@@ -244,11 +244,16 @@ func (t *Git) commitTrailerToken(ctx context.Context, p GitPolicy, sub string) s
 	if sub != "commit" || !p.CommitTrailer {
 		return ""
 	}
+	// The per-call resolver's answer is final, an empty one included. Falling back
+	// to the connection's name when it said "" stamped a subagent's commit with its
+	// PARENT's name — the one thing a trailer exists to get right — so an agent that
+	// has no name of its own signs nothing rather than signing as someone else
+	// (#556). Only a connection that wired no per-call resolver uses the fallback.
 	var name string
-	if t.sessNameForFn != nil {
+	switch {
+	case t.sessNameForFn != nil:
 		name = strings.TrimSpace(t.sessNameForFn(ctx))
-	}
-	if name == "" && t.sessNameFn != nil {
+	case t.sessNameFn != nil:
 		name = strings.TrimSpace(t.sessNameFn())
 	}
 	if name == "" {

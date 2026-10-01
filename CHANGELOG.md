@@ -70,6 +70,36 @@
   finishes, the next `git` call from each session reports `landed as <sha>` or
   the failure with git's output. A value at or above `write_timeout` restores
   the old wait-it-out behaviour. (#549)
+- **Every agent on a shared connection has its own session identity, mail and
+  commit signature.** (#556) A connection registers one session, and the tools
+  answered for it whoever asked: a subagent was told it was its parent, consumed
+  its parent's mail at `session_start` and at `check_messages`, read its parent's
+  threads, and signed its commits `Plumb-Session: <parent's name>`. The
+  connection's identity now belongs to the conversation it is linked to (the id
+  equal to the connection's external id) and to no other agent. Every other
+  stamped agent gets a session row of its own, registered when it first needs an
+  identity and kept on the root it works in; `session_start`'s `Session:` line, its
+  peer digest and its mailbox claim, `leave_note`, `check_messages`, the
+  `workspace_sessions` mail listing and the commit trailer all answer for the
+  caller. An agent with no identity of its own (an unstamped call on a shared
+  connection, or one whose row could not be written) gets none, and its commits
+  carry no trailer, instead of borrowing another agent's. A subagent alone on a
+  restarted connection while its parent is parked is still not the connection.
+  Predecessor session IDs a reconnect inherited reach the owner only, and the
+  owner is whichever conversation the connection is currently linked to.
+- **Only the conversation that resumed is told it resumed.** (#556) A subagent
+  that reached a restarted connection first reported "resumed" for an identity it
+  never had, and the conversation's own main thread then was not told. The
+  connection still takes its conversation's name back as soon as it is linked,
+  whichever agent's call that was, but what resuming means now waits for the owner
+  and is delivered to it once. Only the name comes back: a predecessor's threads
+  and mail bound to its session ID follow only a reconnect that presents the serve
+  proxy's credential, never a conversation id a model can type.
+- **The reconnect note no longer says a new identity was restored.** (#565) A
+  connection's first contact under a credential (`established`) read "Your session
+  identity was restored: you are still X", which told an agent that had never been
+  X that it kept an identity. It now says a new session started, names it, and
+  asks the agent to `session_start` with its `session_id`.
 - **`find_references` and `get_definition` resolve a plain Go method name.**
   (#546) gopls reports a method as `(*WriteTracker).WroteMtime`, so
   `symbol_name: "WroteMtime"` answered "No symbol named" from both tools, while

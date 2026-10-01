@@ -16,12 +16,19 @@ import (
 	"encoding/json"
 )
 
-// WithExternalID wires the external-ID linker: fn receives the session_id
-// argument, persists it on the session file, and may return an inherited
-// session name (non-empty when a matching ended session was found). Nil-safe.
-// Returns the receiver for chaining.
+// WithExternalID wires a caller-blind external-ID linker: fn receives the
+// session_id argument, persists it on the session file, and may return an
+// inherited session name (non-empty when a matching ended session was found).
+// Nil-safe. Returns the receiver for chaining.
+//
+// It is the connection-level shape every client had before a call's own
+// identity mattered, kept for callers with no identity to give. A connection
+// that can tell its agents apart wires WithLinkage instead, which is told WHO
+// is calling and may answer differently for each.
 func (t *SessionStart) WithExternalID(fn func(id string) string) *SessionStart {
-	t.externalIDFn = fn
+	t.linkFn = func(_ context.Context, id string) LinkResult {
+		return LinkResult{InheritedName: fn(id)}
+	}
 	return t
 }
 
@@ -46,19 +53,22 @@ func (t *SessionStart) WithDeclaredAgent(fn func(ctx context.Context, id string)
 
 // resolveLinkage reports whether the caller passed a non-empty session_id
 // (linked) — the external id that makes this session addressable by name from
-// plumb mail and the peer wake hook — and, when so, the name inherited from a
-// previous session with the same external id (see WithExternalID). linked is
-// derived from the raw input regardless of whether an externalIDFn is wired;
-// the accessor is consulted only when it is non-nil.
-func (t *SessionStart) resolveLinkage(raw json.RawMessage) (inheritedName string, linked bool) {
+// plumb mail and the peer wake hook — and, when so, what linking it did (see
+// WithLinkage). linked is derived from the raw input regardless of whether a
+// linker is wired; the linker is consulted only when it is non-nil.
+//
+// ctx is the PER-CALL context, before the declared session_id is put on it: the
+// linker has to tell a call the identity hook stamped from one that only typed an
+// id, and the declared ctx cannot say which it was.
+func (t *SessionStart) resolveLinkage(ctx context.Context, raw json.RawMessage) (link LinkResult, linked bool) {
 	id := SessionIDArg(raw)
 	if id == "" {
-		return "", false
+		return LinkResult{}, false
 	}
-	if t.externalIDFn != nil {
-		inheritedName = t.externalIDFn(id)
+	if t.linkFn != nil {
+		link = t.linkFn(ctx, id)
 	}
-	return inheritedName, true
+	return link, true
 }
 
 // LinkageState is what the CONNECTION actually knows about its own external
@@ -96,21 +106,25 @@ func (t *SessionStart) linkage() LinkageState {
 	return t.linkageStateFn()
 }
 
-// WithResumedNewIdentity wires the flag that says this call resumed a
-// predecessor's NAME via its external id while running under a NEW internal
-// session ID. The resume-by-linkage path never adopts the predecessor's ID —
-// only the proxy credential can do that — so the caller is a continuation that
-// cannot fully prove itself, and the identity line must say what did not
-// follow it: mail and threads bound to the predecessor ID. Nil-safe. Returns
-// the receiver for chaining.
+// WithResumedNewIdentity wires a connection-wide flag that says this call
+// resumed a predecessor's NAME via its external id while running under a NEW
+// internal session ID, so the identity line must say what did not follow it:
+// mail and threads bound to the predecessor ID. Nil-safe. Returns the receiver
+// for chaining.
+//
+// A connection that can tell its callers apart reports the same fact per call,
+// through LinkResult.NewIdentity, and does not wire this: a connection-wide flag
+// is true for every agent on the connection, which is how a subagent that had
+// never existed before came to be told it had "resumed" (#556 symptom 6).
 func (t *SessionStart) WithResumedNewIdentity(fn func() bool) *SessionStart {
 	t.resumedNewIDFn = fn
 	return t
 }
 
-// resumedNewIdentity reports the name-only-resume flag, false when unwired.
+// resumedNewIdentity reports whether the caller resumed a name without the
+// predecessor's session ID: the call's own answer, or the connection-wide flag.
 func (t *SessionStart) resumedNewIdentity() bool {
-	return t.resumedNewIDFn != nil && t.resumedNewIDFn()
+	return t.callLink.NewIdentity || (t.resumedNewIDFn != nil && t.resumedNewIDFn())
 }
 
 // unlinkedSessionNotice is the exact identity-block line session_start emits
