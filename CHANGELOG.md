@@ -78,6 +78,12 @@
   output), so a hook miss can be told from Claude Code never running the hook.
   The shared-connection refusal for a call with no identity now says to retry
   once, since with the hook installed that is usually all it takes.
+- **`read_file` and `read_symbol` keep blank lines at the edges of what they
+  return.** A `read_file` window whose first line was blank dropped it, so
+  every later line was labelled one line too low and the header under-counted
+  the window; a range-mode edit built on that view hit the wrong lines. A
+  window or symbol body ending on a blank line lost that last row. Lines in a
+  ranged read are now each returned with their terminator.
 - **A config watcher that loses its file descriptor recovers at once, and
   closing one waits for its reader.** (#560) fsnotify's kqueue backend
   (macOS) can close one descriptor twice: its `Close` and its reader both close a
