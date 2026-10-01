@@ -56,6 +56,9 @@ type agentShard struct {
 	// "did this agent choose its root?" must accept either — see the
 	// declaration-refusal marker in repinAgent.
 	restored bool
+	// parentSeeded: seeded from its conversation's PERSISTED pin (parent not in
+	// memory), so a connection move must not drag it (#513).
+	parentSeeded bool
 
 	// rosterID is the session.Info registered for THIS agent, so the workspace
 	// it actually works in lists it (issue #472). Empty until the agent holds a
@@ -111,6 +114,12 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		writeLimiter: tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute),
 		pinOrigin:    v.pinOrigin,
 	}
+	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
+	// where the connection happens to sit (issue #513 review). Seeding it from
+	// the connection pin sent a subagent of a parent that had re-pinned itself
+	// to a worktree into whichever checkout the connection held — another
+	// agent's — the exact misroute the declaration gate exists to prevent.
+	s.seedFromParentLocked(sh)
 	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
 	// precedence over the connection's current pin. A pin that no longer verifies
 	// is ignored, so the shard keeps the connection's root rather than resurrecting
@@ -174,7 +183,7 @@ func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy 
 // back to the connection's pin when the connection is not shared (or the call is
 // unattributed). workspace() stays the ctx-less default for background goroutines.
 func (s *connSession) workspaceFor(ctx context.Context) string {
-	if _, pending := s.pendingDeclarationFor(mcp.LogicalAgentFromCtx(ctx)); pending {
+	if _, _, pending := s.pendingDeclarationForCall(ctx); pending {
 		// A refused declaration leaves nothing trustworthy to anchor to: the
 		// shard's root is one this agent explicitly tried to leave. "" makes the
 		// implicit resolvers — relative paths, git's default repository,
@@ -302,10 +311,14 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// agent then blocks on shardsMu behind it — all waiting on one agent's disk
 	// I/O. Registered before the unlock defer so LIFO runs it AFTER sh.mu is
 	// released, and it re-takes the lock itself.
-	var syncRoot, syncLang string
+	var syncRoot, syncLang, movedFrom string
 	defer func() {
 		if syncRoot != "" {
 			s.syncAgentRoster(sh, syncRoot, syncLang)
+		}
+		// After sh.mu is released: it takes shardsMu, then each shard's mu.
+		if movedFrom != "" {
+			s.followParentShard(sh.id, movedFrom)
 		}
 	}()
 	sh.mu.Lock()
@@ -402,6 +415,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// used to wipe an agent's dirty-guard writes and undo history (PLAN-428).
 	// The connection path keeps them under the same rule.
 	if root != prev {
+		movedFrom = prev
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()
 		sh.undoStore.Reset()
@@ -441,68 +455,6 @@ func (s *connSession) seedShardOnLink(linkage string) {
 		return
 	}
 	sh.readTracker.Hydrate(s.readTracker.Records())
-}
-
-// followConnectionShards re-seeds every shard that never chose a workspace of
-// its own (!selfPinned) from the connection's NEW pin, after the connection
-// itself moved away from prevRoot. A shard is seeded from the connection pin at
-// first use — shardFor caches it BEFORE repinAgent can refuse, so one refused
-// ask left the agent cached at a root whose sticky seed then refused the
-// agent's next, entirely legitimate call (the exact PLAN-398 reproduction),
-// while a fresh agent asking the same thing succeeded: the fresh shard seeded
-// from the CURRENT pin, the stale one had not followed. Re-seeding here restores
-// the invariant "a seeded shard sits where the connection sits" without
-// touching shards whose agent deliberately pinned elsewhere — per-agent
-// isolation means the connection's move cannot drag an agent that chose its own
-// root. Runs OUTSIDE the connection mutate lane, in the documented lock order
-// (shardsMu before sh.mu, s.mu innermost), so the per-tool-call hot path's lock
-// pattern is unchanged; the writes mirror repinAgent's success path, held under
-// one sh.mu acquisition each.
-//
-// Returns the ids of the agents whose shards followed, so session_start can
-// tell the caller how many other agents its connection move took with it
-// (issue #517).
-func (s *connSession) followConnectionShards(prevRoot string) (followed []string) {
-	if prevRoot == "" {
-		return nil
-	}
-	v := s.view()
-	if v.acquiredRoot == "" || v.acquiredRoot == prevRoot {
-		return nil
-	}
-	s.shardsMu.Lock()
-	defer s.shardsMu.Unlock()
-	for _, sh := range s.shards {
-		sh.mu.Lock()
-		if sh.selfPinned || sh.root != prevRoot {
-			sh.mu.Unlock()
-			continue
-		}
-		sh.root = v.acquiredRoot
-		sh.language = v.acquiredLanguage
-		sh.pinOrigin = v.pinOrigin
-		// The connection landed on the root this agent asked for, so what its
-		// refusal was about is now simply true; holding the gate would refuse
-		// calls that are safe again.
-		if p, ok := s.pendingDeclarationFor(sh.id); ok && p.requested == sh.root {
-			s.clearDeclarationRefused(sh.id)
-		}
-		sh.policy = s.buildAgentPolicy(sh.root, sh.language)
-		sh.readTracker.Reset()
-		sh.writeTracker.Reset()
-		sh.undoStore.Reset()
-		// Copy what the calls below need while the lock is still held.
-		// shardsMu does not exclude repinAgent — that takes sh.mu alone — so
-		// reading sh.root/sh.language after the unlock would race a concurrent
-		// per-agent re-pin and could persist a root this shard no longer has.
-		// Same rule persistReadShard states: the shard's root is read under sh.mu.
-		root, language := sh.root, sh.language
-		sh.mu.Unlock()
-		followed = append(followed, sh.id)
-		s.rehydrateReadsForAgent(sh, root)
-		s.persistPinForAgent(sh, root, language, v.pinOrigin)
-	}
-	return followed
 }
 
 // persistReadShard mirrors a per-agent recorded read to the durable store, keyed

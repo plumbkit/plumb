@@ -466,9 +466,11 @@ func testAnonymousStateChangeStillRefused(t *testing.T) {
 			t.Errorf("refusal missing %q: %s", want, err)
 		}
 	}
-	// An identified call on the same connection is not refused.
+	// An identified call on the same connection is not refused once its
+	// identity has been declared through session_start (issue #513).
+	m.s.declareSessionStartCaller(mcp.WithLogicalAgent(context.Background(), "agent-a"), "session_start", false)
 	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", "agent-a"); err != nil {
-		t.Errorf("an identified state-changing call must not be refused: %v", err)
+		t.Errorf("a declared, identified state-changing call must not be refused: %v", err)
 	}
 	// Reads are never refused: sharing read-only state is safe.
 	if err := m.s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {

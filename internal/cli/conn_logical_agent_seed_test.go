@@ -21,6 +21,9 @@ import (
 func TestSeedArmsTheGateBeforeAnyAgentRedeclares(t *testing.T) {
 	var l logicalAgentState
 	l.seed([]string{"coordinator", "subagent"})
+	// The coordinator's declaration is restored alongside (restoreDeclared);
+	// an undeclared identity would be refused, see issue #513.
+	l.restoreDeclared([]string{"coordinator"})
 
 	if !l.refuse("") {
 		t.Error("a connection with two persisted identities must refuse an anonymous state-changing call immediately after a restart")
@@ -91,6 +94,11 @@ func TestSeedFromStateArmsTheGate(t *testing.T) {
 	}
 	if err := ss.UpsertPinForAgent(proxyID, "subagent", ws, "go", sessionstate.PinSourceSessionStart); err != nil {
 		t.Fatalf("persist subagent pin: %v", err)
+	}
+
+	// The coordinator declared itself through session_start before the restart.
+	if err := ss.RecordDeclaredLinkage(proxyID, "coordinator"); err != nil {
+		t.Fatalf("persist coordinator declaration: %v", err)
 	}
 
 	// newPersistSession fires onProxySession, exactly as handleInitialize does.
