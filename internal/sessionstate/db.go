@@ -94,7 +94,10 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	8 — logical_agent: every identity observed on a connection (PLAN-440)
 //	9 — declared_linkage: the conversations that declared themselves through
 //	    session_start, so a restart does not refuse them as undeclared (#513)
-const SchemaVersion = 9
+//	10 — logical_agent.roster_name + roster_session_id: the session row a
+//	    non-owner agent on a shared connection holds, so its name and ID come
+//	    back after a restart and its name stays reserved meanwhile (#526)
+const SchemaVersion = 10
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of

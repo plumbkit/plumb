@@ -57,6 +57,20 @@
 
 ### Fixed
 
+- **A subagent's own name and session ID now survive a daemon restart.** (#526)
+  The identity #573 gave each agent on a shared connection lived only in the
+  session directory, so a restart stranded the mail bound to it, let its name go
+  to whichever session drew it next, and brought the agent back as somebody new.
+  The pair is recorded under (proxy session, agent) in `session_state.db` (schema
+  v10: `logical_agent.roster_name` and `roster_session_id`), and a connection that
+  presents the same proxy secret gets it back on the agent's first stamped call,
+  by the connection's own two-step: register fresh, adopt the recorded ID, take
+  the recorded name. A different proxy session that stamps the same
+  `<conversation>/<agent>`, or a connection with no credential, gets a fresh
+  identity: a typed stamp authorises nothing. Either refusal (an ID or name a live
+  session holds) falls back to a fresh identity and leaves the record whole. The
+  names are reserved while the agent is away and released by the existing TTL
+  prune, so they are not held for ever.
 - **The identity hook's stale-on-error cache is harder to fool, and a wedged
   daemon costs less.** (#572) Five narrow windows from the review of #570.
   A daemon now removes its control socket before writing its PID file, so after

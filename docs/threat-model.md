@@ -488,6 +488,13 @@ concurrent case; and cross-project rows remain scoped by `target_workspace`.
 Unbound rows — a peer that was not connected, `next`, and anything written before
 the binding existed — are still addressed by name alone, which is the residual.
 
+A non-owner agent on a shared connection holds a session row of its own, and that
+row's name and ID are recorded under (proxy session, agent) so the same proxy
+secret gets them back after a restart, with the name reserved meanwhile. The proxy
+session ID is the whole key: a stamp (`<conversation>/<agent>`) is a string a model
+can type, so a different proxy session stamping the same one finds no record, and
+no path reads a record on the strength of a stamp or a linkage.
+
 A reconnecting session RESUMES its predecessor's session ID so a daemon restart
 does not strand bound mail, and while that identity is recoverable its **name
 stays reserved** — closing the window where a `plumb serve` outliving its daemon

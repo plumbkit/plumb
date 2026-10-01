@@ -21,14 +21,15 @@ import (
 // cap twice — a tax the history pays again at every future version, for a
 // function whose logic never actually changes. The loop is now constant.
 var migrationSteps = map[int]func(*sql.Tx) error{
-	2: migrateV2,
-	3: migrateV3,
-	4: migrateV4,
-	5: migrateV5,
-	6: migrateV6,
-	7: migrateV7,
-	8: migrateV8,
-	9: migrateV9,
+	2:  migrateV2,
+	3:  migrateV3,
+	4:  migrateV4,
+	5:  migrateV5,
+	6:  migrateV6,
+	7:  migrateV7,
+	8:  migrateV8,
+	9:  migrateV9,
+	10: migrateV10,
 }
 
 // runMigrationStep applies one step and advances user_version to that step's
@@ -293,4 +294,43 @@ func migrateV9(tx *sql.Tx) error {
 		return fmt.Errorf("sessionstate: migrate v9 (declared_linkage): %w", err)
 	}
 	return nil
+}
+
+// migrateV10 gives each logical agent a place to keep the session row it holds
+// on a shared connection (issue #526).
+//
+// The pair rides on logical_agent rather than in a table of its own: the key is
+// the same (proxy session, agent), and so is the lifetime. Prune already reclaims
+// those rows once the connection is gone and the TTL has passed, which is the
+// retention the roster names want: held while the agent can still come back, never
+// for ever, because the name pool is finite. A row an agent never held an identity
+// on keeps the empty default, which reads as "nothing recorded" and reserves
+// nothing.
+//
+// Idempotent in its own right, not only through the version stamp: an ADD COLUMN
+// that already ran is skipped rather than failing with "duplicate column name".
+// Both columns are added inside the step's transaction, so a failure part-way
+// leaves neither.
+func migrateV10(tx *sql.Tx) error {
+	for _, col := range []string{"roster_name", "roster_session_id"} {
+		have, err := columnExists(tx, "logical_agent", col)
+		if err != nil {
+			return fmt.Errorf("sessionstate: migrate v10 (logical_agent.%s): %w", col, err)
+		}
+		if have {
+			continue
+		}
+		// col comes from the literal list above, never from a caller.
+		if _, err := tx.Exec(`ALTER TABLE logical_agent ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil { //nolint:gosec // G202: col is a constant from the list above
+			return fmt.Errorf("sessionstate: migrate v10 (logical_agent.%s): %w", col, err)
+		}
+	}
+	return nil
+}
+
+// columnExists reports whether table already has a column of that name.
+func columnExists(tx *sql.Tx, table, column string) (bool, error) {
+	var n int
+	err := tx.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n)
+	return n > 0, err
 }
