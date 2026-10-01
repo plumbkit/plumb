@@ -62,8 +62,9 @@
   "`plumb hooks install claude-code` stamps every call". With the hook
   installed, the usual cause is a daemon too old to accept the key Claude
   desktop's connector passes through, so the advice sent people round in a
-  circle. The notice now adds that `plumb hooks` says why the call was not
-  stamped.
+  circle. The notice now adds that, if the hook is installed, `plumb hooks`
+  checks it and the daemon: it reports a missing or stale hook, and a daemon
+  that cannot take the stamp.
 
 - **`read_file` and `read_symbol` keep blank lines at the edges of what they
   return.** A `read_file` window whose first line was blank dropped it, so

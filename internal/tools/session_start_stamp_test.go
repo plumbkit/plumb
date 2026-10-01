@@ -169,14 +169,23 @@ func TestStampChannelNoteSilentForNonHookClientUntilShared(t *testing.T) {
 // TestStampChannelNotices_PointAnInstalledHookAtItsDiagnosis: a caller whose
 // hook IS installed but whose call still arrived unstamped (a daemon too old to
 // accept the key Claude desktop's connector passes through) must not be sent to
-// install it again. Both notices name `plumb hooks`, which reports the reason.
+// install it again. Both notices name `plumb hooks`, which checks the hook and
+// the daemon it talks to.
+//
+// They must not promise it says WHY: with a current hook and a daemon that
+// accepts its stamp, bare `plumb hooks` has nothing to report (see
+// TestIdentityHookSkewNote in internal/cli), and a promised diagnosis that does
+// not come sends the reader round in a circle again.
 func TestStampChannelNotices_PointAnInstalledHookAtItsDiagnosis(t *testing.T) {
 	for name, notice := range map[string]string{"refused": stampChannelRefusedNotice, "dormant": stampChannelDormantNotice} {
 		if !strings.Contains(notice, "plumb hooks install claude-code") {
 			t.Errorf("%s notice lost the install remedy: %q", name, notice)
 		}
-		if !strings.Contains(notice, "if it is already installed, `plumb hooks` says why this call was not stamped") {
+		if !strings.Contains(notice, "if the hook is installed, `plumb hooks` checks it and the daemon.") {
 			t.Errorf("%s notice does not point an installed hook at `plumb hooks`: %q", name, notice)
+		}
+		if strings.Contains(notice, "says why") {
+			t.Errorf("%s notice promises a diagnosis bare `plumb hooks` does not always give: %q", name, notice)
 		}
 	}
 }
