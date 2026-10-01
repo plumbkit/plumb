@@ -923,18 +923,24 @@ them.
 
 - `checkout -b` (branch creation) is **write**; any other `checkout` is
   **destructive** (it can discard the working tree or detach HEAD), including
-  `-B`, which resets an existing branch, and `-b` with `-f`. Prefer `switch`
-  for safe branch changes.
-- `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` and
-  `-C`/`--force-create` (which resets an existing branch) are **destructive**.
+  `-b` with `-f`. `-B <name>` is **write** when `<name>` is a new branch and
+  **destructive** when it resets an existing one. Prefer `switch` for safe
+  branch changes.
+- `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
+  **destructive**, and so is `-C`/`--force-create` on a branch that already
+  exists (on a new one it is a write).
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
 - `branch`/`tag`: creating or renaming is **write**, as are branch's upstream
-  and description options; `--delete`/`-d`/`-D` and `-f`/`--force` (which
-  moves or replaces an existing ref) are **destructive**; list mode
+  and description options; `--delete`/`-d`/`-D` is **destructive**, and so is
+  `-f`/`--force` when the named branch or tag already exists (a new one is a
+  write); list mode
   (`--list`/`-a`/`-r`/`--contains`/…, or no arguments) is **read**, and a later
   `--no-list` cancels it. `-v` alone does not list once a name is given.
 - `--end-of-options` ends option parsing exactly as `--` does.
+- Whether the ref named by `-C`/`-B`/`-f` exists is asked of git in the target
+  repository just before the call; if git cannot answer, the call is
+  destructive.
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.

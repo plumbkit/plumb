@@ -136,6 +136,31 @@ func (g gitOptionGrammar) has(args []string, shorts string, longs ...string) boo
 	return found
 }
 
+// positionals returns the arguments git reads as positional: neither an
+// option nor an option's value, plus everything after the end of options.
+func (g gitOptionGrammar) positionals(args []string) []string {
+	var out []string
+	ignore := func(gitOption) bool { return true }
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		var consumesNext bool
+		switch {
+		case isEndOfOptions(a):
+			return append(out, args[i+1:]...)
+		case strings.HasPrefix(a, "--"):
+			consumesNext, _ = g.scanLong(a[2:], ignore)
+		case len(a) > 1 && a[0] == '-':
+			consumesNext, _ = g.scanShorts(a[1:], ignore)
+		default:
+			out = append(out, a)
+		}
+		if consumesNext {
+			i++
+		}
+	}
+	return out
+}
+
 // final reports whether any of opts is in force once all of args are read: like
 // has, but a later --no-<opt> cancels an earlier --<opt> (or -<o>), as git's
 // parser does. That is the reading a check that LOWERS a tier needs —

@@ -194,7 +194,8 @@ func classifyGit(sub string, args []string) gitTier {
 
 func classifySwitch(args []string) gitTier {
 	// --force-create (-C) resets an existing branch to the start point, which
-	// discards its commits the way `reset --keep` does.
+	// discards its commits the way `reset --keep` does. Destructive here; once the
+	// repository is known, refineRefReset lowers it to a write for a new branch.
 	if switchGrammar.has(args, "fC", "force", "discard-changes", "force-create") {
 		return tierDestructive
 	}
@@ -228,7 +229,8 @@ var branchListMode = []gitOptName{
 }
 
 func classifyBranch(args []string) gitTier {
-	// -f/--force moves or replaces an existing branch, like `reset --keep`.
+	// -f/--force moves or replaces an existing branch, like `reset --keep`
+	// (refineRefReset lowers it to a write when the branch is new).
 	if branchGrammar.has(args, "dDf", "delete", "force") {
 		return tierDestructive
 	}
@@ -249,7 +251,7 @@ func classifyBranch(args []string) gitTier {
 }
 
 func classifyTag(args []string) gitTier {
-	// -f/--force replaces an existing tag.
+	// -f/--force replaces an existing tag (refineRefReset: a write for a new one).
 	if tagGrammar.has(args, "df", "delete", "force") {
 		return tierDestructive
 	}
@@ -281,7 +283,8 @@ func classifyStash(args []string) gitTier {
 // classifyCheckout treats only pure branch creation (-b) as a write; every
 // other checkout form can discard the working tree or detach HEAD, so it is
 // destructive — and so is -B, which resets an existing branch like `reset
-// --keep`, and creation with -f, which throws away local modifications. Prefer
+// --keep` (refineRefReset lowers it to a write for a new branch), and creation
+// with -f, which throws away local modifications. Prefer
 // `switch` for safe branch changes.
 func classifyCheckout(args []string) gitTier {
 	if len(args) > 0 && args[0] == "-b" && !checkoutGrammar.has(args, "f", "force") {

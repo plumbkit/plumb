@@ -192,6 +192,7 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	tier = t.refineTier(ctx, a, tier) // git_ref_reset.go: creating a NEW ref is a write
 	policy := t.resolvePolicy()
 	if err := t.gate(tier, policy, a.Confirm); err != nil {
 		return "", err

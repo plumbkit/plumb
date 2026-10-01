@@ -81,9 +81,11 @@
   cancels them: `--end-of-options` ends options as `--` does, a later
   `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
   counts as branch list mode, so `branch -fv side main` cannot force-move a
-  branch at the read tier. `switch -C`, `checkout -B`, `branch -f` and `tag -f`,
-  which move or replace an existing ref like `reset --keep`, are now
-  destructive, and branch's upstream and description options are writes.
+  branch at the read tier. `switch -C`, `checkout -B`, `branch -f` and `tag -f`
+  are destructive when the ref they name already exists, because they move or
+  replace it like `reset --keep`. Creating a new ref with them stays a write,
+  and if git cannot say whether the ref exists the call is destructive.
+  Branch's upstream and description options are writes.
   (#530)
 - **Plumb's own git operations are no longer reported as a peer's edits.** After
   a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
