@@ -1161,7 +1161,15 @@ SHA-256 before the run reports clean. A file with **uncommitted changes is
 refused with no override** — a clean file is what makes `git checkout` a
 guaranteed recovery if the daemon dies mid-run. One run at a time per daemon; a
 second call is refused rather than queued, since concurrent runs would read each
-other's breakage as their own result.
+other's breakage as their own result. The refusal names the run in the way: its
+session name and id, workspace, how long ago it started, and its progress
+(checking its mutants, the unmutated baseline, or mutant *k* of *n* and the step
+it is on). A run whose owning connection closes — the client crashed or
+disconnected — is cancelled (the file is restored as on any cancellation) and
+the slot released, rather than holding it for a report nobody can receive. The
+slot stays per daemon, not per workspace: workspaces nest (a superproject and its
+submodule are two workspaces over one tree), so two of them can mutate and build
+the same files.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

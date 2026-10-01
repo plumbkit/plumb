@@ -372,8 +372,10 @@ type connSession struct {
 	unsubscribe    func()          // removes the store-change listener on close
 
 	// initSettled closes when OnInit's attach ladder has run (conn_roots.go).
-	initSettled     chan struct{}
-	initSettledOnce sync.Once
+	initSettled      chan struct{}
+	initSettledOnce  sync.Once
+	roots            rootsCoalescer // roots/list_changed coalescing (conn_roots.go)
+	beforeLiveMutate func()         // test seam, see mutateLive (conn_lane.go)
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex
