@@ -57,6 +57,9 @@ func (s *Store) BackdateLogicalAgents(proxySessionID string, to time.Time) error
 	if _, err := s.db.Exec(`UPDATE pinned_workspace SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
 		return fmt.Errorf("sessionstate: backdate pins: %w", err)
 	}
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: backdate declarations: %w", err)
+	}
 	return nil
 }
 
@@ -100,6 +103,78 @@ func (s *Store) LogicalAgentIDsFor(proxySessionID string, since time.Time) ([]st
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sessionstate: list logical agents: %w", err)
+	}
+	return out, nil
+}
+
+// RecordDeclaredLinkage durably notes that the conversation linkage declared
+// itself on this connection through session_start (issue #513). It is the
+// evidence that lets a reconnecting daemon keep admitting that conversation's
+// stamped writes instead of refusing them as undeclared. Refreshed on every
+// declaration, so a conversation that re-orients keeps its row young against
+// Prune. nil-safe; blank values are dropped.
+func (s *Store) RecordDeclaredLinkage(proxySessionID, linkage string) error {
+	if s == nil || proxySessionID == "" || linkage == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO declared_linkage (proxy_session_id, linkage, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(proxy_session_id, linkage)
+		 DO UPDATE SET updated_at=excluded.updated_at`,
+		proxySessionID, linkage, time.Now().UnixMilli(),
+	)
+	if err != nil {
+		return fmt.Errorf("sessionstate: record declared linkage: %w", err)
+	}
+	return nil
+}
+
+// TouchDeclaredLinkage refreshes an EXISTING declaration's timestamp, so a
+// conversation that keeps working stays ahead of Prune. It never inserts: an
+// admitted call is not a declaration, and a row Prune already reclaimed stays
+// gone until session_start declares again. nil-safe.
+func (s *Store) TouchDeclaredLinkage(proxySessionID, linkage string) error {
+	if s == nil || proxySessionID == "" || linkage == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=? AND linkage=?`,
+		time.Now().UnixMilli(), proxySessionID, linkage); err != nil {
+		return fmt.Errorf("sessionstate: touch declared linkage: %w", err)
+	}
+	return nil
+}
+
+// DeclaredLinkagesFor returns every linkage declared under proxySessionID that
+// Prune has not yet reclaimed. nil-safe; an empty result means "no evidence".
+func (s *Store) DeclaredLinkagesFor(proxySessionID string) ([]string, error) {
+	if s == nil || proxySessionID == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT linkage FROM declared_linkage WHERE proxy_session_id=? AND linkage<>''`,
+		proxySessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sessionstate: list declared linkages: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, fmt.Errorf("sessionstate: scan declared linkage: %w", err)
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sessionstate: list declared linkages: %w", err)
 	}
 	return out, nil
 }

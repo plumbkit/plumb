@@ -82,30 +82,49 @@ func (s *connSession) repinConnection(ctx context.Context, folder, langOverride 
 // re-pin resolves against afterwards.
 //
 // It is decided by WHETHER the caller's shard follows the connection, not by
-// comparing roots after the fact. A shard that never chose a root follows the
-// connection, so it resolves against the root this move left the connection
-// at — even if a peer's concurrent connection move has already dragged it on,
-// which a root comparison mislabelled as "your own pin". A caller with no shard
-// yet is seeded from the connection on its next call, so the same holds. Only
-// a shard that chose its root (selfPinned) or restored its own persisted pin
-// keeps a root of its own, and that root is reported.
+// comparing roots after the fact. A shard that follows resolves against the
+// root this move left the connection at — even if a peer's concurrent
+// connection move has already dragged it on, which a root comparison
+// mislabelled as "your own pin". Whether it follows is followsConnectionLocked,
+// the same predicate followConnectionShards drags by, so the two agree on WHICH
+// shards follow: a subagent on its conversation's chosen root was left there by
+// the move but told it now worked in the connection's new root (review of #535
+// merged with #533). They can still differ where the move has nothing to drag
+// from: on a connection's first pin a fresh shard stays at "" (#567).
+//
+// A shard that does not follow, or was restored from its own persisted pin
+// (dragged only off the connection's previous root, so its current root is the
+// truth either way), reports its own root.
+//
+// Two more things the caller's next call does are done here too, so the
+// report names what workspaceFor will resolve. A refused declaration, the
+// caller's own or its conversation's, resolves it against nothing. A caller
+// with no shard yet gets one as its next call would, which seeds a subagent
+// from its conversation's chosen root rather than the connection's.
 //
 // The shard is read after the move: the move and the shard are guarded by
 // different locks, and holding both would invert the documented order
 // (shardsMu before sh.mu, s.mu innermost). selfPinned only ever goes from false
 // to true, and a self-pinned shard's root changes only through its own agent's
-// repinAgent, so the one window left is this agent's own concurrent
-// session_start.
+// repinAgent. Two transient, report-only windows remain: this agent's own
+// concurrent session_start, and its conversation self-pinning between the
+// parentChose read and the shard read (followParentShard can move the subagent
+// in that gap).
 func (s *connSession) connScopeCallerRoot(id string, out repinOutcome) string {
-	s.shardsMu.Lock()
-	sh := s.shards[id]
-	s.shardsMu.Unlock()
+	ctx := mcp.WithLogicalAgent(context.Background(), id)
+	if _, _, pending := s.pendingDeclarationForCall(ctx); pending {
+		return ""
+	}
+	sh := s.shardFor(ctx)
 	if sh == nil {
 		return out.root
 	}
+	s.shardsMu.Lock()
+	parentChose := s.parentChoseLocked(id)
+	s.shardsMu.Unlock()
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
-	if !sh.selfPinned && !sh.restored {
+	if followsConnectionLocked(sh, parentChose) && !sh.restored {
 		return out.root
 	}
 	return sh.root
