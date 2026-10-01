@@ -97,6 +97,9 @@ func validateGit(g GitConfig) error {
 	if g.WriteTimeout.Duration < 0 {
 		return fmt.Errorf("git.write_timeout must not be negative (got %s)", g.WriteTimeout.Duration)
 	}
+	if g.DetachAfter.Duration < 0 {
+		return fmt.Errorf("git.detach_after must not be negative (got %s)", g.DetachAfter.Duration)
+	}
 	for k := range g.Env {
 		switch {
 		case k == "":

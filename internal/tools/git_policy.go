@@ -68,6 +68,11 @@ type GitPolicy struct {
 	// group and reporting the operation as plumb's own timeout. Zero means the
 	// compiled default — see gitChildSpec, which is where that is resolved.
 	WriteTimeout time.Duration
+	// DetachAfter is [git] detach_after: how long a call waits for an
+	// index/ref-mutating git child before returning "still running in the
+	// background" and letting the child finish (git_background.go). Zero means
+	// the compiled default; a value at or above WriteTimeout never detaches.
+	DetachAfter time.Duration
 }
 
 // GitPolicyFn resolves the current GitPolicy at call time. nil falls back to a

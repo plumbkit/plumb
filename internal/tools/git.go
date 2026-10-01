@@ -301,7 +301,7 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		}
 	}
 	guard := t.armRefGuard(a, tier)
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.deps.writes(ctx))
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.deps.writes(ctx), t.sessionKey())
 	if err != nil {
 		return "", err
 	}
@@ -309,6 +309,16 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		return guard.warning + switchNote + out + warning, nil
 	}
 	return switchNote + out + warning, nil
+}
+
+// sessionKey is the calling session's identity for the once-per-session report
+// of a finished background git op (git_background.go); "" when unwired, which
+// makes every identity-less caller one reader.
+func (t *Git) sessionKey() string {
+	if t.sessID == nil {
+		return ""
+	}
+	return t.sessID()
 }
 
 // armRefGuard builds the per-call ref-movement guard (git_ref_guard.go). It

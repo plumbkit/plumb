@@ -57,6 +57,19 @@
 
 ### Fixed
 
+- **A slow git write no longer outlives its call and lands unreported.** When a
+  pre-commit hook outlasted the MCP client's call timeout, the client reported
+  `Request timed out` while the commit carried on in the daemon and landed
+  later; a retry then collided on `.git/index.lock` or committed the same change
+  twice. A write- or destructive-tier `git` call now stops waiting after the new
+  `[git] detach_after` (default `45s`, `PLUMB_GIT_DETACH_AFTER`, trust-gated),
+  counting any wait for the per-repository lock. The child is not killed: the
+  call returns "still running in the background" with its pid, start time and
+  HEAD at that moment. Until it finishes, further non-read calls on that repository
+  are refused with that explanation and reads still run with a note. After it
+  finishes, the next `git` call from each session reports `landed as <sha>` or
+  the failure with git's output. A value at or above `write_timeout` restores
+  the old wait-it-out behaviour. (#549)
 - **Every agent on a shared connection has its own session identity, mail and
   commit signature.** (#556) A connection registers one session, and the tools
   answered for it whoever asked: a subagent was told it was its parent, consumed

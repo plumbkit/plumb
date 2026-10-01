@@ -337,7 +337,7 @@ func TestExecGitCmd_NilEnvGetsTheDefaults(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(), "git", "var", "GIT_EDITOR")
 	cmd.Dir = dir
 	cmd.Stdout = &stdout
-	if _, err := execGitCmd(cmd, false, dir); err != nil {
+	if err := execGitCmd(cmd, false, dir); err != nil {
 		t.Fatalf("git var: %v", err)
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "true" {
