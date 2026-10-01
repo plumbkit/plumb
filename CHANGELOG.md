@@ -70,6 +70,15 @@
   finishes, the next `git` call from each session reports `landed as <sha>` or
   the failure with git's output. A value at or above `write_timeout` restores
   the old wait-it-out behaviour. (#549)
+- **`session_start` no longer tells you to install a hook you already have.**
+  When a call arrived without a per-call identity, its notice only said
+  "`plumb hooks install claude-code` stamps every call". With the hook
+  installed, the usual cause is a daemon too old to accept the key Claude
+  desktop's connector passes through, so the advice sent people round in a
+  circle. The notice now adds that, if the hook is installed, `plumb hooks`
+  checks it and the daemon: it reports a missing or stale hook, and a daemon
+  that cannot take the stamp.
+
 - **The `git` tool no longer opens an editor.** plumb runs git with no
   terminal, so `rebase --continue`, `rebase -i`, `cherry-pick -e` and
   `revert --edit` launched `core.editor` and failed with `cannot exec
