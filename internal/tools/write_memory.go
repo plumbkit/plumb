@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
@@ -13,6 +15,8 @@ type writeMemoryTool struct {
 	ws      WorkspaceFn
 	guard   BoundaryGuard
 	indexFn func() *memory.Index
+	histFn  func(context.Context, history.Change)
+	histOn  func() bool
 }
 
 func NewWriteMemory(ws WorkspaceFn) *writeMemoryTool { return &writeMemoryTool{ws: ws} }
@@ -26,6 +30,23 @@ func (t *writeMemoryTool) WithBoundary(guard BoundaryGuard) *writeMemoryTool {
 func (t *writeMemoryTool) WithIndex(fn func() *memory.Index) *writeMemoryTool {
 	t.indexFn = fn
 	return t
+}
+
+func (t *writeMemoryTool) WithHistory(fn func(context.Context, history.Change), on func() bool) *writeMemoryTool {
+	t.histFn = fn
+	t.histOn = on
+	return t
+}
+
+func (t *writeMemoryTool) historyOn() bool {
+	return t.histFn != nil && (t.histOn == nil || t.histOn())
+}
+
+func (t *writeMemoryTool) recordHistory(ctx context.Context, c history.Change) {
+	if t.historyOn() {
+		c.At, c.Kind = time.Now(), history.KindFile
+		t.histFn(ctx, c)
+	}
 }
 
 func (*writeMemoryTool) Name() string { return "write_memory" }
@@ -77,9 +98,26 @@ func (t *writeMemoryTool) Execute(ctx context.Context, args json.RawMessage) (st
 	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("write_memory: %w", err)
 	}
+	path, _ := memory.Path(ws, a.Name)
+	before := history.Side{}
+	if t.historyOn() {
+		if s, err := history.SideFromFile(path); err == nil {
+			before = s
+		}
+	}
 	if err := memory.WriteIndexedWithOptions(resolveMemoryIndex(t.indexFn, ws), ws, a.Name, a.Content, memory.WriteOptions{Description: a.Description, Paths: a.Paths}); err != nil {
 		return "", err
 	}
-	path, _ := memory.Path(ws, a.Name)
+	// Memory writes have no per-path lock. Two concurrent write_memory calls
+	// to one name are ordered by their ts_ms only.
+	if t.historyOn() {
+		if after, err := history.SideFromFile(path); err == nil {
+			op := history.OpUpdate
+			if !before.Exists {
+				op = history.OpCreate
+			}
+			t.recordHistory(ctx, history.Change{Op: op, Tool: "write_memory", Path: path, Before: before, After: after})
+		}
+	}
 	return "Memory saved to " + path, nil
 }

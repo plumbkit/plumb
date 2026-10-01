@@ -161,3 +161,51 @@ func TestTxlogRecoveryRowsAreReverts(t *testing.T) {
 		t.Errorf("CallID = %q, want prefix recovery-", e.CallID)
 	}
 }
+
+func TestAgentConfigSetRecordsConfigToml(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	s := newPersistSession(t, store, ss, "proxy-agent-config")
+	s.historyStore = newHistoryStore(nil)
+	defer s.historyStore.Close()
+
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	s.mutate(func(v *sessionView) { v.agentConfigWrites = true })
+
+	ctx := mcp.WithCallID(context.Background(), "01AC000000000000000000000")
+	if _, err := s.applyAgentConfig(ctx, map[string]any{"tasks.go.build": "go build ./..."}); err != nil {
+		t.Fatalf("applyAgentConfig: %v", err)
+	}
+
+	if err := s.historyStore.store().Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	r, err := history.OpenReadOnlyAt(history.DBPath())
+	if err != nil {
+		t.Fatalf("OpenReadOnlyAt: %v", err)
+	}
+	defer r.Close()
+
+	entries, err := r.List(history.Filter{Workspace: root})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Tool != "agent_config" {
+		t.Errorf("Tool = %q, want agent_config", e.Tool)
+	}
+	if e.Op != history.OpCreate {
+		t.Errorf("Op = %v, want OpCreate", e.Op)
+	}
+	if e.Path != ".plumb/config.toml" {
+		t.Errorf("Path = %q, want .plumb/config.toml", e.Path)
+	}
+}

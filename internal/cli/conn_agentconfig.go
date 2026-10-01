@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -46,7 +47,6 @@ func agentDescribe() []tools.AgentConfigField {
 // live for this connection. The allowlist is enforced here at the cli seam AND
 // again inside config.AgentApplyBatch (defence in depth): a non-allowlisted key
 // is refused before any disk is touched, by two independent checks.
-//
 // It writes the CALLING agent's project (#522). On a shared connection an
 // agent pinned to project B that set tasks.go.lint used to rewrite the
 // connection's project A, and its own run_task never saw the change.
@@ -66,9 +66,26 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 		Client:    s.view().clientName,
 		Timestamp: time.Now(),
 	}
+	cfgPath := config.ProjectConfigPath(ws)
+	before, _ := history.SideFromFile(cfgPath)
 	changed, err := config.AgentApplyBatch(s.store.Current(), ws, pairs, prov)
 	if err != nil {
 		return "", err
+	}
+	if after, aerr := history.SideFromFile(cfgPath); aerr == nil {
+		op := history.OpUpdate
+		if !before.Exists {
+			op = history.OpCreate
+		}
+		s.recordHistory(ctx, history.Change{
+			At:     time.Now(),
+			Op:     op,
+			Kind:   history.KindFile,
+			Tool:   "agent_config",
+			Path:   cfgPath,
+			Before: before,
+			After:  after,
+		})
 	}
 	// Live before the tool returns. The connection's own project is cached in its
 	// view and is re-applied; any other root is read per call (projectViewFor), so
