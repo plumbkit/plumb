@@ -58,17 +58,17 @@ func (s *connSession) attachOnInit(ctx context.Context, request mcp.RequestFn) {
 	// client asserted in this handshake.
 	//
 	// Be honest about when that safety net is absent — it is not only
-	// [session] persist_state = off. The startup prune runs with no live
-	// exemption and deletes pin rows older than [session]
-	// persist_state_ttl_minutes (default 1440), so a session whose declared wide
-	// pin was written more than a day before the restart loses the row too. In
-	// that case every lower rung refuses the wide root as well (roots and the
-	// workspace pre-pin are weaker origins), so the caller must declare the
-	// workspace again. Never WIDER — and, with serve now starting unattached
-	// unless --workspace/PLUMB_WORKSPACE is given, the only rung left below the
-	// pre-pin is first-tool-call path seeding, which needs an ABSOLUTE tool path:
-	// a relative path is refused and the connection stays unattached until
-	// session_start pins it. It is pinned by
+	// [session] persist_state = off. The reaper's TTL sweep deletes pin rows
+	// older than [session] persist_state_ttl_minutes (default 1440) of any
+	// session not connected at that pass, so a serve that stayed away that long
+	// loses the row too. (The sweep no longer runs at daemon start, before
+	// surviving serves reconnect — issue #525.) In that case every lower rung
+	// refuses the wide root as well (roots and the workspace pre-pin are weaker
+	// origins), so the caller must declare the workspace again. Never WIDER —
+	// and, with serve now starting unattached unless --workspace/PLUMB_WORKSPACE
+	// is given, the only rung left below the pre-pin is first-tool-call path
+	// seeding, which needs an ABSOLUTE tool path: a relative path is refused and
+	// the connection stays unattached until session_start pins it. It is pinned by
 	// TestOnInit_UndeclaredFallbackLeavesWideRootUnattached (no hint set) and by
 	// the workspace-hint tests beside it.
 	var refusedReplay string
