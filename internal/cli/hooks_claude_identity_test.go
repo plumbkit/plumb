@@ -205,19 +205,21 @@ func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 	if !daemonAcceptsIdentityStamp(probe, cache, now.Add(30*time.Second)) || probes != 1 {
 		t.Fatalf("a fresh cache must answer without probing: probes=%d", probes)
 	}
-	if !daemonAcceptsIdentityStamp(probe, cache, now.Add(2*time.Minute)) || probes != 2 {
+	stale := now.Add(identityProbeTTL + time.Minute)
+	if !daemonAcceptsIdentityStamp(probe, cache, stale) || probes != 2 {
 		t.Fatalf("a stale cache must re-probe: probes=%d", probes)
 	}
 	old := func() (string, error) { return "0.19.0", nil }
-	if daemonAcceptsIdentityStamp(old, cache, now.Add(4*time.Minute)) {
+	stale = stale.Add(identityProbeTTL + time.Minute)
+	if daemonAcceptsIdentityStamp(old, cache, stale) {
 		t.Fatal("a 0.19.0 daemon predates the channel and must not be stamped")
 	}
-	if daemonAcceptsIdentityStamp(old, cache, now.Add(4*time.Minute+10*time.Second)) {
+	if daemonAcceptsIdentityStamp(old, cache, stale.Add(10*time.Second)) {
 		t.Fatal("the cached old version must keep refusing")
 	}
 	failing := func() (string, error) { return "", errors.New("no daemon") }
-	if daemonAcceptsIdentityStamp(failing, cache, now.Add(10*time.Minute)) {
-		t.Fatal("a failing probe must read as no")
+	if daemonAcceptsIdentityStamp(failing, filepath.Join(t.TempDir(), "none.json"), stale.Add(time.Hour)) {
+		t.Fatal("a failing probe with no cache must read as no")
 	}
 	// A cache stamped in the future (clock stepped back, a copied home) is not
 	// fresh: it must re-probe rather than trust a record from "later".
@@ -720,7 +722,7 @@ func TestCtrlIdentityKeys_ThroughTheRealHandler(t *testing.T) {
 }
 
 // TestDaemonIdentity_CachesTheDeclaredKey: the capability survives the
-// one-minute cache, so a cached answer does not silently fall back to the
+// cache, so a cached answer does not silently fall back to the
 // reverse-DNS key that Claude desktop strips.
 func TestDaemonIdentity_CachesTheDeclaredKey(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)

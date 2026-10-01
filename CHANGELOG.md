@@ -115,6 +115,27 @@
   server, its idle teardown. The paragraph moved to its own `[lsp.<language>]`
   subsection, so it no longer sits between the `[git] env` text and the note on
   how project entries compose with global ones.
+- **The Claude Code identity hook stamps from its cached answer when the daemon
+  probe fails, and fails less often.** (#556) The hook gates every stamp on a
+  probe of the daemon's control socket, and any probe failure was an answer of
+  "unknown", so the call went out unstamped, and on a shared connection an
+  unstamped write is refused as having no logical-agent identity. The probe
+  fails when the machine is busiest: with 200 hooks running at once under CPU
+  saturation, 11 got no stamp. A failed probe now serves the cached answer when
+  it was written for the same daemon instance (the PID file and control socket
+  the cache is already keyed on), however old it is, and never one written for a
+  different instance, so a swapped daemon is still caught. A probe that learned
+  the version but could not learn the keys yields to such a record too. The
+  probe is one dial of a second per phase, not two of 300 ms: the daemon's
+  `identity-keys` reply now carries its version, so a current daemon needs one
+  ask (an older daemon is asked `version` separately, as before), and the whole
+  probe is capped at three seconds, well inside the hook's five. The cache is
+  kept ten minutes, not one, so the first call after a pause is no longer a cold
+  probe. A plumb call the hook leaves unstamped now writes one line to stderr
+  with the reason, the tool and its `tool_use_id` (Claude Code shows it in debug
+  output), so a hook miss can be told from Claude Code never running the hook.
+  The shared-connection refusal for a call with no identity now says to retry
+  once, since with the hook installed that is usually all it takes.
 - **`read_file` and `read_symbol` keep blank lines at the edges of what they
   return.** A `read_file` window whose first line was blank dropped it, so
   every later line was labelled one line too low and the header under-counted
