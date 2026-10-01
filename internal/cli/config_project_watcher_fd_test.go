@@ -14,15 +14,28 @@ import (
 )
 
 // openFDCount reports how many descriptors this process holds, by counting
-// /dev/fd. Listing the directory opens one descriptor of its own, which every
-// reading shares, so differences between readings are exact.
+// the names in /dev/fd. Listing the directory opens one descriptor of its own,
+// which every reading shares, so differences between readings are exact. It
+// reads names only: os.ReadDir also stats each entry, and on macOS that fails
+// with EBADF when another goroutine closes a descriptor between the listing and
+// the stat (seen on CI, where earlier tests' watchers are still closing theirs).
 func openFDCount(t *testing.T) int {
 	t.Helper()
-	entries, err := os.ReadDir("/dev/fd")
-	if err != nil {
-		t.Fatalf("read /dev/fd: %v", err)
+	var err error
+	for range 5 {
+		var dir *os.File
+		if dir, err = os.Open("/dev/fd"); err != nil {
+			continue
+		}
+		var names []string
+		names, err = dir.Readdirnames(-1)
+		_ = dir.Close()
+		if err == nil {
+			return len(names)
+		}
 	}
-	return len(entries)
+	t.Fatalf("read /dev/fd: %v", err)
+	return 0
 }
 
 // TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs pins #568. On kqueue
@@ -82,8 +95,19 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 	cfg := filepath.Join(plumbDir, "config.toml")
 	before := openFDCount(t)
 	for i := range cycles {
+		beforeCycle := openFDCount(t)
 		await(func() { mustDo(os.Mkdir(plumbDir, 0o755)) })
-		if held := openFDCount(t) - before; held > 1 {
+		// A duplicate registration is permanent until the directory goes, so
+		// polling only waits out descriptors unrelated to the watcher closing.
+		var held int
+		for deadline := time.Now().Add(time.Second); ; {
+			held = openFDCount(t) - beforeCycle
+			if held <= 1 || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if held > 1 {
 			t.Fatalf("cycle %d: %d descriptors held for the new .plumb directory, want at most 1: it was registered twice", i, held)
 		}
 		await(func() { mustDo(os.WriteFile(cfg, []byte("[edits]\nstrict = true\n"), 0o644)) })
