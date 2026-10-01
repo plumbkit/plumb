@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -27,11 +30,14 @@ const resilienceInstance = "pid=1 ino=2 mtime=3"
 
 var errProbeTimeout = errors.New("dialling the daemon control socket: i/o timeout")
 
-func failingProbe() (identityProbeRecord, error) { return identityProbeRecord{}, errProbeTimeout }
+func failingProbe(bool) (identityProbeRecord, error) { return identityProbeRecord{}, errProbeTimeout }
+
+// fixedInstance is a daemon instance marker that never moves.
+func fixedInstance(marker string) func() string { return func() string { return marker } }
 
 // goodProbe answers like a current daemon that lifts plumb_agent, counting its calls.
-func goodProbe(probes *int) func() (identityProbeRecord, error) {
-	return func() (identityProbeRecord, error) {
+func goodProbe(probes *int) func(bool) (identityProbeRecord, error) {
+	return func(bool) (identityProbeRecord, error) {
 		*probes++
 		return identityProbeRecord{DaemonVersion: "0.20.5", DeclaredKey: true}, nil
 	}
@@ -49,7 +55,7 @@ func TestDaemonIdentity_FailingProbeServesTheCacheOfTheSameInstance(t *testing.T
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	probes := 0
-	if rec := daemonIdentity(goodProbe(&probes), resilienceInstance, cache, t0); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(goodProbe(&probes), fixedInstance(resilienceInstance), cache, t0); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("control: the first probe must answer and be cached: %+v, probes=%d", rec, probes)
 	}
 
@@ -62,8 +68,8 @@ func TestDaemonIdentity_FailingProbeServesTheCacheOfTheSameInstance(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			asked := 0
-			probe := func() (identityProbeRecord, error) { asked++; return identityProbeRecord{}, failure }
-			rec := daemonIdentity(probe, resilienceInstance, cache, expired)
+			probe := func(bool) (identityProbeRecord, error) { asked++; return identityProbeRecord{}, failure }
+			rec := daemonIdentity(probe, fixedInstance(resilienceInstance), cache, expired)
 			if asked != 1 {
 				t.Fatalf("the probe was asked %d times; the expired record must be re-checked, not trusted blind", asked)
 			}
@@ -83,7 +89,7 @@ func TestDaemonIdentity_FailingProbeServesTheCacheOfTheSameInstance(t *testing.T
 		t.Fatalf("a failed probe rewrote the cache: %+v ok=%v", rec, ok)
 	}
 	probes = 0
-	if rec := daemonIdentity(goodProbe(&probes), resilienceInstance, cache, expired); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(goodProbe(&probes), fixedInstance(resilienceInstance), cache, expired); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("the next call must probe again: %+v, probes=%d", rec, probes)
 	}
 	if rec, _ := readIdentityProbe(cache); !rec.CheckedAt.Equal(expired) {
@@ -100,19 +106,19 @@ func TestDaemonIdentity_UncertainProbeYieldsToTheCacheOfTheSameInstance(t *testi
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	probes := 0
-	daemonIdentity(goodProbe(&probes), resilienceInstance, cache, t0)
-	uncertain := func() (identityProbeRecord, error) {
+	daemonIdentity(goodProbe(&probes), fixedInstance(resilienceInstance), cache, t0)
+	uncertain := func(bool) (identityProbeRecord, error) {
 		return identityProbeRecord{DaemonVersion: "0.20.5", uncertain: true}, nil
 	}
 	expired := t0.Add(identityProbeTTL + time.Minute)
 
-	if got := stampKeyOf(daemonIdentity(uncertain, resilienceInstance, cache, expired)); got != mcp.ArgLogicalAgentDeclaredKey {
+	if got := stampKeyOf(daemonIdentity(uncertain, fixedInstance(resilienceInstance), cache, expired)); got != mcp.ArgLogicalAgentDeclaredKey {
 		t.Fatalf("an uncertain probe overrode the same instance's known answer: key %q", got)
 	}
 	// Control: with no record for this instance the uncertain answer is used,
 	// for this call only — the safe key — and nothing is cached.
 	other := filepath.Join(t.TempDir(), identityProbeCacheFile)
-	if got := stampKeyOf(daemonIdentity(uncertain, resilienceInstance, other, expired)); got != mcp.ArgLogicalAgentKey {
+	if got := stampKeyOf(daemonIdentity(uncertain, fixedInstance(resilienceInstance), other, expired)); got != mcp.ArgLogicalAgentKey {
 		t.Fatalf("with no cache the uncertain answer must stamp the safe key, got %q", got)
 	}
 	if _, ok := readIdentityProbe(other); ok {
@@ -142,7 +148,7 @@ func TestDaemonIdentity_FailingProbeNeverServesAnotherInstancesCache(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 			writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, DaemonInstance: tc.recorded, CheckedAt: t0})
-			rec := daemonIdentity(failingProbe, tc.instance, cache, t0.Add(tc.age))
+			rec := daemonIdentity(failingProbe, fixedInstance(tc.instance), cache, t0.Add(tc.age))
 			if rec.DaemonVersion != "" || rec.DeclaredKey {
 				t.Fatalf("another instance's record was served: %+v", rec)
 			}
@@ -160,15 +166,15 @@ func TestDaemonIdentity_TTLBoundary(t *testing.T) {
 	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.20.5", DeclaredKey: true, DaemonInstance: resilienceInstance, CheckedAt: t0})
 	probes := 0
-	older := func() (identityProbeRecord, error) {
+	older := func(bool) (identityProbeRecord, error) {
 		probes++
 		return identityProbeRecord{DaemonVersion: "0.20.3"}, nil // a different answer, so a hit and a re-probe differ
 	}
 
-	if rec := daemonIdentity(older, resilienceInstance, cache, t0.Add(identityProbeTTL-time.Nanosecond)); !rec.DeclaredKey || probes != 0 {
+	if rec := daemonIdentity(older, fixedInstance(resilienceInstance), cache, t0.Add(identityProbeTTL-time.Nanosecond)); !rec.DeclaredKey || probes != 0 {
 		t.Fatalf("just inside the TTL must hit: %+v, probes=%d", rec, probes)
 	}
-	if rec := daemonIdentity(older, resilienceInstance, cache, t0.Add(identityProbeTTL)); rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(older, fixedInstance(resilienceInstance), cache, t0.Add(identityProbeTTL)); rec.DeclaredKey || probes != 1 {
 		t.Fatalf("at the TTL the record must be asked again: %+v, probes=%d", rec, probes)
 	}
 }
@@ -201,12 +207,21 @@ func TestIdentityProbeLimits(t *testing.T) {
 	if timeout == 0 {
 		t.Fatal("no PreToolUse entry")
 	}
-	if identityProbeBudget+1500*time.Millisecond > timeout {
-		t.Errorf("probe budget %s leaves under 1.5 s of the hook's %s timeout", identityProbeBudget, timeout)
+	if identityHookBudget+time.Second > timeout {
+		t.Errorf("hook budget %s leaves under a second of the hook's %s timeout", identityHookBudget, timeout)
 	}
-	if identityProbeBudget < identityProbeDialTimeout+identityProbeReplyTimeout {
-		t.Errorf("probe budget %s cannot fit one full ask (%s + %s)", identityProbeBudget, identityProbeDialTimeout, identityProbeReplyTimeout)
+	if identityProbeBudget < identityProbeDialTimeout+identityProbeReplyTimeout || identityHookBudget < identityProbeBudget {
+		t.Errorf("budgets %s (hook) and %s (probe) cannot fit one full ask (%s + %s)", identityHookBudget, identityProbeBudget, identityProbeDialTimeout, identityProbeReplyTimeout)
 	}
+}
+
+// oldHookReadsDeclared is what a hook from before the version field read out of
+// an identity-keys reply: only whether the declared key is listed. It is a
+// frozen copy, not a call into the current parser, so the test below still
+// proves an older hook can read a reply that carries the extra field.
+func oldHookReadsDeclared(line string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ok ")
+	return ok && slices.Contains(strings.Fields(rest), mcp.ArgLogicalAgentDeclaredKey)
 }
 
 func TestParseIdentityKeysReply(t *testing.T) {
@@ -214,7 +229,7 @@ func TestParseIdentityKeysReply(t *testing.T) {
 		reply        string
 		declared     bool
 		wantVersion  string
-		wantOldHooks bool // identityKeysReplyHasDeclared, what a hook from before the field reads
+		wantOldHooks bool // oldHookReadsDeclared
 	}{
 		{"ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + " version=0.20.4\n", true, "0.20.4", true},
 		{"ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + "\n", true, "", true},
@@ -225,7 +240,7 @@ func TestParseIdentityKeysReply(t *testing.T) {
 		{"", false, "", false},
 	} {
 		got := parseIdentityKeysReply(tc.reply)
-		if got.declared != tc.declared || got.version != tc.wantVersion || identityKeysReplyHasDeclared(tc.reply) != tc.wantOldHooks {
+		if got.declared != tc.declared || got.version != tc.wantVersion || oldHookReadsDeclared(tc.reply) != tc.wantOldHooks {
 			t.Errorf("parseIdentityKeysReply(%q) = %+v", tc.reply, got)
 		}
 	}
@@ -366,7 +381,9 @@ func runHook(in claudeHookInput, env func(string) string, daemon func() identity
 func TestIdentityHook_FailingProbeWithNoCacheLeavesABreadcrumb(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
-	daemon := func() identityProbeRecord { return daemonIdentity(failingProbe, resilienceInstance, cache, now) }
+	daemon := func() identityProbeRecord {
+		return daemonIdentity(failingProbe, fixedInstance(resilienceInstance), cache, now)
+	}
 
 	stdout, stderr := runHook(breadcrumbInput("mcp__plumb__read_file"), noEnv, daemon)
 	if stdout != "" {
@@ -441,5 +458,177 @@ func TestClaudeHookInput_ReadsToolUseID(t *testing.T) {
 	}
 	if in.ToolUseID != "toolu_77" {
 		t.Fatalf("ToolUseID = %q", in.ToolUseID)
+	}
+}
+
+// --- hardening of the stale-on-error cache (issue #572) ------------------
+
+// TestPublishDaemonPID_ClearsTheStaleControlSocketFirst: after a kill -9 the
+// control socket and the PID file both survive, and a successor that reuses
+// the PID would show the dead daemon's marker until it re-binds the socket.
+// The socket has to be gone at the instant the PID file is written, so the
+// successor's marker is empty — never a match — from then on.
+func TestPublishDaemonPID_ClearsTheStaleControlSocketFirst(t *testing.T) {
+	probeTestEnv(t)
+	sock := daemonCtrlSocketPath()
+	pid := strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(daemonPIDPath(), []byte(pid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := daemonInstanceMarker()
+	if !strings.HasPrefix(stale, "pid="+pid+" ") {
+		t.Fatalf("setup: the stale marker is %q", stale)
+	}
+
+	socketPresentAtWrite := true
+	err := publishDaemonPID(func(name string, data []byte, perm os.FileMode) error {
+		_, statErr := os.Stat(sock)
+		socketPresentAtWrite = statErr == nil
+		return os.WriteFile(name, data, perm)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if socketPresentAtWrite {
+		t.Fatal("the PID file was written while the old control socket still existed")
+	}
+	if got := daemonInstanceMarker(); got != "" {
+		t.Fatalf("a PID-reusing successor that has not bound its socket yet shows the marker %q, want none", got)
+	}
+}
+
+// TestDaemonIdentity_UncertainProbeOfAnotherVersionBeatsTheCache: an uncertain
+// probe that nonetheless read a version is fresh evidence. When that version
+// is not the cached record's, the record no longer describes the daemon and
+// must not be served over it.
+func TestDaemonIdentity_UncertainProbeOfAnotherVersionBeatsTheCache(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	probes := 0
+	daemonIdentity(goodProbe(&probes), fixedInstance(resilienceInstance), cache, t0) // 0.20.5 with the declared key
+	expired := t0.Add(identityProbeTTL + time.Minute)
+	uncertainAt := func(version string) func(bool) (identityProbeRecord, error) {
+		return func(bool) (identityProbeRecord, error) {
+			return identityProbeRecord{DaemonVersion: version, uncertain: true}, nil
+		}
+	}
+
+	rec := daemonIdentity(uncertainAt("0.19.0"), fixedInstance(resilienceInstance), cache, expired)
+	if rec.DaemonVersion != "0.19.0" || rec.DeclaredKey {
+		t.Fatalf("the cache outvoted a probe that read version 0.19.0: %+v", rec)
+	}
+	if daemonVersionAcceptsStamp(rec.DaemonVersion) {
+		t.Fatalf("a daemon the probe read as 0.19.0 would be stamped")
+	}
+	// Control: the same version is the same daemon, so the record stands.
+	if rec := daemonIdentity(uncertainAt("0.20.5"), fixedInstance(resilienceInstance), cache, expired); !rec.DeclaredKey {
+		t.Fatalf("an uncertain probe of the cached version dropped the known answer: %+v", rec)
+	}
+}
+
+// TestDaemonIdentity_TellsTheProbeWhetherARecordIsOnFile pins the wiring the
+// probe's own test cannot see: only a record for THIS instance may let the
+// probe skip a follow-up ask.
+func TestDaemonIdentity_TellsTheProbeWhetherARecordIsOnFile(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	var told []bool
+	probe := func(haveRecord bool) (identityProbeRecord, error) {
+		told = append(told, haveRecord)
+		return identityProbeRecord{}, errProbeTimeout
+	}
+	daemonIdentity(probe, fixedInstance("A"), cache, t0)
+	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.20.5", DeclaredKey: true, DaemonInstance: "A", CheckedAt: t0})
+	expired := t0.Add(identityProbeTTL + time.Minute)
+	daemonIdentity(probe, fixedInstance("A"), cache, expired)
+	daemonIdentity(probe, fixedInstance("B"), cache, expired)
+	if want := []bool{false, true, false}; !slices.Equal(told, want) {
+		t.Fatalf("probe told %v, want %v (no record, this instance's record, another instance's record)", told, want)
+	}
+}
+
+// TestIdentityProbe_WedgedDaemonIsAskedOnceWhenARecordIsOnFile: a daemon that
+// takes the identity-keys connection and does not answer used to be asked its
+// version as well, on every call — two timeouts, about 2 s, to learn what the
+// cached record already says.
+func TestIdentityProbe_WedgedDaemonIsAskedOnceWhenARecordIsOnFile(t *testing.T) {
+	for _, tc := range []struct {
+		haveRecord bool
+		wantDials  int32
+	}{{true, 1}, {false, 2}} {
+		t.Run(fmt.Sprintf("haveRecord=%v", tc.haveRecord), func(t *testing.T) {
+			probeTestEnv(t)
+			dials := countingDaemon(t, func(c net.Conn, line string) {
+				if line == "version" {
+					_, _ = c.Write([]byte("ok 0.21.0\n"))
+				} // identity-keys: hang up without a word
+			})
+			_, err := probeDaemonIdentityBy(time.Now().Add(identityProbeBudget), tc.haveRecord)
+			if tc.haveRecord && err == nil {
+				t.Fatal("a failed identity-keys read must be a probe failure when a record can stand in")
+			}
+			if n := dials.Load(); n != tc.wantDials {
+				t.Fatalf("dialled %d times, want %d", n, tc.wantDials)
+			}
+		})
+	}
+}
+
+// TestClaudeIdentityDaemon_BudgetRunsFromTheProcessStart: the hook's budget is
+// counted from when its process began, so a slow start-up shrinks the probe
+// instead of letting start-up plus probe reach Claude Code's 5 s kill. With
+// 300 ms of the budget left, a daemon that never answers must cost about that,
+// not the dial and reply timeouts of two asks.
+func TestClaudeIdentityDaemon_BudgetRunsFromTheProcessStart(t *testing.T) {
+	probeTestEnv(t)
+	release := make(chan struct{})
+	fakeCtrlDaemon(t, func(net.Conn, string) { <-release })
+	t.Cleanup(func() { close(release) })
+	hookProcessStart = time.Now().Add(-identityHookBudget + 300*time.Millisecond)
+
+	start := time.Now()
+	rec := claudeIdentityDaemon()
+	if took := time.Since(start); took > 800*time.Millisecond {
+		t.Fatalf("the probe took %s with 300 ms of the hook's budget left", took)
+	}
+	if rec.DaemonVersion != "" {
+		t.Fatalf("a silent daemon yielded a version: %+v", rec)
+	}
+}
+
+// TestDaemonIdentity_CacheWriteIsCompareAndSwap: a slow hook that read marker
+// M1 but probed after a restart must not file its answer under M1 over the
+// record another hook already wrote for M2 — that would delete the
+// stale-on-error fallback right after a restart.
+func TestDaemonIdentity_CacheWriteIsCompareAndSwap(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
+	t0 := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	fresh := identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, DaemonInstance: "M2", CheckedAt: t0}
+	writeIdentityProbe(cache, fresh)
+
+	reads := 0
+	restartedMidProbe := func() string {
+		reads++
+		if reads == 1 {
+			return "M1"
+		}
+		return "M2"
+	}
+	probes := 0
+	rec := daemonIdentity(goodProbe(&probes), restartedMidProbe, cache, t0.Add(identityProbeTTL+time.Minute))
+	if !rec.DeclaredKey || probes != 1 {
+		t.Fatalf("the slow hook must still use its own answer: %+v, probes=%d", rec, probes)
+	}
+	if got, ok := readIdentityProbe(cache); !ok || got.DaemonInstance != "M2" || got.DaemonVersion != "0.21.0" {
+		t.Fatalf("the slow hook overwrote the fresh record: %+v", got)
+	}
+	// Control: a marker that holds still is filed.
+	probes = 0
+	daemonIdentity(goodProbe(&probes), fixedInstance("M2"), cache, t0.Add(2*identityProbeTTL))
+	if got, _ := readIdentityProbe(cache); got.DaemonVersion != "0.20.5" {
+		t.Fatalf("with a steady marker the answer must be cached: %+v", got)
 	}
 }

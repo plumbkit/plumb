@@ -57,6 +57,19 @@
 
 ### Fixed
 
+- **The identity hook's stale-on-error cache is harder to fool, and a wedged
+  daemon costs less.** (#572) Five narrow windows from the review of #570.
+  A daemon now removes its control socket before writing its PID file, so after
+  a crash a PID-reusing successor shows an empty instance marker until it
+  re-binds, instead of the dead daemon's. When the probe was uncertain but read
+  a version, the cached record is served only if it names that same version.
+  When a record for the same instance is cached and the `identity-keys` read
+  fails, the hook no longer asks `version` as well, which took about 2 s per
+  call against a wedged daemon. The probe budget now runs from the hook
+  process's start (4 s in all, under Claude Code's 5 s timeout) rather than from
+  the probe's. And the cache write re-reads the instance marker first and is
+  skipped if it moved, so a slow hook that probed across a restart cannot
+  overwrite the new instance's record.
 - **The project config watcher no longer leaks a descriptor when a workspace's
   `.plumb` directory is created after a session has attached.** (#568) On macOS
   and the BSDs, fsnotify's kqueue backend watches a directory created inside a

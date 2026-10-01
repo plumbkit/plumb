@@ -185,14 +185,14 @@ func TestClaudePreToolUse_FailsOpen(t *testing.T) {
 // dev build as current.
 func TestDaemonAcceptsIdentityStamp(t *testing.T) {
 	daemonAcceptsIdentityStamp := func(probe func() (string, error), cache string, now time.Time) bool {
-		var p func() (identityProbeRecord, error)
+		var p func(bool) (identityProbeRecord, error)
 		if probe != nil {
-			p = func() (identityProbeRecord, error) {
+			p = func(bool) (identityProbeRecord, error) {
 				v, err := probe()
 				return identityProbeRecord{DaemonVersion: v}, err
 			}
 		}
-		return daemonVersionAcceptsStamp(daemonIdentity(p, "pid=1 ino=2 mtime=3", cache, now).DaemonVersion)
+		return daemonVersionAcceptsStamp(daemonIdentity(p, fixedInstance("pid=1 ino=2 mtime=3"), cache, now).DaemonVersion)
 	}
 	cache := filepath.Join(t.TempDir(), "probe", identityProbeCacheFile)
 	now := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
@@ -647,11 +647,11 @@ func TestIdentityStampKey_ByCapability(t *testing.T) {
 // TestIdentityKeysReply: the daemon's answer lists both keys, and the hook's
 // parser finds the declared one in it — and not in an older daemon's refusal.
 func TestIdentityKeysReply(t *testing.T) {
-	if !identityKeysReplyHasDeclared(identityKeysReply()) {
+	if !parseIdentityKeysReply(identityKeysReply()).declared {
 		t.Fatalf("the hook does not read the declared key in the daemon's own reply %q", identityKeysReply())
 	}
 	for _, line := range []string{`error: unknown command "identity-keys"`, "ok", "ok " + mcp.ArgLogicalAgentKey, ""} {
-		if identityKeysReplyHasDeclared(line) {
+		if parseIdentityKeysReply(line).declared {
 			t.Errorf("%q read as listing the declared key", line)
 		}
 	}
@@ -716,7 +716,7 @@ func TestCtrlIdentityKeys_ThroughTheRealHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no reply: %v", err)
 	}
-	if !identityKeysReplyHasDeclared(line) {
+	if !parseIdentityKeysReply(line).declared {
 		t.Fatalf("daemon reply %q does not list %s", line, mcp.ArgLogicalAgentDeclaredKey)
 	}
 }
@@ -728,14 +728,14 @@ func TestDaemonIdentity_CachesTheDeclaredKey(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	probes := 0
-	probe := func() (identityProbeRecord, error) {
+	probe := func(bool) (identityProbeRecord, error) {
 		probes++
 		return identityProbeRecord{DaemonVersion: "0.20.3", DeclaredKey: true}, nil
 	}
-	if rec := daemonIdentity(probe, "pid=1 ino=2 mtime=3", cache, now); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(probe, fixedInstance("pid=1 ino=2 mtime=3"), cache, now); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("first probe: %+v, probes=%d", rec, probes)
 	}
-	if rec := daemonIdentity(probe, "pid=1 ino=2 mtime=3", cache, now.Add(30*time.Second)); !rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(probe, fixedInstance("pid=1 ino=2 mtime=3"), cache, now.Add(30*time.Second)); !rec.DeclaredKey || probes != 1 {
 		t.Fatalf("cached answer lost the declared key: %+v, probes=%d", rec, probes)
 	}
 }

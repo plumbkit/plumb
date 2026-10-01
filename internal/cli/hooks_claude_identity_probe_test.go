@@ -37,6 +37,11 @@ func probeTestEnv(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("PLUMB_WAKE_DIR", filepath.Join(home, "wake"))
+	// The hook's probe budget runs from the process's start, which a test binary
+	// outlives within seconds; restart it so the real glue still gets to dial.
+	started := hookProcessStart
+	hookProcessStart = time.Now()
+	t.Cleanup(func() { hookProcessStart = started })
 }
 
 // TestProbeTestEnv_IsolatesEveryDaemonPath: with the developer's own
@@ -317,16 +322,16 @@ func TestDaemonIdentity_CacheIsKeyedOnTheInstance(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), identityProbeCacheFile)
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	probes := 0
-	older := func() (identityProbeRecord, error) {
+	older := func(bool) (identityProbeRecord, error) {
 		probes++
 		return identityProbeRecord{DaemonVersion: "0.20.3"}, nil
 	}
 	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, DaemonInstance: "A", CheckedAt: now})
 
-	if rec := daemonIdentity(older, "A", cache, now.Add(10*time.Second)); !rec.DeclaredKey || probes != 0 {
+	if rec := daemonIdentity(older, fixedInstance("A"), cache, now.Add(10*time.Second)); !rec.DeclaredKey || probes != 0 {
 		t.Fatalf("control: the same instance inside the TTL must hit: %+v, probes=%d", rec, probes)
 	}
-	if rec := daemonIdentity(older, "B", cache, now.Add(20*time.Second)); rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(older, fixedInstance("B"), cache, now.Add(20*time.Second)); rec.DeclaredKey || probes != 1 {
 		t.Fatalf("another instance must re-probe: %+v, probes=%d", rec, probes)
 	}
 	if rec, _ := readIdentityProbe(cache); rec.DaemonInstance != "B" || rec.DeclaredKey {
@@ -337,11 +342,11 @@ func TestDaemonIdentity_CacheIsKeyedOnTheInstance(t *testing.T) {
 	// one (a cache written by an older hook binary).
 	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, CheckedAt: now})
 	probes = 0
-	if rec := daemonIdentity(older, "", cache, now.Add(10*time.Second)); rec.DeclaredKey || probes != 1 {
+	if rec := daemonIdentity(older, fixedInstance(""), cache, now.Add(10*time.Second)); rec.DeclaredKey || probes != 1 {
 		t.Fatalf("no marker must re-probe, never trust the cache: %+v, probes=%d", rec, probes)
 	}
 	fresh := filepath.Join(t.TempDir(), identityProbeCacheFile)
-	daemonIdentity(older, "", fresh, now)
+	daemonIdentity(older, fixedInstance(""), fresh, now)
 	if _, err := os.Stat(fresh); err == nil {
 		t.Fatal("an answer with no instance marker was cached; no later call could ever match it")
 	}
