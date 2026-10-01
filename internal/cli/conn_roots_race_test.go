@@ -446,7 +446,11 @@ func TestRootsCoalescer_Protocol(t *testing.T) {
 
 // watchSession builds a bare connection on a real project-config watch
 // manager, plus a closer that runs close()'s own order for the watcher:
-// cancel, then releaseProjectWatch.
+// cancel, then releaseProjectWatch. A directory the manager will watch must
+// come from watchedTempDir(t, m), never t.TempDir: this helper registers the
+// manager's clean-up first, so a plain t.TempDir created after it is removed
+// BEFORE the manager closes, which is the delete-during-close race that
+// double-closes a descriptor in fsnotify's kqueue backend (see closeFSWatcher).
 func watchSession(t *testing.T) (s *connSession, m *projectConfigWatchManager, closeLike func()) {
 	t.Helper()
 	m, _ = testWatchManager(t, nil)
@@ -464,7 +468,7 @@ func watchSession(t *testing.T) (s *connSession, m *projectConfigWatchManager, c
 func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 	t.Run("control: one reference, released on close", func(t *testing.T) {
 		s, m, closeLike := watchSession(t)
-		ws := t.TempDir()
+		ws := watchedTempDir(t, m)
 		s.trackProjectWatch(ws)
 		if got := m.refs(ws); got != 1 {
 			t.Fatalf("refs = %d, want 1", got)
@@ -480,7 +484,7 @@ func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 	})
 	t.Run("close at the lane", func(t *testing.T) {
 		s, m, closeLike := watchSession(t)
-		ws := t.TempDir()
+		ws := watchedTempDir(t, m)
 		fired := closeAtLane(s, closeLike)
 		s.trackProjectWatch(ws)
 		if !fired.Load() {
@@ -492,7 +496,7 @@ func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 	})
 	t.Run("the reference is held before it is published", func(t *testing.T) {
 		s, m, _ := watchSession(t)
-		ws := t.TempDir()
+		ws := watchedTempDir(t, m)
 		refsAtLane := -1
 		s.beforeLiveMutate = func() { refsAtLane = m.refs(ws) }
 		s.trackProjectWatch(ws)
@@ -502,7 +506,7 @@ func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 	})
 	t.Run("a concurrent track of the same root keeps one reference", func(t *testing.T) {
 		s, m, _ := watchSession(t)
-		ws := t.TempDir()
+		ws := watchedTempDir(t, m)
 		// The first track, holding its reference but not yet published, lets a
 		// second track of the same root run to completion. The first then finds
 		// the root already published and must drop its own reference.
@@ -519,7 +523,7 @@ func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 	})
 	t.Run("a re-pin releases the previous root", func(t *testing.T) {
 		s, m, _ := watchSession(t)
-		ws, ws2 := t.TempDir(), t.TempDir()
+		ws, ws2 := watchedTempDir(t, m), watchedTempDir(t, m)
 		s.trackProjectWatch(ws)
 		s.trackProjectWatch(ws2)
 		if a, b := m.refs(ws), m.refs(ws2); a != 0 || b != 1 {
@@ -534,7 +538,7 @@ func TestTrackProjectWatch_NoWatchOutlivesClose(t *testing.T) {
 func TestTrackProjectWatch_CloseRaceStress(t *testing.T) {
 	const iterations = 3000
 	m, _ := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	leaks := 0
 	for range iterations {
 		ctx, cancel := context.WithCancel(context.Background())
