@@ -243,11 +243,16 @@ const (
 	//     stamp in the measurement behind issue #556. A second is long enough
 	//     for a starved but alive daemon and short enough that one wedged ask
 	//     cannot hold a tool call.
-	//   - identityProbeBudget caps the whole probe at three seconds, however many
-	//     asks it makes, leaving at least a second and a half of the five for
-	//     process start-up, the cache read and write, and the output.
+	//   - identityHookBudget is the hook's whole allowance, counted from the
+	//     process's start rather than from the probe's: under load start-up
+	//     alone has taken 1.77 s, and a budget that began only when the probe
+	//     did could carry start-up plus probe past the five seconds. Four
+	//     seconds leaves a second for the cache write and the output.
+	//   - identityProbeBudget is the same cap for a caller that is not a
+	//     short-lived hook (the status check), counted from its own start.
 	identityProbeDialTimeout  = time.Second
 	identityProbeReplyTimeout = time.Second
+	identityHookBudget        = 4 * time.Second
 	identityProbeBudget       = 3 * time.Second
 
 	// identityProbeCacheFile is new with the declared-key probe: a hook binary
@@ -285,8 +290,18 @@ type identityProbeRecord struct {
 // claudeIdentityDaemon is the production gate: what the running daemon
 // accepts, from the cached control-socket probe (zero when it cannot be had).
 func claudeIdentityDaemon() identityProbeRecord {
-	return daemonIdentity(probeDaemonIdentity, daemonInstanceMarker(), filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
+	deadline := hookProcessStart.Add(identityHookBudget)
+	probe := func(haveRecord bool) (identityProbeRecord, error) {
+		return probeDaemonIdentityBy(deadline, haveRecord)
+	}
+	return daemonIdentity(probe, daemonInstanceMarker, filepath.Join(wakeDir(), identityProbeCacheFile), time.Now())
 }
+
+// hookProcessStart is when this process began, as far as Go code can tell:
+// package initialisation runs before main, so it is the earliest instant the
+// hook can observe. The kernel's exec before it is not counted, which the
+// second of slack in identityHookBudget absorbs.
+var hookProcessStart = time.Now()
 
 // identityStampKey picks the argument key the stamp goes under for the running
 // daemon, or "" when the call must not be stamped. The declarable key is
@@ -337,19 +352,29 @@ func identityStampDecision(daemon func() identityProbeRecord) (key, why string) 
 // A record for a DIFFERENT instance is never served: that is a swapped daemon,
 // possibly an older build that rejects the stamp, and the one thing the cache
 // must not do is vouch for a process it did not ask. An answer the probe could
-// only half give (uncertain) yields to such a record for the same reason.
+// only half give (uncertain) yields to such a record for the same reason —
+// unless it read a version that differs from the record's, which is fresh
+// evidence that the record no longer describes the daemon.
 //
 // With no cache to stand in, every failure (no daemon, a daemon too old to
 // answer, an unreadable cache) is a record with no version, which no threshold
 // accepts: an unstamped call is what the client would have sent anyway.
 //
-// instance is the daemonInstanceMarker the caller read before calling, and it
-// must be read before the probe: the probe then answers for that instance or
-// a later one, so an answer can only ever be filed under an instance at or
-// before the one that gave it — a mismatch on the next call, never a false
-// hit. An empty instance (the marker was unreadable) never hits and is never
-// written: without it the cache cannot tell one daemon from the next.
-func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePath string, now time.Time) identityProbeRecord {
+// readInstance yields the daemonInstanceMarker. It is read before the probe:
+// the probe then answers for that instance or a later one, so an answer can
+// only ever be filed under an instance at or before the one that gave it — a
+// mismatch on the next call, never a false hit. It is read again just before
+// the cache write, which is skipped if the marker moved: a hook that probed
+// slowly across a restart would otherwise file its answer under the old
+// instance over the fresh record another hook had written for the new one,
+// removing the stale-on-error fallback right after a restart. An empty
+// instance (the marker was unreadable) never hits and is never written:
+// without it the cache cannot tell one daemon from the next.
+//
+// probe is told whether a record for this very instance is on file, so a
+// wedged daemon is not asked twice for what the record already answers.
+func daemonIdentity(probe func(haveRecord bool) (identityProbeRecord, error), readInstance func() string, cachePath string, now time.Time) identityProbeRecord {
+	instance := readInstance()
 	cached, haveCache := readIdentityProbe(cachePath)
 	sameInstance := haveCache && instance != "" && cached.DaemonInstance == instance
 	if sameInstance && now.Sub(cached.CheckedAt) < identityProbeTTL && now.After(cached.CheckedAt) {
@@ -358,7 +383,7 @@ func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePa
 	if probe == nil {
 		return identityProbeRecord{probeFailure: "no daemon probe is wired in"}
 	}
-	rec, err := probe()
+	rec, err := probe(sameInstance)
 	switch {
 	case err != nil:
 		if sameInstance {
@@ -366,7 +391,7 @@ func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePa
 		}
 		return identityProbeRecord{probeFailure: err.Error()}
 	case rec.uncertain:
-		if sameInstance {
+		if sameInstance && cached.DaemonVersion == rec.DaemonVersion {
 			return cached
 		}
 		return rec
@@ -375,7 +400,9 @@ func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePa
 	}
 	rec.CheckedAt = now
 	rec.DaemonInstance = instance
-	writeIdentityProbe(cachePath, rec)
+	if readInstance() == instance {
+		writeIdentityProbe(cachePath, rec)
+	}
 	return rec
 }
 

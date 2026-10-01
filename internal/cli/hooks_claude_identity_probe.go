@@ -85,7 +85,15 @@ func probeDaemonVersion(deadline time.Time) (string, error) {
 // the channel, and the record is then marked uncertain — the safe key for this
 // call, nothing cached — rather than guessed.
 func probeDaemonIdentity() (identityProbeRecord, error) {
-	deadline := time.Now().Add(identityProbeBudget)
+	return probeDaemonIdentityBy(time.Now().Add(identityProbeBudget), false)
+}
+
+// probeDaemonIdentityBy is probeDaemonIdentity against a caller-chosen
+// deadline. haveRecord says a cached record for this daemon instance exists;
+// a daemon that was connected to but did not answer identity-keys then costs
+// nothing more — the record already answers, and a second ask of a wedged
+// daemon only added its own timeout to every call.
+func probeDaemonIdentityBy(deadline time.Time, haveRecord bool) (identityProbeRecord, error) {
 	reply, connected, err := askDaemonCtrl(ctrlIdentityKeysCommand, deadline)
 	if err != nil && !connected {
 		return identityProbeRecord{}, err
@@ -93,6 +101,9 @@ func probeDaemonIdentity() (identityProbeRecord, error) {
 	answer := parseIdentityKeysReply(reply)
 	if err == nil && answer.version != "" {
 		return identityProbeRecord{DaemonVersion: answer.version, DeclaredKey: answer.declared}, nil
+	}
+	if err != nil && haveRecord {
+		return identityProbeRecord{}, err
 	}
 	version, verr := probeDaemonVersion(deadline)
 	if verr != nil {
@@ -133,12 +144,6 @@ func parseIdentityKeysReply(line string) identityKeysAnswer {
 		}
 	}
 	return answer
-}
-
-// identityKeysReplyHasDeclared reports whether an `identity-keys` reply lists
-// mcp.ArgLogicalAgentDeclaredKey.
-func identityKeysReplyHasDeclared(line string) bool {
-	return parseIdentityKeysReply(line).declared
 }
 
 // classifyDialError separates "there is no daemon" from "there is something

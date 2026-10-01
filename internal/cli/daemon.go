@@ -298,7 +298,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer ln.Close()
 
 	pidPath := daemonPIDPath()
-	if err := os.WriteFile(pidPath, fmt.Appendf(nil, "%d", os.Getpid()), 0o600); err != nil {
+	if err := publishDaemonPID(os.WriteFile); err != nil {
 		slog.Warn("daemon: could not write PID file", "path", pidPath, "err", err)
 	}
 	defer os.Remove(pidPath)
