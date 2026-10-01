@@ -112,9 +112,10 @@ type SessionStart struct {
 	repin          func(ctx context.Context, workspace, language string, force, connectionScope bool) (RepinReport, error) // may be nil; re-pins to an explicit workspace, optionally forcing a primary language, and reports which pin moved; force overrides the sticky-pin guard
 	episodicFn     func(ws string) (string, bool)                                                                          // may be nil; returns the last episodic summary for the workspace
 	toolProfile    func() (profile string, hidden int, reason string)                                                      // may be nil; the resolved tool profile, count of tools hidden from tools/list, and the resolution reason
-	lspWarmingFn   func() (bool, time.Duration)                                                                            // may be nil; reports whether the primary LSP is still warming + elapsed
-	lspDiagModeFn  func() string                                                                                           // may be nil; the resolved diagnostics mode of the primary LSP ("" when unresolved)
-	lspGoWorkFn    func() string                                                                                           // may be nil; the go.work the primary LSP was started with GOWORK=off against ("" when none)
+	lspServerFn    func(ws string) (language string, started bool)                                                         // may be nil; the language whose server serves ws, and whether it has started
+	lspWarmingFn   func(ws string) (bool, time.Duration)                                                                   // may be nil; reports whether the LSP serving ws is still warming + elapsed
+	lspDiagModeFn  func(ws string) string                                                                                  // may be nil; the resolved diagnostics mode of the LSP serving ws ("" when unresolved)
+	lspGoWorkFn    func(ws string) string                                                                                  // may be nil; the go.work the LSP serving ws was started with GOWORK=off against ("" when none)
 	purposeFn      func(purpose string)                                                                                    // may be nil; persists a validated session purpose tag
 	selfSessID     func() string                                                                                           // this session's ID, excluded from the peer digest and shown as the caller's own
 	selfName       func() string                                                                                           // may be nil; this session's own current name, shown as the caller's own
@@ -427,7 +428,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
 	t.writeSessionIdentity(&sb, ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx))
-	t.writeSessionRecommendedStart(&sb, hasErrors, lang, lspKey)
+	t.writeSessionRecommendedStart(&sb, ws, hasErrors, lang, lspKey)
 	if t.xcodeHintFn != nil {
 		if hint := t.xcodeHintFn(""); hint != "" {
 			sb.WriteString("\n## Xcode build server\n")

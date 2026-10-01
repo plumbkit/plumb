@@ -45,12 +45,14 @@ func isolateGoWorkEnv(t *testing.T) {
 }
 
 // spawnResult is what one pool spawn gave the Go language server: the GOWORK its
-// process received (and whether it received one at all), and the go.work the
-// pool REPORTS switching off — what session_start renders.
+// process received (and whether it received one at all), the go.work the pool
+// REPORTS switching off — what session_start renders — and the go.work the pool
+// PLANNED to switch off, asked for before the server existed.
 type spawnResult struct {
 	goWork   string
 	set      bool
 	reported string
+	planned  string
 }
 
 // spawnedGoWork starts the pool's "go" language server for root with a stand-in
@@ -67,10 +69,13 @@ func spawnedGoWork(t *testing.T, root string, tweak func(p *workspacePool)) spaw
 		tweak(pool)
 	}
 	defer pool.close()
+	// The prediction is read BEFORE the spawn: it is what session_start tells an
+	// agent whose server has not started, so it must not lean on one that has.
+	planned := pool.plannedGoWorkOff(root, "go")
 	if _, err := pool.acquireLang(context.Background(), root, "go", false); err != nil {
 		t.Fatalf("acquireLang: %v", err)
 	}
-	res := spawnResult{reported: pool.goWorkOffFor(root, "go")}
+	res := spawnResult{reported: pool.goWorkOffFor(root, "go"), planned: planned}
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		data, err := os.ReadFile(out)
@@ -107,21 +112,19 @@ func TestPoolSpawn_GoWorkOffForWorktreeUnderEnclosingGoWork(t *testing.T) {
 	}
 }
 
-// TestPoolSpawn_GoWorkLeftAlone is the other direction: every case where the
-// workspace applies, or where GOWORK is already somebody's explicit choice, must
-// reach the server untouched — and the pool must not claim otherwise.
-func TestPoolSpawn_GoWorkLeftAlone(t *testing.T) {
-	isolateGoWorkEnv(t)
-	mainDir, wt := goWorkWorktreeFixture(t)
+// goWorkLeftAloneCase is one way a Go server's GOWORK reaches it untouched, or
+// as somebody's explicit choice.
+type goWorkLeftAloneCase struct {
+	name    string
+	root    string
+	inherit string // a GOWORK already in the daemon's environment
+	tweak   func(p *workspacePool)
+	wantSet bool
+	want    string
+}
 
-	for _, tc := range []struct {
-		name    string
-		root    string
-		inherit string // a GOWORK already in the daemon's environment
-		tweak   func(p *workspacePool)
-		wantSet bool
-		want    string
-	}{
+func goWorkLeftAloneCases(mainDir, wt string) []goWorkLeftAloneCase {
+	return []goWorkLeftAloneCase{
 		{name: "main checkout listed in go.work keeps workspace mode", root: mainDir},
 		{
 			name: "inherited GOWORK wins", root: wt,
@@ -142,7 +145,17 @@ func TestPoolSpawn_GoWorkLeftAlone(t *testing.T) {
 				p.langs[0].cfg.InitializationOptions = map[string]any{"env": map[string]any{"GOWORK": "/gopls/go.work"}}
 			},
 		},
-	} {
+	}
+}
+
+// TestPoolSpawn_GoWorkLeftAlone is the other direction: every case where the
+// workspace applies, or where GOWORK is already somebody's explicit choice, must
+// reach the server untouched — and the pool must not claim otherwise.
+func TestPoolSpawn_GoWorkLeftAlone(t *testing.T) {
+	isolateGoWorkEnv(t)
+	mainDir, wt := goWorkWorktreeFixture(t)
+
+	for _, tc := range goWorkLeftAloneCases(mainDir, wt) {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.inherit != "" {
 				t.Setenv("GOWORK", tc.inherit)
@@ -153,6 +166,48 @@ func TestPoolSpawn_GoWorkLeftAlone(t *testing.T) {
 			}
 			if got.reported != "" {
 				t.Fatalf("pool reports GOWORK=off against %q for a server it left alone", got.reported)
+			}
+		})
+	}
+}
+
+// TestPlannedGoWorkOff_EqualsTheSpawn pins the prediction session_start makes for
+// a server that has not started (a subagent's first call, PR #559 review B2) to
+// what the pool then really spawns: the go.work it plans to switch off is the one
+// the server's own environment shows switched off, and the one the pool reports
+// afterwards. The prediction re-derives the decision from config and disk; if it
+// drifted from startOrReuse — a case one of them knew and the other did not — an
+// agent would be told its server runs one way and find it runs the other.
+//
+// The cases are every outcome of the decision: switched off for a worktree under
+// another checkout's go.work, and each of the four ways it is left alone.
+func TestPlannedGoWorkOff_EqualsTheSpawn(t *testing.T) {
+	isolateGoWorkEnv(t)
+	mainDir, wt := goWorkWorktreeFixture(t)
+	offFile := filepath.Join(filepath.Dir(mainDir), "go.work")
+
+	cases := append([]goWorkLeftAloneCase{
+		{name: "worktree under another checkout's go.work", root: wt},
+	}, goWorkLeftAloneCases(mainDir, wt)...)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.inherit != "" {
+				t.Setenv("GOWORK", tc.inherit)
+			}
+			got := spawnedGoWork(t, tc.root, tc.tweak)
+
+			// What the server's own environment shows is the ground truth the
+			// prediction is held to: switched off exactly when GOWORK=off arrived.
+			spawnedOff := got.set && got.goWork == "off"
+			if (got.planned != "") != spawnedOff {
+				t.Errorf("planned GOWORK=off against %q, but the spawn's GOWORK = %q (set=%v)", got.planned, got.goWork, got.set)
+			}
+			if spawnedOff && got.planned != offFile {
+				t.Errorf("planned GOWORK=off against %q, want the go.work that lists another directory: %q", got.planned, offFile)
+			}
+			if got.planned != got.reported {
+				t.Errorf("planned %q but the pool reports %q after the spawn", got.planned, got.reported)
 			}
 		})
 	}

@@ -411,23 +411,15 @@ Makefile or a script reading `$PWD` would trust.
 
 The same decision is made for the stored `[tasks.<lang>]` commands `run_task` and
 `mutation_test` run, keyed on the directory the command runs in, and `run_task`
-reports it. It is not made for `run_command`, whose commands are the agent's own —
-one of them may be exactly the `go work use .` that fixes a workspace.
+reports it, and for the Go language server (see [The Go language server and
+`GOWORK`](#the-go-language-server-and-gowork)). It is not made for
+`run_command`, whose commands are the agent's own — one of them may be exactly
+the `go work use .` that fixes a workspace.
 
 It applies to the git process plumb runs on your behalf — the one that runs
 hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
 `log -1`, `rev-parse`, `diff --cached`) are plumbing whose output plumb parses,
 and deliberately keep inheriting.
-
-The same `GOWORK` decision is made for the **Go language server** plumb starts
-for a workspace root, keyed on that root: gopls resolves the same `go.work`, and
-from a worktree it would otherwise answer `workspace_symbols` from the main
-checkout and never type-check the worktree's files. A `GOWORK` under
-`[lsp.go]`'s `env`, or in gopls's own `env` setting under
-`[lsp.go.initialization_options]`, is a choice and is used as is. `session_start` shows a `Go LSP:` line naming the `go.work`
-when the server runs with `GOWORK=off`, and the daemon log says so when it
-starts one. The decision is made when the server starts: a server already
-running keeps the environment it started with.
 
 **A project's entries compose with your global ones**, the way every other
 setting in this file does: the project's value wins for the names it sets, and a
@@ -1352,6 +1344,32 @@ build_on_save_step   = "check"   # a step defined in your build.zig
 > can be set in a workspace's `.plumb/config.toml`, enabling this for a repository
 > you do not trust means opening it can run that repository's build script. plumb
 > never turns build-on-save on for you; leave it unset for untrusted code.
+
+### The Go language server and `GOWORK`
+
+The `GOWORK` decision [the git child gets](#the-git-childs-environment) is also
+made for the **Go language server** plumb starts for a workspace root, keyed on
+that root: gopls resolves the same `go.work`, and from a worktree it would
+otherwise answer `workspace_symbols` from the main checkout and never type-check
+the worktree's files. A `GOWORK` under `[lsp.go]`'s `env`, or in gopls's own
+`env` setting under `[lsp.go.initialization_options]`, is a choice and is used as
+is. `session_start` shows a `Go LSP:` line naming the `go.work` when the server
+serving the calling agent's workspace runs with `GOWORK=off` — or, when that
+server has not started yet (a subagent's own worktree before its first semantic
+call), the `go.work` it **will start** with `GOWORK=off` against, decided from
+disk the same way. The daemon log says so when it starts one.
+
+**The decision is made once per language-server start.** A running server keeps
+the environment it started with, and so does one restarted after a crash or woken
+from hibernation. Editing `go.work` — `go work use` to list a worktree, or
+dropping a `use` line — therefore changes nothing for a server already running
+for that root until it starts again. `plumb restart` is always enough. It is not
+the only way: a workspace's primary server is torn down 90 s after the last
+session on that root detaches, and the next one decides again. A server started
+on demand for another root (a subagent's worktree, say) runs until the daemon
+stops, so for that one `plumb restart` is the way. The git child and the
+`[tasks.<lang>]` commands decide afresh for every command, so they follow the
+edit at once.
 
 ### Multiple language servers in one project
 

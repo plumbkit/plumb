@@ -99,10 +99,10 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, l
 	// And the GOWORK=off line (#521): a subagent in a worktree is the typical
 	// brief caller, and the one whose language server would otherwise look
 	// inconsistent with the go commands its own shell runs.
-	sb.WriteString(t.lspGoWorkNote())
-	branch := gitBranch(ws)
-	if branch != "" {
-		fmt.Fprintf(&sb, "Branch:   %s\n", branch)
+	sb.WriteString(t.lspGoWorkNote(ws))
+	head := gitHeadLabel(ws)
+	if head != "" {
+		fmt.Fprintf(&sb, "Branch:   %s\n", head)
 	}
 	// The same unconditional self line the full packet renders, through the same
 	// function. Brief is where it matters MOST: a woken or auto-briefed agent has
@@ -115,7 +115,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, l
 	// place it will definitely look is here.
 	sb.WriteString(t.linkageNote(linked))
 	sb.WriteString(stampNote)
-	if t.gitPolicyFn != nil && branch != "" {
+	if t.gitPolicyFn != nil && head != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
 	}
 	fmt.Fprintf(&sb, "Diagnostics: %d\n", t.diagnosticsCount())

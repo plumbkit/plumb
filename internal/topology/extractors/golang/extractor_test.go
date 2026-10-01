@@ -148,6 +148,56 @@ func (v Value) String() string { return "" }
 	}
 }
 
+// TestExtract_GenericReceiverQualifiedStripsTypeParameters pins the receiver of
+// a generic type's method: go/ast spells `*S[T]` as a StarExpr over an
+// IndexExpr, and `M[K, V]` as an IndexListExpr, neither of which typeStr used to
+// know — so the Qualified came out as "(*_).Run" and no name_path could ever
+// address the method by its receiver (PR #559 review). The type parameters are
+// dropped, matching how a name_path names the type: "S/Run", not "S[T]/Run".
+func TestExtract_GenericReceiverQualifiedStripsTypeParameters(t *testing.T) {
+	src := []byte(`package p
+
+type S[T any] struct{}
+
+type M[K comparable, V any] struct{}
+
+func (s *S[T]) Run() {}
+
+func (s S[T]) Get() {}
+
+func (m *M[K, V]) Put() {}
+
+func (m M[_, _]) Len() int { return 0 }
+`)
+	nodes, _, err := New().Extract(context.Background(), "p.go", src)
+	if err != nil {
+		t.Fatalf("Extract error: %v", err)
+	}
+	want := map[string]string{
+		"Run": "(*S).Run",
+		"Get": "(S).Get",
+		"Put": "(*M).Put",
+		"Len": "(M).Len",
+	}
+	seen := 0
+	for _, n := range nodes {
+		w, ok := want[n.Name]
+		if !ok {
+			continue
+		}
+		seen++
+		if n.Qualified != w {
+			t.Errorf("%s.Qualified = %q, want %q", n.Name, n.Qualified, w)
+		}
+		if n.Name == "Run" && n.Signature != "func (s *S) Run()" {
+			t.Errorf("Run.Signature = %q, want %q: the receiver must not degrade to the unknown-type marker", n.Signature, "func (s *S) Run()")
+		}
+	}
+	if seen != len(want) {
+		t.Fatalf("found %d of the %d generic methods", seen, len(want))
+	}
+}
+
 func TestExtract_BenchAndExampleAreTest(t *testing.T) {
 	src := []byte(`package p
 

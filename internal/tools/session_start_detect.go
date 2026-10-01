@@ -280,6 +280,24 @@ func gitBranch(ws string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// gitHeadLabel names what HEAD is on for the orientation's Branch line and
+// gates its git-policy section: the branch, or "detached at <short sha>" on a
+// detached HEAD — the standard review-worktree setup, which a branch name
+// alone left with neither line (issue #546). "" outside a git repository.
+func gitHeadLabel(ws string) string {
+	if branch := gitBranch(ws); branch != "" {
+		return branch
+	}
+	out, err := exec.Command("git", gitNoOptionalLocks, "-C", ws, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	if sha := strings.TrimSpace(string(out)); sha != "" {
+		return "detached at " + sha
+	}
+	return ""
+}
+
 // gitRecentCommits returns up to n recent commit subjects in "shortsha subject"
 // form. Best-effort; returns nil on any error.
 func gitRecentCommits(ws string, n int) []string {

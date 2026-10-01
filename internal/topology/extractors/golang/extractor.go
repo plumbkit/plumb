@@ -367,12 +367,23 @@ func fieldStr(f *ast.Field) string {
 	return sb.String()
 }
 
+// typeStr renders a type expression for a signature or a method's receiver.
+//
+// An instantiated generic type — S[T], or M[K, V] — renders as its base name,
+// type parameters dropped: a method's Qualified is "(*S).Run" whatever S's
+// parameters are called, so the receiver is a name a name_path can address
+// ("S/Run"). Without the two cases below the receiver fell through to "_" and
+// the method could not be told from any other by its receiver.
 func typeStr(expr ast.Expr) string {
 	switch t := expr.(type) {
 	case *ast.Ident:
 		return t.Name
 	case *ast.StarExpr:
 		return "*" + typeStr(t.X)
+	case *ast.IndexExpr:
+		return typeStr(t.X)
+	case *ast.IndexListExpr:
+		return typeStr(t.X)
 	case *ast.SelectorExpr:
 		return typeStr(t.X) + "." + t.Sel.Name
 	case *ast.ArrayType:

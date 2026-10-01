@@ -7,9 +7,9 @@ import (
 )
 
 func TestSessionStart_WarmingAdvisory(t *testing.T) {
-	ss := (&SessionStart{}).WithLSPWarmup(func() (bool, time.Duration) { return true, 4 * time.Second })
+	ss := (&SessionStart{}).WithLSPWarmup(func(string) (bool, time.Duration) { return true, 4 * time.Second })
 	var sb strings.Builder
-	if !ss.writeLSPWarming(&sb) {
+	if !ss.writeLSPWarming(&sb, "/ws") {
 		t.Fatal("expected the warming advisory to be written")
 	}
 	out := sb.String()
@@ -22,7 +22,7 @@ func TestSessionStart_WarmingAdvisory(t *testing.T) {
 
 	noWarm := &SessionStart{}
 	var sb2 strings.Builder
-	if noWarm.writeLSPWarming(&sb2) || sb2.Len() != 0 {
+	if noWarm.writeLSPWarming(&sb2, "/ws") || sb2.Len() != 0 {
 		t.Fatal("expected no advisory when no accessor is wired")
 	}
 }
@@ -33,9 +33,9 @@ func TestSessionStart_WarmingAdvisory(t *testing.T) {
 func TestSessionStart_WarmingBeatsAvailable(t *testing.T) {
 	ss := (&SessionStart{}).
 		WithLSPLanguage(func() string { return "go" }).
-		WithLSPWarmup(func() (bool, time.Duration) { return true, 2 * time.Second })
+		WithLSPWarmup(func(string) (bool, time.Duration) { return true, 2 * time.Second })
 	var sb strings.Builder
-	ss.writeSessionRecommendedStart(&sb, false, "Go", "go")
+	ss.writeSessionRecommendedStart(&sb, "/ws", false, "Go", "go")
 	out := sb.String()
 	if strings.Contains(out, "LSP is ready") {
 		t.Fatalf("warming should pre-empt 'LSP is ready': %q", out)
@@ -52,9 +52,9 @@ func TestSessionStart_WarmingBeatsAvailable(t *testing.T) {
 func TestSessionStart_ReadyWording(t *testing.T) {
 	ss := (&SessionStart{}).
 		WithLSPLanguage(func() string { return "go" }).
-		WithLSPWarmup(func() (bool, time.Duration) { return false, 0 })
+		WithLSPWarmup(func(string) (bool, time.Duration) { return false, 0 })
 	var sb strings.Builder
-	ss.writeSessionRecommendedStart(&sb, false, "Go", "go")
+	ss.writeSessionRecommendedStart(&sb, "/ws", false, "Go", "go")
 	out := sb.String()
 	if !strings.Contains(out, "LSP is ready") {
 		t.Fatalf("expected 'LSP is ready' wording: %q", out)
