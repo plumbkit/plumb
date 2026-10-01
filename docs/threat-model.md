@@ -165,14 +165,14 @@ this handshake.
 
 That fallback is not unconditional, and the cost of losing it is larger than
 it first looks. The PIN row is absent with `[session] persist_state` off, on a
-first connect, and — the case that bites in the DEFAULT configuration — once
-the row ages past `[session] persist_state_ttl_minutes` (default 1440) and the
-startup prune, which runs with no live exemption, deletes it. (The identity
-record alongside it is retained regardless of age; only the pin expires. See
-`[session] persist_state`.) When the pin row is
-gone, every lower rung refuses the wide root too, because `roots` and the
-workspace pre-pin are weaker origins than the declaration that is now missing,
-so the caller must declare the workspace again. The boundary is never
+first connect, and once the row ages past `[session] persist_state_ttl_minutes`
+(default 1440) and the reaper's sweep finds the session not connected and
+deletes it. (The sweep does not run at daemon start, when no surviving serve
+has reconnected yet to be exempted. The identity record alongside the pin is
+retained regardless of age; only the pin expires. See `[session]
+persist_state`.) When the pin row is gone, every lower rung refuses the wide
+root too, because `roots` and the workspace pre-pin are weaker origins than the
+declaration that is now missing, so the caller must declare the workspace again. The boundary is never
 **wider** — and with `serve` no longer attaching from its launch directory
 (no `--workspace`/`PLUMB_WORKSPACE` ⇒ unattached), the rungs below the
 pre-pin cannot anchor an unrelated project either: path seeding needs an
@@ -241,7 +241,16 @@ shares one pin unless each call carries a logical-agent identity — per-call
 Code's PreToolUse hook). `session_start.session_id` identifies only that call.
 A client that sends none still shares one pin, and its anonymous
 state-changing calls are refused once two identities have been seen — see
-[Known gaps](#known-gaps).
+[Known gaps](#known-gaps). A per-call identity whose conversation never
+declared itself through `session_start` on the connection is refused the same
+way rather than given a fresh shard of the connection's root (#513), unless
+every identity on the connection belongs to one conversation. Declarations
+persist under the proxy session and survive a daemon restart that the serve
+reconnects across. The idle reaper reclaims one only when it finds the serve
+disconnected and the declaration older than `persist_state_ttl_minutes`;
+state-changing calls refresh it at most once per min(TTL/4, 1 h). With
+`persist_state` off, or after such a reclaim, the agent is refused once and must
+call `session_start` again.
 
 ### A2 — Path escape via alias or traversal
 

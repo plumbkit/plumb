@@ -328,6 +328,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 
 	logicalAgent := resolveLogicalAgent(params.Meta, argAgent)
 	ctx = WithLogicalAgent(ctx, logicalAgent)
+	// The scratchpad a tool's callbacks note their decisions in, for ToolResultMeta
+	// to read after the run (result_notes.go).
+	ctx = WithResultNotes(ctx)
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
 	}

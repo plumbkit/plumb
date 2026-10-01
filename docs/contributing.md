@@ -15,16 +15,21 @@ make build
 ```
 
 `make install-hooks` installs a pre-commit hook that runs
-`golangci-lint run --fix ./...`, so formatting and lint issues are caught before
-they reach the tree.
+`golangci-lint run --allow-parallel-runners ./...`, so formatting and lint issues
+are caught before they reach the tree. The hook only CHECKS: an unformatted file
+fails the commit, the hook lists it, and you run `golangci-lint run --fix ./...`,
+review, re-stage and commit again. It never rewrites files itself, because a
+rewrite after the commit's content was chosen left a dirty tree behind a passing
+commit. `--allow-parallel-runners` keeps a peer agent's lint from failing your
+commit on the shared lock. `make check-pre-commit` (part of `make verify`) pins
+both behaviours against a stub linter.
 
 > **Keep your golangci-lint on the pinned version.** `GOLANGCI_LINT_VERSION` in
 > `.github/workflows/ci.yml` is the single source of truth, and the pre-commit
-> hook reads it to warn when your binary differs. The warning matters because the
-> hook runs `--fix`: a newer binary brings newer gofumpt rules, so it can reformat
-> files your commit never touched, and they sit as unstaged modifications until
-> someone's `git add -A` sweeps them into an unrelated PR. Stage files by name
-> rather than with `-A` whenever the warning fires. To match the pin:
+> hook reads it to warn when your binary differs. The warning matters because a
+> newer binary brings newer gofumpt rules, so the hook can fail on files your
+> commit never touched. Do not reformat those as part of your commit. To match
+> the pin:
 > `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v<pinned>`
 > — note that a Homebrew-installed `golangci-lint` drifts on its own schedule and
 > will re-break the match on the next `brew upgrade`. When the newer version is
@@ -49,9 +54,9 @@ they reach the tree.
 | `make install-clients` | Install every supported client CLI, for local client-integration testing. |
 | `make clients-test` / `make clients-test-auth` | On-demand connection/auth tiers that drive each installed client CLI headless (own build tags, never part of `make verify`) — see the comments above these targets in the `Makefile`. |
 
-> **Formatting:** always format via `golangci-lint run --fix ./...` (what the
-> hook runs), not a standalone `gofumpt` binary — the two can pin different
-> versions and disagree.
+> **Formatting:** always format via `golangci-lint run --fix ./...` (the fix the
+> hook names when it fails), not a standalone `gofumpt` binary — the two can pin
+> different versions and disagree.
 
 **Why the CHANGELOG placement guard is not in `verify`.** A rebase replays a
 `CHANGELOG.md` addition under whatever heading happens to sit at that offset, and

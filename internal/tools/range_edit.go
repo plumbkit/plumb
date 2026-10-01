@@ -30,9 +30,18 @@ func lineOffsets(content string) []int {
 // in content with newStr. It is an alternative to old_string matching for cases
 // where a block of lines must be deleted or replaced without a unique anchor.
 //
+// Range mode works in whole lines: a non-empty newStr that does not end with a
+// newline is given the line ending of the text it replaces, so it can never be
+// glued onto the line that follows (#543). The one exception falls out of the
+// same rule: a range running to EOF in a file with no final newline replaced
+// unterminated text, so newStr stays unterminated and the file keeps its
+// missing final newline. An empty newStr deletes the range.
+//
 // Special values:
-//   - startLine == -1: append newStr at end of file. A \n separator is inserted
-//     first when content does not already end with one.
+//   - startLine == -1: append newStr at end of file. When content does not end
+//     with a newline, the file's line ending is inserted first as a separator
+//     and the file keeps its missing final newline; otherwise newStr is
+//     terminated like any other range replacement.
 //   - endLine == 0: defaults to startLine (single-line operation).
 //   - endLine < 0 (e.g. -1): extends the range to the last line of the file.
 //
@@ -40,10 +49,7 @@ func lineOffsets(content string) []int {
 // endLine is silently capped at the total line count.
 func applyRangeEdit(content string, startLine, endLine int, newStr string) (string, error) {
 	if startLine == -1 {
-		if len(content) > 0 && !strings.HasSuffix(content, "\n") {
-			return content + "\n" + newStr, nil
-		}
-		return content + newStr, nil
+		return appendLines(content, newStr), nil
 	}
 
 	offsets := lineOffsets(content)
@@ -82,5 +88,44 @@ func applyRangeEdit(content string, startLine, endLine int, newStr string) (stri
 		endOff = offsets[end] // byte offset of the first character of line end+1
 	}
 
-	return content[:startOff] + newStr + content[endOff:], nil
+	return content[:startOff] + terminateLike(newStr, content[startOff:endOff]) + content[endOff:], nil
+}
+
+// appendLines implements applyRangeEdit's append mode (startLine == -1).
+// Appending nothing leaves the file as it is, including a missing final newline.
+func appendLines(content, newStr string) string {
+	if content == "" || newStr == "" {
+		return content + newStr
+	}
+	if trailingLineEnding(content) == "" {
+		sep := "\n"
+		if strings.Contains(content, "\r\n") {
+			sep = "\r\n"
+		}
+		return content + sep + newStr
+	}
+	return content + terminateLike(newStr, content)
+}
+
+// terminateLike returns newStr ending with the same line terminator as
+// replaced. An empty newStr (a deletion) and one already ending with a newline
+// are returned unchanged, as is every newStr when replaced is unterminated
+// (the last line of a file with no final newline).
+func terminateLike(newStr, replaced string) string {
+	if newStr == "" || strings.HasSuffix(newStr, "\n") {
+		return newStr
+	}
+	return newStr + trailingLineEnding(replaced)
+}
+
+// trailingLineEnding returns the line terminator s ends with: "\r\n", "\n",
+// or "" when s does not end with a newline.
+func trailingLineEnding(s string) string {
+	switch {
+	case strings.HasSuffix(s, "\r\n"):
+		return "\r\n"
+	case strings.HasSuffix(s, "\n"):
+		return "\n"
+	}
+	return ""
 }

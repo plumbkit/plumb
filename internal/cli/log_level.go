@@ -424,7 +424,14 @@ func handleReloadConfig(conn net.Conn, reloadFn func() error) {
 // probes (hooks_claude_identity.go).
 const ctrlIdentityKeysCommand = "identity-keys"
 
-// identityKeysReply is the daemon's answer to ctrlIdentityKeysCommand.
+// identityKeysReply is the daemon's answer to ctrlIdentityKeysCommand: the keys
+// it lifts, then its own version, so the identity hook gets both of the things
+// it needs from one dial (see probeDaemonIdentity). An older hook reads only
+// whether the declared key is listed, so the trailing field costs it nothing.
 func identityKeysReply() string {
-	return "ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + "\n"
+	reply := "ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey
+	if fields := strings.Fields(Version); len(fields) == 1 {
+		reply += " " + ctrlIdentityKeysVersionField + fields[0]
+	}
+	return reply + "\n"
 }

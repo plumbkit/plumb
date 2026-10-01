@@ -301,16 +301,22 @@ Code gets a third:
   client that forwards only declared arguments (Claude desktop's connector)
   the daemon declares `plumb_agent` in every tool's schema so the stamp gets
   through. The hook asks the running daemon what it accepts (over the control
-  socket, cached for a minute under `PLUMB_WAKE_DIR`): its version, and
-  whether its `identity-keys` answer lists `plumb_agent`. A daemon that does
+  socket, one `identity-keys` dial that also reports the version, cached for
+  ten minutes under `PLUMB_WAKE_DIR`): its version, and whether its
+  `identity-keys` answer lists `plumb_agent`. A daemon that does
   not list it gets the older key `dev.plumbkit/logical-agent` instead, which
   Claude desktop's connector strips, and bare `plumb hooks` says so. One
   older than 0.19.1 would reject either as an unknown parameter, so against it
   the hook stamps nothing and bare `plumb hooks` says that too. `PLUMB_IDENTITY_HOOK=off` disables it. It never blocks
   a call: normally the worst case is an unstamped call, which is what the
   client sent anyway. The cached answer belongs to one daemon instance (its
-  PID file and control socket), so a daemon restarted or replaced inside the
-  minute is asked again. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
+  PID file and control socket), so a daemon restarted or replaced is asked
+  again; when the daemon cannot be asked at that moment (a machine at full CPU
+  can starve its control socket) the hook stamps from the cached answer for the
+  same instance rather than send the call unstamped, and never from another
+  instance's. A plumb call the hook does leave unstamped leaves one line on
+  stderr (`plumb identity hook: left the call unstamped: tool_name=… tool_use_id=…
+  reason=…`), which Claude Code shows only in its debug output. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
   not matched. Codex is not covered: its `updatedInput` requires
   `permissionDecision: "allow"`, a permission side-effect plumb will not take
   silently. **After upgrading, re-run `plumb hooks install claude-code`** — an
@@ -957,6 +963,7 @@ argument) in the stored command. A project-supplied command must be trusted firs
 
 ```
 plumb trust [directory]
+plumb trust --revoke [directory]
 ```
 
 Trust this workspace's project-supplied task commands (those set in its
@@ -970,6 +977,11 @@ longer matches and the command is refused until you re-run `plumb trust` — so 
 agent that changes a trusted command cannot have the new command run without a
 fresh prompt. A `trust.json` written by an older plumb (the legacy boolean
 format) is treated as untrusted and re-confirmed once.
+
+`--revoke` removes the workspace's grant instead. A linked git worktree shares
+its repository's grant for identical content and has no grant of its own to
+remove, so `--revoke` there says the worktree is still trusted and names the
+checkout to run `plumb trust --revoke` at.
 
 When it records trust, `plumb trust` **prints each command it is about to
 trust** and flags any that invoke an interpreter with inline code (`bash -c`,

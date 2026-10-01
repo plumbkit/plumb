@@ -1,6 +1,10 @@
 package session
 
-import "testing"
+import (
+	"os"
+	"sync/atomic"
+	"testing"
+)
 
 // export_test.go exposes internals to the external session_test package. It is
 // an _test.go file, so none of this is compiled into the package's real API.
@@ -27,4 +31,22 @@ func LiveDirsForTest() []string { return append([]string(nil), liveDirs...) }
 // branch (testBinary false) can be exercised from a test binary.
 func IsolationErrorForTest(dir string, testBinary bool, live []string) error {
 	return testIsolationError(dir, testBinary, live)
+}
+
+// EndedSessionGraceForTest is how long an ended session's file is kept.
+const EndedSessionGraceForTest = endedSessionGrace
+
+// CountSessionFileReadsForTest counts every session file List reads for the
+// rest of the test. A read count is what separates "remembered" from "re-read"
+// deterministically; a timing assertion on the same thing would flake.
+func CountSessionFileReadsForTest(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var n atomic.Int64
+	orig := readSessionFile
+	readSessionFile = func(name string) ([]byte, error) {
+		n.Add(1)
+		return os.ReadFile(name) //nolint:gosec // G304: test seam over the session directory
+	}
+	t.Cleanup(func() { readSessionFile = orig })
+	return &n
 }

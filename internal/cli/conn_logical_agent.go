@@ -18,10 +18,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -36,6 +38,23 @@ type logicalAgentState struct {
 	// declared for the connection's life, so a later re-check cannot un-see it
 	// and flip the shared flag back off.
 	seen map[string]struct{}
+	// declared is the set of LINKAGES (linkageIDOf) that declared themselves
+	// through session_start on this connection — its session_id argument, or
+	// the per-call identity a successful session_start ran under. It is the
+	// evidence refuse asks for before it lets a per-call identity route a
+	// state-changing call to a per-agent shard (issue #513): an identity nobody
+	// declared would otherwise get a fresh shard seeded from the connection's
+	// root, and a relative write would land in whatever workspace the connection
+	// holds. Keyed on the linkage so a hook-stamped subagent `<conv>/<agent>`,
+	// which usually never calls session_start itself, rides its parent's
+	// declaration. Like seen, it only grows. The value is when this process
+	// last refreshed the durable row (zero: never, e.g. restored after a
+	// restart); see refreshDue.
+	declared map[string]time.Time
+	// priorShared records durable evidence that this connection was shared before
+	// it re-attached (see noteConnectionWasShared). It decides ROUTING only: it never
+	// enters seen, so it cannot arm the anonymous-write gate.
+	priorShared atomic.Bool
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -159,6 +178,11 @@ func shortIDPrefix(s string) string {
 func (l *logicalAgentState) sharedWith(id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.sharedWithLocked(id)
+}
+
+// sharedWithLocked is sharedWith for a caller already holding l.mu.
+func (l *logicalAgentState) sharedWithLocked(id string) bool {
 	if len(l.seen) > 1 {
 		return true
 	}
@@ -179,10 +203,29 @@ func (l *logicalAgentState) armed(id string) bool {
 	return l.sharedWith(id)
 }
 
+// refusalKind is why the ceiling refuses a call, or refusalNone.
+type refusalKind int
+
+const (
+	refusalNone refusalKind = iota
+	// refusalAnonymous: a shared connection and no per-call identity.
+	refusalAnonymous
+	// refusalUndeclared: a per-call identity whose linkage never declared
+	// itself through session_start on this connection (issue #513).
+	refusalUndeclared
+)
+
 // refuse reports whether a call declaring callID must be refused on this
-// connection: the connection is shared (two or more distinct IDs observed) and
-// the call is unattributable (no per-call ID). A non-shared connection needs no
-// ID — the connection itself is the identity.
+// connection. See refusal for the rule.
+func (l *logicalAgentState) refuse(callID string) bool {
+	return l.refusal(callID) != refusalNone
+}
+
+// refusal decides the fail-closed ceiling for a call declaring callID.
+//
+// Anonymous: refused once the connection is shared (two or more distinct IDs
+// observed). A non-shared connection needs no ID — the connection itself is the
+// identity.
 //
 // PLAN-394 removed the attach-time fallback from this decision. Before it, an
 // anonymous call was admitted whenever ANY session_start had attached — and
@@ -191,22 +234,58 @@ func (l *logicalAgentState) armed(id string) bool {
 // force-pin, in the peer's project. Admitting a call on the strength of an
 // identity it did not present is attribution by guesswork; on a shared
 // connection only a presented ID admits a state-changing call.
-func (l *logicalAgentState) refuse(callID string) bool {
+//
+// Identified: refused when the connection is shared COUNTING THE CALLER — the
+// exact predicate shardFor routes on, so this refuses precisely the calls that
+// would be served a per-agent shard — and the id's linkage was never declared
+// through session_start (issue #513). Presenting an id is not the same as
+// having declared one: an id nothing declared (a model typing `plumb_agent`,
+// a client sending _meta it never announced) got a fresh shard seeded from the
+// connection's root, so its relative write landed in whichever workspace the
+// connection held — the misroute an anonymous call is refused for. The linkage,
+// not the full id, is what must be declared, because a hook-stamped subagent
+// `<conv>/<agent>` rarely calls session_start and is vouched for by `<conv>`.
+// session_start itself is not state-changing, so the remedy stays reachable.
+// Exempt: a connection where every observed identity, the caller's included,
+// shares one linkage (see oneConversationLocked's call site).
+func (l *logicalAgentState) refusal(callID string) refusalKind {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.seen) <= 1 {
-		return false
+	if !l.sharedWithLocked(callID) {
+		return refusalNone
 	}
 	// No exemption for a connection where no caller has stamped yet. That
 	// exemption (PLAN-440) let every anonymous write through on Claude
 	// desktop's connector, whose stamp was being dropped in transit, and a
 	// worktree edit landed in another agent's checkout (2026-09-30). An
 	// unattributable write is refused; the refusal names the remedy.
-	return callID == ""
+	if callID == "" {
+		return refusalAnonymous
+	}
+	linkage := linkageIDOf(callID)
+	if _, ok := l.declared[linkage]; ok {
+		return refusalNone
+	}
+	// One conversation is not a shared connection in the sense the gate
+	// guards: a main thread that never called session_start and its own
+	// hook-stamped subagents all answer to the same linkage, so there is no
+	// OTHER conversation's workspace a call could be misrouted into. This is
+	// the Claude Code CLI's everyday topology; refusing it would lock the main
+	// thread out the moment its first subagent made any call. An identity with
+	// a different linkage — an invented one included — breaks the condition,
+	// and from then on every undeclared linkage is refused.
+	if l.oneConversationLocked(linkage) {
+		return refusalNone
+	}
+	return refusalUndeclared
 }
 
-// recordLogicalAgentAttach records a session_start.session_id identity.
-func (s *connSession) recordLogicalAgentAttach(id string) { s.recordLogicalAgent(id) }
+// recordLogicalAgentAttach records a session_start.session_id identity, which
+// is also a declaration of its linkage.
+func (s *connSession) recordLogicalAgentAttach(id string) {
+	s.declareLogicalAgent(id)
+	s.recordLogicalAgent(id)
+}
 
 // recordLogicalAgentCall records a per-call identity (_meta or the stamp
 // argument).
@@ -215,14 +294,16 @@ func (s *connSession) recordLogicalAgentCall(id string) {
 }
 
 // recordCall commits an identity that arrived on the PER-CALL channel;
-// recordAttach one that arrived at attach time. Both commit it the same way;
-// the two names keep call sites and tests explicit about the channel.
+// recordAttach one that arrived at attach time. Both commit it to seen the same
+// way; only the attach channel is session_start, so only it also declares the
+// linkage (issue #513).
 func (l *logicalAgentState) recordCall(id string) (shared, transition bool) {
 	return l.record(id)
 }
 
 // recordAttach commits an attach-time identity. See recordCall.
 func (l *logicalAgentState) recordAttach(id string) (shared, transition bool) {
+	l.declare(id)
 	return l.record(id)
 }
 
@@ -312,13 +393,14 @@ func (s *connSession) markSharedConnectionDetected() {
 			return
 		}
 		info.Health = "shared_connection_detected"
-		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, and a state-changing call carrying no identity is refused — " + sharedIdentityRemedy
+		info.HealthMessage = "multiple logical agents share this connection; per-agent state is isolated, and a state-changing call carrying no identity, or one no session_start declared, is refused — " + sharedIdentityRemedy
 	})
 }
 
 // refuseSharedStateChange is the fail-closed ceiling. It refuses a mutating
 // tool call that arrives on a shared connection without a trustworthy
-// logical-agent identity, naming the supported topology and its remedy. Read
+// logical-agent identity — none at all, or one whose linkage no session_start
+// declared (issue #513) — naming the supported topology and its remedy. Read
 // calls are never refused: sharing read-only state is safe, and the acceptance
 // contract is about state-changing operations resetting a peer's pin, trackers,
 // rate budget, undo state or language.
@@ -326,8 +408,11 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if !slices.Contains(tools.StateChangingToolNames(), name) {
 		return nil
 	}
-	if !s.logicalAgents.refuse(logicalAgent) {
+	switch s.logicalAgents.refusal(logicalAgent) {
+	case refusalNone:
 		return nil
+	case refusalUndeclared:
+		return undeclaredIdentityErr(name, logicalAgent)
 	}
 	// [collab] allow_unidentified_writes used to lift this refusal. It is no
 	// longer honoured: with it set, an unattributable write resolved through
@@ -337,7 +422,27 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if s.collabConfig().AllowUnidentifiedWrites {
 		retired = " ([collab] allow_unidentified_writes is set but no longer honoured.)"
 	}
-	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s%s", name, sharedIdentityRemedy, retired)
+	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s. If the Claude Code hook is already installed, one call can still miss its stamp under load: retry once, which usually succeeds.%s", name, sharedIdentityRemedy, retired)
+}
+
+// undeclaredIdentityErr is the refusal for a per-call identity whose linkage no
+// session_start on this connection declared (issue #513). The session_id it
+// names is the LINKAGE — for a hook-stamped subagent `<conv>/<agent>` that is
+// its conversation's id, not the stamp — so the wording says which.
+//
+// It also asks for `workspace`. A session_start that only declares leaves the
+// caller on whatever root its shard was seeded with, usually the connection's,
+// which on a shared connection may be another agent's checkout: the declaration
+// would then admit exactly the misrouted write this refusal stopped.
+func undeclaredIdentityErr(name, logicalAgent string) error {
+	stamp := stats.SanitiseAgentID(logicalAgent)
+	linkage := linkageIDOf(logicalAgent)
+	which := "the identity you are stamping"
+	if linkage != logicalAgent {
+		which = "your conversation's id, the part of your stamp before `/`; a subagent is covered once its conversation has declared itself"
+	}
+	return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (%s) and workspace set to the absolute path of the project you are working in, then retry. Without workspace, your relative paths may resolve against the connection's root, which can be another agent's checkout",
+		name, stamp, stats.SanitiseAgentID(linkage), which)
 }
 
 // sharedIdentityRemedy names the ways an agent on a shared connection gets an
@@ -432,44 +537,6 @@ func (s *connSession) stampChannelState(ctx context.Context) tools.StampChannelS
 	// Shared means "the ceiling is ARMED for this call": two or more identities
 	// are here, so an unstamped state-changing call is refused.
 	return tools.StampChannelState{Shared: s.logicalAgents.armed(id), PerCallStamped: id != "", HookClient: s.isHookClient()}
-}
-
-// seed commits identities recovered from durable state — the per-agent pins
-// already persisted under this proxy session — so a connection that WAS shared
-// before a daemon restart is shared again the moment it re-attaches, rather
-// than from whenever two agents happen to re-declare.
-//
-// Without it the fail-closed ceiling had a hole exactly where it was most
-// needed: after a restart, clients reconnect and start calling before they
-// re-declare, and refuse admits every anonymous state-changing call until the
-// second declaration lands (PLAN-440 item 2).
-//
-// It only ADDS, preserving the documented monotonicity of seen. A durable view
-// is a lower bound on what this connection has observed, never an upper one: it
-// can be pruned, partially written, or simply older than the live set, and
-// letting a narrower view shrink the set would silently disarm a gate that is
-// currently holding. Blank ids are dropped rather than recorded, so a row with
-// an empty logical_agent_id — the connection-level agent — cannot pose as a
-// second identity and make a single-agent connection read as shared.
-func (l *logicalAgentState) seed(ids []string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			continue
-		}
-		if l.seen == nil {
-			l.seen = make(map[string]struct{})
-		}
-		l.seen[id] = struct{}{}
-	}
-}
-
-// count reports how many distinct identities this connection has committed.
-func (l *logicalAgentState) count() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.seen)
 }
 
 // persistLogicalAgent writes an observed identity to the durable per-connection
