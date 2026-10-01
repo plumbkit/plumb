@@ -6,7 +6,40 @@ import (
 	"time"
 )
 
+var defaultHistorySensitiveGlobs = []string{
+	".env",
+	".env.*",
+	"*.pem",
+	"*.key",
+	"*.p12",
+	"*.pfx",
+	"*.jks",
+	"*.keystore",
+	"id_rsa*",
+	"id_dsa*",
+	"id_ecdsa*",
+	"id_ed25519*",
+	".netrc",
+	".npmrc",
+	".pypirc",
+	"credentials",
+	"credentials.*",
+	"*.tfvars",
+	"secrets.*",
+}
+
+// DefaultHistorySensitiveGlobs returns a copy of the default sensitive globs.
+func DefaultHistorySensitiveGlobs() []string {
+	return slices.Clone(defaultHistorySensitiveGlobs)
+}
+
 var defaults = Config{
+	History: HistoryConfig{
+		Enabled:         true,
+		SensitiveGlobs:  DefaultHistorySensitiveGlobs(),
+		MaxContentBytes: 8 << 20,
+		MaxDiffBytes:    4 << 20,
+	},
 	LogLevel:  "info",
 	LogFormat: "text",
 	UI:        UIConfig{Theme: "plumb", PathStyle: "compact"},
@@ -270,6 +303,7 @@ func cloneConfig(cfg Config) Config {
 	// asymmetry made cloneConfig(defaults) != defaults and latched
 	// RestartNeeded on every fresh daemon (the defaults use Args: []string{}).
 	out.Topology.ExcludePatterns = slices.Clone(cfg.Topology.ExcludePatterns)
+	out.History.SensitiveGlobs = slices.Clone(cfg.History.SensitiveGlobs)
 	out.Quality.Analysers = slices.Clone(cfg.Quality.Analysers)
 	// Cloned for Git.Env's reason as well as the aliasing one: go-toml merges a
 	// project's `[quality.bin]` sub-table into whatever map is already there, so

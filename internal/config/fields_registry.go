@@ -87,6 +87,24 @@ var registryData = []Field{
 		Description: "Refuse walks rooted at $HOME or a protected dir (macOS TCC prompt guard).",
 	},
 
+	// --- History ---
+	{
+		Key: "history.enabled", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Record a diff of every file write plumb makes in history.db (plumb history).",
+	},
+	{
+		Key: "history.sensitive_globs", Type: FieldList, ReloadTier: ReloadLive,
+		Description: "Paths whose writes are recorded as metadata only (no diff).",
+	},
+	{
+		Key: "history.max_content_bytes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
+		Description: "Files larger than this are recorded as metadata only (clamped at 8 MiB).",
+	},
+	{
+		Key: "history.max_diff_bytes", Type: FieldInt, ReloadTier: ReloadLive, Min: &minZero,
+		Description: "Diffs larger than this are recorded as metadata only.",
+	},
+
 	// --- Indexing (topology) ---
 	{
 		Key: "topology.enabled", Type: FieldBool, ReloadTier: ReloadLive,

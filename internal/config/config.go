@@ -492,9 +492,18 @@ type XcodeConfig struct {
 	Timeout         Duration `toml:"timeout"`
 }
 
+// HistoryConfig is the [history] section: per-write diff history (spec §10).
+type HistoryConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	SensitiveGlobs  []string `toml:"sensitive_globs"`
+	MaxContentBytes int64    `toml:"max_content_bytes"`
+	MaxDiffBytes    int64    `toml:"max_diff_bytes"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
+	History   HistoryConfig        `toml:"history"`
 	LogLevel  string               `toml:"log_level"`
 	LogFormat string               `toml:"log_format"`
 	LogFile   string               `toml:"log_file"`
