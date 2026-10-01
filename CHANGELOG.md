@@ -123,6 +123,24 @@
   property, about 80 bytes per tool, but the profile surcharge measured the
   schemas without it. It now measures the schemas as that connection is served
   them. (#515)
+- **A connection that closes mid-attach no longer leaks a language server,
+  and a burst of roots notifications settles on the newest roots.** When
+  a client reported a workspace change (`notifications/roots/list_changed`)
+  and the connection closed while plumb was attaching it, the attach could
+  finish after the close had already released the connection's resources.
+  The language-server reference it took was then never released, so the
+  pooled server never idled out. The same held for the quality runner, the
+  shared write budget and the project-config watcher. OnInit's attach and
+  the refresh after `enable-lsp` had the same gap. Each of these now checks
+  the connection under the same lock the close uses, and gives up without
+  taking anything once the connection has closed. Separately, every roots
+  notification used to fetch the roots on its own, and whichever fetch
+  finished last won, so a slow answer to an early notification could replace
+  a newer one. Now one fetch runs at a time per connection. However many
+  notifications arrive during it, they trigger exactly one more fetch when
+  it finishes, so the pin follows the newest answer. An explicit
+  `session_start` pin still outranks client roots, and a reordered root list
+  still does not move the pin.
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,
