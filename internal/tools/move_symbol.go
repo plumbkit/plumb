@@ -353,8 +353,8 @@ func (t *MoveSymbol) buildMovePlans(ctx, lspCtx context.Context, waited time.Dur
 // server alone made it fire exactly when it was least needed (healthy server)
 // and skipped it exactly where the tool is least sure of itself: a cold or slow
 // server leaves the answer to a line-granular tree-sitter parse, and
-// topologyNodeByPath returns the FIRST node with a matching name, so the move
-// proceeded on a silent guess and rewrote two files (PLAN-403 review §1).
+// topologyNodeByPath returns the FIRST node with a matching plain name, so the
+// move proceeded on a silent guess and rewrote two files (PLAN-403 review §1).
 func (t *MoveSymbol) resolveMoveTarget(ctx, lspCtx context.Context, uri, namePath string) (*protocol.DocumentSymbol, symbolFallbackReason, error) {
 	bare := !strings.Contains(namePath, "/")
 	if bare && t.client != nil {

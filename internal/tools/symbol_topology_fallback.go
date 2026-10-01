@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -167,30 +168,71 @@ func topologyNodesByName(nodes []topology.Node, name string) []topology.Node {
 	return out
 }
 
-// topologyNodeByPath finds the single node matching a slash-separated name_path
-// (the symbol-edit tools' addressing). It matches the leaf segment by name and,
-// when a parent segment is present, prefers a node whose Qualified contains it.
+// topologyNodeByPath finds the node a slash-separated name_path (the
+// symbol-edit tools' addressing) names, or nil when none does.
+//
+// A plain name matches the first node of that name, as it always has. A
+// multi-segment path names a leaf under a parent, and a leaf whose parent is not
+// evidenced is NOT a match: this used to fall back to the first node with the
+// leaf's name, which resolved "S/Run" — or any mistyped parent — to some other
+// receiver's Run and let move_symbol move it (PR #559 review). A parent is
+// evidenced two ways, because extractors differ in whether they qualify a member:
+//   - its Qualified carries the parent as a whole identifier segment: the Go
+//     extractor's "(*S).Run", the dotted forms of Ruby, Scala and C++;
+//   - a node named for the parent encloses it: Python, Java, Rust, Kotlin and
+//     others record a member's Qualified as its bare name, so containment is
+//     the only evidence they give.
+//
+// The parent segment has its type parameters stripped, so "S[T]/Run" names S's
+// method, matching what the Go extractor records for a generic receiver. An
+// empty segment is a malformed path and matches nothing.
 func topologyNodeByPath(nodes []topology.Node, namePath string) *topology.Node {
 	parts := strings.Split(namePath, "/")
 	leaf := parts[len(parts)-1]
-	parent := ""
-	if len(parts) > 1 {
-		parent = parts[len(parts)-2]
+	if len(parts) == 1 {
+		for i := range nodes {
+			if nodes[i].Name == leaf {
+				return &nodes[i]
+			}
+		}
+		return nil
 	}
-	var fallback *topology.Node
+	if slices.Contains(parts, "") {
+		return nil
+	}
+	parent := stripTypeParams(parts[len(parts)-2])
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Name != leaf {
-			continue
-		}
-		if parent == "" || qualifiedHasSegment(n.Qualified, parent) {
+		if n.Name == leaf && (qualifiedHasParent(n.Qualified, parent) || enclosedByNamed(nodes, i, parent)) {
 			return n
 		}
-		if fallback == nil {
-			fallback = n
+	}
+	return nil
+}
+
+// enclosedByNamed reports whether another node named parent encloses nodes[i]:
+// the evidence of a parent for an extractor that does not qualify its members.
+// Byte spans decide when both nodes carry them (two nodes on one line, a
+// one-line class, are still ordered), the line range otherwise. A node never
+// encloses itself, nor a node with exactly its own span.
+func enclosedByNamed(nodes []topology.Node, i int, parent string) bool {
+	n := nodes[i]
+	for j := range nodes {
+		p := nodes[j]
+		if j == i || p.Name != parent {
+			continue
+		}
+		if p.HasBytes && n.HasBytes {
+			if p.StartByte <= n.StartByte && n.EndByte <= p.EndByte && (p.StartByte != n.StartByte || p.EndByte != n.EndByte) {
+				return true
+			}
+			continue
+		}
+		if p.StartLine <= n.StartLine && n.EndLine <= p.EndLine && (p.StartLine != n.StartLine || p.EndLine != n.EndLine) {
+			return true
 		}
 	}
-	return fallback
+	return false
 }
 
 // qualifiedHasSegment reports whether parent appears as a whole identifier
@@ -202,13 +244,24 @@ func qualifiedHasSegment(qualified, parent string) bool {
 	if parent == "" {
 		return false
 	}
-	segs := strings.FieldsFunc(qualified, func(r rune) bool {
+	return slices.Contains(qualifiedSegments(qualified), parent)
+}
+
+// qualifiedHasParent is qualifiedHasSegment for a parent OTHER than the node
+// itself: the last segment of a Qualified is the node's own name, which is no
+// evidence of a parent — a bare "run" would otherwise be the parent of "run",
+// and "(Run).Run" resolve a "Run/Run" path through its method name alone.
+func qualifiedHasParent(qualified, parent string) bool {
+	segs := qualifiedSegments(qualified)
+	if parent == "" || len(segs) < 2 {
+		return false
+	}
+	return slices.Contains(segs[:len(segs)-1], parent)
+}
+
+// qualifiedSegments splits a Qualified name into its identifier segments.
+func qualifiedSegments(qualified string) []string {
+	return strings.FieldsFunc(qualified, func(r rune) bool {
 		return r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
-	for _, seg := range segs {
-		if seg == parent {
-			return true
-		}
-	}
-	return false
 }

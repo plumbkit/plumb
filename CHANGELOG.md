@@ -65,12 +65,36 @@
   matched a nested method, so every tool that takes a symbol name resolves it
   alike. A symbol literally carrying the name still wins, so `Run` stays the
   function `Run` beside a method `(*S).Run`, and `rename_symbol` and
-  `move_symbol` keep working on it. Equally good matches are never resolved to
-  one silently: the read-only tools and the hierarchies answer for each match,
-  `rename_symbol` refuses with the `Receiver.Method` names that single each one
-  out, and `move_symbol` refuses with the `Receiver/Method` name_path for each.
-  `topology_impact` picks the method its node names by line, so a name several
-  receivers share (`Close`, `String`) still gets its cross-file callers.
+  `move_symbol` keep working on it. That rule is deliberate and has a cost: a
+  struct field or an interface method named `Run` carries the name too, so it
+  hides every `(*T).Run` from a plain `Run` lookup, and the method has to be
+  addressed by its receiver (`T.Run`, or `T/Run` for `move_symbol`). Only when
+  no symbol carries the name itself do methods compete, and then equally good
+  matches are never resolved to one silently: the read-only tools and the
+  hierarchies answer for each match, `rename_symbol` refuses with the
+  `Receiver.Method` names that single each one out, and `move_symbol` refuses
+  with the `Receiver/Method` name_path for each. `topology_impact` picks the
+  method its node names by line, so a name several receivers share (`Close`,
+  `String`) still gets its cross-file callers.
+- **`move_symbol` no longer moves the wrong method for a generic receiver, and a
+  name_path whose parent matches nothing is refused.** (#546) For
+  `func (s *S[T]) Run`, gopls names the method `(*S[T]).Run`, so the refusal for
+  a bare `Run` offered `S[T]/Run`; the topology index could not express that
+  receiver, found no parent called `S[T]`, and fell back to the first node named
+  `Run`, so the move reported success and moved another type's `Run`. Three
+  things were wrong and three are fixed. The tree-sitter fallback no longer
+  falls back: a `Parent/Name` path whose parent is not evidenced matches
+  nothing, where it used to match the first node of that name (a plain name is
+  unchanged), and the refusal says the fallback found nothing either when the
+  language server had failed to answer. A parent is evidenced by the node's
+  `Qualified` name or, for the languages whose extractors record a member under
+  its bare name (Python, Java, Rust, Kotlin and others), by a node of that name
+  whose span encloses it. The Go extractor now records a generic receiver by its
+  base type, `(*S).Run`, instead of `(*_).Run`. And the name_paths a refusal
+  offers are resolved by the language server's own flat `(*S[T]).Run` symbol,
+  not only by the topology index, with the type parameters stripped (`S/Run`;
+  `S[T]/Run` resolves too); a path is offered only once the resolver a retry
+  calls is seen to return exactly that match.
 - **The brief `session_start` keeps its `Git:` line on a detached HEAD.**
   (#546) Both packets keyed the branch line and the git-policy section on a
   branch name, so a detached HEAD, the standard setup for a review worktree,

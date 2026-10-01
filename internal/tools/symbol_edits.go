@@ -181,7 +181,16 @@ func resolveSymbolOrFallback(ctx, lspCtx context.Context, client lsp.Client, top
 	}
 	node := topologyNodeByPath(nodes, namePath)
 	if node == nil {
-		return nil, fallbackNotUsed, lspErr
+		// Both trees were asked and neither has the path. When the server itself
+		// answered "not found" that is already the message; when it failed to
+		// answer, its error alone ("did not respond in time — retry shortly")
+		// would send the agent to retry a path that no retry can resolve.
+		var notFound *symbolNotFoundError
+		if errors.As(lspErr, &notFound) {
+			return nil, fallbackNotUsed, lspErr
+		}
+		return nil, fallbackNotUsed, fmt.Errorf("%w; the tree-sitter fallback finds no symbol %q in %s either",
+			lspErr, namePath, paths.URIToPath(uri))
 	}
 	ds := nodeToDocSymbol(*node, fileLines(paths.URIToPath(uri)))
 	return &ds, lspFallbackReason(lspCtx), nil
@@ -211,9 +220,19 @@ func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string)
 	}
 	sym := findSymbolByPath(syms, namePath)
 	if sym == nil {
-		return nil, fmt.Errorf("symbol %q not found in %s", namePath, paths.URIToPath(uri))
+		return nil, &symbolNotFoundError{namePath: namePath, path: paths.URIToPath(uri)}
 	}
 	return sym, nil
+}
+
+// symbolNotFoundError is the language server's answer that namePath is not in
+// the file, as opposed to its failure to answer. resolveSymbolOrFallback tells
+// the two apart: only a failed server leaves the fallback's own miss worth
+// saying aloud.
+type symbolNotFoundError struct{ namePath, path string }
+
+func (e *symbolNotFoundError) Error() string {
+	return fmt.Sprintf("symbol %q not found in %s", e.namePath, e.path)
 }
 
 // ─── insert_before_symbol ──────────────────────────────────────────────────

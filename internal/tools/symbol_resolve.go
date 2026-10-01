@@ -100,6 +100,18 @@ func goReceiverType(parent string) string {
 	return strings.TrimPrefix(strings.Trim(parent, "()"), "*")
 }
 
+// stripTypeParams drops the type-parameter list of a Go generic type: "S[T]"
+// and "M[K, V]" both name the type S / M. A name with no leading identifier
+// ("[]T") is returned unchanged. Every resolver of a Recv/Method name_path
+// applies it to the receiver, so the path an agent copies from a declaration
+// (S[T]/Run) and the one the refusal offers (S/Run) address the same method.
+func stripTypeParams(name string) string {
+	if i := strings.IndexByte(name, '['); i > 0 {
+		return name[:i]
+	}
+	return name
+}
+
 // goMethodReceiver splits a gopls Go method symbol name — "(*Recv).Method" or
 // "(Recv).Method" — into its receiver type and method. ok is false for any name
 // not in that form (plain functions, types, fields).

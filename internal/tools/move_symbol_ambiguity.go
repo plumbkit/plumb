@@ -13,23 +13,42 @@ import (
 )
 
 // moveNamePaths returns a name_path for each ambiguous match: "Recv/Method" for
-// a gopls flat method, which the topology index resolves by receiver (gopls
-// itself never nests a method under its type), and "Parent/Name" for a nested
-// symbol. nil when any match has none — a generic hint beats a partial list.
+// a gopls flat method (gopls itself never nests a method under its type), with
+// the receiver's type parameters stripped — "(*S[T]).Run" is offered as "S/Run",
+// the receiver both findSymbolByPath and the topology index resolve — and
+// "Parent/Name" for a nested symbol.
+//
+// A path is offered only once findSymbolByPath, the resolver a retry calls first,
+// is seen to return exactly that match. A symbol nested two deep names its
+// parent, yet findSymbolByPath follows a path from the top level, so a hint like
+// "Mid/Run" would come back "not found". nil when any match has no such path —
+// a generic hint beats a partial list, and a path that errors is no hint at all.
 func moveNamePaths(syms, matches []protocol.DocumentSymbol) []string {
 	out := make([]string, 0, len(matches))
 	for _, m := range matches {
-		if recv, method, ok := goMethodReceiver(m.Name); ok {
-			out = append(out, recv+"/"+method)
-			continue
-		}
-		parent, ok := enclosingSymbolName(syms, m)
+		path, ok := moveNamePath(syms, m)
 		if !ok {
 			return nil
 		}
-		out = append(out, parent+"/"+m.Name)
+		if got := findSymbolByPath(syms, path); got == nil || !sameSymbol(*got, m) {
+			return nil
+		}
+		out = append(out, path)
 	}
 	return out
+}
+
+// moveNamePath is the candidate name_path for one match, before moveNamePaths
+// proves it.
+func moveNamePath(syms []protocol.DocumentSymbol, m protocol.DocumentSymbol) (string, bool) {
+	if recv, method, ok := goMethodReceiver(m.Name); ok {
+		return stripTypeParams(recv) + "/" + method, true
+	}
+	parent, ok := enclosingSymbolName(syms, m)
+	if !ok {
+		return "", false
+	}
+	return parent + "/" + m.Name, true
 }
 
 // moveAmbiguousErr is the single refusal both ambiguity checks return, so the

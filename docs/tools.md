@@ -38,12 +38,20 @@ These apply across many tools:
   A plain name matches a method at any depth, Go methods included (gopls names
   them `(*Recv).Method`). A symbol literally carrying the name beats a method
   that matches only once its receiver is stripped, so `Run` is the function
-  `Run` even beside a method `(*S).Run`. Equally good matches (two methods
-  `(*A).Run` and `(*B).Run`) are never resolved to one silently: the read-only
-  tools answer for every match; `rename_symbol` refuses and lists, for each, the
+  `Run` even beside a method `(*S).Run`. That includes a struct field or an
+  interface method named `Run`: either hides every `(*T).Run` from a plain `Run`
+  lookup, and the method is addressed by its receiver (`T.Run`; `T/Run` for
+  `move_symbol`). Only when no symbol carries the name itself do methods
+  compete, and then equally good matches (two methods `(*A).Run` and
+  `(*B).Run`) are never resolved to one silently: the read-only tools answer for
+  every match; `rename_symbol` refuses and lists, for each, the
   `Receiver.Method` name that singles it out, or the `line`/`character` to retry
   with when no name does; `move_symbol` refuses and lists the `name_path` for
-  each (`A/Run`, which the topology index resolves by receiver).
+  each (`A/Run`, resolved against the language server's flat `(*A).Run` symbol
+  and, when the server cannot answer, the topology index). A generic receiver's
+  type parameters are left out: `(*S[T]).Run` is `S/Run`, and `S[T]/Run` names
+  the same method. A name_path whose parent matches nothing is refused, never
+  resolved to a same-named declaration elsewhere in the file.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
