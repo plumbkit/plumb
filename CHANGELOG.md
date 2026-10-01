@@ -57,6 +57,24 @@
 
 ### Fixed
 
+- **`move_symbol` no longer moves a different symbol behind a healthy language
+  server, and the symbol-edit tools no longer blame it.** (#571) With a struct
+  field `T.Run` and a method `(*S).Run`, `move_symbol Run` moved the method under
+  a "topology fallback — LSP unavailable" banner while gopls was healthy. The
+  resolver's exact-name tier matched the field, the tool's top-level lookup then
+  missed it, and the miss was taken for a server that did not answer, so the
+  tree-sitter index chose the method. The fallback now answers only for a server
+  that did not: one that errored or timed out, or is still warming (a cold server
+  can answer with an empty tree). A ready server's "not in this file" stands, for
+  `move_symbol`, `insert_before_symbol`, `insert_after_symbol` and
+  `replace_symbol_body` alike, and the banner appears only when the server really
+  was unavailable, warming or slow. A plain name that resolves to a member of a
+  type or body (a field, an interface method, a class member) is refused by its
+  full path, with the path of any method of that name offered; a slash path is
+  still followed as written. `move_symbol` also resolves a plain method name
+  (`Run` for `(*S).Run`) from the server's own range instead of the index's. One
+  cost to know: a plain name for a *nested* symbol, which only worked through the
+  fallback, now fails with the full name_path that resolves it.
 - **A slow git write no longer outlives its call and lands unreported.** When a
   pre-commit hook outlasted the MCP client's call timeout, the client reported
   `Request timed out` while the commit carried on in the daemon and landed

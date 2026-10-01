@@ -52,8 +52,9 @@ func moveNamePath(syms []protocol.DocumentSymbol, m protocol.DocumentSymbol) (st
 }
 
 // moveAmbiguousErr is the single refusal both ambiguity checks return, so the
-// message an agent reads does not depend on which tree answered. namePaths, when
-// every match has one, are the exact name_paths that single each out.
+// message an agent reads does not depend on which tree answered; its caller
+// prefixes the tool name. namePaths, when every match has one, are the exact
+// name_paths that single each out.
 func moveAmbiguousErr(n int, namePath, uri string, namePaths []string) error {
 	remedy := "disambiguate with a slash-separated name_path (Parent/Name)"
 	if len(namePaths) > 0 {
@@ -63,6 +64,6 @@ func moveAmbiguousErr(n int, namePath, uri string, namePaths []string) error {
 		}
 		remedy = "pass one of these name_paths: " + strings.Join(quoted, ", ")
 	}
-	return fmt.Errorf("move_symbol: %d symbols named %q in %s — ambiguous; v1 moves one declaration, %s",
+	return fmt.Errorf("%d symbols named %q in %s — ambiguous; v1 moves one declaration, %s",
 		n, namePath, paths.URIToPath(uri), remedy)
 }
