@@ -57,6 +57,20 @@
 
 ### Fixed
 
+- **Tests no longer take the live session registry's lock.** Tests in
+  `internal/cli`, `internal/tools`, `internal/tui` and `internal/web` reached
+  the real session registry, and on macOS that meant
+  `~/Library/Application Support/plumb/sessions/.sessions.lock`. They
+  contended with the user's daemon: with several test runs going, the daemon
+  held hundreds of descriptors queued on that flock and test binaries sat in it
+  until `-timeout`. Each of those packages now points `XDG_DATA_HOME` at a
+  temporary directory in `TestMain`, and a test that sets its own keeps the
+  private registry that gives it. A test binary that still resolves the registry
+  to its start-up environment's location names the fix and exits, so a new
+  package that forgets fails on CI instead of stalling a developer's daemon. It
+  exits rather than panics because the daemon's own `recover()` sites would
+  swallow a panic and let the test pass. The check never runs outside
+  `go test`. (#551)
 - **A slow git write no longer outlives its call and lands unreported.** When a
   pre-commit hook outlasted the MCP client's call timeout, the client reported
   `Request timed out` while the commit carried on in the daemon and landed

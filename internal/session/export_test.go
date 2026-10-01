@@ -23,6 +23,27 @@ func SetGenerateNameForTest(t *testing.T, fn func() string) {
 	t.Cleanup(func() { generateName = orig })
 }
 
+// LiveDirForTest returns the registry location the test binary's start-up
+// environment resolves to, which Dir refuses to return inside a test.
+func LiveDirForTest() string { return liveDir }
+
+// IsolationErrorForTest exposes the guard's decision so its production
+// branch (testBinary false) can be exercised from a test binary.
+func IsolationErrorForTest(dir string, testBinary bool, live string) error {
+	return testIsolationError(dir, testBinary, live)
+}
+
+// SetRefuseLiveRegistryForTest replaces what the guard does when Dir resolves
+// the live registry, for the duration of the test. The default ends the whole
+// test binary, so without this a test could not see the guard fire in-process;
+// the default itself is covered by re-executing the test binary.
+func SetRefuseLiveRegistryForTest(t *testing.T, fn func(error)) {
+	t.Helper()
+	orig := refuseLiveRegistry
+	refuseLiveRegistry = fn
+	t.Cleanup(func() { refuseLiveRegistry = orig })
+}
+
 // EndedSessionGraceForTest is how long an ended session's file is kept.
 const EndedSessionGraceForTest = endedSessionGrace
 
