@@ -81,11 +81,18 @@
   cancels them: `--end-of-options` ends options as `--` does, a later
   `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
   counts as branch list mode, so `branch -fv side main` cannot force-move a
-  branch at the read tier. `switch -C`, `checkout -B`, `branch -f` and `tag -f`
-  are destructive when the ref they name already exists, because they move or
-  replace it like `reset --keep`. Creating a new ref with them stays a write,
-  and if git cannot say whether the ref exists the call is destructive.
-  Branch's upstream and description options are writes.
+  branch at the read tier. `switch -C`, `checkout -B`, `branch -f`, `branch -M`
+  and `tag -f` are destructive when the ref they name already exists, because
+  they move or replace it like `reset --keep`. Creating a new ref with them
+  stays a write, but only for a plain name given once: the option appears one
+  time, and the name is ASCII letters, digits and `. _ - /` with no `@`, `{`
+  or `..`, that `git check-ref-format` accepts and prints back unchanged, and
+  that does not exist yet. git expands `@{-1}`, `@{u}`, `@{push}` and
+  `<branch>@{upstream}` to a real local branch before it acts, and keeps the
+  last of a repeated `-B`, so the call could reset a branch the existence check
+  never looked at; those stay destructive, as does a call git cannot answer
+  for. `branch -M` is `--move --force` and used to be a write that overwrote
+  its target. Branch's upstream and description options are writes.
   (#530)
 - **Plumb's own git operations are no longer reported as a peer's edits.** After
   a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,

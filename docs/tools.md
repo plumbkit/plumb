@@ -924,23 +924,30 @@ them.
 - `checkout -b` (branch creation) is **write**; any other `checkout` is
   **destructive** (it can discard the working tree or detach HEAD), including
   `-b` with `-f`. `-B <name>` is **write** when `<name>` is a new branch and
-  **destructive** when it resets an existing one. Prefer `switch` for safe
-  branch changes.
+  **destructive** when it resets an existing one (a new branch means a plain
+  name given once; see the last bullet below). Prefer `switch` for safe branch
+  changes.
 - `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
   **destructive**, and so is `-C`/`--force-create` on a branch that already
   exists (on a new one it is a write).
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
-- `branch`/`tag`: creating or renaming is **write**, as are branch's upstream
-  and description options; `--delete`/`-d`/`-D` is **destructive**, and so is
-  `-f`/`--force` when the named branch or tag already exists (a new one is a
-  write); list mode
+- `branch`/`tag`: creating or renaming (`-m`) is **write**, as are branch's
+  upstream and description options; `--delete`/`-d`/`-D` is **destructive**, and
+  so is `-f`/`--force`, or `-M` (`--move --force`), when the named branch or tag
+  already exists (a new one is a write); list mode
   (`--list`/`-a`/`-r`/`--contains`/…, or no arguments) is **read**, and a later
   `--no-list` cancels it. `-v` alone does not list once a name is given.
 - `--end-of-options` ends option parsing exactly as `--` does.
-- Whether the ref named by `-C`/`-B`/`-f` exists is asked of git in the target
-  repository just before the call; if git cannot answer, the call is
-  destructive.
+- A `-C`/`-B`/`-f`/`-M` call is lowered to **write** only when the tool can
+  show it creates a ref. The option appears exactly once, however it is
+  spelled, because git keeps the last of a repeated `-B`. The name is plain:
+  ASCII letters, digits and `.` `_` `-` `/`, with no leading `-`, no `@` or `{`,
+  no `..`, and not ending in `.lock` or `/`, because git expands `@{-1}`,
+  `@{u}`, `@{push}` and `<branch>@{upstream}` to an existing branch. `git
+  check-ref-format` accepts the name and prints it back unchanged. And git,
+  asked in the target repository just before the call, says the ref does not
+  exist. Any other call, including one git cannot answer, is **destructive**.
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.

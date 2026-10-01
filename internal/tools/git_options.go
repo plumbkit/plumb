@@ -136,6 +136,24 @@ func (g gitOptionGrammar) has(args []string, shorts string, longs ...string) boo
 	return found
 }
 
+// count returns how many times args carry any of the given options, however
+// each is spelled: a bundled short flag, a joined value (`-Bname`) and an
+// abbreviated long name all count as git counts them. Like has it runs past
+// "--" and ignores negations, so it can only over-count. A check that lowers a
+// tier because an option appears EXACTLY once pairs it with a token-level read
+// of the same option (git_ref_reset.go): when the two disagree, the call is not
+// one it understands.
+func (g gitOptionGrammar) count(args []string, shorts string, longs ...string) int {
+	n := 0
+	g.scan(args, false, func(o gitOption) bool {
+		if o.is(shorts, longs...) {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
 // positionals returns the arguments git reads as positional: neither an
 // option nor an option's value, plus everything after the end of options.
 func (g gitOptionGrammar) positionals(args []string) []string {

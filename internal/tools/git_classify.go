@@ -229,16 +229,17 @@ var branchListMode = []gitOptName{
 }
 
 func classifyBranch(args []string) gitTier {
-	// -f/--force moves or replaces an existing branch, like `reset --keep`
-	// (refineRefReset lowers it to a write when the branch is new).
-	if branchGrammar.has(args, "dDf", "delete", "force") {
+	// -f/--force moves or replaces an existing branch, like `reset --keep`, and
+	// -M is the short form of --move --force: it overwrites its destination.
+	// (refineRefReset lowers either to a write when the branch is new.)
+	if branchGrammar.has(args, "dDfM", "delete", "force") {
 		return tierDestructive
 	}
 	// -c/-C (branch copy) collide with git's -c/-C config-injection flags and are
 	// denied by the global-flag denylist before classification runs, so they are
 	// unreachable here; branch copy is reached via the long --copy form. The
 	// upstream and description options write the repository's config.
-	if branchGrammar.has(args, "mMu", "move", "copy", "set-upstream-to", "unset-upstream", "edit-description") {
+	if branchGrammar.has(args, "mu", "move", "copy", "set-upstream-to", "unset-upstream", "edit-description") {
 		return tierWrite
 	}
 	if branchGrammar.final(args, true, branchListMode...) {
@@ -284,10 +285,12 @@ func classifyStash(args []string) gitTier {
 // other checkout form can discard the working tree or detach HEAD, so it is
 // destructive — and so is -B, which resets an existing branch like `reset
 // --keep` (refineRefReset lowers it to a write for a new branch), and creation
-// with -f, which throws away local modifications. Prefer
-// `switch` for safe branch changes.
+// with -f, which throws away local modifications. A -B anywhere after a leading
+// -b is not creation either: today git refuses `-b x -B y`, but the call is not
+// one this classifier can call a pure create. Prefer `switch` for safe branch
+// changes.
 func classifyCheckout(args []string) gitTier {
-	if len(args) > 0 && args[0] == "-b" && !checkoutGrammar.has(args, "f", "force") {
+	if len(args) > 0 && args[0] == "-b" && !checkoutGrammar.has(args, "fB", "force") {
 		return tierWrite
 	}
 	return tierDestructive

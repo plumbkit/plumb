@@ -104,6 +104,12 @@ func TestClassifyGit_LoweringChecksFollowGit(t *testing.T) {
 		{"branch", []string{"--force", "existing", "HEAD~5"}, tierDestructive},
 		{"tag", []string{"-f", "v1"}, tierDestructive},
 		{"tag", []string{"--force", "v1", "HEAD~5"}, tierDestructive},
+		// -M is --move --force: it overwrites its destination, so it is not a
+		// write as -m is. A -B after a leading -b is not pure creation either.
+		{"branch", []string{"-M", "old", "new"}, tierDestructive},
+		{"branch", []string{"-M", "new"}, tierDestructive},
+		{"branch", []string{"-m", "old", "new"}, tierWrite},
+		{"checkout", []string{"-b", "new", "-B", "other"}, tierDestructive},
 		// Branch options that write config are writes, not reads.
 		{"branch", []string{"--unset-upstream"}, tierWrite},
 		{"branch", []string{"-u", "origin/main"}, tierWrite},
