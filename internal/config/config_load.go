@@ -362,7 +362,7 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 	// read of the file could see a different version.
 	st := ProjectPolicyStatus{Path: path, Spec: projectPolicySpecFrom(raw)}
 	if !st.Spec.IsEmpty() {
-		st.Trusted = projectPolicyTrust().IsTrustedForPolicy(workspace, st.Spec)
+		st.Trusted, st.InheritedFrom = projectPolicyTrust().PolicyGrant(workspace, st.Spec)
 	}
 	if !st.InEffect() {
 		forceCapabilityFieldsToBase(base, &merged)
