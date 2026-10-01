@@ -55,6 +55,8 @@ A hook slower than `[git] detach_after` (45 s by default) makes the call return 
 
 The confirmation is required on **every** call in those two tiers, not once per session, and `[git] protected_branches` are never force-pushable whatever the rest of the policy says.
 
+No git child ever opens an editor or a credential prompt: plumb runs each with `GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`, so after resolving a conflict `git(subcommand="rebase", args=["--continue"], confirm=true)` keeps the message git prepared, and `rebase -i` runs its todo list unchanged. A `GIT_EDITOR` under `[git] env` replaces that default.
+
 Check the tier before adding a confirmation. `restore --staged` is a **write**, so it needs `[git] allow_writes` and no confirmation — passing one there is inert, and reaching for it is a sign you have the tier wrong.
 
 ## Prefer the narrower tool

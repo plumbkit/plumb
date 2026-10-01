@@ -1009,6 +1009,13 @@ still run, with a note); afterwards the next call from each session reports
 `landed as <sha>` or the failure with git's output. See
 [Configuration → When the call stops waiting](configuration.md#when-the-call-stops-waiting).
 
+No git child opens an editor or a credential prompt: each runs with
+`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`, so
+`rebase --continue`, `cherry-pick -e` and `revert --edit` keep the message git
+prepared and `rebase -i` runs its todo list unchanged. A value under
+`[git] env` wins (see
+[`configuration.md`](configuration.md#the-git-childs-environment)).
+
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
 trailer; regardless of that knob, `workspace_sessions` always lists recent

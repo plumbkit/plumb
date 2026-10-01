@@ -451,3 +451,100 @@ func TestGit_DetachedCommitKilledAtTheWriteTimeoutIsReportedAsPlumbs(t *testing.
 		t.Errorf("a write after the killed background commit must run: %v", err)
 	}
 }
+
+// TestGit_DetachedChildCarriesTheNonInteractiveEnv: a child that outlives the
+// call is started by the same startGitCmd as a foreground one, so it must carry
+// the editor and prompt defaults of #544 too. It is the child that matters most:
+// it runs unattended for as long as write_timeout, holding the per-repository
+// lock, which is exactly what an editor it opened would park it on.
+//
+// The probe is a pre-rebase hook, not a pre-commit one: git runs a commit hook
+// with GIT_EDITOR=: of its own whenever it will not open an editor, which would
+// hide ours. The hook records its environment and then outlives the foreground
+// deadline, so what it recorded is the DETACHED child's. The inherited values
+// are made hostile, so a default that lost to the daemon's environment shows up.
+// The second case hands runGit a spec with no Env: the one route on which only
+// startGitCmd's own fallback stands between the child and the daemon's editor.
+func TestGit_DetachedChildCarriesTheNonInteractiveEnv(t *testing.T) {
+	requireGit(t)
+	cases := []struct {
+		name string
+		// rebase issues `git rebase side` and returns what the call said.
+		rebase func(t *testing.T, dir string) string
+	}{
+		{"through the tool", func(t *testing.T, dir string) string {
+			t.Helper()
+			tool := NewGit(WriteDeps{}, func() GitPolicy {
+				return GitPolicy{AllowWrites: true, AllowDestructive: true, WriteTimeout: 30 * time.Second, DetachAfter: testDetachAfter}
+			}).WithSession(func() string { return "sess-a" }, func() string { return "alpha" })
+			out, err := callGit(t, tool, map[string]any{"subcommand": "rebase", "args": []string{"side"}, "confirm": true, "repo": dir})
+			if err != nil {
+				t.Fatalf("git rebase: %v", err)
+			}
+			return out
+		}},
+		{"spec with no Env", func(t *testing.T, dir string) string {
+			t.Helper()
+			spec := gitChildSpec{WriteTimeout: 30 * time.Second, DetachAfter: testDetachAfter}
+			out, err := runGit(t.Context(), dir, "rebase", []string{"rebase", "side"}, tierDestructive, nil, nil, spec, nil, "sess-a")
+			if err != nil {
+				t.Fatalf("runGit rebase: %v", err)
+			}
+			return out
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			neutraliseEditorEnv(t)
+			dir := initTestRepo(t)
+			base := gwGit(t, dir, "branch", "--show-current")
+			gwGit(t, dir, "switch", "-q", "-c", "side")
+			gwWrite(t, dir, "side.txt", "side\n")
+			gwGit(t, dir, "add", "side.txt")
+			gwGit(t, dir, "commit", "-q", "-m", "side")
+			gwGit(t, dir, "switch", "-q", base)
+			root, err := findGitRoot(dir)
+			if err != nil {
+				t.Fatalf("findGitRoot: %v", err)
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_ = waitGitBackground(ctx, root)
+				gitBackgroundOps.Delete(root)
+			})
+			record := filepath.Join(t.TempDir(), "seen")
+			hook := "#!/bin/sh\n" +
+				"printf 'GIT_EDITOR=%s\\nGIT_SEQUENCE_EDITOR=%s\\nGIT_TERMINAL_PROMPT=%s\\n' " +
+				"\"$GIT_EDITOR\" \"$GIT_SEQUENCE_EDITOR\" \"$GIT_TERMINAL_PROMPT\" > '" + record + "'\n" +
+				"sleep 4\nexit 0\n"
+			if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-rebase"), []byte(hook), 0o755); err != nil { //nolint:gosec // G306: a hook must be executable
+				t.Fatalf("writing hook: %v", err)
+			}
+			t.Setenv("GIT_EDITOR", missingEditor)
+			t.Setenv("GIT_SEQUENCE_EDITOR", missingEditor)
+			t.Setenv("GIT_TERMINAL_PROMPT", "1")
+
+			var out string
+			runBounded(t, 25*time.Second, "git rebase past the foreground deadline", func() { out = tc.rebase(t, dir) })
+			// The control: the call really returned while the child was still running,
+			// so what the hook recorded is a detached child's.
+			if !strings.Contains(out, "STILL RUNNING") {
+				t.Fatalf("the rebase was not detached, so this does not test the background path:\n%s", out)
+			}
+			waitBackground(t, root)
+
+			raw, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatalf("the pre-rebase hook did not run: %v", err)
+			}
+			want := "GIT_EDITOR=true\nGIT_SEQUENCE_EDITOR=true\nGIT_TERMINAL_PROMPT=0\n"
+			if string(raw) != want {
+				t.Errorf("the detached child's environment:\n%s\nwant:\n%s", raw, want)
+			}
+			if got, side := gitRevParse(t, dir, "HEAD"), gitRevParse(t, dir, "side"); got != side {
+				t.Errorf("HEAD = %s after the background rebase, want side's %s", got, side)
+			}
+		})
+	}
+}
