@@ -66,6 +66,16 @@
   checks it and the daemon: it reports a missing or stale hook, and a daemon
   that cannot take the stamp.
 
+- **The `git` tool no longer opens an editor.** plumb runs git with no
+  terminal, so `rebase --continue`, `rebase -i`, `cherry-pick -e` and
+  `revert --edit` launched `core.editor` and failed with `cannot exec
+  '<editor>'`, or waited on it until the write timeout while holding the
+  repository's git lock. Every git child the tool runs now gets
+  `GIT_EDITOR=true` and `GIT_SEQUENCE_EDITOR=true`, which accept the message
+  or todo list git prepared as written, and `GIT_TERMINAL_PROMPT=0`, so an
+  HTTPS credential prompt fails instead of waiting. These replace a value the
+  daemon inherited, which is usually your interactive editor; a value set
+  under `[git] env` is still used as is. (#544)
 - **The Claude Code identity hook stamps from its cached answer when the daemon
   probe fails, and fails less often.** (#556) The hook gates every stamp on a
   probe of the daemon's control socket, and any probe failure was an answer of
