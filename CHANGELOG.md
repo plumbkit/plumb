@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **Skill status tables keep wrapped details in their column.** `plumb skills`
+  and `plumb skills sync` now fit their grouped tables to the terminal width.
+  Conflict paths stay on their own line, followed by the provenance and review
+  note beneath them in the same column.
+- **`plumb skills sync --force` replaces edited skills with a backup.** It saves
+  the existing `SKILL.md` as a timestamped `.bak` before installing the shipped
+  copy; `--check --force` previews replacements without writing.
+
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,

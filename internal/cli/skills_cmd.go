@@ -29,7 +29,8 @@ relative to the copy compiled into this binary. Read-only.
 ` + "`plumb skills sync [client]`" + ` installs or refreshes the skills: every
 registered skill-capable client, or just the named one. A client whose config
 does not register plumb is skipped — sync never writes skill files for a client
-that does not use plumb.`,
+that does not use plumb. To replace an edited skill, run plumb skills sync
+--force <client>; it saves a .bak copy first.`,
 	Args: cobra.NoArgs,
 	RunE: runSkillsStatus,
 }
@@ -42,7 +43,10 @@ that registers plumb, or only in the named client. A skill plumb shipped
 before is replaced in place — no backup — because its content hash is on
 record (` + "`.plumb/skills-manifest.json`" + ` in the skills directory); a skill the
 user has edited is left untouched, with the proposed content written to a
-"<name>.plumb-new" file alongside it for review. Directory-level ".bak"
+"<name>.plumb-new" file alongside it for review. --force replaces a
+conflicting skill with the shipped copy after saving the edited SKILL.md as a
+timestamped .bak file; with --check, it only previews the replacement.
+Directory-level ".bak"
 backups from a prior run whose content is provably plumb's own (a recorded
 shipped hash) are cleaned up automatically; any others are left for manual
 review. Naming a client that does not register plumb is an error — run ` +
@@ -53,12 +57,14 @@ backups would be cleaned up — without writing anything.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dryRun, _ := cmd.Flags().GetBool("check")
-		return runSkillsSync(dryRun, args)
+		forceConflicts, _ := cmd.Flags().GetBool("force")
+		return runSkillsSync(dryRun, args, forceConflicts)
 	},
 }
 
 func init() {
 	skillsSyncCmd.Flags().Bool("check", false, "List drift without writing")
+	skillsSyncCmd.Flags().Bool("force", false, "Replace edited skills with shipped copies (save .bak)")
 	skillsCmd.AddCommand(skillsSyncCmd)
 }
 
@@ -70,7 +76,7 @@ func init() {
 // cell (the widest cell in the table, which stretched every dotted rule).
 func runSkillsStatus(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
-	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir").MaxWidth(terminalWidth(os.Stdout))
 	for _, c := range skillCapableClients() {
 		t.NextGroup()
 		dir, err := c.skillsDirFn()
@@ -106,7 +112,8 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 // Per-skill errors are rows with an error status, not fatal (see
 // syncClientGroup) — a sync that partially failed still leaves every other
 // skill correct.
-func runSkillsSync(dryRun bool, args []string) error {
+func runSkillsSync(dryRun bool, args []string, forceOverride ...bool) error {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
 	tui.RebuildStyles()
 	capable := skillCapableClients()
 	var targets []setupTarget
@@ -136,10 +143,10 @@ func runSkillsSync(dryRun bool, args []string) error {
 		fmt.Println()
 	}
 
-	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir").MaxWidth(terminalWidth(os.Stdout))
 	var summaries []string
 	for _, target := range targets {
-		syncClientGroup(t, &summaries, target, dryRun)
+		syncClientGroup(t, &summaries, target, dryRun, forceConflicts)
 	}
 	fmt.Println(t.Render())
 	if len(summaries) > 0 {
@@ -169,8 +176,9 @@ func runSkillsSync(dryRun bool, args []string) error {
 // cleanup is appended to the client's summary line rather than given its own
 // row: it is not a per-skill outcome, and a table row with no matching skill
 // name would look like a bug.
-func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget, dryRun bool) {
-	dir, results, cleanup := installSkillsFor(target, dryRun)
+func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget, dryRun bool, forceOverride ...bool) {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
+	dir, results, cleanup := installSkillsFor(target, dryRun, forceConflicts)
 	var tally skillSyncTally
 	t.NextGroup()
 	for i, r := range results {
@@ -198,7 +206,7 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 			if strings.HasSuffix(r.action, conflictUnchangedSuffix) {
 				word = "proposal unchanged"
 			}
-			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)"
+			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + "\n (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)\n Run plumb skills sync --force " + target.use + " to replace it (edited file saved as .bak)."
 			tally.conflict++
 		default:
 			if dryRun {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/plumbkit/plumb/internal/render"
 )
@@ -14,6 +15,47 @@ import (
 // text unchanged.
 func newPlainTable(headers ...string) *render.GroupedTable {
 	return render.NewGroupedTable(lipgloss.NewStyle(), lipgloss.NewStyle(), headers...)
+}
+
+func TestGroupedTableWrapsWithinColumns(t *testing.T) {
+	const width = 64
+	table := newPlainTable("Client", "Skill", "Status", "Skills dir").MaxWidth(width).
+		Row("Codex", "plumb-chat", "\x1b[33mconflict\x1b[0m", "~/.codex/skills/plumb-chat.plumb-new (differs from the shipped version — review and merge)").
+		Row("", "plumb-explore", "current", "~/.codex/skills").
+		NextGroup().
+		Row("Junie", "plumb-chat", "conflict", "~/.junie/skills/plumb-chat.plumb-new")
+
+	lines := strings.Split(table.Render(), "\n")
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("line width = %d, exceeds %d: %q", got, width, line)
+		}
+	}
+	const detailsOffset = 6 + 2 + 13 + 2 + 8 + 2
+	var continuation bool
+	for _, line := range lines {
+		plain := ansi.Strip(line)
+		if strings.Contains(plain, "shipped version") || strings.Contains(plain, "review and merge") {
+			continuation = true
+			if !strings.HasPrefix(plain, strings.Repeat(" ", detailsOffset)) {
+				t.Errorf("detail continuation escaped its column: %q", plain)
+			}
+		}
+	}
+	if !continuation {
+		t.Fatalf("long detail did not wrap: %q", table.Render())
+	}
+}
+
+func TestGroupedTableWrapsNarrowAndWideCells(t *testing.T) {
+	const width = 25
+	table := newPlainTable("Client", "Detail").MaxWidth(width).
+		Row("界界界界界界", "an-unbroken/path/with/no/spaces")
+	for _, line := range strings.Split(table.Render(), "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("line width = %d, exceeds %d: %q", got, width, line)
+		}
+	}
 }
 
 func TestGroupedTableRender(t *testing.T) {
