@@ -24,20 +24,20 @@ const genericReceiverSrc = "package demo\n\n" +
 	"func (s *S[T]) Run() int { return 2 }\n\n" +
 	"func Free() {}\n"
 
-func extractGoNodes(t *testing.T, src string) []topology.Node {
+func extractGoNodes(t *testing.T, src string) ([]topology.Node, []topology.Edge) {
 	t.Helper()
-	nodes, _, err := goext.New().Extract(context.Background(), "demo.go", []byte(src))
+	nodes, edges, err := goext.New().Extract(context.Background(), "demo.go", []byte(src))
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	return nodes
+	return nodes, edges
 }
 
 // TestTopologyNodeByPath_GoMethodsByReceiver: a Recv/Method name_path resolves
 // the method of THAT receiver — the value receiver, the pointer receiver, and a
 // generic one under either spelling of its type parameters.
 func TestTopologyNodeByPath_GoMethodsByReceiver(t *testing.T) {
-	nodes := extractGoNodes(t, genericReceiverSrc)
+	nodes, edges := extractGoNodes(t, genericReceiverSrc)
 	for _, tc := range []struct {
 		path, wantQualified string
 	}{
@@ -45,7 +45,7 @@ func TestTopologyNodeByPath_GoMethodsByReceiver(t *testing.T) {
 		{"S/Run", "(*S).Run"},
 		{"S[T]/Run", "(*S).Run"},
 	} {
-		n := topologyNodeByPath(nodes, tc.path)
+		n := soleNode(nodes, edges, tc.path)
 		if n == nil {
 			t.Errorf("%q: not resolved, want %s", tc.path, tc.wantQualified)
 			continue
@@ -60,7 +60,7 @@ func TestTopologyNodeByPath_GoMethodsByReceiver(t *testing.T) {
 // move: a multi-segment path whose parent segment matches nothing used to return
 // the FIRST node with the leaf's name. Every miss must now be a miss.
 func TestTopologyNodeByPath_NoParentMatchIsNotFound(t *testing.T) {
-	nodes := extractGoNodes(t, genericReceiverSrc)
+	nodes, edges := extractGoNodes(t, genericReceiverSrc)
 	for _, path := range []string{
 		"Nope/Run",  // no such parent anywhere
 		"A/Free",    // Free exists, but not under A
@@ -72,7 +72,7 @@ func TestTopologyNodeByPath_NoParentMatchIsNotFound(t *testing.T) {
 		"A/S/Nope",  // the leaf does not exist at all
 		"S[T]/Free", // a generic parent with no such method
 	} {
-		if n := topologyNodeByPath(nodes, path); n != nil {
+		if n := soleNode(nodes, edges, path); n != nil {
 			t.Errorf("%q resolved %s (line %d), want not found — a path whose parent matches nothing must never fall back to a same-named node",
 				path, n.Qualified, n.StartLine)
 		}
@@ -83,8 +83,8 @@ func TestTopologyNodeByPath_NoParentMatchIsNotFound(t *testing.T) {
 // of a generic receiver names the same type, so "S[K, V]/Run" is S's Run. Pinned
 // so the strip is a decision, not an accident.
 func TestTopologyNodeByPath_TypeParametersAreStrippedFromTheParent(t *testing.T) {
-	nodes := extractGoNodes(t, genericReceiverSrc)
-	if n := topologyNodeByPath(nodes, "S[K, V]/Run"); n == nil || n.Qualified != "(*S).Run" {
+	nodes, edges := extractGoNodes(t, genericReceiverSrc)
+	if n := soleNode(nodes, edges, "S[K, V]/Run"); n == nil || n.Qualified != "(*S).Run" {
 		t.Errorf("S[K, V]/Run = %+v, want S's method (*S).Run", n)
 	}
 }
@@ -92,22 +92,24 @@ func TestTopologyNodeByPath_TypeParametersAreStrippedFromTheParent(t *testing.T)
 // TestTopologyNodeByPath_PlainNameKeepsFirstMatch: a single-segment name keeps
 // the behaviour every caller already relies on — the first node of that name.
 func TestTopologyNodeByPath_PlainNameKeepsFirstMatch(t *testing.T) {
-	nodes := extractGoNodes(t, genericReceiverSrc)
-	n := topologyNodeByPath(nodes, "Run")
+	nodes, edges := extractGoNodes(t, genericReceiverSrc)
+	n := soleNode(nodes, edges, "Run")
 	if n == nil || n.Qualified != "(A).Run" {
 		t.Fatalf("plain Run = %+v, want the first node named Run, (A).Run", n)
 	}
-	if topologyNodeByPath(nodes, "Missing") != nil {
+	if soleNode(nodes, edges, "Missing") != nil {
 		t.Error("an unknown plain name must not resolve")
 	}
 }
 
 // TestTopologyNodeByPath_ParentByContainment covers the extractors that do not
-// qualify a nested member (Python, Java, Rust, Kotlin ... record Qualified as
-// the bare name): their parent is evidenced by the span that encloses the
-// member, not by Qualified. Without it, requiring a parent match would refuse
-// every Class/method path they resolve today — and the old first-match fallback
-// answered "Other/run" with the method of Greeter.
+// qualify a nested member (Python, Java, Kotlin ... record Qualified as the bare
+// name): their parent is evidenced by the span that encloses the member, not by
+// Qualified. Without it, requiring a parent match would refuse every
+// Class/method path they resolve today — and the old first-match fallback
+// answered "Other/run" with the method of Greeter. Rust is not one of them: its
+// impl block is no node, so a method is tied to its type by a containment edge
+// (symbol_path_chain_test.go).
 func TestTopologyNodeByPath_ParentByContainment(t *testing.T) {
 	node := func(kind topology.NodeKind, name string, start, end int) topology.Node {
 		return topology.Node{Kind: kind, Name: name, Qualified: name, StartLine: start, EndLine: end}
@@ -129,7 +131,7 @@ func TestTopologyNodeByPath_ParentByContainment(t *testing.T) {
 		{"Greeter/helper", 0}, // helper exists, but outside Greeter
 		{"helper/run", 0},     // a node that encloses nothing is no parent
 	} {
-		n := topologyNodeByPath(nodes, tc.path)
+		n := soleNode(nodes, nil, tc.path)
 		switch {
 		case tc.wantStart == 0 && n != nil:
 			t.Errorf("%q resolved the node at line %d, want not found", tc.path, n.StartLine)
@@ -140,7 +142,7 @@ func TestTopologyNodeByPath_ParentByContainment(t *testing.T) {
 
 	// A member never names ITSELF as its parent: "run/run" is not found when no
 	// other node called run encloses one.
-	if n := topologyNodeByPath(nodes[:2], "run/run"); n != nil {
+	if n := soleNode(nodes[:2], nil, "run/run"); n != nil {
 		t.Errorf("run/run resolved the node at line %d: a node is not its own parent", n.StartLine)
 	}
 }
@@ -160,10 +162,7 @@ func TestTopologyNodeByPath_PythonMembersByContainment(t *testing.T) {
 		"\n" + // 8
 		"def helper():\n" + // 9
 		"    return 3\n" // 10
-	nodes, _, err := treesitter.NewPython().Extract(context.Background(), "demo.py", []byte(src))
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
+	nodes, edges := extractGraph(t, treesitter.NewPython(), "demo.py", src)
 	for _, tc := range []struct {
 		path      string
 		wantStart int // 0: not found
@@ -174,7 +173,7 @@ func TestTopologyNodeByPath_PythonMembersByContainment(t *testing.T) {
 		{"Greeter/helper", 0},
 		{"Greeter/Greeter", 0},
 	} {
-		n := topologyNodeByPath(nodes, tc.path)
+		n := soleNode(nodes, edges, tc.path)
 		switch {
 		case tc.wantStart == 0 && n != nil:
 			t.Errorf("%q resolved the node at line %d, want not found", tc.path, n.StartLine)

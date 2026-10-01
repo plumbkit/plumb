@@ -50,7 +50,22 @@ These apply across many tools:
   each (`A/Run`, resolved against the language server's flat `(*A).Run` symbol
   and, when the server cannot answer, the topology index). A generic receiver's
   type parameters are left out: `(*S[T]).Run` is `S/Run`, and `S[T]/Run` names
-  the same method. A name_path whose parent matches nothing is refused, never
+  the same method, as do `*S/Run` and `(*S)/Run`; a bracket never closed
+  (`S[/Run`) names nothing. When the tree-sitter fallback resolves a `name_path`
+  because the language server cannot (`replace_symbol_body`, `insert_*`,
+  `move_symbol`), `Parent/Name` names a declaration whose *direct* parent is
+  `Parent`, and `P1/P2/Name` one whose parent is `P2`, whose parent is `P1` —
+  never one that merely sits somewhere inside `Parent`, so `Outer/run` is
+  `Outer`'s own `run`, not that of a class nested in it. A declaration's parent
+  is the smallest named node enclosing it, or the node its extractor links it to
+  (a Rust method to the type of its `impl` block, when the file declares that
+  type), though not the package node Go links every top-level declaration to
+  (`p/Run` is refused) or a C# file-scoped namespace; a qualified name that
+  spells out the whole chain (`(*S).Run`, `Foo::run`) counts too. A path no declaration matches is refused, and so is one
+  that several match — overloads, a class nested in a class of the same name, a
+  C++ or Objective-C declaration beside its definition, a TypeScript class beside
+  a same-named one in a `namespace` — with their lines listed. A TypeScript
+  namespace is not a node, so no path through one resolves. Neither case is ever
   resolved to a same-named declaration elsewhere in the file.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
@@ -589,6 +604,11 @@ both files.
 
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.
+>
+> `include_doc_comment` extends the edit over the doc comment of the symbol the
+> tool resolved, and never resolves the `name_path` a second time: the extractor's
+> byte-precise span when a tree-sitter node of that name starts on the symbol's
+> first line, the contiguous comment lines above it otherwise.
 >
 > All four append a unified diff of the change to their response — a preview in
 > `dry_run`, the applied change otherwise — gated by `[edits].show_write_diff`

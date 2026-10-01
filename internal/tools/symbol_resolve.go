@@ -101,15 +101,34 @@ func goReceiverType(parent string) string {
 }
 
 // stripTypeParams drops the type-parameter list of a Go generic type: "S[T]"
-// and "M[K, V]" both name the type S / M. A name with no leading identifier
-// ("[]T") is returned unchanged. Every resolver of a Recv/Method name_path
-// applies it to the receiver, so the path an agent copies from a declaration
-// (S[T]/Run) and the one the refusal offers (S/Run) address the same method.
+// and "M[K, V]" both name the type S / M. The list must be a complete suffix —
+// its brackets balanced, closing at the last character — so an unclosed or
+// trailing bracket ("S[", "S[T", "S[T]x") is no spelling of S and comes back
+// unchanged, as does a name with no leading identifier ("[]T"). Every resolver
+// of a Recv/Method name_path applies it to the receiver, so the path an agent
+// copies from a declaration (S[T]/Run) and the one the refusal offers (S/Run)
+// address the same method, and garbage addresses none.
 func stripTypeParams(name string) string {
-	if i := strings.IndexByte(name, '['); i > 0 {
-		return name[:i]
+	i := strings.IndexByte(name, '[')
+	if i <= 0 || name[len(name)-1] != ']' || strings.Contains(name[:i], "]") {
+		return name
 	}
-	return name
+	depth := 0
+	for j := i; j < len(name); j++ {
+		switch name[j] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 && j != len(name)-1 {
+				return name // the list closes early: "S[T][U]"
+			}
+		}
+	}
+	if depth != 0 {
+		return name
+	}
+	return name[:i]
 }
 
 // goMethodReceiver splits a gopls Go method symbol name — "(*Recv).Method" or
