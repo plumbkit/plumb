@@ -383,10 +383,10 @@ func liveExemption(cutoff int64, live []string) (string, []any) {
 // the daemon it would have told has restarted.
 //
 // The live exemption cannot stand in for this. It spares sessions connected to
-// THIS daemon, and the sweep that matters runs at daemon startup, before any
-// connection exists — so at the one moment a surviving serve most needs its
-// row, the exemption list is empty. That is why retention is a property of the
-// table, not of the caller's argument list.
+// THIS daemon at the moment of the sweep, and a surviving serve can be between
+// connections then — the sweep once ran at daemon startup, before any
+// connection existed, when the exemption list was always empty. That is why
+// retention is a property of the table, not of the caller's argument list.
 //
 // The cost is bounded and documented: one small row per proxy session, kept
 // indefinitely, whose name stays reserved (see Reservations). Reclaiming one
@@ -395,9 +395,11 @@ func liveExemption(cutoff int64, live []string) (string, []any) {
 //
 // Rows belonging to a proxy session in live are kept regardless of age. Without
 // that exemption the sweep reclaims state from sessions that are still
-// connected: read rows are refreshed as the session works, but the pin is
-// written once at initialize, so any conversation older than the TTL (24 h by
-// default) loses it mid-flight and its next reconnect comes back unpinned.
+// connected: a row is refreshed only when rewritten — a read when that file is
+// re-read, a pin when it moves — so any conversation older than the TTL (24 h
+// by default) loses its pins and reads mid-flight. For the same reason the
+// daemon calls this only from its idle reaper, after surviving serves have
+// reconnected, and never at startup (issue #525).
 func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if s == nil {
 		return nil
@@ -422,5 +424,23 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	}
 	// session_names is intentionally absent — see the doc comment. Do not add a
 	// DELETE here without an explicit retirement signal to gate it on.
+	return nil
+}
+
+// BackdateSession ages every EXPENDABLE row under a proxy session — its reads,
+// its pins and its logical-agent declarations — for tests that need state older
+// than the TTL without sleeping. The identity record is left alone, as Prune
+// leaves it.
+func (s *Store) BackdateSession(proxySessionID string, to time.Time) error {
+	if s == nil || proxySessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, tbl := range []string{"read_tracking", "pinned_workspace", "logical_agent"} {
+		if _, err := s.db.Exec(`UPDATE `+tbl+` SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil { //nolint:gosec // G202: tbl is a constant from the list above
+			return fmt.Errorf("sessionstate: backdate %s: %w", tbl, err)
+		}
+	}
 	return nil
 }

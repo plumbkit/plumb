@@ -239,14 +239,13 @@ func TestOnInit_ReplayedMetaPinCannotClaimHomeContainment(t *testing.T) {
 
 // The refusal's real cost, pinned so the docs cannot understate it. When the
 // database has no row to fall back on — [session] persist_state off, a first
-// connect, or (the case that bites in the DEFAULT configuration) a row older
-// than [session] persist_state_ttl_minutes that the startup prune swept — a
-// caller's DECLARED wide root does not come back at all. Every lower rung
-// refuses it too, because roots and the workspace pre-pin are weaker origins
-// than the declaration that is now missing, so the connection returns
-// UNATTACHED rather than pinned somewhere narrower. (No pre-pin is set here;
-// with one, the last rung could attach the pre-pin's project instead — never
-// wider, but not nothing.)
+// connect, or a row older than [session] persist_state_ttl_minutes that the
+// reaper swept while the session was not connected — a caller's DECLARED wide
+// root does not come back at all. Every lower rung refuses it too, because
+// roots and the workspace pre-pin are weaker origins than the declaration that
+// is now missing, so the connection returns UNATTACHED rather than pinned
+// somewhere narrower. (No pre-pin is set here; with one, the last rung could
+// attach the pre-pin's project instead — never wider, but not nothing.)
 //
 // It asserts the OUTCOME, not each rung's reasoning: with no marker at the wide
 // root, detection alone would also decline it. The roots rung's own guard is
