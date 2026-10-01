@@ -27,10 +27,14 @@ func sessionStartArgs(t *testing.T, workspace string) json.RawMessage {
 	return raw
 }
 
-// TestToolResultMeta_AgentScopeIsMarkedAndNotReportedAsTheConnectionsPin: an
-// agent-scope session_start says so, and does not name the connection's root as
-// the workspace it pinned.
-func TestToolResultMeta_AgentScopeIsMarkedAndNotReportedAsTheConnectionsPin(t *testing.T) {
+// TestToolResultMeta_AgentScopeIsMarkedAndKeepsTheConnectionsRoot: an agent-scope
+// session_start says so, and still names the CONNECTION's root (never the agent's
+// worktree) as the resolved workspace. The root is there for a proxy that
+// predates the scope key: it cannot read the scope, so it commits whatever
+// resolved workspace the result names, and with none it falls back to the raw
+// argument, the agent's own worktree, which it replays as the connection's pin
+// for every agent on the connection.
+func TestToolResultMeta_AgentScopeIsMarkedAndKeepsTheConnectionsRoot(t *testing.T) {
 	store, ss := newOriginStore(t)
 	parent, worktree := worktreeUnderParent(t)
 	s := newPersistSession(t, store, ss, "proxy-scope-agent")
@@ -51,9 +55,17 @@ func TestToolResultMeta_AgentScopeIsMarkedAndNotReportedAsTheConnectionsPin(t *t
 	if got := meta[mcp.MetaPinScopeKey]; got != mcp.PinScopeAgent {
 		t.Errorf("_meta[%s] = %v, want %q", mcp.MetaPinScopeKey, got, mcp.PinScopeAgent)
 	}
-	if got, ok := meta[mcp.MetaResolvedWorkspaceKey]; ok {
-		t.Errorf("_meta[%s] = %v on an agent-scope call: it names the CONNECTION's root, which the proxy would replay as a pin nobody chose",
-			mcp.MetaResolvedWorkspaceKey, got)
+	if got := s.workspace(); got != parent {
+		t.Fatalf("precondition: the agent's own pin left the connection on %q, want %q", got, parent)
+	}
+	got, ok := meta[mcp.MetaResolvedWorkspaceKey]
+	if !ok {
+		t.Fatalf("_meta carries no %s on an agent-scope call: a proxy built before %s falls back to the raw argument, %s, and replays the agent's worktree as the connection's pin",
+			mcp.MetaResolvedWorkspaceKey, mcp.MetaPinScopeKey, worktree)
+	}
+	if got != parent {
+		t.Errorf("_meta[%s] = %v, want the CONNECTION's root %q, not the agent's worktree %q",
+			mcp.MetaResolvedWorkspaceKey, got, parent, worktree)
 	}
 	// The identity channel is independent of the pin and must not lose its gate.
 	if _, ok := meta[mcp.MetaSessionIDKey]; !ok {
@@ -185,6 +197,56 @@ func TestSessionStartScope_RoundTripsToTheProxysReplayPin(t *testing.T) {
 
 			if got := p.pinnedWorkspace(); got != c.wantPinned {
 				t.Errorf("the proxy's replay pin = %q, want %q (daemon _meta %s)", got, c.wantPinned, metaJSON)
+			}
+		})
+	}
+}
+
+// TestSessionStartScope_AnOlderProxyRecordsTheConnectionsRootNotTheWorktree runs
+// the daemon's actual `_meta` through the commit of a proxy that predates the
+// scope key. A daemon restart does not restart `plumb serve`, so this pairing is
+// the normal state right after an upgrade, and the pairing the first version of
+// the scope key got wrong: it withheld the resolved workspace for an agent-scope
+// call, the older proxy fell back to the raw argument, and one agent's worktree
+// became the replay pin every agent on the connection came back to.
+//
+// The older proxy cannot tell the scopes apart, so what it records is whatever
+// the daemon names. For an agent-scope call that must be the connection's own
+// root, which is what the proxy recorded before the key existed.
+func TestSessionStartScope_AnOlderProxyRecordsTheConnectionsRootNotTheWorktree(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+
+	cases := []struct {
+		name       string
+		connScope  bool
+		wantPinned string
+	}{
+		{"an agent's own pin leaves the connection's root as the replay pin", false, parent},
+		{"a connection-scope pin is still the replay pin", true, worktree},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newPersistSession(t, store, ss, "proxy-old-proxy-"+string(rune('a'+i)))
+			s.attachWorkspace(context.Background(), "file://"+parent) // the client's roots
+			s.recordLogicalAgentAttach("coordinator")
+			s.recordLogicalAgentAttach("agent-A")
+
+			ctx := mcp.WithResultNotes(mcp.WithLogicalAgent(context.Background(), "agent-A"))
+			if _, err := s.repinWorkspace(ctx, worktree, "", false, c.connScope); err != nil {
+				t.Fatalf("session_start: %v", err)
+			}
+			metaJSON, err := json.Marshal(s.toolResultMeta(ctx, "session_start", sessionStartArgs(t, worktree)))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			p := newPinProxy()
+			p.observeClientRequest(sessionStartFrame("1", worktree))
+			commitSessionStartPinBeforePinScope(p, []byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}],"_meta":`+string(metaJSON)+`}}`))
+
+			if got := p.pinnedWorkspace(); got != c.wantPinned {
+				t.Errorf("a proxy that ignores the scope recorded %q, want %q (daemon _meta %s)", got, c.wantPinned, metaJSON)
 			}
 		})
 	}

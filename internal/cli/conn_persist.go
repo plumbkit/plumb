@@ -556,14 +556,23 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 // must also record it without disturbing a pin the call never mentioned. See
 // commitSessionStartPin.
 //
-// The workspace names the CONNECTION's pin, which is the one the proxy replays,
-// so it is withheld from a call that moved only the caller's own shard: that call
-// says nothing about where the connection should come back, and replaying the
-// connection's root as though someone had chosen it made a roots-derived pin
-// sticky (#527). Which pin moved is the re-pin's decision, noted on the call's
-// ctx (repinWorkspace) rather than guessed here from the state it left, and it is
-// reported as MetaPinScopeKey either way. A call that noted nothing is treated as
-// the connection's, as every call was before the key existed.
+// The workspace is always the CONNECTION's root, which is the pin the proxy
+// replays, including for a call that moved only the caller's own shard. Such a
+// call says nothing about where the connection should come back, and replaying
+// the connection's root as though someone had chosen it made a roots-derived pin
+// sticky (#527), so it also reports MetaPinScopeKey, and a proxy that reads that
+// records nothing without looking at the workspace. Which pin moved is the
+// re-pin's decision, noted on the call's ctx (repinWorkspace) rather than guessed
+// here from the state it left. A call that noted nothing is treated as the
+// connection's, as every call was before the key existed.
+//
+// It is NOT withheld for the agent scope, because a proxy built before the scope
+// key cannot read it: that proxy commits the resolved workspace the result names
+// and, with none, the call's raw argument, the agent's own worktree, which it
+// replays on the next attach as the top-rung pin of every agent on the connection
+// (review of #569). `plumb restart` cycles only the daemon, so a new daemon in
+// front of an older proxy is the normal state after an upgrade. Given the
+// connection's root that proxy records what it did before the key existed.
 func (s *connSession) toolResultMeta(ctx context.Context, name string, args json.RawMessage) map[string]any {
 	if name != sessionStartTool {
 		return nil
@@ -575,12 +584,12 @@ func (s *connSession) toolResultMeta(ctx context.Context, name string, args json
 	if workspaceArgPresent(args) {
 		// The scope is reported even when the connection has no root of its own:
 		// an agent that pinned its shard on an unattached connection must still
-		// tell the proxy so, or the proxy falls back to the raw argument.
-		scope, reported := mcp.ResultMetaNote(ctx, mcp.MetaPinScopeKey)
-		if reported {
+		// tell the proxy so, or the proxy falls back to the raw argument. (One that
+		// cannot read it is out of reach: no connection root, nothing to name.)
+		if scope, reported := mcp.ResultMetaNote(ctx, mcp.MetaPinScopeKey); reported {
 			meta[mcp.MetaPinScopeKey] = scope
 		}
-		if ws := s.workspace(); ws != "" && scope != mcp.PinScopeAgent {
+		if ws := s.workspace(); ws != "" {
 			meta[mcp.MetaResolvedWorkspaceKey] = ws
 		}
 	}

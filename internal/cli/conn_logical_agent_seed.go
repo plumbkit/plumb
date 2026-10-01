@@ -78,8 +78,8 @@ func (s *connSession) seedLogicalAgentsFromState(proxySessionID string) {
 // decides where an identified agent's calls are ROUTED (restoresShardFor), and
 // an agent with no identity is not affected by it at all.
 //
-// It is what lets the first caller after a restart reach its own restored shard.
-// The identities a connection has SEEN start empty, so the first stamped call —
+// It is what lets the first caller after a restart reach its own shard. The
+// identities a connection has SEEN start empty, so the first stamped call —
 // routinely a subagent, while its parent waits on it — reads as the only agent
 // there is, and without this it ran on the connection's pin and read tracker
 // (#523).
@@ -89,6 +89,11 @@ func (s *connSession) seedLogicalAgentsFromState(proxySessionID string) {
 // (attributeConnectionPin), and routing it onto a shard would take its
 // re-pins off the connection for good — the connection pin, language server and
 // session record would stop following it.
+//
+// The window is six hours and each agent refreshes only its OWN row, by its own
+// calls. A parent idle for longer than that while one subagent works drops out
+// of the evidence; if the daemon restarts then, the subagent is the only agent
+// recently declared and falls back to the connection, as it did before this.
 func (s *connSession) noteConnectionWasShared(proxySessionID string) {
 	if ids := s.recentLogicalAgentIDs(proxySessionID); len(ids) >= 2 {
 		s.logicalAgents.priorShared.Store(true)
@@ -96,24 +101,24 @@ func (s *connSession) noteConnectionWasShared(proxySessionID string) {
 }
 
 // restoresShardFor reports whether id is routed to its own shard although what
-// this process has seen does not yet make the connection shared: it was shared
-// before it re-attached, and id holds a shard already or a pin of its own to
-// build one from. See noteConnectionWasShared for why both halves are needed.
+// this process has seen does not yet make the connection shared: the connection
+// was shared before it re-attached (noteConnectionWasShared) and id is a stamped
+// agent. Nothing more is asked of the agent.
+//
+// In particular it need not hold a pin row. The common subagent has none: it is
+// anchored to its parent's chosen root, or simply follows the connection, and
+// asking for a row left exactly that agent on the connection's pin and read
+// tracker, which is #523 one hop from the case a row covers. The shard shardFor
+// builds for it seeds its root the way any shard's is (its parent's choice, its
+// own row if it has one, else the connection's) and starts its own read
+// tracker, where the connection's holds its parent's reads. The routing
+// question also no longer reads the store, which it did on every call of an
+// agent that had no row.
 //
 // Routing only. It is consulted by shardFor and by nothing that gates a call, so
 // it cannot refuse anything and cannot re-arm the anonymous-write gate.
 func (s *connSession) restoresShardFor(id string) bool {
-	if id == "" || !s.logicalAgents.priorShared.Load() {
-		return false
-	}
-	s.shardsMu.Lock()
-	_, built := s.shards[id]
-	s.shardsMu.Unlock()
-	if built {
-		return true
-	}
-	_, _, _, ok := s.loadPinForAgent(id)
-	return ok
+	return id != "" && s.logicalAgents.priorShared.Load()
 }
 
 // seed commits identities recovered from durable state — the per-agent pins

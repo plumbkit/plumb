@@ -76,10 +76,19 @@ func (s *connSession) followConnectionShards(prevRoot string) (followed []string
 		// re-pin and could rehydrate reads for a root this shard no longer has.
 		// Same rule persistReadShard states: the shard's root is read under sh.mu.
 		root := sh.root
+		// The row is forgotten BEFORE sh.mu is released. repinAgent writes the
+		// agent's row under this same lock, so a delete made after the release
+		// could land after a re-pin that ran in the gap and wipe the row of a root
+		// the agent had just chosen: followed here, chosen a moment later, and
+		// forgotten by the next restart. Under the lock the two are ordered. A
+		// re-pin that comes first leaves a self-pinned shard, which this loop does
+		// not follow, and one that comes second writes its row after this delete.
+		// The store's lock is a leaf, taken under sh.mu exactly as
+		// persistPinForAgent takes it, so the lock order does not change.
+		s.forgetPinForAgent(sh.id)
 		sh.mu.Unlock()
 		followed = append(followed, sh.id)
 		s.rehydrateReadsForAgent(sh, root)
-		s.forgetPinForAgent(sh.id)
 	}
 	return followed
 }

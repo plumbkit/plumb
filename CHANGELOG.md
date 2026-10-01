@@ -408,12 +408,19 @@
   there is and ran on the connection's pin and read tracker. Its relative writes
   landed in the parent's checkout, the parent's reloaded reads satisfied its
   strict-mode checks, and its own reads were saved where its shard never looked
-  again. An agent that holds a pin of its own on a connection recorded as shared
-  (two agents declared within the last six hours) now gets its restored shard from
-  its first call. This changes where its calls are routed and nothing that
-  refuses a call: an unstamped write is admitted exactly as before. A lone agent
-  is unaffected, because a lone agent's `session_start` leaves the same row and
-  its re-pins must keep moving the connection.
+  again. Any stamped agent on a connection recorded as shared (two agents
+  declared within the last six hours) now gets its own shard from its first call,
+  whether or not it holds a pin of its own. Most subagents hold none: they are
+  anchored to their parent's chosen root or simply follow the connection, so they
+  get that root (the parent's persisted pin, when the parent is not yet back) and
+  a read tracker of their own, not the connection's, which holds the parent's
+  reads. This changes where its calls are routed and nothing that refuses a call:
+  an unstamped write is admitted exactly as before. A lone agent is unaffected,
+  because a lone agent's `session_start` leaves a row of its own and its re-pins
+  must keep moving the connection. The evidence that the connection was shared is
+  refreshed only by each agent's own calls, so a parent idle for more than six
+  hours while one subagent works drops out of it, and if the daemon restarts then
+  that subagent stays on the connection's pin and read tracker, as before.
 - **A shard that only followed the connection is no longer saved as its agent's
   own pin.** (#527) Moving the connection's pin saved a per-agent row for each
   shard it dragged along, and after a restart that row outranked the connection's
@@ -422,18 +429,23 @@
   writes its row now; a dragged shard's row is deleted. A restored shard counts as
   having chosen its root, so a connection move no longer drags it off a workspace
   its agent named when the two happened to coincide, as a live one never was. A
-  row an earlier release wrote for a shard that had only followed cannot be told
-  from a chosen one, so it is still honoured at the next restart; that agent
-  replaces it by pinning again.
+  row an earlier release wrote for a shard that had only followed carries the
+  connection's origin: a `roots` origin can only be such a row and is ignored, so
+  that agent follows the connection again, but one with a `session_start` origin
+  cannot be told from a chosen one and is still honoured; that agent replaces it
+  by pinning again.
 - **A `session_start` that moved only your own pin is not replayed as the
   connection's.** (#527) The serve proxy records a `session_start` workspace and
   replays it after a reconnect as a connection-level pin that outranks the
   client's roots. The result named the connection's workspace whichever pin the
   call moved, so an agent-scope call made a roots-derived connection pin sticky,
   and roots changes stopped moving it. A result now carries
-  `dev.plumbkit/pin-scope` (`agent` or `connection`); for `agent` the workspace is
-  withheld and the proxy leaves its replay pin alone. The proxy half takes effect
-  when `plumb serve` restarts, which a daemon restart does not do.
+  `dev.plumbkit/pin-scope` (`agent` or `connection`), and a proxy that reads it
+  leaves its replay pin alone for `agent`. The proxy half takes effect when
+  `plumb serve` restarts, which a daemon restart does not do. Until then an older
+  proxy cannot read the scope, so the result still names the connection's
+  workspace for an `agent` call: that proxy records the connection's root, as it
+  did before, and never the agent's own worktree.
 - **The first connection pin on a shared connection moves the caller's fresh
   shard.** (#567) `session_start` reported the new workspace, but the caller's
   shard, created at no workspace before the pin, was left there because only

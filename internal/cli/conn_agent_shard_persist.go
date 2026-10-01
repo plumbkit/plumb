@@ -51,6 +51,10 @@ func (s *connSession) persistPinForAgentID(id, root, language string, origin ses
 // rather than rewriting is the point: with no row a restarted shard is seeded
 // from the connection's pin as it stands THEN, and keeps following it, instead of
 // being restored sticky at a place the connection once took it.
+//
+// The caller holds the shard's mu, as persistPinForAgent's callers do: repinAgent
+// writes the row under it, so a delete outside the lock could land after a re-pin
+// and wipe the row of a root the agent had just chosen.
 func (s *connSession) forgetPinForAgent(id string) {
 	if id == "" {
 		return
@@ -65,14 +69,25 @@ func (s *connSession) forgetPinForAgent(id string) {
 }
 
 // loadPinForAgent returns the pin a logical agent persisted under (proxy session,
-// agent). ok=false when nothing is recorded or persistence is disabled.
+// agent). ok=false when nothing is recorded, persistence is disabled, or the row
+// is a legacy follower row.
+//
+// A row whose origin is PinSourceRoots is not returned. Nothing writes one now: a
+// roots change never reaches an agent's shard, and the rule above lets only an
+// agent's own session_start write a row. One with that origin was therefore
+// written by a release whose followConnectionShards persisted the connection's
+// root, and its roots origin with it, for a shard it had merely dragged along
+// (#527). It names a root nobody chose, and restoring it would hold the agent
+// where it was only ever taken to, so the agent follows the connection again, as
+// it did before the row existed. This is the one reader of a row, so shardFor's
+// restore and a subagent's seeding from its conversation's row skip it alike.
 func (s *connSession) loadPinForAgent(id string) (root, language string, origin sessionstate.PinSource, ok bool) {
 	v := s.view()
 	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
 		return "", "", sessionstate.PinSourceUnknown, false
 	}
 	root, language, origin, ok, err := s.sessionState.LoadPinForAgent(v.proxySessionID, id)
-	if err != nil || !ok || root == "" {
+	if err != nil || !ok || root == "" || origin == sessionstate.PinSourceRoots {
 		return "", "", sessionstate.PinSourceUnknown, false
 	}
 	return root, language, origin, true

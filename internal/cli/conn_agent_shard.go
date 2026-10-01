@@ -97,8 +97,9 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	//
 	// restoresShardFor is the other way in: after a restart the identities seen
 	// start empty, so the first stamped caller reads as the only agent, yet durable
-	// evidence says the connection was shared and the agent holds a pin of its own
-	// (#523). Routing only; nothing that gates a call consults it.
+	// evidence says the connection was shared (#523). Any stamped agent is routed
+	// to its shard then, whether or not it holds a pin row: a subagent anchored to
+	// its parent's root has none. Routing only; nothing that gates a call consults it.
 	if !s.logicalAgents.sharedWith(id) && !s.restoresShardFor(id) {
 		return nil
 	}

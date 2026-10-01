@@ -17,6 +17,7 @@ package cli
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -170,5 +171,70 @@ func TestARestoredShardDoesNotFollowAConnectionMove(t *testing.T) {
 	}
 	if got := second.workspaceFor(ctxSub); got != worktree {
 		t.Errorf("a restored shard was dragged to %q by the connection's move; the agent named %q", got, worktree)
+	}
+}
+
+// recordProbe is a slog handler that calls fn with each record's message, so a
+// test can look at the world from inside the code that logs.
+type recordProbe struct{ fn func(msg string) }
+
+func (recordProbe) Enabled(context.Context, slog.Level) bool { return true }
+func (p recordProbe) Handle(_ context.Context, r slog.Record) error {
+	p.fn(r.Message)
+	return nil
+}
+func (p recordProbe) WithAttrs([]slog.Attr) slog.Handler { return p }
+func (p recordProbe) WithGroup(string) slog.Handler      { return p }
+
+// TestAFollowedShardsRowIsForgottenWhileItsLockIsHeld: forgetting the row of a
+// shard the connection dragged along must happen before the shard's lock is
+// released. repinAgent writes the agent's row under that same lock, so a delete
+// made after the release can land after a re-pin that ran in the gap, and wipe
+// the row of a root the agent has just chosen.
+//
+// The probe sits inside the delete: the store is closed so the delete fails and
+// is logged by forgetPinForAgent itself, and the logger tries to take the
+// shard's lock at that moment. Asserting the lock is held after the call would
+// pass under either order.
+func TestAFollowedShardsRowIsForgottenWhileItsLockIsHeld(t *testing.T) {
+	store, ss := newOriginStore(t)
+	rootX, rootZ := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, rootX)
+	mustGitDir(t, rootZ)
+	ctxSub := mcp.WithLogicalAgent(context.Background(), "sub")
+
+	s := newPersistSession(t, store, ss, "proxy-forget-locked")
+	s.attachWorkspace(context.Background(), "file://"+rootX)
+	s.recordLogicalAgentAttach("coordinator")
+	s.recordLogicalAgentAttach("sub")
+	sh := s.shardFor(ctxSub)
+	if sh == nil {
+		t.Fatal("precondition: the subagent has no shard on a shared connection")
+	}
+
+	ss.Close() // every store call from here on fails, and forgetPinForAgent logs it
+	var forgot, locked bool
+	s.logger = slog.New(recordProbe{fn: func(msg string) {
+		if msg != "daemon: forget agent pin failed" {
+			return
+		}
+		forgot = true
+		if sh.mu.TryLock() {
+			sh.mu.Unlock()
+			return
+		}
+		locked = true
+	}})
+
+	s.onRootsChanged(context.Background(), []string{"file://" + rootZ})
+
+	if got := s.workspaceFor(ctxSub); got != rootZ {
+		t.Fatalf("precondition: the shard did not follow the connection to %q (at %q)", rootZ, got)
+	}
+	if !forgot {
+		t.Fatal("the dragged shard's row was never forgotten, so the probe never ran")
+	}
+	if !locked {
+		t.Error("the shard's row was forgotten after its lock was released: a re-pin in the gap writes a row this delete then wipes")
 	}
 }

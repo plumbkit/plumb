@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -183,5 +184,135 @@ func TestHistoricalDeclarationsDoNotRouteToARestoredShard(t *testing.T) {
 
 	if sh := second.shardFor(ctxSub); sh != nil {
 		t.Error("declarations a month old routed a lone caller onto a shard; only recent, concurrent ones are evidence")
+	}
+}
+
+// TestASubagentWithNoRowOfItsOwnIsAnchoredToItsParentAfterARestart is the common
+// subagent. It never called session_start, so it has no pin row: it was anchored
+// to its parent's chosen root, and that is where it resolved before the restart.
+// With only the subagent calling afterwards, requiring a row of its own sent it
+// to the connection's pin, which is the misroute #523 describes, one hop away
+// from the case its row covers.
+func TestASubagentWithNoRowOfItsOwnIsAnchoredToItsParentAfterARestart(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, worktree := worktreeUnderParent(t)
+	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
+	ctxSub := mcp.WithLogicalAgent(context.Background(), "conv/sub")
+
+	first := newPersistSession(t, store, ss, "proxy-anchored")
+	first.attachWorkspace(context.Background(), "file://"+parent)
+	first.recordLogicalAgentAttach("conv")
+	first.recordLogicalAgentAttach("conv/sub")
+	if _, err := first.repinWorkspace(ctxConv, worktree, "", false, false); err != nil {
+		t.Fatalf("setup: the conversation's own pin: %v", err)
+	}
+	if got := first.workspaceFor(ctxSub); got != worktree {
+		t.Fatalf("precondition: before the restart the subagent resolves to %q, want its parent's %q", got, worktree)
+	}
+	if _, _, _, ok, err := ss.LoadPinForAgent("proxy-anchored", "conv/sub"); err != nil || ok {
+		t.Fatalf("precondition: the subagent has a row of its own (ok=%v err=%v); this test is about the one with none", ok, err)
+	}
+	first.close()
+
+	second := newPersistSession(t, store, ss, "proxy-anchored")
+	second.attachWorkspace(context.Background(), "file://"+parent)
+	second.recordLogicalAgentCall("conv/sub") // only the subagent calls; its parent is parked
+
+	if got := second.workspaceFor(ctxSub); got != worktree {
+		t.Fatalf("after the restart the subagent resolves to %q, want its parent's %q — a relative write would land in %q",
+			got, worktree, filepath.Join(parent, "x"))
+	}
+}
+
+// TestASubagentAfterARestartDoesNotShareTheConnectionsReadTracker is the same gap
+// seen through the read tracker. The parent, alone on the connection, read a file
+// on the CONNECTION's tracker, which a restart reloads; the subagent that joined
+// afterwards has no row, so it ran on that tracker and the parent's read record
+// satisfied its strict-mode check for a file it never read.
+func TestASubagentAfterARestartDoesNotShareTheConnectionsReadTracker(t *testing.T) {
+	store, ss := newOriginStore(t)
+	parent, _ := worktreeUnderParent(t)
+	notes := filepath.Join(parent, "notes.md")
+	readAt := time.Unix(1_700_000_000, 321)
+	ctxConv := mcp.WithLogicalAgent(context.Background(), "conv")
+	ctxSub := mcp.WithLogicalAgent(context.Background(), "conv/sub")
+
+	first := newPersistSession(t, store, ss, "proxy-shared-tracker")
+	first.attachWorkspace(context.Background(), "file://"+parent)
+	first.recordLogicalAgentAttach("conv")
+	if first.readTrackerFor(ctxConv) != first.readTracker {
+		t.Fatal("precondition: alone on the connection, the conversation reads on the connection's tracker")
+	}
+	first.readTrackerFor(ctxConv).Record(notes, readAt, "sha-notes")
+	first.recordLogicalAgentAttach("conv/sub") // the subagent joins afterwards
+	first.close()
+
+	second := newPersistSession(t, store, ss, "proxy-shared-tracker")
+	second.attachWorkspace(context.Background(), "file://"+parent)
+	if got := second.readTracker.Mtime(notes); !got.Equal(readAt) {
+		t.Fatalf("precondition: the connection's tracker reloaded mtime %v for %s, want the parent's read %v", got, notes, readAt)
+	}
+	second.recordLogicalAgentCall("conv/sub")
+
+	if second.readTrackerFor(ctxSub) == second.readTracker {
+		t.Fatal("the subagent runs on the CONNECTION's read tracker, so the parent's reloaded read record satisfies its strict-mode checks")
+	}
+	if got := second.readTrackerFor(ctxSub).Mtime(notes); !got.IsZero() {
+		t.Errorf("the subagent's own tracker holds mtime %v for %s, a file only its parent read", got, notes)
+	}
+}
+
+// TestALegacyFollowerRowIsNotRestoredAsAChosenPin: a per-agent row with origin
+// roots can only have been written by a release that persisted the connection's
+// root for a shard it had merely dragged along (#527). It is not a root the agent
+// chose, so the agent must come back following the connection, as it would had
+// the row never been written, and a later connection move must take it along.
+// Both routes a row is read by are covered: the agent's own, and its
+// conversation's, which anchors a subagent.
+func TestALegacyFollowerRowIsNotRestoredAsAChosenPin(t *testing.T) {
+	cases := []struct {
+		name     string
+		rowOwner string // whose legacy follower row exists
+		caller   string // who calls after the restart
+	}{
+		{"the agent's own row", "sub", "sub"},
+		{"its conversation's row", "conv", "conv/sub"},
+	}
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store, ss := newOriginStore(t)
+			rootX, rootZ := freshTempDir(t), freshTempDir(t)
+			mustGitDir(t, rootX)
+			mustGitDir(t, rootZ)
+			proxyID := "proxy-legacy-follower-" + string(rune('a'+i))
+			ctxCaller := mcp.WithLogicalAgent(context.Background(), c.caller)
+
+			// Before the restart: two agents declared within the window, and the
+			// row an older release left for a follower.
+			first := newPersistSession(t, store, ss, proxyID)
+			first.attachWorkspace(context.Background(), "file://"+rootX)
+			first.recordLogicalAgentAttach("coordinator")
+			first.recordLogicalAgentAttach(c.caller)
+			first.close()
+			if err := ss.UpsertPinForAgent(proxyID, c.rowOwner, rootX, "", sessionstate.PinSourceRoots); err != nil {
+				t.Fatalf("setup: the legacy row: %v", err)
+			}
+
+			calls := 0
+			second := newPersistSession(t, store, ss, proxyID)
+			second.attachOnInit(context.Background(), rootsReplying(rootX, &calls))
+			second.recordLogicalAgentCall(c.caller)
+			if got := second.workspaceFor(ctxCaller); got != rootX {
+				t.Fatalf("precondition: the agent resolves to %q, want the connection's %q", got, rootX)
+			}
+
+			second.onRootsChanged(context.Background(), []string{"file://" + rootZ})
+			if got := second.workspace(); got != rootZ {
+				t.Fatalf("precondition: the connection moved to %q, not %q", got, rootZ)
+			}
+			if got := second.workspaceFor(ctxCaller); got != rootZ {
+				t.Errorf("the agent resolves to %q after the connection moved to %q: a row it never wrote pinned it in place", got, rootZ)
+			}
+		})
 	}
 }

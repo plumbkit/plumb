@@ -76,3 +76,34 @@ func TestCommitSessionStartPin_NoScopeKeyIsTheConnectionsPin(t *testing.T) {
 		t.Fatalf("pinnedWorkspace = %q, want /Users/me/proj", got)
 	}
 }
+
+// commitSessionStartPinBeforePinScope is commitSessionStartPin as every release
+// before dev.plumbkit/pin-scope ran it (serve_proxy_pin.go on main when the key
+// was added): it reads the resolved workspace and nothing about scope, and falls
+// back to the call's raw argument when the result names none. Only the pin half
+// is kept; the session-ID half is unchanged by the key.
+//
+// It is the proxy a new daemon talks to after an upgrade. `plumb restart` cycles
+// the daemon alone, so every `plumb serve` keeps the binary it was started with
+// until the client restarts it, and tests against this function stand for that
+// pairing. The proxy's own half of the key is covered by the tests above, which
+// run the current commitSessionStartPin.
+func commitSessionStartPinBeforePinScope(p *reconnectingProxy, frame []byte) {
+	e := parseEnvelope(frame)
+	if !e.isResponse() {
+		return
+	}
+	key := idKey(e.ID)
+	p.pinMu.Lock()
+	defer p.pinMu.Unlock()
+	start, waiting := p.pending[key]
+	delete(p.pending, key)
+	if !waiting || !toolCallSucceeded(frame) || start.workspace == "" {
+		return
+	}
+	ws := start.workspace
+	if resolved := resolvedWorkspaceMeta(frame); resolved != "" {
+		ws = resolved
+	}
+	p.pinned = ws
+}

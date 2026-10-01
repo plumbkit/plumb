@@ -140,11 +140,13 @@ const MetaResolvedWorkspaceKey = "dev.plumbkit/resolved-workspace"
 // is replayed on reconnect as a session_start-level connection pin, which is
 // sticky and outranks the client's roots. A call that moved only one agent's
 // shard says nothing about where the connection should come back, so for
-// "agent" the daemon withholds MetaResolvedWorkspaceKey (it would name the
-// connection's root, not the agent's) and the proxy records no replay pin. A
-// daemon that predates the key sends nothing, which a proxy must read as
-// "connection" — the behaviour before the key existed. Reverse-DNS namespaced
-// per the MCP `_meta` convention.
+// "agent" the proxy records no replay pin, and does so before it reads
+// MetaResolvedWorkspaceKey. The daemon still sends that key for "agent", naming
+// the connection's root, because a proxy that predates this key cannot read the
+// scope and would otherwise fall back to the call's raw argument, the agent's
+// worktree, and replay it as the connection's pin. A daemon that predates the key
+// sends nothing, which a proxy must read as "connection" — the behaviour before
+// the key existed. Reverse-DNS namespaced per the MCP `_meta` convention.
 const MetaPinScopeKey = "dev.plumbkit/pin-scope"
 
 // PinScopeAgent and PinScopeConnection are the values of MetaPinScopeKey.
