@@ -1,15 +1,16 @@
 package tools
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
 
 func renderTaskSection(t *testing.T, st TaskState) string {
 	t.Helper()
-	tool := &SessionStart{tasksFn: func() TaskState { return st }}
+	tool := &SessionStart{tasksFn: func(context.Context) TaskState { return st }}
 	var sb strings.Builder
-	tool.writeSessionTasks(&sb, "/ws")
+	tool.writeSessionTasks(context.Background(), &sb, "/ws")
 	return sb.String()
 }
 
@@ -87,18 +88,18 @@ func TestWriteSessionTasks_ReportsEmptyCommandAllowList(t *testing.T) {
 // way every other injected section does.
 func TestWriteSessionTasks_NilSafe(t *testing.T) {
 	var sb strings.Builder
-	(&SessionStart{}).writeSessionTasks(&sb, "/ws")
+	(&SessionStart{}).writeSessionTasks(context.Background(), &sb, "/ws")
 	if sb.String() != "" {
 		t.Errorf("unwired tasksFn must emit nothing, got:\n%s", sb.String())
 	}
 	sb.Reset()
-	tool := &SessionStart{tasksFn: func() TaskState { return TaskState{} }}
-	tool.writeSessionTasks(&sb, "")
+	tool := &SessionStart{tasksFn: func(context.Context) TaskState { return TaskState{} }}
+	tool.writeSessionTasks(context.Background(), &sb, "")
 	if sb.String() != "" {
 		t.Errorf("empty workspace must emit nothing, got:\n%s", sb.String())
 	}
 	sb.Reset()
-	tool.writeSessionTasks(&sb, "/ws")
+	tool.writeSessionTasks(context.Background(), &sb, "/ws")
 	if sb.String() != "" {
 		t.Errorf("a wholly empty TaskState must emit nothing, got:\n%s", sb.String())
 	}

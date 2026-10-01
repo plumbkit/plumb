@@ -121,7 +121,7 @@ type SessionStart struct {
 	collabFn       func() (peerAwareness bool, hintBudgetBytes int)                                                        // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn      func() (on bool, inbox Inbox)                                                                           // may be nil; the mailbox delivery snapshot
 	xcodeHintFn    XcodeHintFn                                                                                             // may be nil; bare-Xcode BSP guidance
-	tasksFn        func() TaskState                                                                                        // may be nil; the resolved run_task/run_command state for this workspace
+	tasksFn        func(context.Context) TaskState                                                                         // may be nil; the resolved run_task/run_command state for this workspace
 	surchargeFn    func() (bytes int, tokens int, toolCount int)                                                           // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
 }
 
@@ -439,7 +439,7 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	writeSessionCommits(&sb, ws)
 	writeSessionWorkingTree(&sb, ws)
 	t.writeSessionGitPolicy(&sb, ws)
-	t.writeSessionTasks(&sb, ws)
+	t.writeSessionTasks(ctx, &sb, ws)
 	writeSessionSubmodules(&sb, ws)
 	recent := t.writeSessionRecentFiles(&sb, ws)
 	writeSessionMemories(&sb, ws, recent)
