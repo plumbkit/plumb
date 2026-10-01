@@ -22,6 +22,9 @@ package cli
 // row is what the roster lists and so what peers address. Who the owner is, and
 // which identity it answers to, lives in conn_agent_identity.go.
 //
+// A non-owner's name and session ID are recorded under (proxy session, agent) and
+// handed back to the same proxy after a daemon restart (conn_agent_roster_persist.go).
+//
 // A row deliberately carries NO ExternalID. That field is the CONVERSATION
 // linkage, and both `plumb mail --external-id` (mail.go) and session.FindEnded
 // match on it without filtering child rows — so a child carrying its parent's
@@ -114,14 +117,20 @@ func (s *connSession) registerAgentRow(sh *agentShard, root, language string) {
 	if s.ctx != nil && s.ctx.Err() != nil {
 		return // the connection is closing: no teardown is left to retire this row
 	}
-	info, err := session.Register(session.Info{
+	// The draw avoids names reserved for agents that are not live (#526).
+	info, err := session.RegisterReserved(session.Info{
 		ParentID: s.sessionID(),
 		Folder:   root,
 		Language: language,
-	})
+	}, s.reservedNamesFor("", ""))
 	if err != nil {
 		s.log().Debug("daemon: registering the agent's roster row failed", "agent", sh.id, "root", root, "err", err)
 		return
+	}
+	if !s.ownsConnectionID(sh.id) {
+		// The owner's identity is the connection's, restored by restoreIdentity; its
+		// row here only lists it, and is retired when it returns.
+		info = s.claimRosterIdentity(sh.id, info)
 	}
 	sh.mu.Lock()
 	sh.rosterID, sh.rosterName, sh.rosterFolder = info.ID, info.Name, root
