@@ -347,13 +347,26 @@ func (o reconnectOutcome) tail() string {
 
 // identitySentence reports the identity outcome, and says "unknown" rather than
 // inventing a result when the daemon acknowledged nothing.
+//
+// Only recoveryRestored may say the identity was restored, or that the agent is
+// still anyone. recoveryEstablished is first contact: an identity was minted for
+// this connection and nothing was recovered, so an agent told "you are still X"
+// believes it kept an identity it never had, and does not re-declare itself or
+// re-check its pin and mail (#565).
 func (o reconnectOutcome) identitySentence() string {
 	switch recoveryOutcome(o.recovery) {
-	case recoveryRestored, recoveryEstablished:
+	case recoveryRestored:
 		if o.name != "" {
 			return fmt.Sprintf("Your session identity was restored: you are still %s (%s).", o.name, o.sessionID)
 		}
 		return "Your session identity was restored."
+	case recoveryEstablished:
+		if o.name != "" {
+			return fmt.Sprintf("This connection started a new plumb session (name %s, id %s); "+
+				"call session_start with your session_id to re-link your conversation.", o.name, o.sessionID)
+		}
+		return "This connection started a new plumb session; " +
+			"call session_start with your session_id to re-link your conversation."
 	case recoveryDegraded:
 		return "Your session identity could NOT be restored this time and you are running under a temporary one; " +
 			"the durable record is intact, so a later reconnect will try again. Mail addressed to your previous " +

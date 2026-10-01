@@ -221,11 +221,9 @@ func (t *LeaveNote) selfMatcher(ctx context.Context) func(id, name string) bool 
 	if id := t.deps.sessionID(ctx); id != "" {
 		selfIDs[id] = true
 	}
-	if t.deps.InheritedSessionIDs != nil {
-		for _, id := range t.deps.InheritedSessionIDs() {
-			if id != "" {
-				selfIDs[id] = true
-			}
+	for _, id := range t.deps.inheritedIDs(ctx) {
+		if id != "" {
+			selfIDs[id] = true
 		}
 	}
 	return func(id, name string) bool {

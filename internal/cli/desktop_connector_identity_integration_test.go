@@ -48,7 +48,7 @@ func newDesktopConn(t *testing.T, stampKey string) *desktopConn {
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).
 		WithStampChannel(s.stampChannelState).
-		WithExternalID(s.linkExternalID))
+		WithLinkage(s.linkExternalID))
 	srv.Register(tools.NewWriteFile(s.buildWriteDeps()))
 	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithWorkspace(s.workspaceFor))
 	srv.OnToolRefusal = s.refuseSharedStateChange

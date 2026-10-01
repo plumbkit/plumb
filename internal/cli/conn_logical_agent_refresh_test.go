@@ -18,7 +18,7 @@ func TestDeclarationRefreshWritesOncePerInterval(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-513-throttle"
 	before := newPersistSession(t, store, ss, proxyID)
-	before.linkExternalID("conv-a")
+	before.linkExternalID(context.Background(), "conv-a")
 	before.close()
 	aged := time.Now().Add(-48 * time.Hour)
 	if err := ss.BackdateLogicalAgents(proxyID, aged); err != nil {

@@ -129,8 +129,8 @@ func TestDeclarationsSurviveADaemonRestart(t *testing.T) {
 	const proxyID = "proxy-513-restart"
 
 	before := newPersistSession(t, store, ss, proxyID)
-	before.linkExternalID("conv-a")      // session_start(session_id: conv-a)
-	before.declareLogicalAgent("conv-b") // session_start under conv-b's stamp
+	before.linkExternalID(context.Background(), "conv-a") // session_start(session_id: conv-a)
+	before.declareLogicalAgent("conv-b")                  // session_start under conv-b's stamp
 	before.recordLogicalAgentCall("made-up")
 	before.close()
 
@@ -156,7 +156,7 @@ func TestIdentityRecordLinkageSurvivesAPrunedDeclaration(t *testing.T) {
 	const proxyID = "proxy-513-pruned"
 
 	before := newPersistSession(t, store, ss, proxyID)
-	before.linkExternalID("conv-a")
+	before.linkExternalID(context.Background(), "conv-a")
 	before.declareLogicalAgent("conv-b")
 	before.close()
 	// Every expendable row is older than this cutoff; session_names is kept.
@@ -252,7 +252,7 @@ func TestAdmittedWritesKeepADeclarationYoung(t *testing.T) {
 	const proxyID = "proxy-513-refresh"
 
 	before := newPersistSession(t, store, ss, proxyID)
-	before.linkExternalID("conv-a")
+	before.linkExternalID(context.Background(), "conv-a")
 	before.declareLogicalAgent("conv-b")
 	before.close()
 	if err := ss.BackdateLogicalAgents(proxyID, time.Now().Add(-48*time.Hour)); err != nil {
@@ -296,7 +296,7 @@ func TestDeclarationsRestoreWhenADegradedRecoveryConverges(t *testing.T) {
 		close(release)
 		t.Fatal("precondition: the overlap did not degrade")
 	}
-	first.linkExternalID("conv-late")
+	first.linkExternalID(context.Background(), "conv-late")
 	first.close()
 	close(release)
 

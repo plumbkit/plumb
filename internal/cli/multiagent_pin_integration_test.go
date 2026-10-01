@@ -87,11 +87,9 @@ func newMultiAgentConn(t *testing.T) *multiAgentConn {
 	start := tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).
-		WithExternalID(func(id string) string {
-			session.SetExternalID(s.sessionID(), id)
-			s.recordLogicalAgentAttach(id)
-			return ""
-		})
+		// The real linker, not a stand-in that lets the last session_start win: which
+		// agent owns the connection decides which identity each agent answers to.
+		WithLinkage(s.linkExternalID)
 	return &multiAgentConn{s: s, start: start, write: tools.NewWriteFile(s.buildWriteDeps())}
 }
 

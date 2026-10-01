@@ -75,6 +75,20 @@
   (`Run` for `(*S).Run`) from the server's own range instead of the index's. One
   cost to know: a plain name for a *nested* symbol, which only worked through the
   fallback, now fails with the full name_path that resolves it.
+- **Tests no longer take the live session registry's lock.** Tests in
+  `internal/cli`, `internal/tools`, `internal/tui` and `internal/web` reached
+  the real session registry, and on macOS that meant
+  `~/Library/Application Support/plumb/sessions/.sessions.lock`. They
+  contended with the user's daemon: with several test runs going, the daemon
+  held hundreds of descriptors queued on that flock and test binaries sat in it
+  until `-timeout`. Each of those packages now points `XDG_DATA_HOME` at a
+  temporary directory in `TestMain`, and a test that sets its own keeps the
+  private registry that gives it. A test binary that still resolves the registry
+  to its start-up environment's location names the fix and exits, so a new
+  package that forgets fails on CI instead of stalling a developer's daemon. It
+  exits rather than panics because the daemon's own `recover()` sites would
+  swallow a panic and let the test pass. The check never runs outside
+  `go test`. (#551)
 - **A slow git write no longer outlives its call and lands unreported.** When a
   pre-commit hook outlasted the MCP client's call timeout, the client reported
   `Request timed out` while the commit carried on in the daemon and landed
@@ -88,6 +102,36 @@
   finishes, the next `git` call from each session reports `landed as <sha>` or
   the failure with git's output. A value at or above `write_timeout` restores
   the old wait-it-out behaviour. (#549)
+- **Every agent on a shared connection has its own session identity, mail and
+  commit signature.** (#556) A connection registers one session, and the tools
+  answered for it whoever asked: a subagent was told it was its parent, consumed
+  its parent's mail at `session_start` and at `check_messages`, read its parent's
+  threads, and signed its commits `Plumb-Session: <parent's name>`. The
+  connection's identity now belongs to the conversation it is linked to (the id
+  equal to the connection's external id) and to no other agent. Every other
+  stamped agent gets a session row of its own, registered when it first needs an
+  identity and kept on the root it works in; `session_start`'s `Session:` line, its
+  peer digest and its mailbox claim, `leave_note`, `check_messages`, the
+  `workspace_sessions` mail listing and the commit trailer all answer for the
+  caller. An agent with no identity of its own (an unstamped call on a shared
+  connection, or one whose row could not be written) gets none, and its commits
+  carry no trailer, instead of borrowing another agent's. A subagent alone on a
+  restarted connection while its parent is parked is still not the connection.
+  Predecessor session IDs a reconnect inherited reach the owner only, and the
+  owner is whichever conversation the connection is currently linked to.
+- **Only the conversation that resumed is told it resumed.** (#556) A subagent
+  that reached a restarted connection first reported "resumed" for an identity it
+  never had, and the conversation's own main thread then was not told. The
+  connection still takes its conversation's name back as soon as it is linked,
+  whichever agent's call that was, but what resuming means now waits for the owner
+  and is delivered to it once. Only the name comes back: a predecessor's threads
+  and mail bound to its session ID follow only a reconnect that presents the serve
+  proxy's credential, never a conversation id a model can type.
+- **The reconnect note no longer says a new identity was restored.** (#565) A
+  connection's first contact under a credential (`established`) read "Your session
+  identity was restored: you are still X", which told an agent that had never been
+  X that it kept an identity. It now says a new session started, names it, and
+  asks the agent to `session_start` with its `session_id`.
 - **`find_references` and `get_definition` resolve a plain Go method name.**
   (#546) gopls reports a method as `(*WriteTracker).WroteMtime`, so
   `symbol_name: "WroteMtime"` answered "No symbol named" from both tools, while

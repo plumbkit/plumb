@@ -218,36 +218,15 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStoreIfExists:      s.collabGlobalIfExists,
 		Notifier:                 s.collabPool.notifier(),
 		ResolvePeer:              s.resolvePeer,
-		InheritedSessionIDs:      s.inheritedSessionIDs,
+		InheritedSessionIDs:      s.inheritedSessionIDsFor,
 		TargetAllowsCrossProject: s.targetAllowsCrossProject,
 	}
 }
 
-// inbox is this session's message inbox: its address, its resolved policy, and
-// the two stores it may read from. Built per call so a config hot-reload takes
-// effect on the next delivery.
-//
-// An unregistered session (session.Register failed, so sessID is empty) has no
-// address. Its name never entered the session directory, so no peer's
-// uniqueness check can see it and it may well duplicate a live session's name —
-// claiming that peer's messages, which are delivered exactly once and would
-// simply never arrive. Inbox.Claim treats an empty Self as "mailbox off".
-func (s *connSession) inbox() tools.Inbox {
-	return s.inboxFor(context.Background())
-}
-
-// inboxFor returns the message inbox for the calling agent in ctx.
-func (s *connSession) inboxFor(ctx context.Context) tools.Inbox {
-	return tools.Inbox{
-		Self:         s.addressableNameFor(ctx),
-		SelfID:       s.sessionIDFor(ctx),
-		InheritedIDs: s.inheritedSessionIDs(),
-		Root:         s.workspaceFor(ctx),
-		Policy:       s.collabPolicy(),
-		Workspace:    func() *collab.Store { return s.collabStoreIfExistsFor(ctx) },
-		Global:       s.collabGlobalIfExists,
-	}
-}
+// The message inbox of the calling agent — its address, its resolved policy, the
+// predecessor identities it owns, and the two stores it may read from — is
+// inboxFor, in conn_agent_identity.go, because which agent is asking decides
+// every field of it.
 
 // intentHintTimeout bounds the collab.db read on the hot enrich path so a slow
 // disk never stalls a tool response for the sake of an advisory hint.
