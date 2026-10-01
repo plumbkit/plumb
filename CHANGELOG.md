@@ -1,6 +1,31 @@
 # Changelog
 
-## 0.20.4 (unreleased)
+## 0.21.0 (2026-10-02)
+
+### Upgrading: read this first
+
+- **What could go wrong before 0.21.0.** When several agents shared one
+  `plumb serve`, plumb could not reliably tell their calls apart. Claude
+  desktop runs a single `plumb serve` for every conversation, chat and Code
+  tab, in every project, so this was the common case. A call could then
+  resolve against a workspace another agent had pinned: a relative
+  `edit_file` was written into another conversation's checkout, `git` ran in
+  another project's repository, reads and searches returned another project's
+  files, and `session_start` reported a re-pin that the next call did not
+  honour. One project could see, and change, another's files.
+- **What changes.** Each call now carries its agent's identity (the Claude
+  Code hook stamps it, and Claude desktop's connector now forwards it), each
+  agent keeps its own pin, and a state-changing call on a shared connection
+  that plumb cannot attribute is refused with the remedy instead of being
+  resolved against someone else's workspace. A single agent on its own
+  connection needs nothing new. `[collab] allow_unidentified_writes` is
+  retired: remove it from your config.
+- **Restart the proxies, not just the daemon.** `plumb serve` does not update
+  when the daemon does, and several of these fixes live in the proxy. After
+  upgrading: `plumb restart --force`, then restart every client that runs
+  `plumb serve` (quit and reopen Claude desktop; start new Claude Code, Codex
+  and Gemini sessions). Until a proxy restarts it keeps the old behaviour.
+  Install or refresh the identity hook with `plumb hooks install claude-code`.
 
 ### Added
 
