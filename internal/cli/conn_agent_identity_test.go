@@ -136,10 +136,13 @@ func newResumeFixture(t *testing.T) *resumeFixture {
 	return f
 }
 
-// Symptom 3, and the half of symptom 6 that is about who is TOLD: the conversation's
-// main thread resumes its thread and its unread mail; the subagent that happened to
-// reach the new connection first is not told it resumed anything.
-func TestResumedConversationKeepsItsThreadsAndOnlyItsOwnerIsToldItResumed(t *testing.T) {
+// The half of symptom 6 that is about who is TOLD: a subagent that happened to reach
+// a restarted connection first is not told it resumed anything, and the
+// conversation's own main thread, which arrives later, is told once, and only as far
+// as it is true. The connection took the NAME back; the predecessor's threads and the
+// mail bound to its session ID did not follow (the linkage is a conversation id, which
+// authorises neither: see conn_agent_identity_mail_test.go).
+func TestOnlyTheConversationsOwnerIsToldItResumed(t *testing.T) {
 	f := newResumeFixture(t)
 	second := f.w.conn("")
 
@@ -160,196 +163,69 @@ func TestResumedConversationKeepsItsThreadsAndOnlyItsOwnerIsToldItResumed(t *tes
 		t.Errorf("the first subagent on a restarted connection was told it is its parent: %s", line)
 	}
 
-	parentOut := second.start(resumeConv, "", resumeConv, nil)
-	line := sessionLine(parentOut)
+	line := sessionLine(second.start(resumeConv, "", resumeConv, nil))
 	if !strings.Contains(line, "resumed") {
 		t.Errorf("the conversation's own main thread is not told it resumed: %q", line)
 	}
-	if strings.Contains(line, "not inherited") {
-		t.Errorf("the owner inherited its predecessor's threads but is told it did not: %q", line)
+	if !strings.Contains(line, "not inherited") {
+		t.Errorf("the owner is not told that its predecessor's threads and mail did not follow it: %q", line)
 	}
-
-	out, isErr := second.call(resumeConv, "leave_note", map[string]any{"conversation_id": f.threadID, "body": "reply from the recovered session"})
-	if isErr || strings.Contains(out, "not one of yours") {
-		t.Errorf("symptom 3: the recovered session cannot reply in its own thread: %q", out)
-	}
-	// Delivered by session_start's own Messages block, which claims before check_messages
-	// can: the grant has to be in place by the end of the call that made it.
-	if !strings.Contains(parentOut, "second note, unread") {
-		t.Errorf("mail bound to the predecessor did not follow the conversation: %q", parentOut)
+	if again := sessionLine(second.start(resumeConv, "", resumeConv, nil)); strings.Contains(again, "resumed") {
+		t.Errorf("the owner is told it resumed a second time: %q", again)
 	}
 }
 
-// The safety rule's negative controls. Inheritance is the one grant here that is
-// authorised by a CLAIM (a conversation id) rather than by the proxy secret, so
-// each of these is a caller that must walk away with nothing.
-func TestThreadInheritanceIsRefusedToEveryoneButTheConversationsMainThread(t *testing.T) {
-	cases := []struct {
-		name  string
-		agent string // the stamp, "" for an unstamped call
-		arg   string // the session_id it declares
-	}{
-		{name: "a subagent of the conversation", agent: resumeSubConv, arg: resumeSubConv},
-		{name: "a stamped different conversation", agent: "conv-2", arg: "conv-2"},
-		{name: "a stamped different conversation claiming this one's id", agent: "conv-2", arg: resumeConv},
-		{name: "a subagent claiming the conversation's id outright", agent: resumeSubConv, arg: resumeConv},
+// What was pending for one conversation is not told to the next one that links the
+// connection: a subagent of conv-A reached the restarted connection first and the
+// news waited for conv-A's main thread, which never came before conv-B relinked it.
+// conv-B resumed nothing.
+func TestAPendingResumeIsNotToldToAConversationThatRelinksTheConnection(t *testing.T) {
+	f := newResumeFixture(t)
+	second := f.w.conn("")
+	second.start(resumeSubConv, f.ws, resumeSubConv, nil)
+
+	out := second.start("conv-B", "", "conv-B", nil)
+	if got := second.s.externalID(); got != "conv-B" {
+		t.Fatalf("precondition: conv-B did not relink the connection: %q", got)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f := newResumeFixture(t)
-			second := f.w.conn("")
-			second.start(c.agent, f.ws, c.arg, nil)
-
-			if out, isErr := second.call(c.agent, "leave_note", map[string]any{"conversation_id": f.threadID, "body": "intruding"}); !isErr && !strings.Contains(out, "not one of yours") {
-				t.Errorf("%s replied in the predecessor's thread: %q", c.name, out)
-			}
-			if got, _ := second.call(c.agent, "check_messages", nil); strings.Contains(got, "second note, unread") || strings.Contains(got, "hello parent") {
-				t.Errorf("%s read mail bound to the predecessor: %q", c.name, got)
-			}
-			if ids := second.s.inheritedSessionIDsFor(stampedCtx(c.agent)); len(ids) != 0 {
-				t.Errorf("%s was handed the predecessor's identity %v", c.name, ids)
-			}
-		})
+	if line := sessionLine(out); strings.Contains(line, "resumed") {
+		t.Errorf("conv-B is told it resumed a predecessor that was conv-A's: %s", line)
 	}
-
-	// An unstamped call is a claim nothing vouches for. It may still take back the
-	// NAME, as every non-hook client always could, but not the threads.
-	t.Run("an unstamped caller", func(t *testing.T) {
-		f := newResumeFixture(t)
-		second := f.w.conn("")
-		second.start("", f.ws, resumeConv, nil)
-
-		if out, isErr := second.call("", "leave_note", map[string]any{"conversation_id": f.threadID, "body": "intruding"}); !isErr && !strings.Contains(out, "not one of yours") {
-			t.Errorf("an unstamped caller replied in the predecessor's thread: %q", out)
-		}
-		if ids := second.s.inheritedSessionIDsFor(stampedCtx("")); len(ids) != 0 {
-			t.Errorf("an unstamped caller was handed the predecessor's identity %v", ids)
-		}
-	})
 }
 
-// #564 and symptom 4: two conversations share one connection, which is the normal
-// case for Claude desktop's Code tab. The second conversation's session_start used
-// to replace the connection's linkage and rename the connection.
-func TestSecondConversationDoesNotTakeOverTheConnection(t *testing.T) {
+// An unstamped call on a connection several agents share is nobody: nothing says
+// which agent made it, so workspace_sessions must not show it as the owner. It
+// printed the owner's row as "you" and, under that identity, the owner's sent notes
+// and the ids of its threads (the listing omits bodies, but the thread id is the
+// address a peer replies in).
+func TestWorkspaceSessionsDoesNotShowAnUnstampedCallerAsTheOwner(t *testing.T) {
 	w := newIdentityWorld(t)
 	ws := identityRepo(t)
-
-	// conv-B had a connection of its own once, and a name.
-	b0 := w.conn("")
-	b0.start("conv-B", ws, "conv-B", nil)
-	oldB := b0.s.sessionName()
-	b0.s.close()
-
-	c := w.conn("")
-	c.start("conv-A", ws, "conv-A", nil)
-	nameA, idA := c.s.sessionName(), c.s.sessionID()
-	if got := c.s.externalID(); got != "conv-A" {
-		t.Fatalf("precondition: linkage = %q, want conv-A", got)
-	}
-
-	out := c.start("conv-B", "", "conv-B", nil)
-	if got := c.s.externalID(); got != "conv-A" {
-		t.Errorf("#564: conv-B replaced the connection's linkage: %q, want conv-A", got)
-	}
-	if got := c.s.sessionName(); got != nameA {
-		t.Errorf("#564: conv-B renamed the connection: %q, want %q", got, nameA)
-	}
-	if got := c.s.sessionID(); got != idA {
-		t.Errorf("conv-B changed the connection's session ID: %q, want %q", got, idA)
-	}
-	if line := sessionLine(out); strings.Contains(line, "resumed") || strings.Contains(line, nameA) {
-		t.Errorf("conv-B was told it is the connection (%q) or that it resumed: %s", nameA, line)
-	}
-	if !strings.Contains(out, "different conversation") {
-		t.Errorf("conv-B is not told its session_id was left unlinked: %q", out)
-	}
-	if got := c.s.sessionNameFor(stampedCtx("conv-B")); got == "" || got == nameA || got == oldB {
-		t.Errorf("conv-B's own name = %q, want a fresh one distinct from %q and its predecessor's %q", got, nameA, oldB)
-	}
-
-	// conv-A, back on its own connection, is still conv-A.
-	outA := c.start("conv-A", "", "conv-A", nil)
-	if line := sessionLine(outA); !strings.Contains(line, nameA) {
-		t.Errorf("conv-A no longer sees its own name %q: %s", nameA, line)
-	}
-}
-
-// What an UNSTAMPED call may do on a connection (the hook failed open): it can
-// link a connection that has no linkage and nobody else on it, which is every
-// client without a hook, and it can do nothing else.
-func TestUnstampedSessionStartCannotRelinkAConnection(t *testing.T) {
-	w := newIdentityWorld(t)
-	ws, ws2 := identityRepo(t), identityRepo(t)
-
-	t.Run("it still links a connection nothing else is on", func(t *testing.T) {
-		c := w.conn("")
-		c.start("", ws, "typed-by-the-model", nil)
-		if got := c.s.externalID(); got != "typed-by-the-model" {
-			t.Errorf("an unstamped session_start on a lone connection did not link it: %q", got)
-		}
-	})
-
-	t.Run("it cannot replace a linkage", func(t *testing.T) {
-		c := w.conn("")
-		const conv, sub = "conv-1", "conv-1/agent-7"
-		c.start(conv, ws, conv, nil)
-		c.start(sub, ws2, sub, map[string]any{"force": true})
-		name := c.s.sessionName()
-		out := c.start("", "", "subagent-7", nil)
-		if got := c.s.externalID(); got != conv {
-			t.Errorf("an unstamped session_start replaced the linkage: %q, want %q", got, conv)
-		}
-		if got := c.s.sessionName(); got != name {
-			t.Errorf("an unstamped session_start renamed the connection: %q, want %q", got, name)
-		}
-		if line := sessionLine(out); strings.Contains(line, name) {
-			t.Errorf("an unattributable caller was told it is %q: %s", name, line)
-		}
-	})
-}
-
-// The proxy-credential path grants the predecessor to the connection whatever
-// became of its name, and the connection hands it to its owner alone. Here the
-// predecessor is still live, so both the ID and the name are refused and the
-// connection runs under a temporary identity: the case the old gate on the name
-// stranded.
-func TestCredentialGrantReachesOnlyTheOwner(t *testing.T) {
-	w := newIdentityWorld(t).withState()
-	ws := identityRepo(t)
-	peer := w.conn("")
-	peer.call("", "session_start", map[string]any{"workspace": ws})
+	peer, owner := w.conn(""), w.conn("")
 	const conv, sub = "conv-1", "conv-1/agent-7"
 
-	first := w.conn("proxyX")
-	first.start(conv, ws, conv, nil)
-	firstName, firstID := first.s.sessionName(), first.s.sessionID()
-	// Bound to the first connection's session ID, which this connection will not hold.
-	if out, isErr := peer.call("", "leave_note", map[string]any{"to": firstName, "body": "bound to the predecessor"}); isErr {
-		t.Fatalf("peer leave_note: %s", out)
+	peer.call("", "session_start", map[string]any{"workspace": ws})
+	owner.start(conv, ws, conv, nil)
+	owner.start(sub, "", sub, nil) // the connection is now shared
+	ownerName := owner.s.sessionName()
+	if out, isErr := owner.call(conv, "leave_note", map[string]any{"to": peer.s.sessionName(), "body": "the owner's private note"}); isErr {
+		t.Fatalf("leave_note: %s", out)
+	}
+	received, _ := peer.call("", "check_messages", nil)
+	threadID := conversationIDOf(t, received)
+
+	// The control: the owner is shown as itself, with its own sent note and thread.
+	own, _ := owner.call(conv, "workspace_sessions", nil)
+	for _, want := range []string{"you:  " + ownerName, ownerName + " (you)", "your recent notes", threadID} {
+		if !strings.Contains(own, want) {
+			t.Fatalf("the owner's own listing does not show %q, so the absences below prove nothing:\n%s", want, own)
+		}
 	}
 
-	// The same proxy reconnects while the predecessor still holds the name and the ID.
-	second := w.conn("proxyX")
-	if got := second.s.sessionID(); got == firstID {
-		t.Fatalf("precondition: the overlapping reconnect adopted the live ID %s", firstID)
-	}
-	// The subagent is first, so the connection is shared before the owner calls, and
-	// the subagent polls BEFORE the owner does: had it been granted the predecessor
-	// it would win the mail.
-	second.start(sub, ws, sub, nil)
-	if out, _ := second.call(sub, "check_messages", nil); strings.Contains(out, "bound to the predecessor") {
-		t.Errorf("a subagent read mail bound to the owner's predecessor: %q", out)
-	}
-	ownerOut := second.start(conv, "", conv, nil)
-
-	if got := second.s.inheritedSessionIDsFor(stampedCtx(conv)); len(got) != 1 || got[0] != firstID {
-		t.Errorf("the owner inherited %v, want [%s]", got, firstID)
-	}
-	if got := second.s.inheritedSessionIDsFor(stampedCtx(sub)); len(got) != 0 {
-		t.Errorf("a subagent was granted the owner's predecessor: %v", got)
-	}
-	if !strings.Contains(ownerOut, "bound to the predecessor") {
-		t.Errorf("the owner did not receive mail bound to its predecessor: %q", ownerOut)
+	anon, _ := owner.call("", "workspace_sessions", nil)
+	for _, leak := range []string{"you:", "(you)", "your recent notes", threadID} {
+		if strings.Contains(anon, leak) {
+			t.Errorf("an unstamped caller on a shared connection was shown the owner's identity (%q):\n%s", leak, anon)
+		}
 	}
 }

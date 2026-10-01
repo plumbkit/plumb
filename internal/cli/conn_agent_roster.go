@@ -167,22 +167,13 @@ func (s *connSession) unregisterAgentRosters() {
 // rosterIdentity answers workspace_sessions' per-call question: which workspace
 // the CALLING agent is in, and which row is its own.
 //
-// A caller with no row of its own returns "" for the id, which the tool reads as
-// "fall back to the connection's" — the correct answer for the owner, whose
-// connection row IS its row. A non-owner is given a row first, so it never reads
-// the connection's row (some other agent's) as its own.
+// The row is the caller's identity (identityFor), and the tool treats the answer as
+// final: the owner's is the connection's row, a non-owner is given a row of its own
+// first so it never reads the connection's (some other agent's) as its own, and a
+// caller that is nobody — an unattributable call on a shared connection — answers
+// "" and is listed as no one.
 func (s *connSession) rosterIdentity(ctx context.Context) (workspace, selfID string) {
-	workspace = s.workspaceFor(ctx)
-	sh, owner := s.callerFor(ctx)
-	if sh == nil {
-		return workspace, ""
-	}
-	if !owner {
-		s.ensureAgentRow(sh)
-	}
-	sh.mu.RLock()
-	defer sh.mu.RUnlock()
-	return workspace, sh.rosterID
+	return s.workspaceFor(ctx), s.identityFor(ctx, true).id
 }
 
 // touchAgentRoster keeps the calling agent's own row fresh. LastSeenAt comes

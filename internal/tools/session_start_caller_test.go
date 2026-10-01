@@ -78,7 +78,7 @@ func TestSessionStart_AnAgentWithNoIdentityIsNotNamedAsSomeoneElse(t *testing.T)
 }
 
 // The linker is told who is calling, and what it answers reaches the packet: the
-// resume wording, and the refusal when the id was not linked.
+// resume wording, and nothing more than the linker established.
 func TestSessionStart_LinkageIsAnsweredPerCaller(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -92,37 +92,15 @@ func TestSessionStart_LinkageIsAnsweredPerCaller(t *testing.T) {
 			contains: []string{"wise-cobra (you", "resumed; new internal identity", "not inherited"},
 		},
 		{
-			name:     "the owner whose predecessor's threads followed",
-			link:     LinkResult{InheritedName: "wise-cobra", ThreadsInherited: true},
-			contains: []string{"resumed; the threads and mail bound to your predecessor session continue under this one"},
-			avoids:   []string{"not inherited", "new internal identity"},
-		},
-		{
-			name:     "the owner whose name was refused but whose threads followed",
-			link:     LinkResult{ThreadsInherited: true},
-			contains: []string{"the threads and mail bound to your predecessor session continue under this one"},
-			avoids:   []string{"resumed"},
+			name:     "the owner whose name was refused",
+			link:     LinkResult{InheritedName: "old-owl", NewIdentity: true},
+			contains: []string{"resumed; requested old-owl, which is in use"},
+			avoids:   []string{"not inherited"},
 		},
 		{
 			name:   "a caller that resumed nothing",
 			link:   LinkResult{},
-			avoids: []string{"resumed", "NOTE: this connection is already linked"},
-		},
-		{
-			name:     "a different conversation is told its id was not linked",
-			link:     LinkResult{Unlinked: UnlinkedOtherConversation},
-			contains: []string{"already linked to a different conversation", "was not linked"},
-			avoids:   []string{"resumed"},
-		},
-		{
-			name:     "a stamp that contradicts the id",
-			link:     LinkResult{Unlinked: UnlinkedStampMismatch},
-			contains: []string{"names a different conversation than the identity stamped on this call"},
-		},
-		{
-			name:     "an unattributable call",
-			link:     LinkResult{Unlinked: UnlinkedAnonymous},
-			contains: []string{"carried no agent identity", "will not guess"},
+			avoids: []string{"resumed", "not inherited", "predecessor"},
 		},
 	}
 	for _, c := range cases {

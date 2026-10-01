@@ -84,20 +84,6 @@ func TestALoneSubagentOfTheLinkedConversationIsNotTheOwner(t *testing.T) {
 	}
 }
 
-// Inheriting is additive and deduplicated, so the two ways of being granted a
-// predecessor can both contribute and a retry cannot grow the set.
-func TestInheritSessionIDIsAdditiveAndDeduplicated(t *testing.T) {
-	s := newIdentitySession(t)
-	s.inheritSessionID("pred-1")
-	s.inheritSessionID("pred-1")
-	s.inheritSessionID("pred-2")
-	s.inheritSessionID("")
-	s.inheritSessionID(s.sessionID())
-	if got := s.inheritedSessionIDs(); len(got) != 2 || got[0] != "pred-1" || got[1] != "pred-2" {
-		t.Errorf("inherited = %v, want [pred-1 pred-2]", got)
-	}
-}
-
 // An agent with no identity of its own has none: never the connection's. The
 // connection is closing here, so no row can be registered for it.
 func TestAnAgentThatCannotBeGivenARowHasNoIdentity(t *testing.T) {

@@ -76,3 +76,50 @@ func TestWorkspaceSessions_MailBlockIsTheCallers(t *testing.T) {
 		}
 	}
 }
+
+// A caller that is nobody is shown as nobody. The per-call row is final: the tool
+// must not fall back to the connection's row for a caller that has none, which is
+// how an unattributable call on a shared connection came to be listed as "you" with
+// the owner's sent notes and thread ids.
+func TestWorkspaceSessions_ACallerThatIsNobodyIsNotShownAsTheConnection(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	owner := registerRow(t, ws, "", "")
+	peer := registerRow(t, ws, "", "other")
+
+	tool := NewWorkspaceSessions(func() string { return ws }, func() string { return owner.ID }).
+		WithAgentIdentity(func(ctx context.Context) (string, string) {
+			if mcp.LogicalAgentFromCtx(ctx) == "owner" {
+				return ws, owner.ID
+			}
+			return ws, ""
+		})
+	list := func(agent string) string {
+		t.Helper()
+		out, err := tool.Execute(mcp.WithLogicalAgent(context.Background(), agent), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return out
+	}
+
+	own := list("owner")
+	for _, want := range []string{"you:  " + owner.Name, owner.Name + " (you)"} {
+		if !strings.Contains(own, want) {
+			t.Fatalf("the owner's own listing does not say %q, so the absences below prove nothing:\n%s", want, own)
+		}
+	}
+
+	nobody := list("nobody")
+	for _, leak := range []string{"you:", "(you)"} {
+		if strings.Contains(nobody, leak) {
+			t.Errorf("a caller with no identity was shown as somebody (%q):\n%s", leak, nobody)
+		}
+	}
+	// Not hidden from the roster: it can still see who is here and reach them.
+	for _, name := range []string{owner.Name, peer.Name} {
+		if !strings.Contains(nobody, name) {
+			t.Errorf("the roster a caller with no identity sees is missing %s:\n%s", name, nobody)
+		}
+	}
+}

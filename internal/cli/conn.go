@@ -205,8 +205,8 @@ type sessionView struct {
 	// assume one. "" until restoreIdentity runs, and read through recovery().
 	recovery recoveryOutcome
 	// inheritedSessionIDs are predecessor session IDs the connection's OWNER may
-	// also read mail and threads for (see inheritSessionID), and no other agent
-	// (inheritedSessionIDsFor). Nil for every other session.
+	// also read mail and threads for, granted ONLY by the proxy-authenticated path
+	// (see inheritSessionID) and to no other agent (inheritedSessionIDsFor). Nil otherwise.
 	inheritedSessionIDs []string
 
 	// workspaceHint is the workspace pre-pin the serve proxy transported in the

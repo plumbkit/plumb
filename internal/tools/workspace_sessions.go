@@ -334,14 +334,20 @@ func formatWorkspaceSessions(workspace, selfSessID string, peers []session.Info,
 	var sb strings.Builder
 
 	// ── my session ─────────────────────────────────────────────────────────
-	myName := "(unknown)"
-	for _, p := range peers {
-		if p.ID == selfSessID {
-			myName = p.Name
-			break
+	// A caller with no session of its own (selfSessID "", an unattributable call on
+	// a shared connection) has no "you": naming a row for it would name somebody
+	// else's. Not the same as a session that is merely not listed yet, which is
+	// "(unknown)".
+	if selfSessID != "" {
+		myName := "(unknown)"
+		for _, p := range peers {
+			if p.ID == selfSessID {
+				myName = p.Name
+				break
+			}
 		}
+		fmt.Fprintf(&sb, "you:  %s\n", myName)
 	}
-	fmt.Fprintf(&sb, "you:  %s\n", myName)
 
 	// ── active sessions ────────────────────────────────────────────────────
 	if len(peers) <= 1 {

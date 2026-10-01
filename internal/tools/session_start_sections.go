@@ -47,7 +47,6 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 	// session_start_self.go for why that is not a nicety.
 	sb.WriteString(t.selfIdentityLine(inheritedName))
 	sb.WriteString(t.linkageNote(linked))
-	sb.WriteString(t.callLink.note())
 	sb.WriteString(stampNote)
 	sb.WriteString(t.contestedPinNote())
 	if note := uncoveredPrimaryLanguageNote(lang); note != "" {

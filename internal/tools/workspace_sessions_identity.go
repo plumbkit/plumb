@@ -30,14 +30,18 @@ import (
 // have to agree, or the listing reports an empty mailbox while a note is being
 // handed over, or prints another agent's (#556).
 //
-// A caller whose row is "" is the connection's own, so it falls back to the
-// connection's session ID below. An agent that has none and is not the
-// connection's is given a row before it gets here.
+// The row it answers is FINAL once this is wired, an empty one included. The
+// connection's own caller is answered with the connection's row explicitly, and an
+// agent that has none and is not the connection's (an unattributable call on a
+// shared connection) answers "" and is shown as nobody: no "you" line, no "(you)"
+// mark, and none of the notes or threads of the agent the connection belongs to.
+// Falling back to the connection's row for it is how it came to be listed as that
+// agent.
 //
 // Nil-safe: unwired ⇒ both fall back to the connection accessors, which is what
-// every existing caller and every single-agent connection gets. An empty string
-// for either field falls back individually, so a caller that can answer one
-// question and not the other is not forced to guess.
+// every existing caller and every single-agent connection gets. An empty
+// workspace falls back to the connection's, so a caller that cannot say where it
+// is is not forced to guess.
 func (t *WorkspaceSessions) WithAgentIdentity(fn func(ctx context.Context) (workspace, selfID string)) *WorkspaceSessions {
 	t.agentIdentityFn = fn
 	return t
@@ -58,7 +62,8 @@ func (t *WorkspaceSessions) WithCollabStoreFor(fn func(workspace string) *collab
 }
 
 // resolveCaller returns the workspace to list and the row to mark as the
-// caller's, preferring the per-call agent answer over the connection's.
+// caller's, preferring the per-call agent answer over the connection's. The row
+// is "" for a caller that is nobody.
 func (t *WorkspaceSessions) resolveCaller(ctx context.Context) (workspace, selfID string) {
 	workspace, selfID = t.workspace(), t.selfID()
 	if t.agentIdentityFn == nil {
@@ -68,10 +73,7 @@ func (t *WorkspaceSessions) resolveCaller(ctx context.Context) (workspace, selfI
 	if agentWS != "" {
 		workspace = agentWS
 	}
-	if agentID != "" {
-		selfID = agentID
-	}
-	return workspace, selfID
+	return workspace, agentID
 }
 
 // resolveCallerName returns the session name to use for the caller. The per-call

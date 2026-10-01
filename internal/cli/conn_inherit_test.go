@@ -197,19 +197,14 @@ func TestInherit_ImpostorCannotReadBoundMailEndToEnd(t *testing.T) {
 	}
 }
 
-// TestInherit_OverlappingReconnectInheritsTheAuthenticatedPredecessor. A proxy can
-// reconnect while its predecessor is still registered and still holding the name;
-// the rename then fails with ErrNameTaken and the session keeps its generated name.
-//
-// It is still granted the predecessor's identity. The grant used to wait on the
-// rename, which tied what a session may READ to a name another session happened to
-// hold: mail and threads bound to the predecessor's ID stayed stranded for exactly
-// as long as the overlap lasted, and a refused name is what an overlap looks like.
-// What authorises the grant is the proxy secret that selected the record, and
-// nothing about the name changes whose record it is. The negative controls that
-// matter are in TestInherit_OnlyThroughTheProxyAuthenticatedPath: a different
-// proxy, or none, gets nothing however the names fall.
-func TestInherit_OverlappingReconnectInheritsTheAuthenticatedPredecessor(t *testing.T) {
+// TestInherit_OverlappingReconnectInheritsNothing. A proxy can reconnect while
+// its predecessor is still registered and still holding the name; the rename
+// then fails with ErrNameTaken and the session keeps its generated name. It must
+// not walk away with the identity either. Holding an identity for a name you do
+// not have is not exploitable on its own — the claim also matches on the name —
+// but the two are one fact, and letting them drift apart is how a later change
+// turns a harmless mismatch into a live one.
+func TestInherit_OverlappingReconnectInheritsNothing(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store := config.NewStore(config.Defaults())
 	ss := openStateStore(t)
@@ -217,7 +212,7 @@ func TestInherit_OverlappingReconnectInheritsTheAuthenticatedPredecessor(t *test
 	// First session records its identity, and STAYS LIVE.
 	first := newPersistSession(t, store, ss, "proxyX")
 	t.Cleanup(first.close)
-	firstName, firstID := first.sessionName(), first.sessionID()
+	firstName := first.sessionName()
 
 	// The same proxy reconnects before the predecessor is reaped.
 	overlapping := newPersistSession(t, store, ss, "proxyX")
@@ -227,9 +222,9 @@ func TestInherit_OverlappingReconnectInheritsTheAuthenticatedPredecessor(t *test
 		t.Fatalf("the overlapping reconnect took the live name %q; the rename should have been "+
 			"refused, so this test is not exercising the branch it targets", firstName)
 	}
-	if got := overlapping.inheritedSessionIDs(); len(got) != 1 || got[0] != firstID {
-		t.Errorf("inherited = %v, want [%s]: the proxy secret authenticated the record, so the "+
-			"predecessor's mail and threads must reach the session whatever became of its name", got, firstID)
+	if got := overlapping.inheritedSessionIDs(); len(got) != 0 {
+		t.Errorf("a session that could NOT take the name still inherited %v — inheritance must "+
+			"follow the name it was granted for", got)
 	}
 }
 
