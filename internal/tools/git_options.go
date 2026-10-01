@@ -60,8 +60,8 @@ func (o gitOption) is(shorts string, longs ...string) bool {
 // scan calls fn with each option in args, in order, as git reads them: a
 // required value is consumed (joined, or the next argument), bundled short
 // flags are unpacked up to the first that takes a value, and a lone "-" or any
-// non-option is skipped. With untilDashDash, a "--" that is not a value ends
-// the scan — for a check that must only count real options, such as the one
+// non-option is skipped. With untilDashDash, a "--" (or "--end-of-options")
+// that is not a value ends the scan — for a check that must only count real options, such as the one
 // that LOWERS restore to the write tier. Without it the scan runs to the end,
 // which is the safe choice for any check that raises a tier or refuses: a path
 // after "--" that spells an option only over-classifies. fn returns false to
@@ -69,7 +69,7 @@ func (o gitOption) is(shorts string, longs ...string) bool {
 func (g gitOptionGrammar) scan(args []string, untilDashDash bool, fn func(gitOption) bool) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--" {
+		if isEndOfOptions(a) {
 			if untilDashDash {
 				return
 			}
@@ -124,15 +124,61 @@ func (g gitOptionGrammar) scanShorts(bundle string, fn func(gitOption) bool) (co
 	return false, true
 }
 
-// has reports whether args carry any of the given options (see scan for
-// untilDashDash).
-func (g gitOptionGrammar) has(args []string, untilDashDash bool, shorts string, longs ...string) bool {
+// has reports whether args carry any of the given options anywhere — past
+// "--" and ignoring negations, so it can only over-report. It is for checks
+// that RAISE a tier or refuse; a check that lowers one uses final.
+func (g gitOptionGrammar) has(args []string, shorts string, longs ...string) bool {
 	found := false
-	g.scan(args, untilDashDash, func(o gitOption) bool {
+	g.scan(args, false, func(o gitOption) bool {
 		found = o.is(shorts, longs...)
 		return !found
 	})
 	return found
+}
+
+// final reports whether any of opts is in force once all of args are read: like
+// has, but a later --no-<opt> cancels an earlier --<opt> (or -<o>), as git's
+// parser does. That is the reading a check that LOWERS a tier needs —
+// `branch --list --no-list x` is not in list mode — while a check that raises
+// one can ignore negations and so over-classify, which is the safe error. A
+// name that is itself one of opts (`--no-contains`) sets that option rather
+// than cancelling another.
+func (g gitOptionGrammar) final(args []string, untilDashDash bool, opts ...gitOptName) bool {
+	on := map[string]bool{}
+	g.scan(args, untilDashDash, func(o gitOption) bool {
+		for _, n := range opts {
+			if o.is(string(n.short), n.long) {
+				on[n.long] = true
+				return true
+			}
+		}
+		if rest, ok := strings.CutPrefix(o.long, "no-"); ok {
+			for _, n := range opts {
+				if isLongPrefix(rest, n.long, 1) {
+					on[n.long] = false
+				}
+			}
+		}
+		return true
+	})
+	for _, v := range on {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
+// gitOptName names one option by its short letter (0 for none) and long name.
+type gitOptName struct {
+	short rune
+	long  string
+}
+
+// isEndOfOptions reports whether a ends git's options: "--", or
+// "--end-of-options", which git treats the same way.
+func isEndOfOptions(a string) bool {
+	return a == "--" || a == "--end-of-options"
 }
 
 // isLongPrefix reports whether name is an abbreviation git would expand to

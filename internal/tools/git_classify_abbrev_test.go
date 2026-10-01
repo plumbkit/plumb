@@ -42,7 +42,7 @@ func TestClassifyGit_ReadsOptionsAsGitDoes(t *testing.T) {
 
 		// Controls: these stay at their tier.
 		{"switch", []string{"--create", "feature"}, tierWrite},
-		{"switch", []string{"--force-create", "feature"}, tierWrite},
+		{"switch", []string{"--force-create", "feature"}, tierDestructive},
 		{"switch", []string{"--create", "f-branch", "main"}, tierWrite},
 		{"switch", []string{"-m", "main"}, tierWrite},
 		{"switch", []string{"--detach", "HEAD~1"}, tierWrite},
@@ -62,7 +62,65 @@ func TestClassifyGit_ReadsOptionsAsGitDoes(t *testing.T) {
 		{"tag", []string{"-m", "-d", "v1"}, tierWrite},
 		{"tag", []string{"--message", "--delete", "v1"}, tierWrite},
 		{"checkout", []string{"-b", "new", "origin/main"}, tierWrite},
-		{"checkout", []string{"-B", "new"}, tierWrite},
+		{"checkout", []string{"-B", "new"}, tierDestructive},
+	}
+	for _, c := range cases {
+		if got := classifyGit(c.sub, c.args); got != c.want {
+			t.Errorf("classifyGit(%q, %q) = %s, want %s", c.sub, c.args, gitTierNames[got], gitTierNames[c.want])
+		}
+	}
+}
+
+// TestClassifyGit_LoweringChecksFollowGit pins the #540 round-2 review: the
+// checks that LOWER a tier (branch's list mode to read, restore --staged to
+// write) must hold only when git really is in that mode, and the operations
+// that move or replace an existing ref are destructive, like `reset --keep`.
+func TestClassifyGit_LoweringChecksFollowGit(t *testing.T) {
+	cases := []struct {
+		sub  string
+		args []string
+		want gitTier
+	}{
+		// -v/--verbose do not put `git branch` in list mode once a name is given;
+		// with bundles expanded, `-fv` used to reach the read tier and force-move.
+		{"branch", []string{"-fv", "side", "main"}, tierDestructive},
+		{"branch", []string{"-vf", "old", "HEAD"}, tierDestructive},
+		{"branch", []string{"-v", "-f", "old", "HEAD"}, tierDestructive},
+		{"branch", []string{"-qv", "newb"}, tierWrite},
+		{"branch", []string{"-v", "newb"}, tierWrite},
+		{"branch", []string{"--verbose", "newb"}, tierWrite},
+		// A later --no-<opt> cancels the list flag.
+		{"branch", []string{"--list", "--no-list", "newb"}, tierWrite},
+		{"branch", []string{"-l", "--no-list", "newb"}, tierWrite},
+		{"branch", []string{"-l", "--no-list", "-f", "old", "HEAD"}, tierDestructive},
+		// --end-of-options ends options exactly as -- does.
+		{"branch", []string{"--end-of-options", "-l"}, tierWrite},
+		{"restore", []string{"--end-of-options", "--staged", "f"}, tierDestructive},
+		{"restore", []string{"--staged", "--no-staged", "f"}, tierDestructive},
+		// Moving or replacing an existing ref.
+		{"checkout", []string{"-B", "main", "HEAD~5"}, tierDestructive},
+		{"switch", []string{"--force-create", "main", "HEAD~5"}, tierDestructive},
+		{"branch", []string{"-f", "existing"}, tierDestructive},
+		{"branch", []string{"--force", "existing", "HEAD~5"}, tierDestructive},
+		{"tag", []string{"-f", "v1"}, tierDestructive},
+		{"tag", []string{"--force", "v1", "HEAD~5"}, tierDestructive},
+		// Branch options that write config are writes, not reads.
+		{"branch", []string{"--unset-upstream"}, tierWrite},
+		{"branch", []string{"-u", "origin/main"}, tierWrite},
+		{"branch", []string{"--set-upstream-to=origin/main"}, tierWrite},
+		{"branch", []string{"--edit-description"}, tierWrite},
+
+		// Controls: list mode stays read.
+		{"branch", []string{"-v"}, tierRead},
+		{"branch", []string{"-vv"}, tierRead},
+		{"branch", []string{"--list", "-v"}, tierRead},
+		{"branch", []string{"-r"}, tierRead},
+		{"branch", []string{"--no-contains", "HEAD"}, tierRead},
+		{"branch", []string{"--points-at", "HEAD"}, tierRead},
+		{"branch", []string{"--contains", "HEAD", "-v"}, tierRead},
+		{"restore", []string{"--staged", "--no-worktree", "f"}, tierWrite},
+		{"checkout", []string{"-b", "new"}, tierWrite},
+		{"switch", []string{"--create", "new"}, tierWrite},
 	}
 	for _, c := range cases {
 		if got := classifyGit(c.sub, c.args); got != c.want {

@@ -73,6 +73,16 @@ func sharedWorktreeGrant(m map[string]trustRecord, root string, match func(trust
 // evil/.git and a trusted repository's .git as its common directory); only a
 // linked directory INSIDE the trusted repository's git directory puts the
 // back-link where the borrower cannot write.
+//
+// Accepted residual: a worktree directory deleted without `git worktree prune`
+// leaves its registration, back-link included, naming the old path. Whoever
+// recreates that exact path with the old .git file and identical config is
+// treated as the worktree again — and so is it by git, whose own registry
+// (`git worktree list`) shows the path as live once it exists, so consulting
+// git would add nothing. Reaching it needs write access to a path the user
+// chose for a worktree of a trusted repository, typically inside that
+// repository's own tree, where the same access already reaches the trusted
+// checkout's scripts.
 func linkedWorktreeCommonDir(root string) string {
 	dotGit := filepath.Join(root, ".git")
 	gitDir := readGitDirLink(dotGit)

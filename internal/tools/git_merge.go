@@ -27,7 +27,7 @@ import (
 // neighbours: a state flag anywhere in args lifts the whole call to destructive,
 // read as git reads it (git_options.go) — so `--ab` IS --abort.
 func classifyMerge(args []string) gitTier {
-	if mergeGrammar.has(args, false, "", "abort", "quit", "continue") {
+	if mergeGrammar.has(args, "", "abort", "quit", "continue") {
 		return tierDestructive
 	}
 	return tierWrite

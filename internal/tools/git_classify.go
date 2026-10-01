@@ -193,7 +193,9 @@ func classifyGit(sub string, args []string) gitTier {
 // check that LOWERS one (restore --staged, the list-mode flags) stops there.
 
 func classifySwitch(args []string) gitTier {
-	if switchGrammar.has(args, false, "f", "force", "discard-changes") {
+	// --force-create (-C) resets an existing branch to the start point, which
+	// discards its commits the way `reset --keep` does.
+	if switchGrammar.has(args, "fC", "force", "discard-changes", "force-create") {
 		return tierDestructive
 	}
 	return tierWrite
@@ -202,25 +204,42 @@ func classifySwitch(args []string) gitTier {
 // classifyRestore: `restore --staged <path>` only touches the index (safe to
 // treat as a write); any form that touches the working tree discards changes.
 func classifyRestore(args []string) gitTier {
-	staged := restoreGrammar.has(args, true, "S", "staged")
-	worktree := restoreGrammar.has(args, false, "W", "worktree")
+	staged := restoreGrammar.final(args, true, gitOptName{'S', "staged"})
+	worktree := restoreGrammar.has(args, "W", "worktree")
 	if staged && !worktree {
 		return tierWrite
 	}
 	return tierDestructive
 }
 
+// branchListMode are the options that put `git branch` in list mode even with
+// a name given (the name is then a pattern or a value). -v/--verbose are NOT
+// among them: with a name they create, and with -f they force-move.
+var branchListMode = []gitOptName{
+	{'l', "list"},
+	{'a', "all"},
+	{'r', "remotes"},
+	{0, "show-current"},
+	{0, "contains"},
+	{0, "no-contains"},
+	{0, "merged"},
+	{0, "no-merged"},
+	{0, "points-at"},
+}
+
 func classifyBranch(args []string) gitTier {
-	if branchGrammar.has(args, false, "dD", "delete") {
+	// -f/--force moves or replaces an existing branch, like `reset --keep`.
+	if branchGrammar.has(args, "dDf", "delete", "force") {
 		return tierDestructive
 	}
 	// -c/-C (branch copy) collide with git's -c/-C config-injection flags and are
 	// denied by the global-flag denylist before classification runs, so they are
-	// unreachable here; branch copy is reached via the long --copy form.
-	if branchGrammar.has(args, false, "mM", "move", "copy") {
+	// unreachable here; branch copy is reached via the long --copy form. The
+	// upstream and description options write the repository's config.
+	if branchGrammar.has(args, "mMu", "move", "copy", "set-upstream-to", "unset-upstream", "edit-description") {
 		return tierWrite
 	}
-	if branchGrammar.has(args, true, "larv", "list", "all", "remotes", "show-current", "contains", "merged", "no-merged") {
+	if branchGrammar.final(args, true, branchListMode...) {
 		return tierRead
 	}
 	if hasNonFlagArg(args) {
@@ -230,10 +249,11 @@ func classifyBranch(args []string) gitTier {
 }
 
 func classifyTag(args []string) gitTier {
-	if tagGrammar.has(args, false, "d", "delete") {
+	// -f/--force replaces an existing tag.
+	if tagGrammar.has(args, "df", "delete", "force") {
 		return tierDestructive
 	}
-	if tagGrammar.has(args, true, "ln", "list", "contains", "merged") {
+	if tagGrammar.final(args, true, gitOptName{'l', "list"}, gitOptName{'n', ""}, gitOptName{0, "contains"}, gitOptName{0, "merged"}) {
 		return tierRead
 	}
 	if hasNonFlagArg(args) {
@@ -258,19 +278,27 @@ func classifyStash(args []string) gitTier {
 	}
 }
 
-// classifyCheckout treats only pure branch creation (-b/-B) as a write; every
+// classifyCheckout treats only pure branch creation (-b) as a write; every
 // other checkout form can discard the working tree or detach HEAD, so it is
-// destructive — and so is branch creation with -f, which throws away local
-// modifications. Prefer `switch` for safe branch changes.
+// destructive — and so is -B, which resets an existing branch like `reset
+// --keep`, and creation with -f, which throws away local modifications. Prefer
+// `switch` for safe branch changes.
 func classifyCheckout(args []string) gitTier {
-	if len(args) > 0 && (args[0] == "-b" || args[0] == "-B") && !checkoutGrammar.has(args, false, "f", "force") {
+	if len(args) > 0 && args[0] == "-b" && !checkoutGrammar.has(args, "f", "force") {
 		return tierWrite
 	}
 	return tierDestructive
 }
 
+// hasNonFlagArg reports whether args carry a positional argument: one not
+// starting with "-", or anything after "--" / "--end-of-options" (where git
+// reads `-l` as a name). It does not skip option values, so a value counts as
+// a positional too — over-counting only raises the tier it decides.
 func hasNonFlagArg(args []string) bool {
-	for _, a := range args {
+	for i, a := range args {
+		if isEndOfOptions(a) {
+			return i+1 < len(args)
+		}
 		if a != "" && !strings.HasPrefix(a, "-") {
 			return true
 		}

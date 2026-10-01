@@ -180,6 +180,8 @@ func TestGit_MergeRefusesFlagsThatEscapeTheToolsContract(t *testing.T) {
 		{[]string{"-nm", "x", "--no-verify", "side"}, "--no-verify"},
 		// A genuine `--` does not end the check either.
 		{[]string{"side", "--", "--no-verify"}, "--no-verify"},
+		{[]string{"--end-of-options", "--no-verify"}, "--no-verify"},
+		{[]string{"--message", "--end-of-options", "--no-verify", "side"}, "--no-verify"},
 	}
 	for _, c := range cases {
 		_, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "merge", "args": c.args})
