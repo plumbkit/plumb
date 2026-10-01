@@ -169,7 +169,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if undoOK {
 		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
-	t.recordWriteHistory(ctx, path, histBefore, a.Content, isNew)
+	t.recordHistory(ctx, path, histBefore, a.Content, isNew)
 	// Prefer the untruncated pre-write content for the differential: oldContent
 	// is capped for diff rendering, and an unknown "before" costs the
 	// re-index-lag suppression that keeps phantom errors out of the delta — which
@@ -192,7 +192,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	return result + t.deps.reportQuality(ctx, path), nil
 }
 
-func (t *WriteFile) recordWriteHistory(ctx context.Context, path string, before history.Side, content string, isNew bool) {
+func (t *WriteFile) recordHistory(ctx context.Context, path string, before history.Side, content string, isNew bool) {
 	op := history.OpUpdate
 	if isNew {
 		op = history.OpCreate
