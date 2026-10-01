@@ -185,6 +185,12 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	ss.cancel = cancel
 	scanCh := startScanGoroutine(ctx, bufio.NewReader(r))
 	var initOnce sync.Once
+	// connGone fires the moment the client stops sending (see ConnectionClosed).
+	// It is deliberately NOT ctx: in-flight handlers keep running on ctx exactly
+	// as before, and only a tool that asks can choose to abandon its work.
+	connCtx, connGone := context.WithCancel(ctx)
+	defer connGone()
+	reqCtx := withConnectionClosed(ctx, connCtx.Done())
 
 	for {
 		select {
@@ -193,6 +199,7 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			return ctx.Err()
 		case line, ok := <-scanCh:
 			if !ok {
+				connGone()
 				ss.wg.Wait()
 				return nil
 			}
@@ -202,10 +209,11 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 				continue
 			}
 			if line.err != nil {
+				connGone()
 				ss.wg.Wait()
 				return line.err
 			}
-			ss.wg.Go(func() { ss.dispatchMessage(ctx, data, &initOnce) })
+			ss.wg.Go(func() { ss.dispatchMessage(reqCtx, data, &initOnce) })
 		}
 	}
 }
