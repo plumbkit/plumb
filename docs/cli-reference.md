@@ -462,7 +462,7 @@ pointing at a deregistered plumb are dead weight.
 
 ```
 plumb skills
-plumb skills sync [client]
+plumb skills sync [client] [--check] [--force]
 ```
 
 Bare `plumb skills` is **read-only**: a status table over the clients with a
@@ -490,12 +490,30 @@ accident.
 skills directories of every skill-capable client that **registers plumb**, or
 only the named client with `plumb skills sync <client>` (an unknown name is a
 usage error listing the valid ones; naming an unregistered client is an error
-pointing at `plumb setup <client>`). A changed skill is backed up before being
-overwritten, an unchanged one is left alone, and a per-skill error is a
-warning, not a failure. The report ends with a `● Summary` section — one
-`┊`-guttered line per synced client, with any unregistered-client skip notes
-a blank line below. Sync is the only writer of skill files —
+pointing at `plumb setup <client>`). A skill plumb shipped earlier and the user
+has not touched is replaced in place, with no backup, because its content hash
+is on record in `.plumb/skills-manifest.json`; an unchanged one is left alone;
+and a per-skill error is a warning, not a failure. A skill the user has edited
+(or whose origin the manifest cannot prove) is a `conflict`: it is left
+untouched, the shipped copy is written beside it as `<name>.plumb-new` for
+review, and the row says how to force it. The report ends with a `● Summary`
+section — one `┊`-guttered line per synced client, with any unregistered-client
+skip notes a blank line below. Sync is the only writer of skill files —
 `plumb setup` is config-only.
+
+- `--force` replaces a conflicting skill with the shipped copy instead of
+  proposing it. The edited `SKILL.md` is first saved beside it as
+  `SKILL.md.<timestamp>.bak`, then replaced, and the skill's `.plumb-new` file is
+  removed. The row reports `replaced` with the backup's path, and the summary
+  counts it under `replaced`. Skills that are not in conflict are handled as
+  usual.
+- `--check` reports every action sync would take, and which `.bak` copies it
+  would clean up, without writing anything. With `--force` it previews the
+  replacements (`would replace`) and saves no backup.
+
+Tables fit the terminal width, wrapping a long cell within its column; when
+output is piped or redirected they keep their natural column widths and nothing
+is wrapped to fit, so `grep` and `awk` see each row whole.
 
 Re-run `plumb skills sync` after upgrading plumb to pick up new skill content;
 `plumb doctor` prints an informational line (never a warning) for any

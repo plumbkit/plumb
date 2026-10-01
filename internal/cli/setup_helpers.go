@@ -257,13 +257,23 @@ func CodexConfigPath() (string, error) {
 
 // backupFile copies src to src.<timestamp>.bak in the same directory.
 func backupFile(src string) error {
+	_, err := backupFileTo(src)
+	return err
+}
+
+// backupFileTo is backupFile that also returns the path it wrote, for a caller
+// that tells the user where the copy went.
+func backupFileTo(src string) (string, error) {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return err
+		return "", err
 	}
 	stamp := time.Now().Format("20060102-150405")
 	dst := src + "." + stamp + ".bak"
-	return os.WriteFile(dst, data, 0o600) //nolint:gosec // G703: dst is derived from OS-native config path helpers (UserHomeDir, Executable), not user input
+	if err := os.WriteFile(dst, data, 0o600); err != nil { //nolint:gosec // G703: dst is derived from OS-native config path helpers (UserHomeDir, Executable), not user input
+		return "", err
+	}
+	return dst, nil
 }
 
 // claudeDesktopConfigBaseDir returns the platform-specific directory Claude
