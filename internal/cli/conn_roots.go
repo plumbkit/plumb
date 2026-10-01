@@ -9,6 +9,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"sync"
 
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -28,14 +30,55 @@ import (
 // It waits for OnInit's attach ladder first. The two run in separate
 // goroutines, and a first-attach here that beat the ladder would skip its
 // restore of a persisted session_start pin (rung 1b) and overwrite the stored
-// row with the client's root — a silent cross-repo move on reconnect. After
-// the connection closes it does not start an attach: one then would hold a
-// language-server reference close() has already released. (A close that lands
-// inside the attach itself is not covered here; OnInit shares that gap.)
+// row with the client's root — a silent cross-repo move on reconnect.
+//
+// Notifications are coalesced per connection (issue #514). The mcp server runs
+// each in its own goroutine, and clients send bursts of them. Each used to do
+// its own roots/list round trip, and whichever took the mutation lane last won
+// — so a slow answer to an early notification could replace the answer to a
+// later one. Now at most one run is in flight; a notification that arrives
+// during it only marks the run stale, and the running goroutine fetches roots
+// once more when it finishes. The last fetch starts after the last
+// notification, so the pin settles on the newest answer. However many
+// notifications land while one fetch is in flight, they cost one more fetch,
+// not one each; a notification arriving during that re-fetch earns another,
+// so a steady stream costs one fetch per fetch interval. The re-run uses the
+// loop owner's ctx; every notification carries the same serve context, so
+// nothing is lost.
+//
+// After the connection closes nothing is attached: the check below skips the
+// work, and the attach itself re-checks inside the mutation lane (mutateLive),
+// which is what closes the window between this check and the attach.
 func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.RequestFn) {
 	if !s.awaitInitSettled(ctx) {
 		return
 	}
+	if !s.roots.enter(request) {
+		s.log().Debug("daemon: roots changed — a refresh is in flight; it will re-fetch once it finishes")
+		return
+	}
+	// A panicking run (the mcp server's safeRun recovers it) must not leave the
+	// loop owned by nobody, or every later notification would be parked
+	// forever. Released on panic only: a normal exit released it in next(), and
+	// a later owner may hold it by now.
+	defer func() {
+		if r := recover(); r != nil {
+			s.roots.abandon()
+			panic(r)
+		}
+	}()
+	for {
+		request, ok := s.roots.next(func() bool { return ctx.Err() == nil && s.ctx.Err() == nil })
+		if !ok {
+			return
+		}
+		s.applyRootsNotification(ctx, request)
+	}
+}
+
+// applyRootsNotification is one coalesced run: fetch the client's roots and
+// apply them.
+func (s *connSession) applyRootsNotification(ctx context.Context, request mcp.RequestFn) {
 	s.setClientRequest(request)
 	s.log().Info("daemon: roots changed — re-fetching workspace root")
 	roots := rootsFromClient(ctx, request, s.log())
@@ -45,6 +88,58 @@ func (s *connSession) handleRootsListChanged(ctx context.Context, request mcp.Re
 	}
 	s.onRootsChanged(ctx, roots)
 	s.startConfigWatcher()
+}
+
+// rootsCoalescer serialises a connection's roots/list_changed handling: one
+// goroutine runs at a time, and notifications that arrive while it runs fold
+// into a single re-run. Safe for concurrent use; the zero value is ready.
+type rootsCoalescer struct {
+	mu      sync.Mutex
+	running bool          // a goroutine owns the run loop
+	stale   bool          // a notification arrived that no fetch has started after
+	request mcp.RequestFn // the newest notification's request function
+}
+
+// enter records a notification and reports whether the caller now owns the
+// run loop. A false return means a run is in flight and will pick this
+// notification up.
+func (c *rootsCoalescer) enter(request mcp.RequestFn) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.request = request
+	c.stale = true
+	if c.running {
+		return false
+	}
+	c.running = true
+	return true
+}
+
+// next hands the loop owner the request to fetch with, clearing stale, or
+// reports false — releasing ownership in the same critical section — when no
+// notification is outstanding or live says the work is no longer wanted.
+// Releasing under the lock is what keeps a notification from being lost: one
+// that arrives after this returns false finds running cleared and takes the
+// loop itself.
+func (c *rootsCoalescer) next(live func() bool) (mcp.RequestFn, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.stale || !live() {
+		c.running = false
+		c.stale = false
+		return nil, false
+	}
+	c.stale = false
+	return c.request, true
+}
+
+// abandon releases the loop after its owner panicked, dropping whatever was
+// outstanding: the next notification takes the loop and fetches afresh.
+func (c *rootsCoalescer) abandon() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.running = false
+	c.stale = false
 }
 
 // markInitSettled records that OnInit's attach ladder has finished. Idempotent.
@@ -106,6 +201,9 @@ func (s *connSession) onRootsChanged(ctx context.Context, roots []string) {
 		return
 	}
 	if _, err := s.repinWorkspaceFrom(ctx, folder, "", sessionstate.PinSourceRoots, pinTriggerLive, false); err != nil {
+		if errors.Is(err, errConnClosed) {
+			return // the connection went away mid-notification; nothing to report
+		}
 		s.log().Warn("daemon: roots-changed re-pin failed", "to", folder, "err", err)
 	}
 }

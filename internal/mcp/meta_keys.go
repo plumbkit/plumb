@@ -131,6 +131,32 @@ const MetaPinnedWorkspaceKey = "dev.plumbkit/pinned-workspace"
 // `_meta` convention.
 const MetaResolvedWorkspaceKey = "dev.plumbkit/resolved-workspace"
 
+// MetaPinScopeKey is the tools/call result `_meta` key under which the daemon
+// says WHICH pin a session_start(workspace=…) call moved: "agent" (the calling
+// agent's own shard on a shared connection) or "connection" (the connection's
+// pin). It rides every successful session_start that carried a workspace.
+//
+// It exists for the serve proxy's replay pin. That pin is the CONNECTION's: it
+// is replayed on reconnect as a session_start-level connection pin, which is
+// sticky and outranks the client's roots. A call that moved only one agent's
+// shard says nothing about where the connection should come back, so for
+// "agent" the proxy records no replay pin, and does so before it reads
+// MetaResolvedWorkspaceKey. The daemon still sends that key for "agent", naming
+// the connection's root, because a proxy that predates this key cannot read the
+// scope and would otherwise fall back to the call's raw argument, the agent's
+// worktree, and replay it as the connection's pin. A daemon that predates the key
+// sends nothing, which a proxy must read as "connection" — the behaviour before
+// the key existed. Reverse-DNS namespaced per the MCP `_meta` convention.
+const MetaPinScopeKey = "dev.plumbkit/pin-scope"
+
+// PinScopeAgent and PinScopeConnection are the values of MetaPinScopeKey.
+// tools.PinScope is defined from them, so session_start's report and the `_meta`
+// the proxy reads cannot name the two scopes differently.
+const (
+	PinScopeAgent      = "agent"
+	PinScopeConnection = "connection"
+)
+
 // MetaAlwaysLoadKey is the per-tool `tools/list` `_meta` key Claude Code reads to
 // exempt a tool from MCP tool-search deferral: a tool advertised with
 // `_meta["anthropic/alwaysLoad"] = true` is loaded into the client's context at

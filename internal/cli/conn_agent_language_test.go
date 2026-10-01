@@ -132,7 +132,7 @@ func TestSameRootLanguageSwitchPreservesShardTrackers(t *testing.T) {
 	// A same-root language change, as an ordinary re-pin would produce it. It
 	// reports a change — the shard's language really did move — which is what
 	// makes keeping the trackers a deliberate exception rather than a no-op.
-	changed, refused := s.repinAgent(ctxA, root, "go", sessionstate.PinSourceSessionStart, false)
+	_, changed, refused := s.repinAgent(ctxA, root, "go", sessionstate.PinSourceSessionStart, false)
 	if refused != nil {
 		t.Fatalf("same-root language change on a shard: %v", refused)
 	}
@@ -146,7 +146,7 @@ func TestSameRootLanguageSwitchPreservesShardTrackers(t *testing.T) {
 	// The contrast: moving the agent to another project does start clean.
 	other := freshTempDir(t)
 	mustGitDir(t, other)
-	if moved, refused := s.repinAgent(ctxA, other, "go", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+	if _, moved, refused := s.repinAgent(ctxA, other, "go", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
 		t.Fatalf("agent move: changed=%v err=%v", moved, refused)
 	}
 	if s.writeTrackerFor(ctxA).Wrote(written) {

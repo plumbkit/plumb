@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -371,18 +370,20 @@ func (d WriteDeps) resolvePath(ctx context.Context, path string) (string, error)
 //     changedSinceSessionRead staleness guard does not false-positive on the
 //     session's own consecutive writes (read → edit → edit no longer warns).
 //
-// Both calls stat under the caller's held per-path lock, so they observe the
-// same post-write mtime. nil-safe on both trackers. Both trackers resolve per
-// logical agent (PLAN-286), so a write is recorded against the calling agent's
-// own read/write state.
-func (d WriteDeps) recordWritten(ctx context.Context, path string) {
+// v is the version the caller WROTE — writeResult.written, the hash of its
+// bytes and the mtime of the file it wrote them to — never a re-read of the
+// path. The per-path lock excludes only plumb's own writers, so by the time this
+// runs an outside process may have replaced the file, and re-reading it recorded
+// that process's content as this session's version: the session's next write
+// then passed both guards over a change it never saw (issue #528). A zero v
+// (version unknown) records the write but leaves the read state alone. nil-safe
+// on both trackers. Both trackers resolve per logical agent (PLAN-286), so a
+// write is recorded against the calling agent's own read/write state.
+func (d WriteDeps) recordWritten(ctx context.Context, path string, v fileSnapshot) {
 	if w := d.writes(ctx); w != nil {
-		w.Record(path)
+		w.recordAt(path, v.mtime)
 	}
-	if r := d.reads(ctx); r != nil {
-		if info, err := os.Stat(path); err == nil {
-			sha, _ := fileSHA256(path) // best-effort; empty on error
-			r.Record(path, info.ModTime(), sha)
-		}
+	if r := d.reads(ctx); r != nil && !v.mtime.IsZero() {
+		r.Record(path, v.mtime, v.sha)
 	}
 }

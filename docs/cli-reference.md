@@ -957,6 +957,7 @@ argument) in the stored command. A project-supplied command must be trusted firs
 
 ```
 plumb trust [directory]
+plumb trust --revoke [directory]
 ```
 
 Trust this workspace's project-supplied task commands (those set in its
@@ -970,6 +971,11 @@ longer matches and the command is refused until you re-run `plumb trust` — so 
 agent that changes a trusted command cannot have the new command run without a
 fresh prompt. A `trust.json` written by an older plumb (the legacy boolean
 format) is treated as untrusted and re-confirmed once.
+
+`--revoke` removes the workspace's grant instead. A linked git worktree shares
+its repository's grant for identical content and has no grant of its own to
+remove, so `--revoke` there says the worktree is still trusted and names the
+checkout to run `plumb trust --revoke` at.
 
 When it records trust, `plumb trust` **prints each command it is about to
 trust** and flags any that invoke an interpreter with inline code (`bash -c`,

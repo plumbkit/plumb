@@ -112,7 +112,12 @@ func gitReadArgv(argv []string) []string {
 // is configurable; the auxiliary read queries around it
 // (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
 // parses, and are deliberately left inheriting.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec) (string, error) {
+//
+// writes (may be nil) is the calling session's WriteTracker. When this op can
+// rewrite the working tree, the files the session wrote that git then changes
+// are re-recorded afterwards (git_own_writes.go), so the next read does not blame a
+// peer for plumb's own switch, merge or restore.
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -130,6 +135,9 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 	if err := guardRefPreExec(execCtx, guard, repoRoot, sub); err != nil {
 		return "", err
 	}
+	// Taken under the per-repo lock and refreshed on EVERY exit below: a merge
+	// that stops on conflicts fails and has still rewritten files.
+	defer trackOwnGitWrites(writes, repoRoot, sub, tier)()
 	warning := ""
 	if intentWarn != nil {
 		warning = intentWarn(execCtx, repoRoot)

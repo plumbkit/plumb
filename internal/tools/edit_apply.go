@@ -80,13 +80,15 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	}
 
 	var modified []string
-	for _, p := range plans {
-		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+	for i, p := range plans {
+		res, err := safeWrite(p.path, p.after, p.mode)
+		if err != nil {
 			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
 		}
+		plans[i].written = res.written
 		modified = append(modified, p.path)
 	}
 	if onApplied != nil {
@@ -100,6 +102,8 @@ type workspaceEditPlan struct {
 	before []byte
 	after  []byte
 	mode   os.FileMode
+	// written is the version the apply published, set once the write lands.
+	written fileSnapshot
 }
 
 // workspaceEditTarget is one file's share of a WorkspaceEdit, resolved to a

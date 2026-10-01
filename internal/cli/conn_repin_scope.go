@@ -49,10 +49,10 @@ func connScopeAuthorised(ctx context.Context) bool {
 // The caller must be identified. The move resets every peer shard that has not
 // pinned a root of its own (followConnectionShards), including its read, write
 // and undo state, so it has to be attributable to the agent that asked for it.
-func (s *connSession) repinConnection(ctx context.Context, folder, langOverride string, force bool) (string, error) {
+func (s *connSession) repinConnection(ctx context.Context, folder, langOverride string, force bool) (repinOutcome, error) {
 	id := mcp.LogicalAgentFromCtx(ctx)
 	if id == "" && s.logicalAgents.sharedWith("") {
-		return "", toolerror.Wrap(
+		return repinOutcome{}, toolerror.Wrap(
 			fmt.Errorf(`refusing a connection-scoped re-pin to %s: this connection serves several logical agents and this call carries no identity, so a move that resets every peer's workspace, read tracking and undo state cannot be attributed to the agent that asked for it. Identify yourself — pass session_start.session_id, or a per-call _meta[%s] — and retry with scope: "connection"`, folder, mcp.MetaLogicalAgentKey),
 			toolerror.KindPinRefused,
 			toolerror.ClassFixArguments,
@@ -65,7 +65,69 @@ func (s *connSession) repinConnection(ctx context.Context, folder, langOverride 
 	// Deliberately NOT under the caller's ctx identity: this moves the
 	// CONNECTION, so it must reach attachOrRepinTo rather than being routed to
 	// the caller's shard by repinShard.
-	return s.repinWorkspaceFrom(withConnScopeAuthorised(mcp.WithoutLogicalAgent(ctx)), folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
+	out, err := s.repinWorkspaceFrom(withConnScopeAuthorised(mcp.WithoutLogicalAgent(ctx)), folder, langOverride, sessionstate.PinSourceSessionStart, pinTriggerLive, force)
+	if err != nil || id == "" {
+		return out, err
+	}
+	// The stripped ctx made repinWorkspaceFrom settle the ANONYMOUS declaration
+	// marker, not this agent's. A deliberate move of the connection is a
+	// settling path for its caller too, so clear the caller's own marker —
+	// otherwise it kept resolving to nothing after a successful call.
+	s.clearDeclarationRefused(id)
+	out.effective = s.connScopeCallerRoot(id, out)
+	return out, nil
+}
+
+// connScopeCallerRoot is the root an identified caller of a connection-scoped
+// re-pin resolves against afterwards.
+//
+// It is decided by WHETHER the caller's shard follows the connection, not by
+// comparing roots after the fact. A shard that follows resolves against the
+// root this move left the connection at — even if a peer's concurrent
+// connection move has already dragged it on, which a root comparison
+// mislabelled as "your own pin". Whether it follows is followsConnectionLocked,
+// the same predicate followConnectionShards drags by, so the two agree on WHICH
+// shards follow: a subagent on its conversation's chosen root was left there by
+// the move but told it now worked in the connection's new root (review of #535
+// merged with #533). They agree on a connection's first pin too: the shard that
+// follows sits at "" and is moved to the new root with the rest (#567), so what
+// is reported here is where workspaceFor then resolves.
+//
+// A shard that does not follow (its agent chose its root, in this life or by a
+// persisted pin restored from an earlier one) reports its own root.
+//
+// Two more things the caller's next call does are done here too, so the
+// report names what workspaceFor will resolve. A refused declaration, the
+// caller's own or its conversation's, resolves it against nothing. A caller
+// with no shard yet gets one as its next call would, which seeds a subagent
+// from its conversation's chosen root rather than the connection's.
+//
+// The shard is read after the move: the move and the shard are guarded by
+// different locks, and holding both would invert the documented order
+// (shardsMu before sh.mu, s.mu innermost). selfPinned only ever goes from false
+// to true, and a self-pinned shard's root changes only through its own agent's
+// repinAgent. Two transient, report-only windows remain: this agent's own
+// concurrent session_start, and its conversation self-pinning between the
+// parentChose read and the shard read (followParentShard can move the subagent
+// in that gap).
+func (s *connSession) connScopeCallerRoot(id string, out repinOutcome) string {
+	ctx := mcp.WithLogicalAgent(context.Background(), id)
+	if _, _, pending := s.pendingDeclarationForCall(ctx); pending {
+		return ""
+	}
+	sh := s.shardFor(ctx)
+	if sh == nil {
+		return out.root
+	}
+	s.shardsMu.Lock()
+	parentChose := s.parentChoseLocked(id)
+	s.shardsMu.Unlock()
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	if followsConnectionLocked(sh, parentChose) {
+		return out.root
+	}
+	return sh.root
 }
 
 // refuseAnonymousForcedMove refuses a forced connection re-pin that carries no

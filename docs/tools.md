@@ -121,7 +121,14 @@ key, or `plumb_agent`, placed by a client **runtime** as a top-level key inside
 `plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
 every `mcp__plumb__*` call and also fills `session_id` on this tool); and
 `session_id` itself, which identifies this call only: on a connection other agents
-share, a later write without a per-call identity is refused. Pass a stable value per agent:
+share, a later write without a per-call identity is refused. It is also the
+declaration a per-call identity needs there: a state-changing call whose
+conversation half no successful `session_start` on the connection has declared
+(its `session_id`, or the per-call identity it ran under) is refused with that
+remedy, plus `workspace` so the declared agent is not left on the connection's
+root, unless every identity on the connection belongs to one conversation. A
+subagent stamped `<conversation>/<agent>` rides its conversation's declaration
+and works in its conversation's workspace, following it when it re-pins. Pass a stable value per agent:
 the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
 The session **record** — the name mail is addressed to, `plumb mail
 --external-id`, name inheritance on resume — is linked to the conversation half,
@@ -905,7 +912,7 @@ index is disabled or empty.
 Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
 `diff`, `show`, `blame`, `shortlog`, and branch/tag/stash listing). **Write**
 needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
-branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
+`merge`, branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, …) needs
 `allow_destructive` + `confirm:true`.
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
@@ -916,20 +923,61 @@ narrower plumb tool to prefer over a destructive git command (`undo_edit`,
 `file_status`, `minimal_diff_review`).
 
 **Ambiguous subcommands are classified by their arguments**, biased towards the
-safer-to-deny higher tier:
+safer-to-deny higher tier, and read the way git's own parser reads them:
+abbreviated long options (`--disc` is `--discard-changes`), bundled short flags
+(`-dr`) and option values (`tag -m -d` is a message) all count as git counts
+them.
 
-- `checkout -b`/`-B` (branch creation) is **write**; any other `checkout` is
-  **destructive** (it can discard the working tree or detach HEAD). Prefer
-  `switch` for safe branch changes.
+- `checkout -b` (branch creation) is **write**; any other `checkout` is
+  **destructive** (it can discard the working tree or detach HEAD), including
+  `-b` with `-f`. `-B <name>` is **write** when `<name>` is a new branch and
+  **destructive** when it resets an existing one (a new branch means a plain
+  name given once; see the last bullet below). Prefer `switch` for safe branch
+  changes.
 - `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
-  **destructive**.
+  **destructive**, and so is `-C`/`--force-create` on a branch that already
+  exists (on a new one it is a write).
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
-- `branch`/`tag`: creating or renaming is **write**, `--delete`/`-d`/`-D` is
-  **destructive**, and `--list`/`-a`/`-r`/… is **read**.
+- `branch`: creating, renaming (`-m`) or copying (`--copy`) is **write**, as are
+  the upstream and description options. Every forced form is **destructive**
+  whether or not the branch exists: `-f`/`--force`, `-M` (`--move --force`),
+  `-C` (`--copy --force`, also inside a bundle such as `-qC`) and
+  `-D`/`-d`/`--delete`. List mode (`--list`/`-a`/`-r`/`--contains`/…, or no
+  arguments) is **read**, and a later `--no-list` cancels it. `-v` alone does
+  not list once a name is given.
+- `tag`: creating is **write**; `--delete`/`-d` is **destructive**, and so is
+  `-f`/`--force` when the tag already exists (on a new one it is a write); list
+  mode is **read**.
+- `--end-of-options` ends option parsing exactly as `--` does.
+- A `checkout -B`, `switch -C` or `tag -f` call is lowered to **write** only
+  when the tool can show it creates a ref; `branch` is never lowered, because
+  its option grammar defeated every attempt to tell a creation from a reset. The
+  option appears exactly once, however it is spelled, because git keeps the last
+  of a repeated `-B`. The name is plain:
+  ASCII letters, digits and `.` `_` `-` `/`, with no leading `-`, no `@` or `{`,
+  no `..`, and not ending in `.lock` or `/`, because git expands `@{-1}`,
+  `@{u}`, `@{push}` and `<branch>@{upstream}` to an existing branch. `git
+  check-ref-format` accepts the name and prints it back unchanged. And git,
+  asked in the target repository just before the call, says the ref does not
+  exist. Any other call, including one git cannot answer, is **destructive**.
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.
+- `merge` (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is **write** and
+  runs `pre-merge-commit`/`commit-msg` as `commit` runs its hooks; `--abort` and
+  `--quit` (also abbreviated, as git expands them) are **destructive**.
+  `--continue`, `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused —
+  conclude a merge with `commit` and a message. A merge that stops on conflicts
+  fails naming the conflicted files and leaves git's merging state (`MERGE_HEAD`)
+  to resolve, `add`, and `commit`.
+
+A file plumb wrote this session and then changed on disk through this tool (a
+`switch`, `merge`, `restore`, `stash pop`, `reset`, `pull`, …) is re-recorded
+afterwards, so the next `read_file` does not report it as a peer's edit. A file a
+peer had already changed before the operation, or changes after it, still warns.
+When a tier is off because this workspace's untrusted project config asked for
+it, the refusal says so and names the `plumb trust` command for the path.
 
 `add` and `commit` are **typed, not pass-through**: `commit` only ever runs
 `commit -m <message>`, plus `-- <files>` when `files` is passed to limit the
@@ -955,7 +1003,7 @@ commits per session (short SHA, subject, repository) from its recent-writes
 feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
 
 With `[collab] intents = true`, a **repo-state op** — every destructive-tier op,
-plus the write-tier HEAD movers `commit`/`switch`/`checkout` — also surfaces any
+plus the write-tier HEAD movers `commit`/`switch`/`checkout`/`merge` — also surfaces any
 live peer `share_intent` claims covering the repository as an advisory
 `# plumb-warning:` block naming the peer and the claim.
 
@@ -1164,7 +1212,15 @@ SHA-256 before the run reports clean. A file with **uncommitted changes is
 refused with no override** — a clean file is what makes `git checkout` a
 guaranteed recovery if the daemon dies mid-run. One run at a time per daemon; a
 second call is refused rather than queued, since concurrent runs would read each
-other's breakage as their own result.
+other's breakage as their own result. The refusal names the run in the way: its
+session name and id, workspace, how long ago it started, and its progress
+(checking its mutants, the unmutated baseline, or mutant *k* of *n* and the step
+it is on). A run whose owning connection closes — the client crashed or
+disconnected — is cancelled (the file is restored as on any cancellation) and
+the slot released, rather than holding it for a report nobody can receive. The
+slot stays per daemon, not per workspace: workspaces nest (a superproject and its
+submodule are two workspaces over one tree), so two of them can mutate and build
+the same files.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

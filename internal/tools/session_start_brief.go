@@ -66,7 +66,7 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // grows a second "sections" knob to pick among them.
 //
 // Three signals are NOT optional, even though the rest of the identity block
-// (writeSessionIdentity) is full-only: inheritedName and repinnedFrom, plus
+// (writeSessionIdentity) is full-only: inheritedName and repinLine, plus
 // the wired lspSkipNoteFn, are exactly the loud, one-shot announcements full
 // always carries — the PR #181 re-pin guarantee, the #316 why-no-server note,
 // and the resumed session's own peer-addressable name (how a woken agent
@@ -77,12 +77,13 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // woken session must still see its pending mail, or the wake flow loses its
 // point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
 // so it costs nothing when there is nothing to deliver.
-func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string, claimable bool) string {
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, linked bool, stampNote string, claimable bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
-	if repinnedFrom != "" {
-		sb.WriteString(repinnedFrom)
-	}
+	// The same re-pin block the full packet renders: which pin moved, how many
+	// other agents followed it, and what this caller's next relative path
+	// resolves against (issue #517).
+	sb.WriteString(repinLine)
 	if lang != "" {
 		fmt.Fprintf(&sb, "Language: %s\n", lang)
 	}
