@@ -137,15 +137,15 @@ func summariseEditScript(script editScript) string {
 	// non-common lines (additions and/or deletions) collapses to one range.
 	newLine := 1
 	for i := 0; i < len(script); {
-		if script[i].kind == ' ' {
+		if script[i].Op == ' ' {
 			newLine++
 			i++
 			continue
 		}
 		runStart := newLine
 		added := false
-		for i < len(script) && script[i].kind != ' ' {
-			if script[i].kind == '+' {
+		for i < len(script) && script[i].Op != ' ' {
+			if script[i].Op == '+' {
 				added = true
 				newLine++
 			}

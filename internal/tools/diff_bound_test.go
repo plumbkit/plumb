@@ -36,7 +36,7 @@ func TestComputeEditScript_BoundedFallsBackToWholeFile(t *testing.T) {
 
 	var dels, adds, common int
 	for _, l := range script {
-		switch l.kind {
+		switch l.Op {
 		case '-':
 			dels++
 		case '+':
@@ -73,7 +73,7 @@ func TestComputeEditScript_ExactBelowBound(t *testing.T) {
 	script := computeEditScript(before, after)
 	var changed int
 	for _, l := range script {
-		if l.kind != ' ' {
+		if l.Op != ' ' {
 			changed++
 		}
 	}

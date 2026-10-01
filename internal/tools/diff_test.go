@@ -3,11 +3,27 @@ package tools
 import (
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/textdiff"
 )
 
 func TestUnifiedDiff_NoChange(t *testing.T) {
 	if d := unifiedDiff("f.go", "same\n", "same\n"); d != "" {
 		t.Fatalf("expected empty diff for identical content, got:\n%s", d)
+	}
+}
+
+func TestUnifiedDiffRendersANewlineOnlyEdit(t *testing.T) {
+	// Before this change the trailing "" was dropped on both sides, the line
+	// slices compared equal and the write tools reported no diff at all.
+	d := unifiedDiff("f.txt", "a\nb\n", "a\nb")
+	if !strings.Contains(d, textdiff.NoEOLMarker) {
+		t.Fatalf("newline-only edit rendered %q; want the no-newline marker", d)
+	}
+	// Positive control: an ordinary edit renders exactly as before.
+	want := "--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n a\n-b\n+c"
+	if got := unifiedDiff("f.txt", "a\nb\n", "a\nc\n"); got != want {
+		t.Fatalf("ordinary edit changed rendering:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -154,8 +170,8 @@ func TestComputeEditScript_BasicCorrectness(t *testing.T) {
 func replayScript(script editScript) []string {
 	var out []string
 	for _, dl := range script {
-		if dl.kind == ' ' || dl.kind == '+' {
-			out = append(out, dl.text)
+		if dl.Op == ' ' || dl.Op == '+' {
+			out = append(out, dl.Text)
 		}
 	}
 	return out
