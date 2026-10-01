@@ -327,11 +327,21 @@ func (o reconnectOutcome) cause() string {
 // are rebuilt. Collapsing both into one "state was rebuilt" sentence is what
 // made a successful recovery read as a loss.
 func (o reconnectOutcome) tail() string {
+	// The pin sentence says what each kind of reader can expect, because the proxy
+	// cannot tell which one it is writing for. A workspace set with session_start
+	// is restored only while its directory still resolves to itself; on a shared
+	// connection that means the agent's OWN pin for an agent that set one, while an
+	// agent that only followed the connection's comes back wherever the connection
+	// is now (#529).
 	const state = " Read-tracking and caches were rebuilt: re-read a file before " +
 		"editing it (or pass dirty_ok:true for a file you wrote earlier this " +
-		"session). The daemon restores an explicit session_start workspace, but " +
-		"if you have not set one, a relative path may now resolve against a " +
-		"different project — confirm the pin before a relative-path write."
+		"session). A workspace you set with session_start comes back if its " +
+		"directory still resolves to itself: on a connection shared by several " +
+		"agents, an agent that set its own pin gets that pin back, while one that " +
+		"only followed the connection's pin comes back on whatever the connection " +
+		"holds now, which may be a different project. If you never set one, a " +
+		"relative path may resolve against a different project — confirm the pin " +
+		"before a relative-path write."
 	return " — " + o.identitySentence() + state
 }
 

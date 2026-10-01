@@ -31,13 +31,13 @@ func (s *connSession) seedFromParentLocked(sh *agentShard) {
 	if parent, ok := s.shards[linkage]; ok {
 		parent.mu.RLock()
 		chose := parent.selfPinned || parent.restored
-		root, language, origin := parent.root, parent.language, parent.pinOrigin
+		root, language, origin, prov := parent.root, parent.language, parent.pinOrigin, parent.prov
 		parent.mu.RUnlock()
 		if chose {
 			// No parentSeeded here: a parent in memory that chose keeps saying
 			// so (selfPinned and restored are never cleared), and
 			// followConnectionShards asks it directly.
-			sh.root, sh.language, sh.pinOrigin = root, language, origin
+			sh.root, sh.language, sh.pinOrigin, sh.prov = root, language, origin, prov
 		}
 		return
 	}
@@ -47,6 +47,7 @@ func (s *connSession) seedFromParentLocked(sh *agentShard) {
 	}
 	if resolved, _, intact := s.restoreRootIntact(root); intact {
 		sh.root, sh.language, sh.pinOrigin = resolved, language, origin
+		sh.prov = restoredProvenance(origin)
 		// The parent is not in memory to be asked, so the child remembers.
 		sh.parentSeeded = true
 	}
@@ -73,7 +74,7 @@ func (s *connSession) followParentShard(parentID, prevRoot string) {
 		return
 	}
 	parent.mu.RLock()
-	root, language, origin := parent.root, parent.language, parent.pinOrigin
+	root, language, origin, prov := parent.root, parent.language, parent.pinOrigin, parent.prov
 	parent.mu.RUnlock()
 	for id, sh := range s.shards {
 		if id == parentID || linkageIDOf(id) != parentID {
@@ -90,8 +91,8 @@ func (s *connSession) followParentShard(parentID, prevRoot string) {
 			sh.mu.Unlock()
 			continue
 		}
-		sh.root, sh.language, sh.pinOrigin = root, language, origin
-		sh.policy = s.buildAgentPolicy(root, language)
+		sh.root, sh.language, sh.pinOrigin, sh.prov = root, language, origin, prov
+		sh.policy = s.buildAgentPolicy(root, language, prov)
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()
 		sh.undoStore.Reset()

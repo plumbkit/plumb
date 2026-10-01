@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
 // PinScope names which pin a session_start re-pin moved: the calling agent's own
@@ -20,10 +22,10 @@ type PinScope string
 
 const (
 	// PinScopeAgent is the caller's own per-agent pin on a shared connection.
-	PinScopeAgent PinScope = "agent"
+	PinScopeAgent PinScope = mcp.PinScopeAgent
 	// PinScopeConnection is the connection's pin: an anonymous caller's, a
 	// single-agent connection's, or the one scope: "connection" moves.
-	PinScopeConnection PinScope = "connection"
+	PinScopeConnection PinScope = mcp.PinScopeConnection
 )
 
 // RepinReport is what the re-pin callback reports back. Which pin moves is
