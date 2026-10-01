@@ -23,7 +23,7 @@ func initWorkspace(t *testing.T) string {
 // TestBegin_NoPlumb returns a no-op Log when the workspace has no .plumb/.
 func TestBegin_NoPlumb(t *testing.T) {
 	ws := t.TempDir() // no .plumb/
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestBegin_NoPlumb(t *testing.T) {
 
 // TestBegin_EmptyWorkspace returns a no-op Log without error.
 func TestBegin_EmptyWorkspace(t *testing.T) {
-	l, err := Begin("")
+	l, err := Begin("", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestHappyPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -180,11 +180,11 @@ func TestConcurrentTransactions(t *testing.T) {
 		}
 	}
 
-	la, err := Begin(ws)
+	la, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin(a): %v", err)
 	}
-	lb, err := Begin(ws)
+	lb, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin(b): %v", err)
 	}
@@ -216,7 +216,7 @@ func TestConcurrentTransactions(t *testing.T) {
 func TestRecord_LargeFileSkipsSnapshot(t *testing.T) {
 	ws := initWorkspace(t)
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRollback_MultiFile(t *testing.T) {
 		}
 	}
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestRollback_SkipsUnsnapshottedOps(t *testing.T) {
 	}
 
 	// The replay must log a warning and NOT touch the file.
-	replayOrphan(txDir, confinedTo(ws))
+	replayOrphan(txDir, confinedTo(ws), nil)
 
 	got, _ := os.ReadFile(target)
 	if string(got) != "current" {
@@ -348,7 +348,7 @@ func TestRollback_PermissionsPreserved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}

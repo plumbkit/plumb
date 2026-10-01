@@ -428,7 +428,9 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 		s.startTopologyIndexer(v, root)
 		v.policy = s.buildPathPolicy(v)
 		s.warmDepRoots(language)
-		recoverWorkspaceTxlog(root, func(ws string) { txlog.Scan(ws, s.daemonStartedAt, txlogReplayGuard(v.policy)) })
+		recoverWorkspaceTxlog(root, func(ws string) {
+			txlog.ScanRecording(ws, s.daemonStartedAt, txlogReplayGuard(v.policy), s.txlogRecoverySink(ws))
+		})
 		cn, cv := v.clientName, v.clientVersion
 		session.Patch(s.sessionID(), func(info *session.Info) {
 			info.Folder = root
