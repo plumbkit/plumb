@@ -370,7 +370,7 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 // writer, and stamping every row with the conversation id would add a column
 // of noise that says nothing. A row therefore means what it says forever:
 // blank = "one agent held this connection", set = "one of several".
-func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string) {
+func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string, callID string) {
 	session.Touch(s.sessionID())
 	s.touchAgentRoster(logicalAgent)
 	v := s.view()
@@ -421,6 +421,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 		SavingsModelVersion: clientcaps.ModelVersion,
 		Purpose:             v.purpose,
 		LogicalAgent:        s.attributedAgent(logicalAgent),
+		CallID:              callID,
 	}, failure))
 }
 
@@ -438,7 +439,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 // row is attributed only when the call itself also carried an identity.
 func (s *connSession) afterToolFromCtx(ctx context.Context, toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error) {
 	s.declareSessionStartCaller(ctx, toolName, isError)
-	s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure, mcp.LogicalAgentFromCtx(ctx))
+	s.onAfterTool(toolName, args, output, errMsg, dur, isError, failure, mcp.LogicalAgentFromCtx(ctx), mcp.CallIDFromCtx(ctx))
 }
 
 // attributedAgent is the logical-agent id worth recording for this call: the

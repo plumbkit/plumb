@@ -51,7 +51,11 @@ func TestAfterToolFromCtxRecordsTheCallersAgent(t *testing.T) {
 
 	record := func(agent, path string) {
 		args, _ := json.Marshal(map[string]any{"file_path": path, "content": "x"})
-		s.afterToolFromCtx(mcp.WithLogicalAgent(context.Background(), agent),
+		ctx := mcp.WithLogicalAgent(context.Background(), agent)
+		if path == root+"/parent.txt" {
+			ctx = mcp.WithCallID(ctx, "01TESTCALLID0000000000000")
+		}
+		s.afterToolFromCtx(ctx,
 			"write_file", args, "wrote", "", time.Millisecond, false, nil)
 	}
 
@@ -90,6 +94,14 @@ func TestAfterToolFromCtxRecordsTheCallersAgent(t *testing.T) {
 		if agent, ok := got[path]; !ok || agent != want {
 			t.Errorf("row for %s recorded agent %q (present=%v), want %q", path, agent, ok, want)
 		}
+	}
+
+	call, ok, err := db.CallByID("01TESTCALLID0000000000000")
+	if err != nil || !ok || call.Tool != "write_file" {
+		t.Fatalf("CallByID(01TESTCALLID0000000000000) = %+v, %v, %v; want ok=true, tool=write_file", call, ok, err)
+	}
+	if _, ok, err := db.CallByID("01NONEXISTENT0000000000000"); ok || err != nil {
+		t.Fatalf("CallByID(01NONEXISTENT0000000000000) = ok=%v, err=%v; want false, nil", ok, err)
 	}
 }
 
