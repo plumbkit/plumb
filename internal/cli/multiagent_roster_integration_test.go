@@ -220,6 +220,10 @@ func TestRestoredAgentConfirmingItsRootIsStillListed(t *testing.T) {
 // naming the agent that made it, not the connection.
 func TestCommitSessionTrailerNamesCallingAgent(t *testing.T) {
 	m := newMultiAgentConn(t)
+	// The subagent is the coordinator conversation's own, stamped the way the hook
+	// stamps one. A plain second id is a second CONVERSATION, which relinks the
+	// connection to itself and so takes the connection's identity from the first.
+	const sub = "coord/sub"
 	parent := t.TempDir()
 	gitCmd := func(dir string, args ...string) {
 		t.Helper()
@@ -244,7 +248,7 @@ func TestCommitSessionTrailerNamesCallingAgent(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
 		t.Fatalf("coordinator session_start: %v", err)
 	}
-	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+	if err := m.sessionStart(t, map[string]any{"session_id": sub, "workspace": worktree}); err != nil {
 		t.Fatalf("subagent session_start: %v", err)
 	}
 
@@ -256,15 +260,15 @@ func TestCommitSessionTrailerNamesCallingAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "f.txt"), []byte("sub\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.call(t, "sub", "git", map[string]any{"subcommand": "add", "files": []string{"f.txt"}, "repo": worktree}, gitTool.Execute); err != nil {
+	if err := m.call(t, sub, "git", map[string]any{"subcommand": "add", "files": []string{"f.txt"}, "repo": worktree}, gitTool.Execute); err != nil {
 		t.Fatalf("subagent git add: %v", err)
 	}
-	if err := m.call(t, "sub", "git", map[string]any{"subcommand": "commit", "message": "sub commit", "repo": worktree}, gitTool.Execute); err != nil {
+	if err := m.call(t, sub, "git", map[string]any{"subcommand": "commit", "message": "sub commit", "repo": worktree}, gitTool.Execute); err != nil {
 		t.Fatalf("subagent git commit: %v", err)
 	}
 
 	m.s.shardsMu.Lock()
-	sh := m.s.shards["sub"]
+	sh := m.s.shards[sub]
 	m.s.shardsMu.Unlock()
 	sh.mu.RLock()
 	subName := sh.rosterName
@@ -454,6 +458,10 @@ func callOutput(t *testing.T, m *multiAgentConn, metaAgent, name string, args ma
 //     attributed to the subagent, so the coordinator can claim it.
 func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	m := newMultiAgentConn(t)
+	// The subagent is the coordinator conversation's own, stamped the way the hook
+	// stamps one. A plain second id is a second CONVERSATION, which relinks the
+	// connection to itself and so takes the connection's identity from the first.
+	const sub = "coord/sub"
 	parent := freshTempDir(t)
 	mustGitDir(t, parent)
 	worktree := filepath.Join(parent, "worktree")
@@ -465,7 +473,7 @@ func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	if err := m.sessionStart(t, map[string]any{"session_id": "coord", "workspace": parent}); err != nil {
 		t.Fatalf("coordinator session_start: %v", err)
 	}
-	if err := m.sessionStart(t, map[string]any{"session_id": "sub", "workspace": worktree}); err != nil {
+	if err := m.sessionStart(t, map[string]any{"session_id": sub, "workspace": worktree}); err != nil {
 		t.Fatalf("subagent session_start: %v", err)
 	}
 
@@ -475,7 +483,7 @@ func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	m.s.mutate(func(v *sessionView) { v.collab.CrossProject = true })
 
 	m.s.shardsMu.Lock()
-	sh := m.s.shards["sub"]
+	sh := m.s.shards[sub]
 	m.s.shardsMu.Unlock()
 	sh.mu.RLock()
 	subName := sh.rosterName
@@ -505,7 +513,7 @@ func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	}
 
 	// Subagent checks messages: it MUST receive the note addressed to its roster name.
-	subCheckRaw, err := callOutput(t, m, "sub", "check_messages", map[string]any{}, checkMessagesTool.Execute)
+	subCheckRaw, err := callOutput(t, m, sub, "check_messages", map[string]any{}, checkMessagesTool.Execute)
 	if err != nil {
 		t.Fatalf("sub check_messages: %v", err)
 	}
@@ -514,7 +522,7 @@ func TestLogicalAgentIsAddressableForMail(t *testing.T) {
 	}
 
 	// Subagent replies to the coordinator.
-	if err := m.call(t, "sub", "leave_note", map[string]any{
+	if err := m.call(t, sub, "leave_note", map[string]any{
 		"to":   m.s.sessionName(),
 		"body": "reply from sub",
 	}, leaveNoteTool.Execute); err != nil {
