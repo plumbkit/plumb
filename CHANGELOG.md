@@ -763,6 +763,12 @@
   agent with a pin of its own and not for one that only followed the connection's.
   It now says which is which.
 
+### Changed
+
+- **Write tools now report a change to a file's final newline.** Previously such
+  an edit showed no diff; the diff shows the standard `\ No newline at end of file`
+  marker.
+
 ## 0.20.3 (2026-09-30)
 
 ### Fixed

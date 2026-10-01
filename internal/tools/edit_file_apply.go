@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/textdiff"
 )
 
 // editFileApply runs the retry loop, notifies the LSP on success, and
@@ -86,7 +87,7 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 	}
 	// Compute the edit script once and feed both the line summary and the diff,
 	// so a successful edit never pays two Myers passes over the same content.
-	script := computeEditScript(diffSplitLines(before), diffSplitLines(content))
+	script := textdiff.ComputeExact(before, content)
 	summary := summariseEditScript(script)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "applied %d %s to %s %s", len(edits), noun, path, sizeSummary(content))
