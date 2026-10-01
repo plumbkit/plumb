@@ -35,15 +35,16 @@ func TestNormaliseSwitchCreate(t *testing.T) {
 	}
 }
 
-// TestClassifySwitchCreate confirms the rewritten long forms classify as writes
-// (so the global-flag denylist no longer pre-empts the tier), and that adding a
-// discard flag still escalates to destructive.
+// TestClassifySwitchCreate confirms the rewritten long forms classify by what
+// they do (so the global-flag denylist no longer pre-empts the tier): --create
+// is a write, --force-create resets an existing branch like `reset --keep` and
+// is destructive, and adding a discard flag still escalates to destructive.
 func TestClassifySwitchCreate(t *testing.T) {
 	if got := classifyGit("switch", []string{"--create", "feature"}); got != tierWrite {
 		t.Errorf("switch --create = %v, want tierWrite", got)
 	}
-	if got := classifyGit("switch", []string{"--force-create", "feature"}); got != tierWrite {
-		t.Errorf("switch --force-create = %v, want tierWrite", got)
+	if got := classifyGit("switch", []string{"--force-create", "feature"}); got != tierDestructive {
+		t.Errorf("switch --force-create = %v, want tierDestructive", got)
 	}
 	if got := classifyGit("switch", []string{"--create", "feature", "--discard-changes"}); got != tierDestructive {
 		t.Errorf("switch --create --discard-changes = %v, want tierDestructive", got)
