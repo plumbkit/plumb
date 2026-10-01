@@ -145,7 +145,7 @@ func TestIdentityProbe_NoDaemonStampsNothingAndCachesNothing(t *testing.T) {
 
 // An identity-keys probe that fails on I/O is "no" for this call (the safe
 // key) but is not cached, so the next call asks again rather than stripping
-// the desktop connector's stamps for a minute.
+// the desktop connector's stamps for the whole TTL.
 func TestIdentityProbe_TransientKeysFailureIsNotCached(t *testing.T) {
 	probeTestEnv(t)
 	fakeCtrlDaemon(t, func(c net.Conn, line string) {
@@ -181,12 +181,12 @@ func writePIDFile(t *testing.T, pid string) {
 	}
 }
 
-// TestIdentityProbe_DaemonSwappedInsideTheMinuteIsReprobed is #532's
+// TestIdentityProbe_DaemonSwappedInsideTheTTLIsReprobed is #532's
 // reproduction through the real probe: the cache holds a current daemon's
-// "plumb_agent is fine", the daemon is replaced inside the minute by an older
+// "plumb_agent is fine", the daemon is replaced inside the TTL by an older
 // build that does not lift it, and the next call must ask the new daemon
 // rather than stamp a key it rejects as an unknown parameter.
-func TestIdentityProbe_DaemonSwappedInsideTheMinuteIsReprobed(t *testing.T) {
+func TestIdentityProbe_DaemonSwappedInsideTheTTLIsReprobed(t *testing.T) {
 	probeTestEnv(t)
 	writePIDFile(t, "4101")
 	fakeCtrlDaemon(t, currentDaemon("0.21.0"))
@@ -324,7 +324,7 @@ func TestDaemonIdentity_CacheIsKeyedOnTheInstance(t *testing.T) {
 	writeIdentityProbe(cache, identityProbeRecord{DaemonVersion: "0.21.0", DeclaredKey: true, DaemonInstance: "A", CheckedAt: now})
 
 	if rec := daemonIdentity(older, "A", cache, now.Add(10*time.Second)); !rec.DeclaredKey || probes != 0 {
-		t.Fatalf("control: the same instance inside the minute must hit: %+v, probes=%d", rec, probes)
+		t.Fatalf("control: the same instance inside the TTL must hit: %+v, probes=%d", rec, probes)
 	}
 	if rec := daemonIdentity(older, "B", cache, now.Add(20*time.Second)); rec.DeclaredKey || probes != 1 {
 		t.Fatalf("another instance must re-probe: %+v, probes=%d", rec, probes)

@@ -67,6 +67,27 @@
   HTTPS credential prompt fails instead of waiting. These replace a value the
   daemon inherited, which is usually your interactive editor; a value set
   under `[git] env` is still used as is. (#544)
+- **The Claude Code identity hook stamps from its cached answer when the daemon
+  probe fails, and fails less often.** (#556) The hook gates every stamp on a
+  probe of the daemon's control socket, and any probe failure was an answer of
+  "unknown", so the call went out unstamped, and on a shared connection an
+  unstamped write is refused as having no logical-agent identity. The probe
+  fails when the machine is busiest: with 200 hooks running at once under CPU
+  saturation, 11 got no stamp. A failed probe now serves the cached answer when
+  it was written for the same daemon instance (the PID file and control socket
+  the cache is already keyed on), however old it is, and never one written for a
+  different instance, so a swapped daemon is still caught. A probe that learned
+  the version but could not learn the keys yields to such a record too. The
+  probe is one dial of a second per phase, not two of 300 ms: the daemon's
+  `identity-keys` reply now carries its version, so a current daemon needs one
+  ask (an older daemon is asked `version` separately, as before), and the whole
+  probe is capped at three seconds, well inside the hook's five. The cache is
+  kept ten minutes, not one, so the first call after a pause is no longer a cold
+  probe. A plumb call the hook leaves unstamped now writes one line to stderr
+  with the reason, the tool and its `tool_use_id` (Claude Code shows it in debug
+  output), so a hook miss can be told from Claude Code never running the hook.
+  The shared-connection refusal for a call with no identity now says to retry
+  once, since with the hook installed that is usually all it takes.
 - **`read_file` and `read_symbol` keep blank lines at the edges of what they
   return.** A `read_file` window whose first line was blank dropped it, so
   every later line was labelled one line too low and the header under-counted
@@ -433,6 +454,18 @@
   overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
   file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
   naming the `go.work` when it applies (#521).
+- **`edit_file` range mode no longer glues a replacement onto the next line.**
+  A range edit (`start_line`/`end_line`) whose non-empty `new_string` had no
+  trailing newline was joined onto the line after the range, while an empty
+  `new_string` deleted its lines cleanly. Replacing one line with two this way
+  silently merged the second new line with the next one and broke the build.
+  Range mode now works in whole lines: a missing trailing newline is added,
+  using the line ending of the text replaced, so a CRLF file stays CRLF. A range
+  that runs to the end of a file with no final newline, and an append
+  (`start_line: -1`) to such a file, keep the file without one. Appending to a
+  file that ends with a newline now leaves it ending with one, and the separator
+  added before appending to a CRLF file with no final newline is `\r\n`. The same
+  applies with `apply_partial`. (#543)
 - **The first agent to call after a daemon restart runs on its own restored pin
   and read tracker.** (#523) On a connection shared by several agents, the
   identities the daemon has seen start empty after a restart, so the first
