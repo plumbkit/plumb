@@ -104,6 +104,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.execTrusted = execTrusted
 		v.projectCommands = projectCommands
 		v.projectGit = projectGit
+		v.configRoot = workspace
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}

@@ -71,6 +71,11 @@ func runArgv(ctx context.Context, workdir string, argv, env []string, timeout ti
 	if len(argv) == 0 {
 		return ExecResult{}, errors.New("run task: empty command")
 	}
+	// Before exec, not after: os/exec reports a missing cmd.Dir as the BINARY
+	// missing (see WorkingDirError).
+	if err := checkWorkingDir(workdir); err != nil {
+		return ExecResult{}, err
+	}
 	if timeout <= 0 {
 		timeout = defaultTaskTimeout
 	}
