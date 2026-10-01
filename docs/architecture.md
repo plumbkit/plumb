@@ -384,12 +384,7 @@ singleton has always had — `plumb.daemon.lock` lives *in* the runtime dir, so 
 has only ever guaranteed one daemon per directory.
 
 XDG: `XDG_DATA_HOME` (sessions and stats) and `XDG_CONFIG_HOME` (config) are
-respected when set. `PLUMB_SESSIONS_DIR`, set to an absolute path, moves only the
-session registry and its `.sessions.lock`, and outranks `XDG_DATA_HOME` for it;
-plumb's own test binaries use it to stay off the user's live registry. Set it for
-every plumb process (daemon, CLI, hooks) or for none: a process that does not see
-it uses the default registry, so the daemon and the CLI would then disagree about
-which sessions exist.
+respected when set.
 
 plumb resolves these locations through `internal/paths`, which delegates to
 `github.com/adrg/xdg` for config/data/state/cache. The daemon log is the sole

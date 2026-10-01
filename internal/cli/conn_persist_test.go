@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
@@ -531,8 +530,6 @@ func TestUnregisteredSession_HasNoMailboxAddress(t *testing.T) {
 		t.Fatalf("seeding the blocker file: %v", err)
 	}
 	t.Setenv("XDG_DATA_HOME", blocker)
-	// Clear TestMain's registry override so the blocker above governs.
-	t.Setenv(session.DirEnv, "")
 
 	s := newConnSession(context.Background(), detectTestPool(), nil,
 		config.NewStore(config.Defaults()), nil, nil, newSharedBudgets())

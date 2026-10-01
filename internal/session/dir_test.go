@@ -12,23 +12,16 @@ import (
 	"github.com/plumbkit/plumb/internal/session"
 )
 
-// TestDir_HonoursSessionsDirOverride pins that PLUMB_SESSIONS_DIR moves the
-// whole registry — the session files AND the .sessions.lock flock — and that
-// XDG_DATA_HOME's location is left untouched while it is set. The positive
-// control clears the override and confirms the same process then resolves to
-// the XDG location, so the first half cannot pass because Dir ignored both.
-func TestDir_HonoursSessionsDirOverride(t *testing.T) {
-	override := t.TempDir()
+// TestDir_FollowsXDGDataHome pins that the whole registry — the session files
+// AND the .sessions.lock flock — lives under XDG_DATA_HOME, which is what lets a
+// test (or a TestMain) move it off the user's real data directory.
+func TestDir_FollowsXDGDataHome(t *testing.T) {
 	xdgData := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", xdgData)
-	t.Setenv(session.DirEnv, override)
 
-	dir, err := session.Dir()
-	if err != nil {
-		t.Fatalf("Dir: %v", err)
-	}
-	if dir != override {
-		t.Fatalf("Dir() = %q, want the override %q", dir, override)
+	want := filepath.Join(xdgData, "plumb", "sessions")
+	if dir, err := session.Dir(); err != nil || dir != want {
+		t.Fatalf("Dir() = %q, %v; want %q", dir, err, want)
 	}
 
 	id, err := registerID(session.Info{Folder: "/tmp/x", Adapter: "gopls"})
@@ -36,58 +29,38 @@ func TestDir_HonoursSessionsDirOverride(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 	for _, name := range []string{id + ".json", ".sessions.lock"} {
-		if _, err := os.Stat(filepath.Join(override, name)); err != nil {
-			t.Errorf("%s not in the override dir: %v", name, err)
+		if _, err := os.Stat(filepath.Join(want, name)); err != nil {
+			t.Errorf("%s not under XDG_DATA_HOME: %v", name, err)
 		}
-	}
-	xdgSessions := filepath.Join(xdgData, "plumb", "sessions")
-	if _, err := os.Stat(xdgSessions); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("XDG sessions dir %s was touched while the override was set (stat err %v)", xdgSessions, err)
-	}
-
-	// Positive control: without the override the same process resolves to XDG.
-	t.Setenv(session.DirEnv, "")
-	if dir, _ := session.Dir(); dir != xdgSessions {
-		t.Fatalf("with the override cleared Dir() = %q, want %q", dir, xdgSessions)
-	}
-}
-
-// TestDir_IgnoresRelativeOverride pins that a relative PLUMB_SESSIONS_DIR is
-// ignored: the daemon and the CLI have different working directories, so
-// honouring it would split the registry in two.
-func TestDir_IgnoresRelativeOverride(t *testing.T) {
-	xdgData := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", xdgData)
-	t.Setenv(session.DirEnv, filepath.Join("relative", "sessions"))
-
-	want := filepath.Join(xdgData, "plumb", "sessions")
-	if dir, _ := session.Dir(); dir != want {
-		t.Fatalf("Dir() = %q, want the XDG default %q", dir, want)
 	}
 }
 
 // TestDir_RefusesLiveRegistryInTestBinary is the guard for #551: a test binary
 // that resolves the registry to the one its start-up environment's daemon uses
-// must be refused instead of taking the real flock. Both ways in are covered —
-// a test that moved nothing (override cleared, XDG as at start-up) and an
-// override pointing straight at the live directory. Only Dir is called, so a
-// broken guard returns a path and fails the test without touching it.
+// must be refused instead of taking the real flock. Two ways in are covered — a
+// test that moved nothing, and one whose XDG_DATA_HOME is relative, which the
+// XDG spec has implementations ignore, so the real default comes back. Only Dir
+// is called, so a broken guard returns a path and fails the test without
+// touching it.
 //
 // The default refusal ends the process, so this swaps it for a recorder; what
 // that default does is TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers.
 func TestDir_RefusesLiveRegistryInTestBinary(t *testing.T) {
-	live := session.LiveDirsForTest()
-	if len(live) == 0 {
-		t.Fatal("no live registry dirs recorded in a test binary; the guard is disarmed")
+	live := session.LiveDirForTest()
+	if live == "" {
+		t.Fatal("no live registry dir recorded in a test binary; the guard is disarmed")
 	}
-	// Each case is the PLUMB_SESSIONS_DIR value the test runs with.
-	cases := map[string]string{
-		"nothing moved":            "",
-		"override at the live dir": live[0],
+	// Each case is a mistake a test could make; neither moves the data dir off
+	// the live registry. The value is the XDG_DATA_HOME to set, if any.
+	cases := map[string]*string{
+		"nothing moved":          nil,
+		"relative XDG_DATA_HOME": ptr(filepath.Join("relative", "data")),
 	}
-	for name, override := range cases {
+	for name, xdg := range cases {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv(session.DirEnv, override)
+			if xdg != nil {
+				t.Setenv("XDG_DATA_HOME", *xdg)
+			}
 			var refused error
 			session.SetRefuseLiveRegistryForTest(t, func(err error) { refused = err })
 			got := func() (r any) {
@@ -99,8 +72,8 @@ func TestDir_RefusesLiveRegistryInTestBinary(t *testing.T) {
 			if refused == nil {
 				t.Fatal("the guard did not refuse the live registry")
 			}
-			if !strings.Contains(refused.Error(), session.DirEnv) || !strings.Contains(refused.Error(), live[0]) {
-				t.Errorf("the refusal should name the live dir and %s: %v", session.DirEnv, refused)
+			if !strings.Contains(refused.Error(), "XDG_DATA_HOME") || !strings.Contains(refused.Error(), live) {
+				t.Errorf("the refusal should name the live dir and XDG_DATA_HOME: %v", refused)
 			}
 			// A refusal that returns must still not hand the live dir back.
 			if _, ok := got.(error); !ok {
@@ -109,13 +82,15 @@ func TestDir_RefusesLiveRegistryInTestBinary(t *testing.T) {
 		})
 	}
 
-	// Positive control: an isolated registry resolves without panicking.
+	// Positive control: an isolated data dir resolves without a refusal.
 	isolated := t.TempDir()
-	t.Setenv(session.DirEnv, isolated)
-	if dir, _ := session.Dir(); dir != isolated {
-		t.Fatalf("Dir() = %q, want %q", dir, isolated)
+	t.Setenv("XDG_DATA_HOME", isolated)
+	if dir, _ := session.Dir(); dir != filepath.Join(isolated, "plumb", "sessions") {
+		t.Fatalf("Dir() = %q, want the registry under %q", dir, isolated)
 	}
 }
+
+func ptr(s string) *string { return &s }
 
 // TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers pins the guard's
 // default. The daemon's own recover() sites — the MCP dispatch and the
@@ -139,7 +114,7 @@ func TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers(t *testing.T) {
 	}
 
 	cmd := exec.Command(os.Args[0], "-test.run=^TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers$", "-test.count=1")
-	cmd.Env = append(os.Environ(), childEnv+"=1", session.DirEnv+"=")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
 	out, err := cmd.CombinedOutput()
 
 	var exit *exec.ExitError
@@ -149,27 +124,27 @@ func TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers(t *testing.T) {
 	if strings.Contains(string(out), "CHILD-SURVIVED-THE-GUARD") {
 		t.Errorf("the child got past a recovered call to Dir; output:\n%s", out)
 	}
-	if !strings.Contains(string(out), session.DirEnv) {
-		t.Errorf("the refusal should name %s so the fix is clear; output:\n%s", session.DirEnv, out)
+	if !strings.Contains(string(out), "XDG_DATA_HOME") {
+		t.Errorf("the refusal should name XDG_DATA_HOME so the fix is clear; output:\n%s", out)
 	}
 }
 
 // TestIsolationError_NeverFiresOutsideTestBinaries pins the production branch:
 // with testBinary false the guard returns nil even for the live directory, so
-// it cannot fire in a real plumb process. liveDirs is also nil there, which
+// it cannot fire in a real plumb process. liveDir is also empty there, which
 // TestDir_RefusesLiveRegistryInTestBinary's non-empty check contrasts.
 func TestIsolationError_NeverFiresOutsideTestBinaries(t *testing.T) {
-	live := []string{"/home/u/.local/share/plumb/sessions"}
-	if err := session.IsolationErrorForTest(live[0], false, live); err != nil {
+	const live = "/home/u/.local/share/plumb/sessions"
+	if err := session.IsolationErrorForTest(live, false, live); err != nil {
 		t.Errorf("production (testBinary=false): got %v, want nil", err)
 	}
-	if err := session.IsolationErrorForTest(live[0], true, nil); err != nil {
-		t.Errorf("no live dirs recorded: got %v, want nil", err)
+	if err := session.IsolationErrorForTest(live, true, ""); err != nil {
+		t.Errorf("no live dir recorded: got %v, want nil", err)
 	}
 	if err := session.IsolationErrorForTest("/tmp/isolated", true, live); err != nil {
 		t.Errorf("isolated dir in a test binary: got %v, want nil", err)
 	}
-	if err := session.IsolationErrorForTest(live[0], true, live); err == nil {
+	if err := session.IsolationErrorForTest(live, true, live); err == nil {
 		t.Error("live dir in a test binary: got nil, want an error")
 	}
 }

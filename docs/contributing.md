@@ -89,12 +89,12 @@ registry that the binary's start-up environment points at, which is the
 developer's own daemon's. It exits rather than panics because the daemon's
 `recover()` sites would swallow a panic and let the test pass. Every package
 whose tests reach the registry, directly or through daemon, connection, hook, TUI
-or web code, has a `TestMain` (`session_isolation_main_test.go`) that sets
-`PLUMB_SESSIONS_DIR` to a temporary directory for the whole binary. That
-directory is shared, and `PLUMB_SESSIONS_DIR` outranks `XDG_DATA_HOME`, so a
-test's own `t.Setenv("XDG_DATA_HOME", ...)` does not give it a registry of its
-own there; a test that needs an empty one sets
-`t.Setenv(session.DirEnv, t.TempDir())`.
+or web code, has a `TestMain` (`session_isolation_main_test.go`) that points
+`XDG_DATA_HOME` at a temporary directory for the whole binary. A test that needs
+a registry of its own sets `t.Setenv("XDG_DATA_HOME", t.TempDir())` as usual,
+which wins over `TestMain`'s. Do not add an override that outranks it: one
+directory shared by every test lets a session another test left live hold a
+name this one asks for.
 
 **Coverage and vulnerability checks are deliberately separate from `verify`.**
 Coverage re-runs the whole suite instrumented and vulnerability scanning needs
