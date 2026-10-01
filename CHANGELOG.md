@@ -77,7 +77,14 @@
   classified a tier BELOW the operation git performed. They now match git's
   unambiguous-prefix rule, unpack bundles and consume option values, and a
   `--staged` after `--` or given as another option's value no longer lowers
-  `restore` to the write tier. (#530)
+  `restore` to the write tier. The checks that LOWER a tier now honour what
+  cancels them: `--end-of-options` ends options as `--` does, a later
+  `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
+  counts as branch list mode, so `branch -fv side main` cannot force-move a
+  branch at the read tier. `switch -C`, `checkout -B`, `branch -f` and `tag -f`,
+  which move or replace an existing ref like `reset --keep`, are now
+  destructive, and branch's upstream and description options are writes.
+  (#530)
 - **Plumb's own git operations are no longer reported as a peer's edits.** After
   a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
   the next `read_file` of a file plumb had written warned that "a peer or

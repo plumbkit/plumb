@@ -921,15 +921,20 @@ abbreviated long options (`--disc` is `--discard-changes`), bundled short flags
 (`-dr`) and option values (`tag -m -d` is a message) all count as git counts
 them.
 
-- `checkout -b`/`-B` (branch creation) is **write**; any other `checkout` is
-  **destructive** (it can discard the working tree or detach HEAD). Prefer
-  `switch` for safe branch changes.
-- `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
-  **destructive**.
+- `checkout -b` (branch creation) is **write**; any other `checkout` is
+  **destructive** (it can discard the working tree or detach HEAD), including
+  `-B`, which resets an existing branch, and `-b` with `-f`. Prefer `switch`
+  for safe branch changes.
+- `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` and
+  `-C`/`--force-create` (which resets an existing branch) are **destructive**.
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
-- `branch`/`tag`: creating or renaming is **write**, `--delete`/`-d`/`-D` is
-  **destructive**, and `--list`/`-a`/`-r`/… is **read**.
+- `branch`/`tag`: creating or renaming is **write**, as are branch's upstream
+  and description options; `--delete`/`-d`/`-D` and `-f`/`--force` (which
+  moves or replaces an existing ref) are **destructive**; list mode
+  (`--list`/`-a`/`-r`/`--contains`/…, or no arguments) is **read**, and a later
+  `--no-list` cancels it. `-v` alone does not list once a name is given.
+- `--end-of-options` ends option parsing exactly as `--` does.
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.
