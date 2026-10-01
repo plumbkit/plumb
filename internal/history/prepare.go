@@ -14,8 +14,6 @@ type Policy struct {
 }
 
 // binarySniffBytes matches internal/tools/walk.go (the ripgrep/git heuristic).
-//
-//nolint:unused // consumed by writer in Task 7
 const binarySniffBytes = 8000
 
 // Prepare classifies it inline, on the caller's goroutine, so withheld content
@@ -72,7 +70,6 @@ func MatchSensitive(globs []string, root, path string) bool {
 	return false
 }
 
-//nolint:unused // consumed by writer in Task 7
 func isBinary(b []byte) bool {
 	return bytes.IndexByte(b[:min(len(b), binarySniffBytes)], 0) >= 0
 }
