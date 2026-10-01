@@ -63,7 +63,8 @@ func TestStickyPin_ForceOverrides(t *testing.T) {
 		t.Fatalf("first explicit pin: %v", err)
 	}
 
-	root, err := s.repinWorkspace(context.Background(), rootB, "", true, false)
+	rootRep, err := s.repinWorkspace(context.Background(), rootB, "", true, false)
+	root := rootRep.Root
 	if err != nil {
 		t.Fatalf("force: true must override the sticky-pin guard: %v", err)
 	}
@@ -178,7 +179,8 @@ func TestStickyPin_SameRootAndSubdirNotRefused(t *testing.T) {
 	if _, err := s.repinWorkspace(context.Background(), root, "", false, false); err != nil {
 		t.Fatalf("same-root re-pin refused: %v", err)
 	}
-	resolved, err := s.repinWorkspace(context.Background(), sub, "", false, false)
+	resolvedRep, err := s.repinWorkspace(context.Background(), sub, "", false, false)
+	resolved := resolvedRep.Root
 	if err != nil {
 		t.Fatalf("subdir re-pin refused: %v", err)
 	}
