@@ -36,8 +36,9 @@ func TestDocCommentStartColumnAgreement(t *testing.T) {
 
 	// Line 2 (0-based) is `    def run(self):` — the indented member.
 	lineScan := docCommentStart(path, protocol.Position{Line: 2})
+	run := &protocol.DocumentSymbol{Name: "run", Range: protocol.Range{Start: protocol.Position{Line: 2, Character: 4}}}
 	topo, ok := topologyDocCommentStart(context.Background(),
-		func() *topology.Store { return store }, "file://"+path, "run")
+		func() *topology.Store { return store }, "file://"+path, run)
 	if !ok {
 		t.Fatal("topology path should resolve a doc span for the indented method")
 	}

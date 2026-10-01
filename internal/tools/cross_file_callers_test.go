@@ -36,7 +36,7 @@ func TestLSPCrossFileCallers_RelativePathAndFiltering(t *testing.T) {
 	}
 
 	// Relative centre path, exactly as topology stores it.
-	sites := fn(context.Background(), "internal/paths/paths.go", "RecoveredHijacks")
+	sites := fn(context.Background(), "internal/paths/paths.go", "RecoveredHijacks", 0, 0)
 
 	// The LSP must be queried with an ABSOLUTE file URI, not the relative path.
 	if want := "file:///ws/internal/paths/paths.go"; mock.lastRefURI != want {
@@ -68,7 +68,7 @@ func TestLSPCrossFileCallers_NilClient(t *testing.T) {
 func TestLSPCrossFileCallers_UnknownSymbol(t *testing.T) {
 	mock := &mockLSP{docSymbols: symbolWithKeywordRange("Other")}
 	fn := tools.NewLSPCrossFileCallers(mock, nil, time.Minute, 0, func() string { return "/ws" })
-	if sites := fn(context.Background(), "internal/paths/paths.go", "Missing"); sites != nil {
+	if sites := fn(context.Background(), "internal/paths/paths.go", "Missing", 0, 0); sites != nil {
 		t.Errorf("expected nil for an unknown symbol, got %+v", sites)
 	}
 }

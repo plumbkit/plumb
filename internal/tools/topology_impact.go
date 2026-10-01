@@ -250,7 +250,7 @@ func (t *TopologyImpact) crossFileCallers(ctx context.Context, result *topology.
 	}
 	switch string(result.Centre.Kind) {
 	case "function", "method", "test":
-		return t.callersFn(ctx, result.Centre.Path, result.Centre.Name)
+		return t.callersFn(ctx, result.Centre.Path, result.Centre.Name, result.Centre.StartLine, result.Centre.EndLine)
 	default:
 		return nil
 	}
