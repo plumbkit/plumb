@@ -268,9 +268,9 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPinProvenance(s.pinProvenance).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
-		WithLSPWarmup(s.lspWarming).
-		WithLSPDiagMode(s.lspDiagMode).
-		WithLSPGoWorkOff(s.lspGoWorkOff).
+		WithLSPWarmup(s.lspWarmingIn).
+		WithLSPDiagMode(s.lspDiagModeIn).
+		WithLSPGoWorkOff(s.lspGoWorkOffIn).
 		WithXcodeHint(xcodeHintFn).
 		WithTasks(s.taskState).
 		WithProjectPolicy(s.projectGitStatus).

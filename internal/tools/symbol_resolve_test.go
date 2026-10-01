@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -95,6 +96,38 @@ func TestResolveSymbolsByName_StripsArgList(t *testing.T) {
 		}
 		if len(got) != 1 || got[0].Name != c.want {
 			t.Errorf("%q: got %v, want [%s]", c.query, docSymNames(got), c.want)
+		}
+	}
+}
+
+// TestResolveSymbolsByName_PlainGoMethodName covers issue #546: a plain method
+// name matches gopls' flat "(*Recv).Method" symbols, the way it already
+// matches a nested method at any depth. A name shared by a function and
+// methods matches every one of them, in document order — never one silently.
+func TestResolveSymbolsByName_PlainGoMethodName(t *testing.T) {
+	syms := []protocol.DocumentSymbol{
+		{Name: "WriteTracker", Kind: protocol.SKStruct, Children: []protocol.DocumentSymbol{
+			{Name: "mtimes", Kind: protocol.SKField},
+		}},
+		{Name: "(*WriteTracker).WroteMtime", Kind: protocol.SKMethod},
+		{Name: "(*WriteTracker).Close", Kind: protocol.SKMethod},
+		{Name: "Close", Kind: protocol.SKFunction},
+		{Name: "(ReadTracker).Close", Kind: protocol.SKMethod},
+	}
+	cases := []struct {
+		query string
+		want  []string
+	}{
+		{"WroteMtime", []string{"(*WriteTracker).WroteMtime"}},
+		{"Close", []string{"(*WriteTracker).Close", "Close", "(ReadTracker).Close"}},
+		{"mtimes", []string{"mtimes"}},
+		{"Wrote", nil},                             // exact method name only, never a prefix
+		{"WriteTracker", []string{"WriteTracker"}}, // the receiver is not its methods
+	}
+	for _, c := range cases {
+		got := docSymNames(resolveSymbolsByName(syms, c.query))
+		if strings.Join(got, ",") != strings.Join(c.want, ",") {
+			t.Errorf("%q: got %v, want %v", c.query, got, c.want)
 		}
 	}
 }

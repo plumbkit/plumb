@@ -33,63 +33,69 @@ func (t *SessionStart) lspRouted() []string {
 	return t.lspRoutedFn()
 }
 
-// WithLSPWarmup wires an accessor reporting whether the session's primary
-// language server is still warming (handshake incomplete) and for how long. When
-// it reports warming, session_start softens "LSP is ready" into a warming
-// advisory that steers the agent to topology/workspace_symbols meanwhile. Nil-safe:
-// unset means never warming. Returns the receiver for chaining.
-func (t *SessionStart) WithLSPWarmup(fn func() (bool, time.Duration)) *SessionStart {
+// The three accessors below take the workspace session_start resolved for the
+// CALLER (the per-agent pin), not the connection's: on a shared connection a
+// subagent pinned to a worktree is served by that worktree's language server,
+// and describing the connection primary's server instead told it the wrong
+// GOWORK, warm-up state and diagnostics mode (issue #546).
+
+// WithLSPWarmup wires an accessor reporting whether the language server serving
+// the caller's workspace is still warming (handshake incomplete) and for how
+// long. When it reports warming, session_start softens "LSP is ready" into a
+// warming advisory that steers the agent to topology/workspace_symbols meanwhile.
+// Nil-safe: unset means never warming. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPWarmup(fn func(ws string) (bool, time.Duration)) *SessionStart {
 	t.lspWarmingFn = fn
 	return t
 }
 
-// lspWarming reports the primary LSP warm-up state, or (false, 0) when no
-// accessor is wired.
-func (t *SessionStart) lspWarming() (bool, time.Duration) {
+// lspWarming reports the warm-up state of the server serving ws, or (false, 0)
+// when no accessor is wired.
+func (t *SessionStart) lspWarming(ws string) (bool, time.Duration) {
 	if t.lspWarmingFn == nil {
 		return false, 0
 	}
-	return t.lspWarmingFn()
+	return t.lspWarmingFn(ws)
 }
 
-// WithLSPDiagMode wires an accessor for the resolved diagnostics mode of this
-// session's primary language server (push / pull / hybrid /
+// WithLSPDiagMode wires an accessor for the resolved diagnostics mode of the
+// language server serving the caller's workspace (push / pull / hybrid /
 // pull-requested-but-unavailable). session_start surfaces a non-default mode on
-// the "LSP is ready" line so an agent knows the connection negotiated something
+// the "LSP is ready" line so an agent knows the server negotiated something
 // other than the push default. Nil-safe: unset ⇒ the mode is never shown.
 // Returns the receiver for chaining.
-func (t *SessionStart) WithLSPDiagMode(fn func() string) *SessionStart {
+func (t *SessionStart) WithLSPDiagMode(fn func(ws string) string) *SessionStart {
 	t.lspDiagModeFn = fn
 	return t
 }
 
-// lspDiagMode returns the primary LSP's resolved diagnostics mode, or "" when no
-// accessor is wired.
-func (t *SessionStart) lspDiagMode() string {
+// lspDiagMode returns the diagnostics mode of the server serving ws, or "" when
+// no accessor is wired.
+func (t *SessionStart) lspDiagMode(ws string) string {
 	if t.lspDiagModeFn == nil {
 		return ""
 	}
-	return t.lspDiagModeFn()
+	return t.lspDiagModeFn(ws)
 }
 
-// WithLSPGoWorkOff wires an accessor for the go.work the session's primary
-// language server was started with GOWORK=off against ("" when its environment
-// was left alone). session_start names it in the identity block: an agent in a
-// worktree otherwise has no way to tell why the server answers about the
-// worktree while `go` in its own shell, under the same go.work, does not (#521).
-// Nil-safe. Returns the receiver for chaining.
-func (t *SessionStart) WithLSPGoWorkOff(fn func() string) *SessionStart {
+// WithLSPGoWorkOff wires an accessor for the go.work the language server serving
+// the caller's workspace was started with GOWORK=off against ("" when its
+// environment was left alone). session_start names it in the identity block: an
+// agent in a worktree otherwise has no way to tell why the server answers about
+// the worktree while `go` in its own shell, under the same go.work, does not
+// (#521). Nil-safe. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPGoWorkOff(fn func(ws string) string) *SessionStart {
 	t.lspGoWorkFn = fn
 	return t
 }
 
 // lspGoWorkNote renders the GOWORK=off identity line, ending in a newline, or
-// "" when the primary server runs with the environment it inherited.
-func (t *SessionStart) lspGoWorkNote() string {
+// "" when the server serving ws runs with the environment it inherited.
+func (t *SessionStart) lspGoWorkNote(ws string) string {
 	if t.lspGoWorkFn == nil {
 		return ""
 	}
-	work := t.lspGoWorkFn()
+	work := t.lspGoWorkFn(ws)
 	if work == "" {
 		return ""
 	}

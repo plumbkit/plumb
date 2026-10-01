@@ -35,6 +35,10 @@ These apply across many tools:
   `character`) or a symbol name (`symbol_name` / `name`, plain or dotted
   `ReceiverType.MethodName`). Prefer names when available; plumb resolves them
   to the identifier's `SelectionRange.Start` and avoids hand-computed positions.
+  A plain name matches a method at any depth, Go methods included (gopls names
+  them `(*Recv).Method`). A name several symbols share is never resolved to one
+  silently: the read-only tools answer for every match, and `rename_symbol`
+  refuses with the `Receiver.Method` names that single each one out.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.

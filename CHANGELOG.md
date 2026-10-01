@@ -39,6 +39,34 @@
 
 ### Fixed
 
+- **`find_references` and `get_definition` resolve a plain Go method name.**
+  (#546) gopls reports a method as `(*WriteTracker).WroteMtime`, so
+  `symbol_name: "WroteMtime"` answered "No symbol named" from both tools, while
+  `read_symbol` found it through its tree-sitter fallback. The shared resolver
+  now matches a plain name against a Go method's own name, the way it already
+  matched a nested method, so every tool that takes a symbol name resolves it
+  alike. A name several symbols share is never resolved to one silently:
+  `find_references`, `get_definition`, `read_symbol` and the hierarchies answer
+  for each match, `rename_symbol` refuses with the `Receiver.Method` names that
+  single each one out, `move_symbol` refuses as ambiguous, and
+  `topology_impact`'s cross-file callers report nothing rather than another
+  receiver's callers.
+- **The brief `session_start` keeps its `Git:` line on a detached HEAD.**
+  (#546) Both packets keyed the branch line and the git-policy section on a
+  branch name, so a detached HEAD, the standard setup for a review worktree,
+  dropped both. They now show `Branch: detached at <short sha>` and the policy.
+- **`session_start` describes the calling agent's own language server.** (#546)
+  The `Go LSP: runs with GOWORK=off` line, the warm-up advisory and the
+  diagnostics mode read the connection's primary server, so on a shared
+  connection a subagent pinned to a worktree was not told its server runs with
+  `GOWORK=off`, and one on the main checkout was told it did. They now describe
+  the server serving the workspace `session_start` resolved for the caller.
+  `daemon_info` still reports the connection's own server.
+- **docs: a `go.work` edit reaches the Go language server only after `plumb
+  restart`.** (#546) The `GOWORK=off` decision is made once per server start,
+  and docs/configuration.md now says so. The paragraph moved to its own
+  `[lsp.<language>]` subsection, so it no longer sits between the `[git] env`
+  text and the note on how project entries compose with global ones.
 - **A daemon restart no longer deletes a long-lived session's pins and read
   records.** The daemon pruned persisted session state older than
   `[session] persist_state_ttl_minutes` (24h by default) at start-up, before

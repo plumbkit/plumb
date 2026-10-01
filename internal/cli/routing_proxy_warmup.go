@@ -65,15 +65,53 @@ func (r *routingProxy) DiagMode(uri string) string {
 	return r.pool.diagModeFor(root, language)
 }
 
-// GoWorkOff reports the go.work the connection's primary language server was
-// started with GOWORK=off against (goLSPEnv), or "" when it runs with the
-// environment it inherited or nothing is pooled. Resolution-only, like DiagMode.
-func (r *routingProxy) GoWorkOff() string {
-	root, language := r.warmupTarget("")
+// GoWorkOff reports the go.work the language server serving the workspace ws
+// (the connection's primary, when ws is empty) was started with GOWORK=off
+// against (goLSPEnv), or "" when it runs with the environment it inherited or
+// nothing is pooled. Resolution-only, like DiagMode.
+func (r *routingProxy) GoWorkOff(ws string) string {
+	root, language := r.workspaceTarget(ws)
 	if root == "" || language == "" || language == LanguageNone {
 		return ""
 	}
 	return r.pool.goWorkOffFor(root, language)
+}
+
+// WorkspaceWarmup is WarmupStatus for the server serving the workspace ws
+// rather than one file: what session_start reports for an agent pinned away
+// from the connection's root (issue #546).
+func (r *routingProxy) WorkspaceWarmup(ws string) (warming bool, elapsed time.Duration) {
+	root, language := r.workspaceTarget(ws)
+	if root == "" || language == "" || language == LanguageNone {
+		return false, 0
+	}
+	return r.pool.warmupFor(root, language)
+}
+
+// WorkspaceDiagMode is DiagMode for the server serving the workspace ws, the
+// counterpart of WorkspaceWarmup.
+func (r *routingProxy) WorkspaceDiagMode(ws string) string {
+	root, language := r.workspaceTarget(ws)
+	if root == "" || language == "" || language == LanguageNone {
+		return ""
+	}
+	return r.pool.diagModeFor(root, language)
+}
+
+// workspaceTarget resolves the (root, language) of the server serving the
+// workspace ws: what detection gives ws, which is the key route() gives that
+// workspace's own files, or the connection primary when ws is empty. Unlike
+// warmupTarget it never falls back to the primary for a ws that does not
+// resolve: another workspace's server is the wrong answer about this one.
+func (r *routingProxy) workspaceTarget(ws string) (root, language string) {
+	if ws == "" {
+		return r.warmupTarget("")
+	}
+	root, language, err := r.pool.Detect(ws)
+	if err != nil {
+		return "", ""
+	}
+	return root, language
 }
 
 // warmupTarget resolves the (root, language) WarmupStatus inspects for uri: the

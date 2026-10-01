@@ -234,7 +234,7 @@ func TestRecommendedStart_LastResortSearch(t *testing.T) {
 			toolProfile:  func() (string, int, string) { return "full", 0, "test" },
 		}
 		var sb strings.Builder
-		s.writeSessionRecommendedStart(&sb, false, lang, lspKey)
+		s.writeSessionRecommendedStart(&sb, "/ws", false, lang, lspKey)
 		return sb.String()
 	}
 	routed := func(client string) string {
@@ -243,7 +243,7 @@ func TestRecommendedStart_LastResortSearch(t *testing.T) {
 			toolProfile:  func() (string, int, string) { return "full", 0, "test" },
 		}).WithLSPRouted(func() []string { return []string{"go"} })
 		var sb strings.Builder
-		s.writeSessionRecommendedStart(&sb, false, "", "")
+		s.writeSessionRecommendedStart(&sb, "/ws", false, "", "")
 		return sb.String()
 	}
 

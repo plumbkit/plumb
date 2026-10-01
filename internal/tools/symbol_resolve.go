@@ -35,7 +35,10 @@ func symbolNameMatches(symName, query string) bool {
 // tree-sitter extractors), and the flat shape, where the method is a top-level
 // symbol named "(*Recv).Method" or "(Recv).Method" (gopls' Go output — methods
 // are never nested under the receiver type). For plain names it matches at any
-// depth.
+// depth, and a flat Go method by its method name, so "WroteMtime" resolves
+// "(*WriteTracker).WroteMtime" just as a plain name resolves a nested method
+// (issue #546). A name several symbols share matches all of them, in document
+// order: each caller lists them or refuses, and never picks one.
 func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protocol.DocumentSymbol {
 	if parent, child, ok := strings.Cut(name, "."); ok {
 		parentType := goReceiverType(parent)
@@ -59,6 +62,8 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 	walk = func(ss []protocol.DocumentSymbol) {
 		for _, s := range ss {
 			if symbolNameMatches(s.Name, name) {
+				out = append(out, s)
+			} else if _, method, ok := goMethodReceiver(s.Name); ok && method == name {
 				out = append(out, s)
 			}
 			walk(s.Children)

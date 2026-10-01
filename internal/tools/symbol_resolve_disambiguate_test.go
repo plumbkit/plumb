@@ -39,12 +39,11 @@ func assertRoundTrips(t *testing.T, syms, matches []protocol.DocumentSymbol) []d
 }
 
 // TestDisambiguatedNames_GoFlatMethodForm covers gopls' flat "(*Recv).Method"
-// method-symbol shape mixed with a same-named nested match — a dotted query
-// ("Foo.Close") is the only way resolveSymbolsByName ever surfaces a flat-form
-// symbol as an ambiguous match (a plain query never matches "(*Recv).Method",
-// since baseSymbolName strips everything before the leading "("), so this
-// builds the mixed nested+flat tree that dotted query actually resolves,
-// rather than hand-picking an unreachable matches slice.
+// method-symbol shape mixed with a same-named nested match, reached through a
+// dotted query ("Foo.Close"). This builds the mixed nested+flat tree that
+// dotted query actually resolves, rather than hand-picking an unreachable
+// matches slice. The plain-name route to a flat-form match is
+// TestDisambiguatedNames_PlainGoMethodName.
 func TestDisambiguatedNames_GoFlatMethodForm(t *testing.T) {
 	nestedClose := protocol.DocumentSymbol{Name: "Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 2, Character: 8}}}
 	syms := []protocol.DocumentSymbol{
@@ -63,6 +62,28 @@ func TestDisambiguatedNames_GoFlatMethodForm(t *testing.T) {
 	for _, c := range cands {
 		if c.SymbolName == "Foo.Close" {
 			t.Errorf("candidate %q is the original ambiguous query itself — it does not disambiguate anything", c.SymbolName)
+		}
+	}
+}
+
+// TestDisambiguatedNames_PlainGoMethodName: a plain name shared by two
+// receivers' methods and a function (issue #546) offers each method its
+// "Recv.Method" form, proven to round-trip, and the function — which no
+// symbol_name singles out — its line and character.
+func TestDisambiguatedNames_PlainGoMethodName(t *testing.T) {
+	syms := []protocol.DocumentSymbol{
+		{Name: "(*Foo).Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 3, Character: 15}}},
+		{Name: "Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 6, Character: 5}}},
+		{Name: "(Bar).Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 9, Character: 14}}},
+	}
+	matches := resolveSymbolsByName(syms, "Close")
+	if len(matches) != 3 {
+		t.Fatalf("setup: expected the plain name to match both methods and the function, got %d", len(matches))
+	}
+	cands := assertRoundTrips(t, syms, matches)
+	for i, want := range []string{"Foo.Close", "", "Bar.Close"} {
+		if cands[i].SymbolName != want {
+			t.Errorf("candidate[%d].SymbolName = %q, want %q", i, cands[i].SymbolName, want)
 		}
 	}
 }

@@ -27,10 +27,10 @@ func TestSessionStart_ReadyLineSurfacesDiagMode(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			ss := (&SessionStart{}).
 				WithLSPLanguage(func() string { return "go" }).
-				WithLSPWarmup(func() (bool, time.Duration) { return false, 0 }).
-				WithLSPDiagMode(func() string { return c.mode })
+				WithLSPWarmup(func(string) (bool, time.Duration) { return false, 0 }).
+				WithLSPDiagMode(func(string) string { return c.mode })
 			var sb strings.Builder
-			ss.writeSessionRecommendedStart(&sb, false, "Go", "go")
+			ss.writeSessionRecommendedStart(&sb, "/ws", false, "Go", "go")
 			out := sb.String()
 			if !strings.Contains(out, "LSP is ready") {
 				t.Fatalf("expected the ready line: %q", out)

@@ -65,7 +65,10 @@ func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time
 
 		syms := cachedDocumentSymbols(ctx, client, c, ttl, uri)
 		matches := resolveSymbolsByName(syms, name)
-		if len(matches) == 0 {
+		// One match or nothing: topology passes a Go method's bare name, which
+		// several receivers in one file can share, and reporting the first one's
+		// callers would attribute them to the wrong method.
+		if len(matches) != 1 {
 			return nil
 		}
 

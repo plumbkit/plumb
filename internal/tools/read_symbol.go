@@ -188,12 +188,11 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	matches := resolveSymbolsByName(syms, a.Name)
 	if len(matches) == 0 {
-		// The LSP answered but did not resolve the name (commonly a cold server,
-		// or a bare method name it indexes only as a qualified symbol). Try the
-		// structural Map before giving up — the Go extractor names methods by their
-		// bare name, so it resolves what the LSP missed. The server DID answer
-		// here, so no attempt budget was missed and the banner keeps its
-		// historical wording.
+		// The LSP answered but did not resolve the name (commonly a cold server
+		// with an incomplete symbol tree). Try the structural Map before giving
+		// up, so it resolves what the LSP missed. The server DID answer here, so
+		// no attempt budget was missed and the banner keeps its historical
+		// wording.
 		if fb, ok := t.topologyReadFallback(ctx, fallbackNotUsed, 0, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
