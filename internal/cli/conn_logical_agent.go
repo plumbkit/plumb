@@ -422,7 +422,7 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	if s.collabConfig().AllowUnidentifiedWrites {
 		retired = " ([collab] allow_unidentified_writes is set but no longer honoured.)"
 	}
-	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s%s", name, sharedIdentityRemedy, retired)
+	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s. If the Claude Code hook is already installed, one call can still miss its stamp under load: retry once, which usually succeeds.%s", name, sharedIdentityRemedy, retired)
 }
 
 // undeclaredIdentityErr is the refusal for a per-call identity whose linkage no
