@@ -39,6 +39,10 @@
 
 ### Fixed
 
+- **`read_file` keeps the blank lines a `start_line` window begins with.** A
+  window whose first line was blank dropped it, so every later line was
+  labelled one line too low and the header under-counted the window. A
+  range-mode edit built on that view hit the wrong lines.
 - **An agent pinned to its own project runs that project's tasks and
   commands.** On a `plumb serve` connection shared by several agents, an agent
   that pinned itself with `session_start` to project B while the connection

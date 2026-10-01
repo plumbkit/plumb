@@ -183,6 +183,40 @@ func TestReadFile_GutterRangeStartsAtFileLine(t *testing.T) {
 	}
 }
 
+// TestReadFile_RangeStartingOnBlankLinesKeepsThem: a window whose first lines
+// are blank returns them, so every later line keeps its real file number. The
+// separator used to key on the builder's length, which a blank first line
+// leaves at zero: the blank line vanished and everything after it was labelled
+// one line too low, so a range edit built on the view hit the wrong lines.
+func TestReadFile_RangeStartingOnBlankLinesKeepsThem(t *testing.T) {
+	cases := []struct {
+		name       string
+		file       string
+		start, end int
+		want       string
+		wantLines  string
+	}{
+		{"one blank first line", "a\n\nc\nd\n", 2, 3, "2\t\n3\tc", "lines=2 "},
+		{"two blank first lines", "a\n\n\nd\n", 2, 4, "2\t\n3\t\n4\td", "lines=3 "},
+		{"blank first line of the file", "\nb\nc\n", 1, 2, "1\t\n2\tb", "lines=2 "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := writeTextFile(t, c.file)
+			out, err := callReadFile(t, map[string]any{"file_path": path, "start_line": c.start, "end_line": c.end})
+			if err != nil {
+				t.Fatalf("read_file: %v", err)
+			}
+			if !strings.HasSuffix(out, "\n\n"+c.want) {
+				t.Fatalf("want body %q keyed to file lines, got:\n%s", c.want, out)
+			}
+			if !strings.Contains(out, c.wantLines) {
+				t.Fatalf("header should count %s for the window, got:\n%s", c.wantLines, out)
+			}
+		})
+	}
+}
+
 func TestWithLineGutter(t *testing.T) {
 	cases := []struct {
 		name      string
