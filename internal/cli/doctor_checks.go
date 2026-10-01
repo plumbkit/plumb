@@ -8,13 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // checkDaemon verifies the daemon is reachable and its version matches.
@@ -422,6 +425,76 @@ func checkStatsDB(ws string) []checkResult {
 		ok:     true,
 		detail: fmt.Sprintf("%s  (%d calls recorded)", contractConfigPath(dbPath), total),
 	}}
+}
+
+// checkHistoryDB verifies the global history DB is readable and reports its health.
+func checkHistoryDB() []checkResult {
+	dbPath := history.DBPath()
+	fi, err := os.Stat(dbPath)
+	if os.IsNotExist(err) {
+		return []checkResult{{
+			name:   "history db",
+			ok:     true,
+			detail: "not created yet (no writes recorded)",
+		}}
+	}
+	r, err := history.OpenReadOnlyAt(dbPath)
+	if err != nil {
+		return []checkResult{{
+			name:   "history db",
+			ok:     false,
+			detail: err.Error(),
+			fix:    "upgrade plumb or remove " + contractConfigPath(dbPath) + " to reset",
+		}}
+	}
+	defer r.Close()
+
+	count, _ := r.Count()
+	res := []checkResult{{
+		name:   "history db",
+		ok:     true,
+		detail: fmt.Sprintf("%s  (%d changes, %s)", contractConfigPath(dbPath), count, textfmt.HumanBytes(fi.Size())),
+	}}
+
+	meta, _ := r.Meta()
+	now := time.Now().UnixMilli()
+	cutoff := now - 24*time.Hour.Milliseconds()
+
+	hasDropRecent := false
+	if v, ok := meta["last_drop_at_ms"]; ok && v != "" {
+		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= cutoff {
+			hasDropRecent = true
+		}
+	}
+	hasErrorRecent := false
+	if v, ok := meta["last_error_at_ms"]; ok && v != "" {
+		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= cutoff {
+			hasErrorRecent = true
+		}
+	}
+
+	if hasDropRecent || hasErrorRecent {
+		dropped := meta["dropped_rows"]
+		if dropped == "" {
+			dropped = "0"
+		}
+		errs := meta["write_errors"]
+		if errs == "" {
+			errs = "0"
+		}
+		res = append(res, checkResult{
+			name:   "history health",
+			warn:   true,
+			detail: fmt.Sprintf("dropped_rows=%s write_errors=%s last_error=%s", dropped, errs, meta["last_error"]),
+		})
+	} else {
+		res = append(res, checkResult{
+			name:   "history health",
+			ok:     true,
+			detail: "ok",
+		})
+	}
+	return res
 }
 
 // checkRastro reports whether the Rastro integration is enabled and, if so,

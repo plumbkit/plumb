@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/plumbkit/plumb/internal/history"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 func TestCheckConfigs_WarnsOnFrozenDefaults(t *testing.T) {
@@ -74,5 +80,63 @@ analysers = ["golangci-lint"]
 	}
 	if !strings.Contains(found.fix, "delete redundant default lines") {
 		t.Errorf("expected fix instruction in fix field, got: %q", found.fix)
+	}
+}
+
+func TestCheckHistoryDB(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	// 1. Absent file
+	results := checkHistoryDB()
+	if len(results) != 1 || !results[0].ok || !strings.Contains(results[0].detail, "not created yet") {
+		t.Fatalf("absent history db check: %+v", results)
+	}
+
+	// 2. Seeded store without drops -> ok (positive control)
+	dbPath := history.DBPath()
+	s, err := history.Open(dbPath, history.Options{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	s.Enqueue(history.Item{Change: history.Change{
+		Op:    history.OpCreate,
+		Path:  "/test/a.txt",
+		After: history.SideFromBytes([]byte("content\n")),
+		At:    time.Now(),
+		Kind:  history.KindFile,
+	}})
+	_ = s.Sync(context.Background())
+	_ = s.Close(context.Background())
+
+	results = checkHistoryDB()
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %+v", results)
+	}
+	if !results[0].ok || results[0].warn {
+		t.Errorf("history db should be ok, got %+v", results[0])
+	}
+	if !results[1].ok || results[1].warn {
+		t.Errorf("history health should be ok (no drops/errors), got %+v", results[1])
+	}
+
+	// 3. Seeded store with meta last_drop_at_ms = now -> warn
+	db, err := sqlitex.Open(dbPath, sqlitex.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatalf("sqlitex.Open: %v", err)
+	}
+	nowMs := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	_, _ = db.Exec(`INSERT INTO meta(key, value) VALUES ('dropped_rows', '5') ON CONFLICT(key) DO UPDATE SET value = '5'`)
+	_, _ = db.Exec(`INSERT INTO meta(key, value) VALUES ('last_drop_at_ms', ?) ON CONFLICT(key) DO UPDATE SET value = ?`, nowMs, nowMs)
+	db.Close()
+
+	results = checkHistoryDB()
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %+v", results)
+	}
+	if !results[1].warn {
+		t.Errorf("expected warn on recent drop, got %+v", results[1])
+	}
+	if !strings.Contains(results[1].detail, "dropped_rows=5") {
+		t.Errorf("expected detail to mention dropped_rows=5, got %q", results[1].detail)
 	}
 }

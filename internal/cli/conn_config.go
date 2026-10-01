@@ -249,7 +249,6 @@ func (s *connSession) editsConfig() config.EditsConfig {
 	return s.view().edits
 }
 
-//nolint:unused // consumed by history store wiring in Task 9
 func (s *connSession) historyConfig() config.HistoryConfig {
 	return s.view().history
 }

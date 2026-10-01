@@ -82,6 +82,8 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		PostWriteNotifyFn:     s.javaPostWriteNotify,
 		QualityReport:         qualityReport,
 		TopologyNotify:        topologyNotify,
+		HistoryFn:             s.recordHistory,
+		HistoryEnabledFn:      func() bool { return s.historyConfig().Enabled },
 	}
 }
 
