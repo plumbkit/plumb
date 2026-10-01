@@ -72,11 +72,9 @@ type sessionView struct {
 	// identity line discloses what did not follow it (mail, threads).
 	resumedNewIdentity bool
 	lastCfgMtime       time.Time
-	// configRoot is the root the project-scoped blocks above were last loaded
-	// for by applyProjectConfig, or "" before the first apply. A re-pin moves
-	// acquiredRoot first and applies the new root's config after, so between the
-	// two the view pairs the NEW root with the OLD project's commands and trust;
-	// projectViewFor keys on this, not on acquiredRoot (#522).
+	// configRoot is the root applyProjectConfig last loaded the blocks above for
+	// ("" before any). A re-pin moves acquiredRoot before applying the new config,
+	// so projectViewFor keys on this, never on acquiredRoot (#522).
 	configRoot string
 	// projectWatchRoot: the canonical root this session holds a project-config
 	// watcher reference on (PLAN-414), acquired on every config apply, released
