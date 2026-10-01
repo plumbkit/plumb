@@ -155,11 +155,12 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	// can tell errors this write introduced from ones already present.
 	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 
-	if _, err := safeWrite(path, []byte(a.Content), 0o644); err != nil {
+	res, err := safeWrite(path, []byte(a.Content), 0o644)
+	if err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}
 
-	notifyFailed := t.writeFilePostWrite(ctx, path, uri, isNew)
+	notifyFailed := t.writeFilePostWrite(ctx, path, uri, isNew, res.written)
 	if undoOK {
 		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
@@ -269,7 +270,7 @@ func (t *WriteFile) writeFileCapture(ctx context.Context, path string, isNew, wa
 // reports whether a notification FAILED: the diagnostics pass needs to know,
 // because a server that was never told the file changed cannot produce a result
 // that reflects this write.
-func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool) (notifyFailed bool) {
+func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, isNew bool, written fileSnapshot) (notifyFailed bool) {
 	changeType := protocol.FileChanged
 	if isNew {
 		changeType = protocol.FileCreated
@@ -285,7 +286,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 		}
 	}
 	invalidateCache(t.deps.Cache, uri)
-	t.deps.recordWritten(ctx, path)
+	t.deps.recordWritten(ctx, path, written)
 	return notifyFailed
 }
 

@@ -39,6 +39,18 @@
 
 ### Fixed
 
+- **A daemon restart no longer deletes a long-lived session's pins and read
+  records.** The daemon pruned persisted session state older than
+  `[session] persist_state_ttl_minutes` (24h by default) at start-up, before
+  any `plumb serve` had reconnected, so it could not spare sessions still in
+  use. Rows refresh only when rewritten, so a serve kept open for more than a
+  day came back from a restart without its per-agent pins or its read records,
+  and the "changed since you read it" guard then let an edit through for any
+  file read more than a day earlier. Nothing is pruned at start-up now. The idle
+  reaper prunes instead: its first pass runs 5 minutes after start, once
+  surviving serves have reconnected, and it skips every connected session, so a
+  dead session's state is still removed once it is older than the TTL. The
+  identity record is still kept regardless of age. (#525)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
@@ -89,6 +101,33 @@
   descriptor. A file replaced during the read keeps the version read. One
   rewritten in place is read again, and one that never settles records no hash.
   Applies to `read_file` (windowed and pattern search) and `read_symbol`.
+- **A write records the version it wrote.** After a successful write, plumb
+  refreshed the session's read record by stat'ing and hashing the path again.
+  The per-path lock excludes only plumb's own writers, so a process outside
+  plumb that wrote the file in that gap had its content recorded as this
+  session's version, and the session's next write passed "changed since you
+  read it" and the same-mtime `expected_mtime` check over a change it never
+  saw. Writes now record the hash of the bytes plumb wrote and the mtime of the
+  file it wrote them to, taken from the closed staged file just before the
+  rename publishes it. `rename_file`, which writes no bytes, records the version
+  it moved, read from the source before the move. Applies to every write tool,
+  `undo_edit`, and the `fail_on_new_errors` rollbacks. `edit_file`'s reply had
+  the same gap: its `mtime:` line re-read the path after the post-write
+  diagnostics wait, so an outside write in that wait handed the caller an
+  `expected_mtime` that let its next write through. The reply now prints the
+  version plumb wrote, with or without `apply_partial` (issue #528).
+- **A file read through one spelling and written through another keeps its read
+  record.** Read tracking keyed a read on the path as spelled, while the write
+  lock, write tracking and undo resolve symlinks and fold case where the volume
+  does. A file read through a symlinked parent, macOS `/tmp` versus
+  `/private/tmp`, or a case variant, and then written through another spelling,
+  had no read record at the write: the "changed since you read it" guard let the
+  write overwrite a peer's change, and strict mode refused the edit as unread.
+  Reads are now keyed the way writes are, in memory and in the persisted
+  session state. Rows saved by an older daemon are re-keyed when they are
+  restored after a restart; where one collides with a row this version saved,
+  the newer row wins even if a tool such as `cp -p` moved the file's mtime
+  backwards (issue #524).
 - **Contested-pin messages no longer recommend `session_id` as the fix.** The
   contested-pin note in `session_start`, the boundary and re-pin refusals, and
   the `git`, `run_task` and `undo_edit` refusals told agents sharing a

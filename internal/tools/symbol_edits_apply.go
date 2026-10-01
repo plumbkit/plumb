@@ -136,7 +136,8 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	if err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
 	}
-	if _, err := safeWrite(path, after, mode); err != nil {
+	res, err := safeWrite(path, after, mode)
+	if err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
 	}
 	diff := ""
@@ -149,7 +150,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 		sb.WriteString("\n")
 		sb.WriteString(diff)
 	}
-	sb.WriteString(semanticPostWrite(ctx, deps, client, c, path, uri, string(before), string(after), toolName, baseline))
+	sb.WriteString(semanticPostWrite(ctx, deps, client, c, path, uri, string(before), string(after), toolName, baseline, res.written))
 	return sb.String(), nil
 }
 
@@ -205,13 +206,14 @@ func captureSemanticBaseline(ctx context.Context, deps *WriteDeps, uri string) *
 
 // semanticPostWrite is the full post-write pipeline for callers still holding
 // the target's path lock: write-tracker/undo bookkeeping (which requires the
-// held lock) plus the notify/diagnostics/quality half.
-func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline) string {
+// held lock) plus the notify/diagnostics/quality half. written is the version
+// the edit published (writeResult.written).
+func semanticPostWrite(ctx context.Context, deps *WriteDeps, client lsp.Client, c *cache.Cache, path, uri, before, after, toolName string, baseline *diagBaseline, written fileSnapshot) string {
 	if deps == nil {
 		notifySymbolEditWritten(ctx, client, c, path, uri)
 		return ""
 	}
-	deps.recordWritten(ctx, path)
+	deps.recordWritten(ctx, path, written)
 	deps.recordUndo(ctx, path, before, after, true, toolName)
 	return semanticNotifyPostWrite(ctx, deps, client, c, path, uri, before, after, toolName, baseline)
 }

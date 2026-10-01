@@ -231,6 +231,10 @@ type writeResult struct {
 	// the temp file. Used as a reference to detect whether the target was
 	// modified by a third party after we started but before our rename landed.
 	tempWrittenAt time.Time
+	// written is the version this write published (stagedSnapshot): the hash of
+	// the bytes written and the closed staged file's mtime, which the rename
+	// carries to the target. recordWritten records it rather than re-reading the path.
+	written fileSnapshot
 }
 
 // safeWrite writes data to path using temp-file-then-atomic-rename.
@@ -308,6 +312,10 @@ func safeWrite(path string, data []byte, perm os.FileMode) (writeResult, error) 
 		_ = os.Remove(tmpPath)
 		return res, fmt.Errorf("closing temp file: %w", err)
 	}
+	if res.written, err = stagedSnapshot(tmpPath, data); err != nil {
+		_ = os.Remove(tmpPath)
+		return res, fmt.Errorf("stat temp file: %w", err)
+	}
 
 	res.tempWrittenAt = time.Now()
 
@@ -358,6 +366,10 @@ func safeWriteSibling(path string, data []byte, perm os.FileMode, modTimeBefore 
 	if err := f.Close(); err != nil {
 		_ = os.Remove(sibling)
 		return res, fmt.Errorf("closing sibling temp file: %w", err)
+	}
+	if res.written, err = stagedSnapshot(sibling, data); err != nil {
+		_ = os.Remove(sibling)
+		return res, fmt.Errorf("stat sibling temp file: %w", err)
 	}
 	res.tempWrittenAt = time.Now()
 
