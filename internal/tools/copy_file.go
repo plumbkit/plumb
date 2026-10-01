@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -111,10 +112,19 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
+	destBefore := t.deps.historySide(to)
 	res, err := safeWrite(to, data, perm)
 	if err != nil {
 		return "", fmt.Errorf("copy_file: writing destination: %w", err)
 	}
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     history.OpCopy,
+		Tool:   "copy_file",
+		Path:   to,
+		From:   from,
+		Before: destBefore,
+		After:  history.SideFromBytes(data),
+	})
 	t.copyFilePostWrite(ctx, to, res.written)
 	return fmt.Sprintf("copied %s → %s (%d bytes)", from, to, len(data)), nil
 }

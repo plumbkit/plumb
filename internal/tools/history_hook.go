@@ -54,8 +54,6 @@ func (d WriteDeps) historySink(ctx context.Context) historySink {
 // historySide reads path's current content for a change's before-side, or the
 // zero (absent) Side when history is off — so a write never pays for a read it
 // would not record. A read error degrades to an absent side, logged.
-//
-//nolint:unused // consumed by file tool write sites in Task 10
 func (d WriteDeps) historySide(path string) history.Side {
 	if !d.historyOn() {
 		return history.Side{}

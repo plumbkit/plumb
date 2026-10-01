@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -233,6 +234,12 @@ func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string
 			return "", fmt.Errorf("delete_file: %w (directory must be empty)", err)
 		}
 		syncDirBestEffort("delete_file", filepath.Dir(tgt.path))
+		t.deps.recordHistory(ctx, history.Change{
+			Op:   history.OpDelete,
+			Kind: history.KindDir,
+			Tool: "delete_file",
+			Path: tgt.path,
+		})
 		t.deps.notifyTopology(tgt.path)
 		return "deleted directory " + tgt.path, nil
 	}
@@ -240,12 +247,24 @@ func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string
 	// Summarise what is about to be removed (line + byte count) before deleting,
 	// so the agent can report the scope of the change. Best-effort: a read error
 	// degrades to the byte count from Stat.
-	summary := deleteSummary(tgt.path, tgt.size)
+	summary, data := deleteSummary(tgt.path, tgt.size)
+	var before history.Side
+	if data != nil || tgt.size == 0 {
+		before = history.SideFromBytes(data)
+	} else {
+		before = t.deps.historySide(tgt.path)
+	}
 
 	if err := os.Remove(tgt.path); err != nil {
 		return "", fmt.Errorf("delete_file: %w", err)
 	}
 	syncDirBestEffort("delete_file", filepath.Dir(tgt.path))
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     history.OpDelete,
+		Tool:   "delete_file",
+		Path:   tgt.path,
+		Before: before,
+	})
 
 	if err := notifyLSP(ctx, t.deps.Client, tgt.path, protocol.FileDeleted); err != nil {
 		slog.Warn("delete_file: LSP notification failed", "path", tgt.path, "err", err)
@@ -269,23 +288,24 @@ func deleteReport(removed []string) string {
 // deleteSummary describes the content removed by a delete: a line + byte count
 // for a readable text file, falling back to bytes only for a binary file, one
 // over maxReadFileBytes, or any that can't be read. size is the Stat size, used
-// for the byte count and to skip reading oversized files.
-func deleteSummary(path string, size int64) string {
+// for the byte count and to skip reading oversized files. It also returns the
+// raw bytes read (nil when oversized or unreadable).
+func deleteSummary(path string, size int64) (string, []byte) {
 	if size > maxReadFileBytes {
-		return fmt.Sprintf("%d bytes removed", size)
+		return fmt.Sprintf("%d bytes removed", size), nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Sprintf("%d bytes removed", size)
+		return fmt.Sprintf("%d bytes removed", size), nil
 	}
 	sniff := data
 	if len(sniff) > binarySniffBytes {
 		sniff = sniff[:binarySniffBytes]
 	}
 	if bytes.IndexByte(sniff, 0) >= 0 {
-		return fmt.Sprintf("%d bytes removed (binary)", len(data))
+		return fmt.Sprintf("%d bytes removed (binary)", len(data)), data
 	}
-	return fmt.Sprintf("%d lines, %d bytes removed", countTextLines(data), len(data))
+	return fmt.Sprintf("%d lines, %d bytes removed", countTextLines(data), len(data)), data
 }
 
 // countTextLines counts lines the way an editor would: the number of newlines,

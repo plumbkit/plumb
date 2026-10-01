@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -129,9 +130,27 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// A source this snapshot cannot read leaves the version unknown, which records
 	// no read state rather than a guessed one.
 	moved, _ := readSnapshot(from, func(io.Reader) error { return nil })
+	src := t.deps.historySide(from)
+	dest := t.deps.historySide(to)
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
+	if dest.Exists {
+		t.deps.recordHistory(ctx, history.Change{
+			Op:     history.OpDelete,
+			Tool:   "rename_file",
+			Path:   to,
+			Before: dest,
+		})
+	}
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     history.OpRename,
+		Tool:   "rename_file",
+		Path:   to,
+		From:   from,
+		Before: src,
+		After:  src,
+	})
 	// Fsync both parent directories so the move survives a hard crash: the
 	// source dir loses an entry, the destination dir gains one (they differ
 	// whenever the move crosses directories).

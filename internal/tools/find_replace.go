@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/plumbkit/plumb/internal/history"
+
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -245,9 +247,9 @@ func findReplaceCollectFiles(ctx context.Context, a findReplaceArgs, guard Bound
 
 // findReplaceScanFile reads path, applies the pattern, and returns the match
 // count, the original bytes, and the replacement bytes. Returns (0, nil, nil)
-// for binary, oversized, or zero-match files. oldData is returned only when
-// wantDiff is set and the file is within the diff size cap; nil otherwise.
-func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool) (count int, oldData, newData []byte) {
+// for binary, oversized, or zero-match files. oldData is returned when keepBefore
+// is set, or when wantDiff is set and the file is within the diff size cap; nil otherwise.
+func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp, wantDiff, keepBefore bool) (count int, oldData, newData []byte) {
 	if fi, err := os.Stat(path); err != nil || fi.Size() > a.MaxFileBytes {
 		return 0, nil, nil
 	}
@@ -274,7 +276,9 @@ func findReplaceScanFile(path string, a findReplaceArgs, re *regexp.Regexp, want
 	if count == 0 {
 		return 0, nil, nil
 	}
-	if wantDiff && len(data) <= maxFindReplaceDiffBytes {
+	if keepBefore {
+		oldData = data
+	} else if wantDiff && len(data) <= maxFindReplaceDiffBytes {
 		oldData = data
 	}
 	return count, oldData, newData
@@ -308,7 +312,7 @@ func applyFindReplace(data []byte, a findReplaceArgs, re *regexp.Regexp) (int, [
 
 // findReplaceProcessFile writes newData to path, checking the rate limiter,
 // dirty state, and notifying the LSP after a successful write.
-func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, newData []byte, a findReplaceArgs) error {
+func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, oldData, newData []byte, a findReplaceArgs) error {
 	if !t.deps.limiter(ctx).Allow() {
 		return rateLimitError("find_replace", t.deps.limiter(ctx))
 	}
@@ -318,6 +322,17 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
 	}
 	res, writeErr := safeWrite(path, newData, 0o644)
+	if writeErr == nil {
+		// before was read outside the lock (find_replace's existing design).
+		// If another writer intervened, the gap shows as "unrecorded change", which is accurate.
+		t.deps.recordHistory(ctx, history.Change{
+			Op:     history.OpUpdate,
+			Tool:   "find_replace",
+			Path:   path,
+			Before: history.SideFromBytes(oldData),
+			After:  history.SideFromBytes(newData),
+		})
+	}
 	unlock()
 	if writeErr != nil {
 		return fmt.Errorf("find_replace: writing %s: %w", path, writeErr)
@@ -335,7 +350,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 // The second return is false when the file should be skipped (no match, over
 // budget). On a write error or over-budget claim it cancels the shared context.
 func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, truncated *atomic.Bool, cancel context.CancelFunc) (fileChange, bool) {
-	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff)
+	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff, t.deps.historyOn())
 	if count == 0 {
 		return fileChange{}, false
 	}
@@ -345,7 +360,7 @@ func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path strin
 		return fileChange{}, false
 	}
 	if !a.dryRun {
-		if err := t.findReplaceProcessFile(wctx, path, newData, a); err != nil {
+		if err := t.findReplaceProcessFile(wctx, path, oldData, newData, a); err != nil {
 			cancel()
 			return fileChange{path: path, count: count, err: err}, true
 		}
@@ -482,7 +497,7 @@ func appendFindReplaceDiffs(sb *strings.Builder, changes []fileChange, root stri
 		if shown >= maxFindReplaceDiffFiles {
 			break
 		}
-		if c.oldData == nil {
+		if c.oldData == nil || len(c.oldData) > maxFindReplaceDiffBytes {
 			continue
 		}
 		d := unifiedDiff(findReplaceRelPath(root, c.path), string(c.oldData), string(c.newData))

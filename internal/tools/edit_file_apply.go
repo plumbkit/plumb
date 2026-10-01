@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/textdiff"
 )
@@ -213,6 +214,14 @@ func (t *EditFile) tryEdit(ctx context.Context, path string, edits []strEdit) (w
 	if err != nil {
 		return writeResult{}, "", "", nil, fmt.Errorf("edit_file: write failed: %w", err)
 	}
+
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     history.OpUpdate,
+		Tool:   "edit_file",
+		Path:   path,
+		Before: history.SideFromBytes(data),
+		After:  history.SideFromBytes([]byte(content)),
+	})
 
 	return res, original, content, notes, nil
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -223,5 +224,12 @@ func (t *EditFile) tryEditPartial(ctx context.Context, path string, edits []strE
 	if writeErr != nil {
 		return results, writeResult{}, original, original, fmt.Errorf("edit_file: write failed: %w", writeErr)
 	}
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     history.OpUpdate,
+		Tool:   "edit_file",
+		Path:   path,
+		Before: history.SideFromBytes(data),
+		After:  history.SideFromBytes([]byte(content)),
+	})
 	return results, res, original, content, nil
 }
