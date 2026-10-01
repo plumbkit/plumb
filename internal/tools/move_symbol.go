@@ -273,7 +273,11 @@ func (t *MoveSymbol) applyMove(ctx, lspCtx context.Context, waited time.Duration
 			deps.recordUndo(ctx, p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
 		}
 	}
-	if _, err := applyMovePlans(plans, onApplied); err != nil {
+	var sink historySink
+	if deps != nil {
+		sink = deps.historySink(ctx)
+	}
+	if _, err := applyMovePlans(plans, onApplied, sink); err != nil {
 		return nil, "", "", nil, fmt.Errorf("move_symbol: applying move: %w", err)
 	}
 	return plans, name, note, baselines, nil
@@ -482,66 +486,4 @@ func (t *MoveSymbol) formatMove(plans []movePlan, name, note, srcPath, dstPath s
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String()
-}
 
-// movePlan is one file's share of a move: its pre- and post-move bytes, its
-// mode, and whether it existed before (a created destination is removed on
-// rollback rather than restored).
-type movePlan struct {
-	path          string
-	before        []byte
-	after         []byte
-	mode          os.FileMode
-	existedBefore bool
-	// written is the version the move published, set once the write lands.
-	written fileSnapshot
-}
-
-// applyMovePlans writes each plan in order and rolls every prior write back on a
-// mid-sequence failure — a created file is removed, an existing file restored to
-// its pre-move bytes — keeping a two-file move all-or-nothing at the filesystem
-// level. onApplied runs after all writes succeed. The caller holds the per-path
-// locks for every plan (see applyMove); this helper performs no locking so it is
-// also directly unit-testable.
-func applyMovePlans(plans []movePlan, onApplied func()) ([]string, error) {
-	var written []movePlan
-	for i, p := range plans {
-		res, err := safeWrite(p.path, p.after, p.mode)
-		if err != nil {
-			if rbErr := rollbackMove(written); rbErr != nil {
-				return nil, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
-			}
-			return nil, fmt.Errorf("writing %s: %w", p.path, err)
-		}
-		plans[i].written = res.written
-		written = append(written, p)
-	}
-	if onApplied != nil {
-		onApplied()
-	}
-	out := make([]string, len(plans))
-	for i, p := range plans {
-		out[i] = p.path
-	}
-	return out, nil
-}
-
-func rollbackMove(written []movePlan) error {
-	var errs []string
-	for i := len(written) - 1; i >= 0; i-- {
-		p := written[i]
-		if !p.existedBefore {
-			if err := os.Remove(p.path); err != nil && !os.IsNotExist(err) {
-				errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
-			}
-			continue
-		}
-		if _, err := safeWrite(p.path, p.before, p.mode); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
-		}
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
-}

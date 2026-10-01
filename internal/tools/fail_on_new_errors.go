@@ -42,6 +42,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -141,6 +142,14 @@ func (d WriteDeps) revertWrite(ctx context.Context, req rollbackRequest) (holds 
 		if err := os.Remove(req.path); err != nil && !os.IsNotExist(err) {
 			return "the content this call wrote (the file plumb created is still there)", fmt.Errorf("removing %q: %w", req.path, err)
 		}
+		d.recordHistory(ctx, history.Change{
+			Op:             history.OpRevert,
+			Tool:           req.tool,
+			Path:           req.path,
+			Before:         history.SideFromBytes([]byte(req.wrote)),
+			RevertsOwnCall: true,
+			Reason:         "new_errors",
+		})
 		d.notifyReverted(ctx, req.path, req.uri, protocol.FileDeleted, fileSnapshot{})
 		return "", nil
 	}
@@ -152,6 +161,15 @@ func (d WriteDeps) revertWrite(ctx context.Context, req rollbackRequest) (holds 
 	if err != nil {
 		return "the content this call wrote (the restore itself failed)", fmt.Errorf("restoring %q: %w", req.path, err)
 	}
+	d.recordHistory(ctx, history.Change{
+		Op:             history.OpRevert,
+		Tool:           req.tool,
+		Path:           req.path,
+		Before:         history.SideFromBytes([]byte(req.wrote)),
+		After:          history.SideFromBytes([]byte(req.before)),
+		RevertsOwnCall: true,
+		Reason:         "new_errors",
+	})
 	d.notifyReverted(ctx, req.path, req.uri, protocol.FileChanged, res.written)
 	return "", nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -139,6 +140,12 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	res, err := safeWrite(path, after, mode)
 	if err != nil {
 		return "", fmt.Errorf("applying edit: %w", err)
+	}
+	if deps != nil {
+		deps.recordHistory(ctx, history.Change{
+			Op: history.OpUpdate, Tool: toolName, Path: path,
+			Before: history.SideFromBytes(before), After: history.SideFromBytes(after),
+		})
 	}
 	diff := ""
 	if showDiff {

@@ -30,7 +30,7 @@ func TestApplyMovePlans_RollsBackExistingOnSecondWriteFailure(t *testing.T) {
 		{path: blockerChild(t, dir), after: []byte("new\n"), mode: 0o644, existedBefore: false},
 	}
 	applied := false
-	if _, err := applyMovePlans(plans, func() { applied = true }); err == nil {
+	if _, err := applyMovePlans(plans, func() { applied = true }, nil); err == nil {
 		t.Fatal("expected the second write to fail")
 	}
 	if applied {
@@ -48,7 +48,7 @@ func TestApplyMovePlans_RemovesCreatedFileOnRollback(t *testing.T) {
 		{path: created, after: []byte("package x\n"), mode: 0o644, existedBefore: false},
 		{path: blockerChild(t, dir), after: []byte("new\n"), mode: 0o644, existedBefore: false},
 	}
-	if _, err := applyMovePlans(plans, nil); err == nil {
+	if _, err := applyMovePlans(plans, nil, nil); err == nil {
 		t.Fatal("expected the second write to fail")
 	}
 	if _, err := os.Stat(created); !os.IsNotExist(err) {
@@ -68,7 +68,7 @@ func TestApplyMovePlans_HappyPathWritesBothAndRunsOnApplied(t *testing.T) {
 		{path: b, after: []byte("new-b\n"), mode: 0o644, existedBefore: false},
 	}
 	ran := false
-	modified, err := applyMovePlans(plans, func() { ran = true })
+	modified, err := applyMovePlans(plans, func() { ran = true }, nil)
 	if err != nil {
 		t.Fatalf("applyMovePlans: %v", err)
 	}

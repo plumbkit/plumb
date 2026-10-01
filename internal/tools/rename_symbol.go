@@ -386,9 +386,13 @@ func (t *RenameSymbol) applyOrPreview(ctx context.Context, a renameSymbolArgs, w
 	var diagOut strings.Builder
 	if !a.DryRun {
 		baselines := t.captureRenameBaselines(ctx, files)
+		var sink historySink
+		if deps := writeDepsPtr(t.hasDeps, &t.deps); deps != nil {
+			sink = deps.historySink(ctx)
+		}
 		modified, plans, applyErr := applyWorkspaceEditDetailed(we, func(plans []workspaceEditPlan) {
 			t.recordRenameWrites(ctx, plans)
-		})
+		}, sink, "rename_symbol")
 		if applyErr != nil {
 			if strings.Contains(applyErr.Error(), "out of range") {
 				return "", fmt.Errorf("applying rename: %w%s", applyErr, renameStaleIndexHint)

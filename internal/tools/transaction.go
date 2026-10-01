@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
@@ -135,6 +136,7 @@ type txPrepared struct {
 	preMtime time.Time
 	perm     os.FileMode
 	written  fileSnapshot
+	existed  bool
 }
 
 func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -413,6 +415,7 @@ func txValidateOp(i int, op txOperation, path string, reads *ReadTracker) (txPre
 		after:    content,
 		preMtime: info.ModTime(),
 		perm:     info.Mode().Perm(),
+		existed:  true,
 	}, nil
 }
 
@@ -438,7 +441,7 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 	for _, p := range prepared {
 		if info, err := os.Stat(p.path); err == nil {
 			if !info.ModTime().Equal(p.preMtime) {
-				rollback(written)
+				rollback(written, t.deps.historySink(ctx))
 				txl.Rollback()
 				return nil, nil, fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
@@ -452,12 +455,19 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 		}
 		res, err := safeWrite(p.path, []byte(p.after), p.perm)
 		if err != nil {
-			rollback(written)
+			rollback(written, t.deps.historySink(ctx))
 			txl.Rollback()
 			return nil, nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
 				p.path, err, len(written))
 		}
 		p.written = res.written
+		t.deps.recordHistory(ctx, history.Change{
+			Op:     opFor(p),
+			Tool:   "transaction_apply",
+			Path:   p.path,
+			Before: txBeforeSide(p),
+			After:  history.SideFromBytes([]byte(p.after)),
+		})
 		written = append(written, p)
 	}
 	// No extra directory fsync here: every write above went through safeWrite,
@@ -516,15 +526,39 @@ func formatTransactionResult(written []txPrepared, showDiff bool) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+func opFor(p txPrepared) history.Op {
+	if !p.existed {
+		return history.OpCreate
+	}
+	return history.OpUpdate
+}
+
+func txBeforeSide(p txPrepared) history.Side {
+	if !p.existed {
+		return history.Side{}
+	}
+	return history.SideFromBytes([]byte(p.before))
+}
+
 // rollback restores each entry in written to its pre-transaction content.
 // Best-effort: failures are logged and proceed. If a rollback write itself
 // fails, the file is left in the post-write state and the caller has lost
 // atomicity — but a partial application is the only outcome possible at
 // that point.
-func rollback(written []txPrepared) {
+func rollback(written []txPrepared, sink historySink) {
 	for _, p := range written {
 		if _, err := safeWrite(p.path, []byte(p.before), p.perm); err != nil {
 			slog.Error("transaction_apply: rollback failed", "path", p.path, "err", err)
+		} else {
+			sink.recordHistory(history.Change{
+				Op:             history.OpRevert,
+				Tool:           "transaction_apply",
+				Path:           p.path,
+				Before:         history.SideFromBytes([]byte(p.after)),
+				After:          history.SideFromBytes([]byte(p.before)),
+				RevertsOwnCall: true,
+				Reason:         "tx_rollback",
+			})
 		}
 	}
 }
