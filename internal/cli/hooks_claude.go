@@ -122,8 +122,11 @@ type claudeHookInput struct {
 	// PreToolUse fields. AgentID is present only inside a subagent; ToolInput
 	// is the tool's arguments, which the identity hook echoes back with one
 	// key added (updatedInput replaces the whole input).
-	AgentID   string          `json:"agent_id"`
-	ToolName  string          `json:"tool_name"`
+	AgentID  string `json:"agent_id"`
+	ToolName string `json:"tool_name"`
+	// ToolUseID names the one call, so the identity hook's breadcrumb can be
+	// matched to a call in Claude Code's own log.
+	ToolUseID string          `json:"tool_use_id"`
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
@@ -140,12 +143,8 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 	}
 	switch input.Event {
 	case "PreToolUse":
-		// One JSON document on stdout, or nothing at all. Exit 0 either way:
-		// only exit 2 blocks a call, and an unstamped call is the client's own
-		// behaviour, not a failure.
-		if out, ok := claudePreToolUseOutput(input, os.Getenv, claudeIdentityDaemon); ok {
-			_ = json.NewEncoder(os.Stdout).Encode(out)
-		}
+		// One JSON document on stdout, or nothing at all, and exit 0 either way.
+		runClaudePreToolUse(input, os.Getenv, claudeIdentityDaemon, os.Stdout, os.Stderr)
 		return nil
 	case "SessionStart":
 		// Plain stdout reaches the agent for this event, so the linkage
