@@ -295,10 +295,14 @@ func (s *connSession) rateLimiterFor(ctx context.Context) *tools.RateLimiter {
 // connection being unusable, and flagging it would raise a dashboard alert
 // against the coordinator for a peer's call. The log line is greppable, carries
 // the agent id and both roots, and does not expire.
-func (s *connSession) repinAgent(ctx context.Context, root, language string, origin sessionstate.PinSource, force bool) (changed bool, refused error) {
+//
+// prev is the shard's root BEFORE the call, read under the same sh.mu
+// acquisition that moves it, so session_start can report the pin's previous
+// root without a second, racy read (issue #517).
+func (s *connSession) repinAgent(ctx context.Context, root, language string, origin sessionstate.PinSource, force bool) (prev string, changed bool, refused error) {
 	sh := s.repinShard(ctx)
 	if sh == nil {
-		return false, nil
+		return "", false, nil
 	}
 	// The roster sync registers or moves a session.Info, which takes a flock on
 	// the session directory. Doing that while holding sh.mu wedges the whole
@@ -319,7 +323,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	}()
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	prev := sh.root
+	prev = sh.root
 	// The guard keys on the pin ORIGIN, which a seeded shard inherits wholesale:
 	// shardFor copies the CONNECTION's pin and its origin onto a new shard, and
 	// attachOrRepinTo's same-root promotion branch upgrades a roots-held pin to
@@ -373,7 +377,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
 			"agent", sh.id, "pinned", prev, "requested", root,
 			"remedy", "call session_start again with force: true to move THIS agent, or run one plumb serve per agent")
-		return false, refused
+		return prev, false, refused
 	}
 	if root == prev && language == sh.language {
 		// Nothing moves — but naming the root the shard already holds is still
@@ -393,7 +397,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// issue #472 describes, by a path no live-move test exercises.
 		// confirmShardPin cannot host this: it returns early for a shard that is
 		// already selfPinned, which a restored-and-reconfirming one is.
-		return false, nil
+		return prev, false, nil
 	}
 	changed = true
 	// The agent has CHOSEN this root (even back to the seeded one, via a
@@ -419,7 +423,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	syncRoot, syncLang = root, language
-	return changed, nil
+	return prev, changed, nil
 }
 
 // seedShardOnLink hydrates the linkage owner's shard from the connection's
@@ -468,13 +472,17 @@ func (s *connSession) seedShardOnLink(linkage string) {
 // (shardsMu before sh.mu, s.mu innermost), so the per-tool-call hot path's lock
 // pattern is unchanged; the writes mirror repinAgent's success path, held under
 // one sh.mu acquisition each.
-func (s *connSession) followConnectionShards(prevRoot string) {
+//
+// Returns the ids of the agents whose shards followed, so session_start can
+// tell the caller how many other agents its connection move took with it
+// (issue #517).
+func (s *connSession) followConnectionShards(prevRoot string) (followed []string) {
 	if prevRoot == "" {
-		return
+		return nil
 	}
 	v := s.view()
 	if v.acquiredRoot == "" || v.acquiredRoot == prevRoot {
-		return
+		return nil
 	}
 	s.shardsMu.Lock()
 	defer s.shardsMu.Unlock()
@@ -507,9 +515,11 @@ func (s *connSession) followConnectionShards(prevRoot string) {
 		// Same rule persistReadShard states: the shard's root is read under sh.mu.
 		root, language := sh.root, sh.language
 		sh.mu.Unlock()
+		followed = append(followed, sh.id)
 		s.rehydrateReadsForAgent(sh, root)
 		s.persistPinForAgent(sh, root, language, v.pinOrigin)
 	}
+	return followed
 }
 
 // persistReadShard mirrors a per-agent recorded read to the durable store, keyed
