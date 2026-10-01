@@ -116,5 +116,9 @@ func (s *connSession) confirmShardPin(sh *agentShard, root, language string, ori
 	}
 	sh.selfPinned = true
 	sh.pinOrigin = origin
+	// Rebuilt so a boundary refusal quotes the upgraded label, as the connection's
+	// same-root promotion rebuilds its own policy.
+	sh.prov = confirmedProvenance(sh.prov, origin)
+	sh.policy = s.buildAgentPolicy(root, language, sh.prov)
 	s.persistPinForAgent(sh, root, language, origin)
 }

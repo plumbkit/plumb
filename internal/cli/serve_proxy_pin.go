@@ -163,11 +163,44 @@ func (p *reconnectingProxy) commitSessionStartPin(frame []byte) {
 		// choice — the precise coupling this split exists to remove.
 		return
 	}
+	// The replay pin is the CONNECTION's: it is replayed on reconnect as a
+	// session_start-level connection pin, which is sticky and outranks the client's
+	// roots. A call that moved only the caller's own shard says nothing about where
+	// the connection should come back, and recording it made a roots-derived
+	// connection pin sticky at a root nobody had chosen (#527). Left alone, not
+	// cleared: an earlier connection-scope pin still stands.
+	if pinScopeMeta(frame) == mcp.PinScopeAgent {
+		return
+	}
 	ws := start.workspace
 	if resolved := resolvedWorkspaceMeta(frame); resolved != "" {
 		ws = resolved
 	}
 	p.pinned = ws
+}
+
+// pinScopeMeta extracts which pin the daemon says a session_start moved
+// (mcp.MetaPinScopeKey), or "" when absent or malformed — a daemon that predates
+// the key, which a caller must read as the connection's pin, as before the key
+// existed. Fail-safe like its siblings: anything it cannot parse yields "".
+func pinScopeMeta(frame []byte) string {
+	var resp struct {
+		Result *struct {
+			Meta map[string]json.RawMessage `json:"_meta"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(frame, &resp); err != nil || resp.Result == nil {
+		return ""
+	}
+	raw, ok := resp.Result.Meta[mcp.MetaPinScopeKey]
+	if !ok {
+		return ""
+	}
+	var scope string
+	if err := json.Unmarshal(raw, &scope); err != nil {
+		return ""
+	}
+	return scope
 }
 
 // resolvedWorkspaceMeta extracts the canonical workspace root the daemon echoed

@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -50,6 +51,10 @@ type logicalAgentState struct {
 	// last refreshed the durable row (zero: never, e.g. restored after a
 	// restart); see refreshDue.
 	declared map[string]time.Time
+	// priorShared records durable evidence that this connection was shared before
+	// it re-attached (see noteConnectionWasShared). It decides ROUTING only: it never
+	// enters seen, so it cannot arm the anonymous-write gate.
+	priorShared atomic.Bool
 }
 
 // record commits an identity and reports the connection's shared STATE and,
@@ -532,44 +537,6 @@ func (s *connSession) stampChannelState(ctx context.Context) tools.StampChannelS
 	// Shared means "the ceiling is ARMED for this call": two or more identities
 	// are here, so an unstamped state-changing call is refused.
 	return tools.StampChannelState{Shared: s.logicalAgents.armed(id), PerCallStamped: id != "", HookClient: s.isHookClient()}
-}
-
-// seed commits identities recovered from durable state — the per-agent pins
-// already persisted under this proxy session — so a connection that WAS shared
-// before a daemon restart is shared again the moment it re-attaches, rather
-// than from whenever two agents happen to re-declare.
-//
-// Without it the fail-closed ceiling had a hole exactly where it was most
-// needed: after a restart, clients reconnect and start calling before they
-// re-declare, and refuse admits every anonymous state-changing call until the
-// second declaration lands (PLAN-440 item 2).
-//
-// It only ADDS, preserving the documented monotonicity of seen. A durable view
-// is a lower bound on what this connection has observed, never an upper one: it
-// can be pruned, partially written, or simply older than the live set, and
-// letting a narrower view shrink the set would silently disarm a gate that is
-// currently holding. Blank ids are dropped rather than recorded, so a row with
-// an empty logical_agent_id — the connection-level agent — cannot pose as a
-// second identity and make a single-agent connection read as shared.
-func (l *logicalAgentState) seed(ids []string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			continue
-		}
-		if l.seen == nil {
-			l.seen = make(map[string]struct{})
-		}
-		l.seen[id] = struct{}{}
-	}
-}
-
-// count reports how many distinct identities this connection has committed.
-func (l *logicalAgentState) count() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.seen)
 }
 
 // persistLogicalAgent writes an observed identity to the durable per-connection
