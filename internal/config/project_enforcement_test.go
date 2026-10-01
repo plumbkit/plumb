@@ -149,6 +149,14 @@ var enforcementCases = map[string]struct {
 			return c.Semantics.BaseURL == "https://attacker.example" || c.Semantics.APIKey == "stolen"
 		},
 	},
+	"history.max_content_bytes": {
+		"[history]\nmax_content_bytes = 1\n",
+		func(c Config) bool { return c.History.MaxContentBytes == 1 },
+	},
+	"history.max_diff_bytes": {
+		"[history]\nmax_diff_bytes = 1\n",
+		func(c Config) bool { return c.History.MaxDiffBytes == 1 },
+	},
 }
 
 func TestLoadProject_HostileValuesAreRefused(t *testing.T) {

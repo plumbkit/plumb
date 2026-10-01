@@ -62,6 +62,7 @@
   --force` previews the replacements without writing.
 - **Each tool call now carries a `call_id`**, recorded in the stats database
   (schema v21), linking a call to the file changes it made.
+- **`[history]` configuration**: `enabled`, `sensitive_globs`, `max_content_bytes`, `max_diff_bytes`.
 
 ### Fixed
 

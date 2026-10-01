@@ -99,6 +99,7 @@ type sessionView struct {
 	lastToolProfile string
 
 	edits     config.EditsConfig
+	history   config.HistoryConfig
 	walk      config.WalkConfig
 	git       config.GitConfig
 	ws        config.WorkspaceConfig

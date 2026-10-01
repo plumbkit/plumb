@@ -105,6 +105,7 @@ func (s *connSession) applyProjectConfigIf(workspace string, stillTarget func(v 
 			v.collabNotice = notice
 		}
 		v.edits = projectCfg.Edits
+		v.history = projectCfg.History
 		v.walk = projectCfg.Walk
 		v.git = projectCfg.Git
 		v.ws = projectCfg.Workspace
@@ -246,6 +247,11 @@ func (s *connSession) isStrict() bool {
 // editsConfig returns the current resolved edits config.
 func (s *connSession) editsConfig() config.EditsConfig {
 	return s.view().edits
+}
+
+//nolint:unused // consumed by history store wiring in Task 9
+func (s *connSession) historyConfig() config.HistoryConfig {
+	return s.view().history
 }
 
 // memoryConfig returns the current resolved [memory] config off the lock-free

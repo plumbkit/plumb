@@ -519,4 +519,9 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	//
 	// Cloned, not aliased, for the reason the workspace roots above give.
 	merged.Quality.Bin = maps.Clone(base.Quality.Bin)
+	// [history] max_content_bytes and max_diff_bytes are daemon-global resource
+	// limits, not per-project concerns. Force them to base so a project's
+	// .plumb/config.toml cannot raise them to unbounded sizes or bypass caps.
+	merged.History.MaxContentBytes = base.History.MaxContentBytes
+	merged.History.MaxDiffBytes = base.History.MaxDiffBytes
 }

@@ -100,6 +100,15 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// durability contract for every other session.
 	"edits.fsync": ClassInert,
 
+	// --- History: enabled and sensitive_globs are ClassPreference (a project
+	// may opt out of history or declare additional sensitive globs for its own
+	// files). max_content_bytes and max_diff_bytes are ClassForcedGlobal (size caps
+	// protect the daemon from memory/disk exhaustion and are user/daemon-wide).
+	"history.enabled":           ClassPreference,
+	"history.sensitive_globs":   ClassPreference,
+	"history.max_content_bytes": ClassForcedGlobal,
+	"history.max_diff_bytes":    ClassForcedGlobal,
+
 	// --- Walk. refuse_home_roots suppresses a macOS TCC consent prompt for two
 	// convenience walks inside session_start. It is never consulted by
 	// buildPathPolicy, so it cannot widen access.
