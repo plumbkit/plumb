@@ -118,9 +118,18 @@ type mutationResult struct {
 // that is an emergency, not a result, and continuing would mutate a second file
 // while the first is still broken on disk. Results gathered so far are returned
 // alongside the error so the caller can still report them.
+//
+// It also stops, before the next mutant, once ctx is done: a cancelled request
+// (or a closed owning connection) must not go on writing mutants to disk only
+// to have each one's command refused at start and misreported as a tooling
+// fault. Execute says how many were skipped (skippedNote).
 func (t *MutationTest) runAll(ctx context.Context, targets []mutationTarget, plan mutationPlan) ([]mutationResult, error) {
 	results := make([]mutationResult, 0, len(targets))
-	for _, tgt := range targets {
+	for i, tgt := range targets {
+		if ctx.Err() != nil {
+			break
+		}
+		mutationRun.atMutant(i + 1)
 		res, restoreErr := t.runOne(ctx, tgt, plan)
 		results = append(results, res)
 		if restoreErr != nil {
@@ -161,9 +170,11 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	// Sequenced, not evaluated as two arguments: a mutant that does not compile
 	// has nothing to learn from running the suite against a tree that will not
 	// build, and doing so burns a full test timeout per broken mutant.
+	mutationRun.atStep(stepCompile)
 	compile := t.runStep(ctx, plan.compile, plan.timeout)
 	var test stepOutcome
 	if !compile.failed() {
+		mutationRun.atStep(stepTest)
 		test = t.runStep(ctx, plan.test, plan.timeout)
 	}
 	res.classify(compile, test)

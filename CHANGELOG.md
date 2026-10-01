@@ -57,6 +57,40 @@
   produced it. Before, Go reported
   `fork/exec <binary>: no such file or directory`, which blamed a binary that
   exists. (#522)
+- **`mutation_test` names the run holding its slot, and frees the slot when
+  that run's client goes.** (#545) A second run is still refused (one run per
+  daemon keeps two agents from reading each other's mutant as their own result),
+  but the refusal said only "another mutation run is already in progress", so
+  agents waited over an hour unable to tell a long run from a stuck one. It now
+  names the holder's session name and id, workspace, how long ago it started,
+  and its progress (checking its mutants, the unmutated baseline, or mutant *k*
+  of *n* and its compile or test step). And the MCP server never cancelled a
+  call whose client disconnected, so a crashed agent's run held the slot until
+  it finished, for a report nobody could receive. A run whose connection closes
+  is now cancelled: the step in flight is killed, the file restored, the slot
+  released, and no further mutant is started.
+- **The pre-commit hook no longer fails on a peer's lint, and no longer
+  rewrites files behind a commit.** (#545) With two agents committing at once,
+  golangci-lint refused the second with "parallel golangci-lint is running" and
+  the commit failed on contention, not a finding; the hook now passes
+  `--allow-parallel-runners`. And its `run --fix` reformatted files after the
+  commit's content was chosen, so a passing commit left a dirty tree whose
+  rewrite drifted into the next unrelated commit. The hook now only checks: an
+  unformatted file fails the commit, is listed by name, and the message gives
+  the fix (`golangci-lint run --fix ./...`, then re-stage). `make
+  check-pre-commit`, part of `make verify`, pins both against a stub linter.
+- **`workspace_sessions` no longer times out when several agents list at
+  once.** (#545) The session list opened and parsed every session file on
+  every call, under an exclusive lock, and ended sessions are kept for a day so
+  a reconnecting agent can inherit its name: on a busy machine that was about a
+  thousand files and ~290 ms per list, queued behind every other caller, against
+  `workspace_sessions`' 500 ms budget, so the second of two concurrent calls
+  returned "timed out reading session or stats data". An ended session's file
+  does not change, so the list now remembers it by the file's identity (inode,
+  size and modification time) and settles it with a stat instead of an open;
+  a changed file is read again. On that directory a list now takes ~34 ms, and
+  sixteen concurrent lists finish within ~240 ms instead of 1.7 s. The budget is
+  unchanged.
 - **A daemon restart no longer deletes a long-lived session's pins and read
   records.** The daemon pruned persisted session state older than
   `[session] persist_state_ttl_minutes` (24h by default) at start-up, before
