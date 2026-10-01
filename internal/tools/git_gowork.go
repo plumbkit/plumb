@@ -29,7 +29,7 @@ import (
 // A static [git] env GOWORK=off is not an answer: it is project-wide, and the
 // main checkout legitimately NEEDS its workspace. What is needed is a decision
 // per child, made where plumb spawns the children that run a repository's own
-// configured commands: the git child that runs its hooks (execGitCmd) and the
+// configured commands: the git child that runs its hooks (startGitCmd) and the
 // stored [tasks.<lang>] commands of run_task and mutation_test (RunTaskArgv) —
 // and where the daemon's pool spawns a Go language server for a workspace root
 // (internal/cli, through GoWorkBypass), because gopls resolves the same go.work

@@ -142,6 +142,10 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// .git/index.lock and leaves a half-written index; a repository could make
 	// every commit in its own worktree fail that way.
 	"git.write_timeout": ClassTrustGated,
+	// detach_after only decides when a CALL stops waiting, never when the child
+	// dies, but it is part of the [git] block that is reset whole
+	// (forceCapabilityFieldsToBase), so it is gated with the rest of it.
+	"git.detach_after": ClassTrustGated,
 
 	// --- Session lifecycle. persist_state only makes this connection's own
 	// state more or less sticky, and writes to a plumb-owned fixed path.

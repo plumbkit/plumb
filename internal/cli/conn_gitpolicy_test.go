@@ -24,6 +24,7 @@ func TestGitPolicyFrom_CarriesEveryGitField(t *testing.T) {
 		CommitTrailer:     true,
 		Env:               map[string]string{"GOWORK": "off"},
 		WriteTimeout:      config.Duration{Duration: 7 * time.Minute},
+		DetachAfter:       config.Duration{Duration: 33 * time.Second},
 	}
 	// If GitConfig grows a field, this fails until the fixture above covers it,
 	// which is the prompt to decide whether it should cross into GitPolicy.
@@ -51,5 +52,8 @@ func TestGitPolicyFrom_CarriesEveryGitField(t *testing.T) {
 	// what decides when plumb kills a commit mid-hook.
 	if got.WriteTimeout != 7*time.Minute {
 		t.Errorf("WriteTimeout = %s, want the configured 7m", got.WriteTimeout)
+	}
+	if got.DetachAfter != 33*time.Second {
+		t.Errorf("DetachAfter = %s, want the configured 33s", got.DetachAfter)
 	}
 }

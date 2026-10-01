@@ -72,6 +72,19 @@
   and let the test pass. The check never runs outside `go test`. The smoke
   harnesses drop an inherited `PLUMB_SESSIONS_DIR`, which would otherwise outrank
   their isolated `XDG_DATA_HOME`. (#551)
+- **A slow git write no longer outlives its call and lands unreported.** When a
+  pre-commit hook outlasted the MCP client's call timeout, the client reported
+  `Request timed out` while the commit carried on in the daemon and landed
+  later; a retry then collided on `.git/index.lock` or committed the same change
+  twice. A write- or destructive-tier `git` call now stops waiting after the new
+  `[git] detach_after` (default `45s`, `PLUMB_GIT_DETACH_AFTER`, trust-gated),
+  counting any wait for the per-repository lock. The child is not killed: the
+  call returns "still running in the background" with its pid, start time and
+  HEAD at that moment. Until it finishes, further non-read calls on that repository
+  are refused with that explanation and reads still run with a note. After it
+  finishes, the next `git` call from each session reports `landed as <sha>` or
+  the failure with git's output. A value at or above `write_timeout` restores
+  the old wait-it-out behaviour. (#549)
 - **`find_references` and `get_definition` resolve a plain Go method name.**
   (#546) gopls reports a method as `(*WriteTracker).WroteMtime`, so
   `symbol_name: "WroteMtime"` answered "No symbol named" from both tools, while
