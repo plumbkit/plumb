@@ -3,6 +3,8 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -88,7 +90,10 @@ func TestApplyRangeEdit_AppendWholeLines(t *testing.T) {
 		{"crlf final newline, bare", "a\r\n", "b", "a\r\nb\r\n"},
 		{"crlf no final newline, bare", "a\r\nb", "c", "a\r\nb\r\nc"},
 		{"empty file", "", "b", "b"},
+		// Appending nothing is a no-op: it must not add a final newline either.
 		{"empty new_string", "a\n", "", "a\n"},
+		{"empty new_string, no final newline", "a", "", "a"},
+		{"empty new_string, crlf no final newline", "a\r\nb", "", "a\r\nb"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,6 +171,108 @@ func TestEditFile_RangeEdit_BatchAndCRLF(t *testing.T) {
 					t.Errorf("got  %q\nwant %q", got, tc.want)
 				}
 			})
+		}
+	}
+}
+
+// viewRows splits a ranged read_file reply into its rows: the file line number
+// from the gutter and the line text after the "<n>\t" prefix. #562 ends every
+// row with its own newline, so a blank row at either edge is still a row.
+func viewRows(t *testing.T, view string) (nums []int, texts []string) {
+	t.Helper()
+	_, body, ok := strings.Cut(view, "\n\n") // header block, blank line, then rows
+	if !ok || !strings.HasSuffix(body, "\n") {
+		t.Fatalf("read_file window is not a header and terminated rows: %q", view)
+	}
+	for _, row := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+		num, text, found := strings.Cut(row, "\t")
+		n, err := strconv.Atoi(strings.TrimSpace(num))
+		if !found || err != nil {
+			t.Fatalf("row %q has no \"<n>\\t\" gutter", row)
+		}
+		nums, texts = append(nums, n), append(texts, text)
+	}
+	return nums, texts
+}
+
+// TestEditFile_RangeEdit_FromReadFileWindow pins how #543 (range edits replace
+// whole lines) and #562 (read_file terminates every row of a window and keeps
+// its blank edges) fit together: the text an agent copies out of a ranged read,
+// edited and sent back over the same line numbers, changes exactly the one row
+// it touched. The edited row is the first or the last of the window, so a blank
+// row at that edge is the one replaced, and the replacement is sent both with
+// and without its trailing newline. read_file strips "\r", so the CRLF cases
+// also prove the file's own line endings survive a round trip through the view.
+//
+// A bare new_string cannot spell a window whose last row is blank and unedited:
+// "x\n" is one line, so only the terminated spelling is sent there.
+func TestEditFile_RangeEdit_FromReadFileWindow(t *testing.T) {
+	cases := []struct {
+		name, file string
+		start, end int
+		blankLast  bool // the window's last row is blank
+	}{
+		{"interior window", "a\nb\nc\nd\ne\n", 2, 4, false},
+		{"blank first and last rows", "a\n\nc\nd\n\ne\n", 2, 5, true},
+		{"only blank rows", "a\n\n\nd\n", 2, 3, true},
+		{"blank first line of the file", "\nb\nc\n", 1, 2, false},
+		{"through the last line", "a\nb\nc\n", 2, 3, false},
+		{"crlf interior", "a\r\nb\r\nc\r\nd\r\n", 2, 3, false},
+		{"crlf blank edges", "a\r\n\r\nc\r\n\r\ne\r\n", 2, 4, true},
+	}
+	for _, tc := range cases {
+		for _, edited := range []string{"first", "last"} {
+			for _, terminated := range []bool{true, false} {
+				if !terminated && edited == "first" && tc.blankLast {
+					continue
+				}
+				name := tc.name + "/" + edited + " row/bare"
+				if terminated {
+					name = tc.name + "/" + edited + " row/terminated"
+				}
+				t.Run(name, func(t *testing.T) {
+					path := filepath.Join(t.TempDir(), "f.txt")
+					if err := os.WriteFile(path, []byte(tc.file), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					view, err := callReadFile(t, map[string]any{"file_path": path, "start_line": tc.start, "end_line": tc.end})
+					if err != nil {
+						t.Fatal(err)
+					}
+					nums, texts := viewRows(t, view)
+					if len(nums) != tc.end-tc.start+1 || nums[0] != tc.start || nums[len(nums)-1] != tc.end {
+						t.Fatalf("the view must number its rows %d..%d, got %v", tc.start, tc.end, nums)
+					}
+					row := 0
+					if edited == "last" {
+						row = len(nums) - 1
+					}
+					texts[row] = "CHANGED"
+					newStr := strings.Join(texts, "\n")
+					if terminated {
+						newStr += "\n"
+					}
+					if _, err := callEditFile(t, map[string]any{
+						"file_path": path,
+						"edits":     []map[string]any{{"start_line": tc.start, "end_line": tc.end, "new_string": newStr}},
+					}); err != nil {
+						t.Fatal(err)
+					}
+
+					// Oracle: the original file with exactly that one line replaced,
+					// keeping the line ending it had.
+					lines := strings.SplitAfter(tc.file, "\n")
+					eol := "\n"
+					if strings.HasSuffix(lines[nums[row]-1], "\r\n") {
+						eol = "\r\n"
+					}
+					lines[nums[row]-1] = "CHANGED" + eol
+					want := strings.Join(lines, "")
+					if got, _ := os.ReadFile(path); string(got) != want {
+						t.Errorf("read_file view %q, new_string %q\n got  %q\n want %q", view, newStr, got, want)
+					}
+				})
+			}
 		}
 	}
 }

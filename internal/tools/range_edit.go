@@ -92,9 +92,10 @@ func applyRangeEdit(content string, startLine, endLine int, newStr string) (stri
 }
 
 // appendLines implements applyRangeEdit's append mode (startLine == -1).
+// Appending nothing leaves the file as it is, including a missing final newline.
 func appendLines(content, newStr string) string {
-	if content == "" {
-		return newStr
+	if content == "" || newStr == "" {
+		return content + newStr
 	}
 	if trailingLineEnding(content) == "" {
 		sep := "\n"
