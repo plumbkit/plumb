@@ -89,14 +89,24 @@ else
 	@echo "codesign: skipping on $(UNAME_S) (macOS-only)"
 endif
 
+# GO_TEST_TIMEOUT replaces go test's 10-minute default, which the cli package
+# alone has come within a second of on a loaded machine; a slow CI runner
+# (test-race especially) would fail on time, not on a test. integration-test
+# shares it: its untagged half runs the same packages. Empty means the default.
+GO_TEST_TIMEOUT ?= 20m
+ifeq ($(strip $(GO_TEST_TIMEOUT)),)
+GO_TEST_TIMEOUT := 20m
+endif
+export GO_TEST_TIMEOUT
+
 test: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -timeout=$(GO_TEST_TIMEOUT) ./...
 
 test-race: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race -timeout=$(GO_TEST_TIMEOUT) ./...
 
 integration-test: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=10m ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=$(GO_TEST_TIMEOUT) ./...
 
 # fuzz runs every fuzz target in the tree for FUZZTIME each (default 60s).
 #
