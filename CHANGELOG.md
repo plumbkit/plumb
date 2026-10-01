@@ -4,6 +4,24 @@
 
 ### Added
 
+- **The `git` tool runs `merge`.** Merging the base branch into a work branch is
+  the non-rewriting way to update it, and the tool refused it outright, forcing
+  a shell exactly where the safer operation was wanted. An ordinary merge
+  (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is now in the write tier
+  beside `commit`, runs `pre-merge-commit` and `commit-msg`, gets the same
+  GOWORK decision and `[git] env`, and honours `expected_head` and the
+  cross-session guard. `--abort` and `--quit` (and their abbreviations) are
+  destructive, as rebase's and cherry-pick's state flags are. `--continue`,
+  `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused with the route
+  that works: conclude a merge with `commit` and a message. A merge that stops
+  on conflicts fails naming the conflicted files and leaves git's merging state
+  to resolve. The refused flags are found the way git's parser finds them: an
+  option that takes a value consumes the next argument whatever it spells, so
+  neither `--message -m --no-verify` nor `--message -- --no-verify` slips a
+  refused flag past the check. (#530)
+- **`plumb trust --revoke`** removes a workspace's grant. Run in a linked
+  worktree that shares its repository's grant, it says so and names the
+  checkout to revoke it at, since the worktree has no grant of its own. (#530)
 - **`[tasks.<lang>] env`: environment variables for a language's task
   commands.** (#537) A task slot had no way to set a variable, so `run_task test`
   could not reproduce plumb's own CI: `make test` sets `GOTMPDIR` inside the
@@ -38,6 +56,58 @@
   command with no `{run}` is refused; a `verbose` it cannot place is noted.
 
 ### Fixed
+
+- **A linked worktree of a trusted project gets the project's approved
+  capability values.** Trust is keyed on the path, so a worktree at
+  `<project>/.claude/worktrees/<name>` had no grant and fell back to the global
+  `[git]` policy and task commands, although it reads the same checked-in
+  `.plumb/config.toml`. The content-bound grants now also match in a linked
+  worktree of the same repository whose request is identical to the approved
+  one; a branch that changes the capability config stays untrusted, and a
+  directory with a forged `.git` link does not qualify: the worktree's git
+  directory must sit inside the trusted repository's own `worktrees/`. When a
+  worktree is trusted this way, `session_start`, `plumb config show` and the
+  daemon log name the checkout the grant is shared from. When an untrusted
+  project config is why a git tier is off, the refusal now says so and names
+  the `plumb trust` command for that path. (#530)
+- **The `git` tool's tiers read options as git does.** The argument-dependent
+  classifiers matched options by exact spelling, but git expands abbreviations
+  and unpacks bundled short flags. So `switch --disc`, `branch --del`, `branch
+  -dr`, `tag --del`, `restore --staged --work` and `checkout -b x -f` were
+  classified a tier BELOW the operation git performed. They now match git's
+  unambiguous-prefix rule, unpack bundles and consume option values, and a
+  `--staged` after `--` or given as another option's value no longer lowers
+  `restore` to the write tier. The checks that LOWER a tier now honour what
+  cancels them: `--end-of-options` ends options as `--` does, a later
+  `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
+  counts as branch list mode, so `branch -fv side main` cannot force-move a
+  branch at the read tier. `checkout -B`, `switch -C` and `tag -f` are
+  destructive when the ref they name already exists, because they move or
+  replace it like `reset --keep`, and a write when the name is new. Creating a
+  new ref with them stays a write, but only for a plain name given once: the
+  option appears one time, and the name is ASCII letters, digits and `. _ - /`
+  with no `@`, `{` or `..`, that `git check-ref-format` accepts and prints back
+  unchanged, and that does not exist yet. git expands `@{-1}`, `@{u}`, `@{push}`
+  and `<branch>@{upstream}` to a real local branch before it acts, and keeps the
+  last of a repeated `-B`, so the call could reset a branch the existence check
+  never looked at; those stay destructive, as does a call git cannot answer
+  for. Every forced `git branch` form (`-f`, `--force`, `-M`, `-C`, `-D`) is
+  destructive whether or not the branch exists: branch's option grammar defeated
+  each attempt to tell a creation from a reset (`--no-move` cancels the mode
+  that picks which argument is the name, `-C` inside a bundle such as `-qC`
+  slips past the global-flag denylist that refuses only a bare `-C`, and
+  `--recurse-submodules` resets the submodules' branch of the same name too).
+  `branch -M` is `--move --force` and `-C` is `--copy --force`, and both used to
+  be a write that overwrote their target. Branch's upstream and description
+  options are writes. (#530)
+- **Plumb's own git operations are no longer reported as a peer's edits.** After
+  a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
+  the next `read_file` of a file plumb had written warned that "a peer or
+  external process may have edited it". Files the operation changed are now
+  re-recorded as plumb's; a peer's edit before or after the operation still
+  warns, and so does a write by a hook the operation ran (merge's
+  `pre-merge-commit`, switch's `post-checkout`) to a file git did not
+  produce. (#529)
 
 - **`make test`, `make test-race`, `make cover` and `make integration-test`
   no longer stop `go test` at 10 minutes.** The `internal/cli` package alone has

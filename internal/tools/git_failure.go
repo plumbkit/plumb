@@ -71,6 +71,9 @@ func gitFailureBody(repoRoot, headline, stdout, stderr, warning string) (string,
 // name the setting that turns it off, instead of claiming no plumb setting matters.
 func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, stderr, warning, goWorkOff string) error {
 	headline := fmt.Sprintf("git %s: %s", sub, gitExitDescription(runErr))
+	if conflict := mergeConflictHeadline(repoRoot, sub, runErr); conflict != "" {
+		headline = conflict
+	}
 	body, truncated := gitFailureBody(repoRoot, headline, stdout, stderr, warning)
 	if hint := lintLockHint(stdout, stderr); hint != "" {
 		body += hint
