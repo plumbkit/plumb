@@ -521,12 +521,22 @@ func listLocked(dir string) ([]Info, error) {
 	}
 
 	var infos []Info
+	kept := make(map[string]endedFile)
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
-		data, err := os.ReadFile(path)
+		// A stat is ~100x cheaper than the open below, and settles an ended file
+		// List has already read (list_cache.go). fi is nil when the stat failed.
+		fi, _ := e.Info()
+		if fi != nil {
+			if endedAt, ok := endedFiles.lookup(dir, e.Name(), fi); ok {
+				pruneOrKeepEnded(path, e.Name(), endedFile{fi: fi, endedAt: endedAt}, kept)
+				continue
+			}
+		}
+		data, err := readSessionFile(path)
 		if err != nil {
 			continue
 		}
@@ -535,10 +545,7 @@ func listLocked(dir string) ([]Info, error) {
 			continue
 		}
 		if !info.EndedAt.IsZero() {
-			// Ended session — keep for grace period, then remove.
-			if time.Since(info.EndedAt) > endedSessionGrace {
-				_ = os.Remove(path)
-			}
+			pruneOrKeepEnded(path, e.Name(), endedFile{fi: fi, endedAt: info.EndedAt}, kept)
 			continue
 		}
 		if !pidAlive(info.PID) {
@@ -553,6 +560,8 @@ func listLocked(dir string) ([]Info, error) {
 		}
 		infos = append(infos, info)
 	}
+
+	endedFiles.retain(dir, kept)
 
 	sort.Slice(infos, func(i, j int) bool {
 		return infos[i].StartedAt.Before(infos[j].StartedAt)

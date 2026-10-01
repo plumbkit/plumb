@@ -102,7 +102,18 @@ func TestClassifyGit(t *testing.T) {
 		{"push", nil, tierNetwork},
 		{"fetch", nil, tierNetwork},
 		{"pull", nil, tierNetwork},
-		{"merge", []string{"main"}, tierReject},
+		// merge is argument-dependent: an ordinary merge is a write, like commit;
+		// the state flags that reset or strand the merge are destructive.
+		{"merge", []string{"main"}, tierWrite},
+		{"merge", nil, tierWrite},
+		{"merge", []string{"--no-ff", "--no-edit", "origin/main"}, tierWrite},
+		{"merge", []string{"--ff-only", "origin/main"}, tierWrite},
+		{"merge", []string{"-m", "merge main", "main"}, tierWrite},
+		{"merge", []string{"--abort"}, tierDestructive},
+		{"merge", []string{"--quit"}, tierDestructive},
+		// git expands an unambiguous long-option prefix, so these ARE --abort/--quit.
+		{"merge", []string{"--ab"}, tierDestructive},
+		{"merge", []string{"--qu"}, tierDestructive},
 		{"rm", []string{"f"}, tierReject},
 		{"filter-branch", nil, tierReject},
 		{"config", []string{"core.pager", "x"}, tierReject},
@@ -373,7 +384,7 @@ func TestGit_CherryPickStateFlagsGatedAsDestructive(t *testing.T) {
 
 func TestGit_RejectsUnknownSubcommand(t *testing.T) {
 	tool := NewGit(WriteDeps{}, nil)
-	_, err := callGit(t, tool, map[string]any{"subcommand": "merge", "args": []string{"main"}})
+	_, err := callGit(t, tool, map[string]any{"subcommand": "filter-branch", "args": []string{"HEAD"}})
 	if err == nil || !strings.Contains(err.Error(), "not permitted") {
 		t.Fatalf("expected not-permitted error, got %v", err)
 	}

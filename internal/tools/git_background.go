@@ -261,9 +261,17 @@ func (r *gitChildRun) awaitOrDetach(cmd *exec.Cmd, wait func() error) (*gitBackg
 // same way a foreground call would have reported it, and only then releases
 // the per-repo lock and drain token (cleanup): the op is marked finished first,
 // so a write arriving in between queues briefly rather than being refused.
+//
+// The own-writes refresh (afterExit) runs here, on a failure too, because the
+// call that started the child returned before git changed any file: re-recording
+// at that point would be a no-op, and the next read_file would blame a peer for
+// this operation. It runs before the op is marked finished, so a caller told the
+// outcome never reads a file that is still unrecorded.
 func (r *gitChildRun) finishInBackground(op *gitBackgroundOp, done <-chan error) {
 	defer r.cleanup()
-	if err := <-done; err != nil {
+	err := <-done
+	r.afterExit()
+	if err != nil {
 		op.finish(true, r.failure(err).Error())
 		return
 	}

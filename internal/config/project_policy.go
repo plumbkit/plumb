@@ -344,6 +344,11 @@ type ProjectPolicyStatus struct {
 	// Trusted reports whether this exact spec has been approved for this root.
 	// Always false for an empty spec, which needs no approval.
 	Trusted bool
+	// InheritedFrom is the checkout whose grant this workspace shares, when it
+	// is a linked git worktree trusted through that grant rather than its own
+	// record (see sharedWorktreeGrant); "" otherwise. Revoking the grant means
+	// revoking it there.
+	InheritedFrom string
 }
 
 // InEffect reports whether the project's capability-granting keys are actually
@@ -388,7 +393,7 @@ func ProjectPolicyStatusFor(workspace string) (ProjectPolicyStatus, error) {
 	}
 	st := ProjectPolicyStatus{Path: ProjectConfigPath(workspace), Spec: spec}
 	if !spec.IsEmpty() {
-		st.Trusted = projectPolicyTrust().IsTrustedForPolicy(workspace, spec)
+		st.Trusted, st.InheritedFrom = projectPolicyTrust().PolicyGrant(workspace, spec)
 	}
 	return st, nil
 }

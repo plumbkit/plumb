@@ -299,6 +299,14 @@ func TestMigrateV1ToV8_LogicalAgentRecordExistsAndWorks(t *testing.T) {
 	if !tableExists(t, s, "logical_agent") {
 		t.Fatal("logical_agent is missing after migrating a v1 database")
 	}
+	// v9 (issue #513) on the same upgrade path: declarations restore after a
+	// restart only if every installed database gains the table.
+	if !tableExists(t, s, "declared_linkage") {
+		t.Fatal("declared_linkage is missing after migrating a v1 database")
+	}
+	if err := s.RecordDeclaredLinkage("legacy", "conv"); err != nil {
+		t.Fatalf("record a declaration on a migrated database: %v", err)
+	}
 
 	// The legacy pin row survives and still counts as evidence, alongside a
 	// declaration the new table records.

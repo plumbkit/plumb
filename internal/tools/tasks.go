@@ -66,6 +66,11 @@ type TaskCommand struct {
 	// boundary-checked by the resolver. Empty falls back to the workspace root,
 	// which is what every caller got before [tasks.<lang>] working_dir existed.
 	WorkingDir string
+	// WorkingDirSource names the setting WorkingDir came from, e.g.
+	// `[tasks.go] working_dir = "plumb" in /repo/.plumb/config.toml`, or "" when
+	// no working_dir is set. A directory that does not exist is refused naming
+	// it, so the caller fixes the setting rather than hunting for the path (#522).
+	WorkingDirSource string
 	// Language and Configured describe the resolution CONTEXT, and are set even
 	// when Steps is empty — that is the case they exist for. "no test command
 	// configured for this workspace" named neither the language it resolved for
@@ -292,7 +297,7 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	for i, argv := range cmd.Steps {
 		res, err := RunTaskArgv(ctx, ws, argv, env, defaultTaskTimeout)
 		if err != nil {
-			return "", fmt.Errorf("run_task %s: %w", cmd.Slot, err)
+			return "", fmt.Errorf("run_task %s: %w%s", cmd.Slot, err, workingDirOrigin(err, cmd))
 		}
 		b.WriteString(formatStep(argv, res))
 		if res.ExitCode != 0 {

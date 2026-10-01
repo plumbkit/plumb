@@ -1,7 +1,8 @@
 package cli
 
 // daemon_sessionstate.go — the session-state maintenance the daemon runs at
-// start, before any connection is accepted.
+// start, before any connection is accepted, and the TTL sweep the idle reaper
+// runs once connections exist.
 //
 // Split from daemon.go, which owns process lifecycle: these are policy
 // decisions about persisted state (what expires, what is no longer trusted),
@@ -14,19 +15,38 @@ import (
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
+// maintainSessionStateAtStart runs the one-off session-state maintenance the
+// daemon does before accepting its first connection.
+//
+// It deliberately does not prune by age (issue #525). At start no `plumb serve`
+// has reconnected yet, so a surviving session cannot be told from a dead one,
+// and age says nothing: rows refresh only when rewritten (a read when that file
+// is re-read, a per-agent pin when it moves), so a serve kept open for days
+// holds rows far older than the TTL while it is in use. Pruning here deleted its
+// pins and read records on every restart, and the "changed since you read it"
+// guard then failed open. The idle reaper prunes instead: its first pass comes
+// reaperInterval after start, well after a surviving serve has reconnected
+// (its reconnect backoff is capped at seconds), and it exempts every connected
+// session — so dead sessions' state is still reclaimed, only a few minutes later.
+func maintainSessionStateAtStart(sessState *sessionstate.Store) {
+	sweepLegacyWidePins(sessState)
+	reportLegacyNameConflicts(sessState)
+}
+
 // pruneSessionState reclaims persisted per-connection state older than the TTL,
-// dropping rows left by a serve proxy that died without reconnecting. A TTL of 0
-// disables pruning (state lingers until the next daemon restart with a positive
-// TTL). Best-effort and nil-safe.
+// dropping rows left by a serve proxy that died without reconnecting. Only the
+// idle reaper calls it, with the connected sessions as live — never the daemon
+// start, which has no connections to exempt (see maintainSessionStateAtStart).
+// A TTL of 0 disables pruning; the TTL is read live, so state lingers until a
+// reaper pass under a positive one. Best-effort and nil-safe.
 func pruneSessionState(sessState *sessionstate.Store, ttlMinutes int, live ...string) {
 	if sessState == nil || ttlMinutes <= 0 {
 		return
 	}
-	// live sessions are exempt: their pin is written once at initialize, so a
-	// conversation older than the TTL would otherwise have it reclaimed while it
-	// is still connected. The identity record needs no help from this list — it
-	// is exempt from the sweep entirely, which is the only thing that works at
-	// daemon start, when no connection exists to be exempted. See Store.Prune.
+	// live sessions are exempt: their rows are refreshed only when rewritten, so
+	// a conversation older than the TTL would otherwise have its pins and reads
+	// reclaimed while it is still connected. The identity record needs no help
+	// from this list — it is exempt from the sweep entirely. See Store.Prune.
 	if err := sessState.Prune(time.Now().Add(-time.Duration(ttlMinutes)*time.Minute), live...); err != nil {
 		slog.Debug("daemon: session-state prune failed", "err", err)
 	}

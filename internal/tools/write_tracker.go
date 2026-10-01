@@ -107,3 +107,70 @@ func (w *WriteTracker) WroteMtime(path string) (int64, bool) {
 	w.mu.Unlock()
 	return mtime, ok
 }
+
+// unchangedUnder is the before-image of a git operation plumb itself runs in
+// the repository at root: every path recorded under root whose file is still
+// exactly as plumb last left it (on-disk mtime equal to the recorded one, 0 for
+// a missing file), with that mtime. A path already changed by someone else is
+// left out, so a later rerecord can never launder an edit made before it.
+// nil-safe (nil).
+func (w *WriteTracker) unchangedUnder(root string) map[string]int64 {
+	if w == nil {
+		return nil
+	}
+	rootKey := lockPathKey(root)
+	w.mu.Lock()
+	candidates := make(map[string]int64)
+	for key, mtime := range w.written {
+		if dirWithinRoot(key, rootKey) {
+			candidates[key] = mtime
+		}
+	}
+	w.mu.Unlock()
+	out := make(map[string]int64, len(candidates))
+	for key, recorded := range candidates {
+		if statMtime(key) == recorded {
+			out[key] = recorded
+		}
+	}
+	return out
+}
+
+// changedSince returns each path in before (from unchangedUnder) whose mtime
+// has moved since, with its current mtime — the candidates for re-recording
+// once the caller has decided which of those changes were its own.
+func changedSince(before map[string]int64) map[string]int64 {
+	out := make(map[string]int64)
+	for key, was := range before {
+		if now := statMtime(key); now != was {
+			out[key] = now
+		}
+	}
+	return out
+}
+
+// rerecord records each path in now at its new mtime: plumb itself made that
+// change, so the next read must not attribute it to a peer. A record some
+// concurrent plumb write already replaced since before was taken is left as
+// that write recorded it. nil-safe.
+func (w *WriteTracker) rerecord(before, now map[string]int64) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for key, mtime := range now {
+		if recorded, ok := w.written[key]; ok && recorded == before[key] {
+			w.written[key] = mtime
+		}
+	}
+}
+
+// statMtime is path's mtime (UnixNano), or 0 when it cannot be stat'd — the
+// value Record stores for a missing file.
+func statMtime(path string) int64 {
+	if info, err := os.Stat(path); err == nil {
+		return info.ModTime().UnixNano()
+	}
+	return 0
+}

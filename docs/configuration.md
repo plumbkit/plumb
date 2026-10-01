@@ -260,8 +260,8 @@ and network calls additionally require `confirm: true` per call.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `branch`/`tag` create, `stash` push/pop. |
-| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
+| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `merge`, `branch`/`tag` create, `stash` push/pop. |
+| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, `merge --abort`/`--quit`, `switch -C`/`checkout -B`/`tag -f` on an existing ref (or on any name that is not a plain new one given once; on a new plain name they are writes), every forced `branch` form (`-f`, `-M`, `-C`, `-D`) whether or not the branch exists, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
@@ -574,7 +574,7 @@ paced; write-triggered upserts are never delayed.
 | `idle_threshold_minutes` | int | `30` | — | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
 | `eviction_ttl_minutes` | int | `60` | — | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
 | `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking, session identity) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. Identity recovery requires it: with no durable record there is nothing that proves which session a reconnecting proxy continues, so it comes back as a new one. |
-| `persist_state_ttl_minutes` | int | `1440` | — | How long the EXPENDABLE persisted state (read-tracking, the pinned workspace) is honoured on restart before it's treated as stale and discarded. It does **not** apply to the durable identity record, which is retained regardless of age — see below. |
+| `persist_state_ttl_minutes` | int | `1440` | — | How long the EXPENDABLE persisted state (read-tracking, the pinned workspace) of a session that is **no longer connected** is kept before it's discarded. A connected session's state never expires, however old. It does **not** apply to the durable identity record, which is retained regardless of age — see below. |
 
 Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
 
@@ -582,8 +582,8 @@ Global or per-project; no environment override except `persist_state`. Activity 
 
 What is stored divides into two kinds with **opposite expiry rules**, and the distinction is the point:
 
-- **Expendable state** — strict-mode read-tracking and the pinned workspace. Losing it costs a re-read or a re-declaration, so it expires: `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers. It is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads.
-- **The durable identity record** — the connection's internal session ID, its current name, and its authorised external-conversation linkage. This is **never expired by age**. Deleting it would not degrade a session, it would fork one: the surviving proxy comes back as a stranger under a new ID and name, and mail addressed to the old one is orphaned. Elapsed time is no evidence that a serve process died, and the sweep that matters runs at daemon start, before any connection exists to be exempted — so retention is a property of the record, not of a live-session exemption list. The cost is one small row per proxy session, kept indefinitely, whose **name stays reserved** so no new session can be handed it. Reclaiming one would need explicit retirement semantics (proof the serve is gone, not a guess from age), which plumb deliberately does not invent.
+- **Expendable state** — strict-mode read-tracking and the pinned workspace (the connection's and each agent's). Losing it costs a re-read or a re-declaration, so it expires: `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers. The retention rule: every 5 minutes the idle reaper deletes a row that was last written more than the TTL ago **unless its session is connected at that moment**. Rows refresh only when rewritten (a read when that file is re-read, a pin when it moves), so a session connected for days holds rows older than the TTL, and the connected-session exemption is what keeps them. For the same reason nothing is pruned at daemon start: no surviving serve has reconnected yet, so a live session cannot be told from a dead one. The reaper's first pass, 5 minutes after start, comes after they have (a serve retries within seconds). A dead session's state is therefore gone within 5 minutes of the TTL elapsing, once the daemon has stayed up for 5 minutes (a daemon restarted more often than that, such as one in a crash loop, never prunes). It is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads.
+- **The durable identity record** — the connection's internal session ID, its current name, and its authorised external-conversation linkage. This is **never expired by age**. Deleting it would not degrade a session, it would fork one: the surviving proxy comes back as a stranger under a new ID and name, and mail addressed to the old one is orphaned. Elapsed time is no evidence that a serve process died, and a sweep can find a surviving serve between connections, with nothing to exempt it — so retention is a property of the record, not of a live-session exemption list. The cost is one small row per proxy session, kept indefinitely, whose **name stays reserved** so no new session can be handed it. Reclaiming one would need explicit retirement semantics (proof the serve is gone, not a guess from age), which plumb deliberately does not invent.
 
 On reconnect the fresh daemon resolves the identity from that record and RESUMES it — same internal session ID, same name, same linkage — before any tool is served, and states the outcome in the `initialize` result's `_meta` so the proxy can report it accurately rather than guess. Stats, memories and collab therefore see one continuous identity. No extra `session_start` is needed, and recovery does not depend on the caller having named a workspace, linked a conversation, or made any tool call at all.
 
@@ -1133,6 +1133,27 @@ task command does not disturb the LSP grant — but rewriting a trusted `command
 does mean the new command is not honoured until you re-run `plumb trust`. An
 unreadable or corrupt trust store fails closed.
 
+**Linked git worktrees share their repository's grant — for identical content
+only.** A grant is keyed on the path `plumb trust` ran in, and a worktree
+(`git worktree add`, e.g. `<project>/.claude/worktrees/<name>`) is a new path.
+The two content-bound grants — the capability config (`[git]`, the exec-deciding
+`[lsp.<lang>]` fields) and the task commands — therefore also match when the
+workspace is a linked worktree of the same repository (one common git directory)
+as another trusted checkout, **and** its request hashes to what that checkout's
+grant approved. A branch that widens `[git]` or rewrites a task command is
+untrusted there exactly as anywhere else. The worktree must be one git vouches
+for: its `.git` link must name a directory inside the trusted repository's own
+`worktrees/` whose back-link (written there by git) names the worktree, so a
+directory carrying a forged `.git` file, or a whole forged layout of its own,
+does not qualify. A shared grant lives on the checkout it was recorded for:
+`session_start`, `plumb config show` and the daemon log name that checkout, and
+`plumb trust --revoke` in the worktree removes nothing but says where to revoke
+it (`plumb trust --revoke <that checkout>`). The coarse grant behind
+`[[command]]`, `[commands]` and the Xcode build server is not content-bound, so it
+stays per path. When a tier is refused because an untrusted project config asked
+for it, the `git` tool's refusal says so and names the `plumb trust` command for
+that path.
+
 Nothing about this is silent. An untrusted request is reported by `plumb doctor`
 (a warning naming the keys and the fix), by `plumb config show` (the row's
 provenance reads `global config — project asked, UNTRUSTED`, and the requested
@@ -1372,6 +1393,13 @@ The only agent-supplied input that reaches the argv is a shell-safe `{target}`
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
 
+**Which project's block.** `run_task`, `mutation_test` and `run_command` read
+`[tasks.<lang>]` and `[[command]]` from the calling agent's own workspace. On a
+`plumb serve` connection that several agents share, an agent that pinned itself
+to another project (or a worktree) with `session_start` gets that project's
+commands, `working_dir`, `env` and `plumb trust` state, not the connection's,
+and its `agent_config` writes go to that project's `.plumb/config.toml`.
+
 ### `{target}` and its default
 
 A placeholder is a **whole argv element**, in one of two spellings:
@@ -1527,7 +1555,9 @@ and again **after symlink resolution** when it is resolved, so a `working_dir`
 naming a symlink out of the tree is refused rather than silently followed. A
 project-supplied `working_dir` is trust-gated exactly like a command, and it
 makes *every* slot for that language project-supplied — choosing where the
-shipped default runs is as much influence as choosing what it runs.
+shipped default runs is as much influence as choosing what it runs. A
+`working_dir` that does not exist is refused before the command starts, naming
+the directory and the setting it came from.
 
 **Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
 not run until the workspace is trusted with `plumb trust` (recorded per workspace

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -121,7 +120,17 @@ func gitArgvForTier(argv []string, tier gitTier) []string {
 // one whose environment is configurable; the auxiliary read queries around it
 // (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
 // parses, and are deliberately left inheriting.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, sessKey string) (string, error) {
+//
+// writes (may be nil) is the calling session's WriteTracker. When this op can
+// rewrite the working tree, the files the session wrote that git then changes
+// are re-recorded afterwards (git_own_writes.go), so the next read does not blame a
+// peer for plumb's own switch, merge or restore. A child that outlives the call
+// (git_background.go) is re-recorded by its finisher when it exits, not when the
+// call returns.
+//
+// sessKey names the calling session for the once-per-session report of a
+// background op's outcome (git_background.go).
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker, sessKey string) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -137,7 +146,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 			return "", err
 		}
 	}
-	out, err := runGitIn(ctx, repoRoot, sub, argv, tier, guard, intentWarn, child)
+	out, err := runGitIn(ctx, repoRoot, sub, argv, tier, guard, intentWarn, child, writes)
 	if err != nil {
 		return "", err
 	}
@@ -155,8 +164,8 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 // would otherwise outlive its client just as the holder did, and then commit
 // after the client had been told it timed out. A wait cut short runs nothing
 // and says so; a child still running at the bound is detached, never killed.
-func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec) (string, error) {
-	r := &gitChildRun{ctx: ctx, execCtx: ctx, repoRoot: repoRoot, sub: sub, argv: argv, tier: tier, child: child, guard: guard, start: time.Now(), cleanup: func() {}}
+func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker) (string, error) {
+	r := &gitChildRun{ctx: ctx, execCtx: ctx, repoRoot: repoRoot, sub: sub, argv: argv, tier: tier, child: child, guard: guard, start: time.Now(), cleanup: func() {}, afterExit: func() {}}
 	lockWait := child.writeTimeout()
 	if d, ok := child.detachAfter(); ok && r.mutating() {
 		r.detachAfter = d
@@ -180,6 +189,17 @@ func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier git
 	if err := guardRefPreExec(r.execCtx, guard, repoRoot, sub); err != nil {
 		return "", err
 	}
+	// Taken under the per-repo lock and refreshed on EVERY exit below: a merge
+	// that stops on conflicts fails and has still rewritten files. A child that
+	// is detached instead is refreshed by its finisher once it has exited (the
+	// files change while it runs, not when this call returns), still under the
+	// lock.
+	r.afterExit = trackOwnGitWrites(writes, repoRoot, sub, tier)
+	defer func() {
+		if !detached {
+			r.afterExit()
+		}
+	}()
 	if intentWarn != nil {
 		r.warning = intentWarn(r.execCtx, repoRoot)
 	}
@@ -192,75 +212,6 @@ func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier git
 		return gitStillRunningMessage(op), nil
 	}
 	return out, err
-}
-
-// gitChildRun is one git child from start to reported outcome. It exists so a
-// child that outlives the call's foreground deadline can be handed, whole, to a
-// background finisher that reports it on the same terms a foreground call would.
-//
-// Concurrency: owned by one goroutine at a time — the calling one, then (once
-// detached) the finisher alone; the caller touches nothing after detaching.
-type gitChildRun struct {
-	ctx, execCtx context.Context
-	repoRoot     string
-	sub          string
-	argv         []string
-	tier         gitTier
-	child        gitChildSpec
-	guard        *gitRefGuard
-	warning      string
-	cleanup      func()
-	start        time.Time
-	// detachAfter is the call's foreground deadline, measured from start; zero
-	// means the call waits the child out.
-	detachAfter    time.Duration
-	stdout, stderr bytes.Buffer
-	goWorkOff      string
-}
-
-func (r *gitChildRun) mutating() bool { return r.tier == tierWrite || r.tier == tierDestructive }
-
-// exec starts the child and waits for it — or, past the foreground deadline,
-// detaches it and returns the registered background op instead of a result.
-// argv is passed rather than read from r so the argv reaching exec stays a
-// visible parameter (it is always the tool's own classified argv), and is
-// stored on r for the failure report.
-func (r *gitChildRun) exec(argv []string) (string, *gitBackgroundOp, error) {
-	r.argv = argv
-	cmd := exec.CommandContext(r.execCtx, "git", argv...)
-	cmd.Dir = r.repoRoot
-	cmd.Env = r.child.Env
-	cmd.Stdout = &r.stdout
-	cmd.Stderr = &r.stderr
-	goWorkOff, wait, err := startGitCmd(cmd, r.mutating(), r.repoRoot)
-	r.goWorkOff = goWorkOff
-	if err == nil {
-		var op *gitBackgroundOp
-		if op, err = r.awaitOrDetach(cmd, wait); op != nil {
-			return "", op, nil
-		}
-	}
-	if err != nil {
-		// git check-ignore exits 1 when NONE of the listed paths are ignored —
-		// a normal "no match" result, not a failure.
-		if r.sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(r.stderr.String()) == "" {
-			out, perr := postProcessGit(r.ctx, r.repoRoot, r.sub, r.stdout.String())
-			return out, nil, perr
-		}
-		return "", nil, r.failure(err)
-	}
-	r.guard.postExec(r.execCtx)
-	processed, err := postProcessGit(r.ctx, r.repoRoot, r.sub, r.output())
-	return r.warning + processed, nil, err
-}
-
-// output is the child's report: stdout, or stderr when stdout is empty
-// (switch/push and friends report on stderr).
-func (r *gitChildRun) output() string {
-	if out := r.stdout.String(); strings.TrimSpace(out) != "" {
-		return out
-	}
-	return r.stderr.String()
 }
 
 // beginSerialisedGit prepares a non-read git op: it refuses new work while the

@@ -4,6 +4,24 @@
 
 ### Added
 
+- **The `git` tool runs `merge`.** Merging the base branch into a work branch is
+  the non-rewriting way to update it, and the tool refused it outright, forcing
+  a shell exactly where the safer operation was wanted. An ordinary merge
+  (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is now in the write tier
+  beside `commit`, runs `pre-merge-commit` and `commit-msg`, gets the same
+  GOWORK decision and `[git] env`, and honours `expected_head` and the
+  cross-session guard. `--abort` and `--quit` (and their abbreviations) are
+  destructive, as rebase's and cherry-pick's state flags are. `--continue`,
+  `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused with the route
+  that works: conclude a merge with `commit` and a message. A merge that stops
+  on conflicts fails naming the conflicted files and leaves git's merging state
+  to resolve. The refused flags are found the way git's parser finds them: an
+  option that takes a value consumes the next argument whatever it spells, so
+  neither `--message -m --no-verify` nor `--message -- --no-verify` slips a
+  refused flag past the check. (#530)
+- **`plumb trust --revoke`** removes a workspace's grant. Run in a linked
+  worktree that shares its repository's grant, it says so and names the
+  checkout to revoke it at, since the worktree has no grant of its own. (#530)
 - **`[tasks.<lang>] env`: environment variables for a language's task
   commands.** (#537) A task slot had no way to set a variable, so `run_task test`
   could not reproduce plumb's own CI: `make test` sets `GOTMPDIR` inside the
@@ -52,6 +70,149 @@
   finishes, the next `git` call from each session reports `landed as <sha>` or
   the failure with git's output. A value at or above `write_timeout` restores
   the old wait-it-out behaviour. (#549)
+- **`read_file` and `read_symbol` keep blank lines at the edges of what they
+  return.** A `read_file` window whose first line was blank dropped it, so
+  every later line was labelled one line too low and the header under-counted
+  the window; a range-mode edit built on that view hit the wrong lines. A
+  window or symbol body ending on a blank line lost that last row. Lines in a
+  ranged read are now each returned with their terminator.
+- **A config watcher that loses its file descriptor recovers at once, and
+  closing one waits for its reader.** (#560) fsnotify's kqueue backend
+  (macOS) can close one descriptor twice: its `Close` and its reader both close a
+  watch whose path was just deleted, and a file opened in between loses its
+  descriptor. When that was a project config watcher, its reader spun on
+  "bad file descriptor" and the workspace waited for the 30 s poll; for the
+  global config watcher, hot reload stopped. Both now recreate a watcher that
+  reports EBADF and reload once, and give up to the old fallback only if the
+  replacement is lost within a second. Closing a watcher now waits until its
+  reader has stopped delivering, and the daemon's project-watch shutdown waits
+  for every watcher, for at most half a second, so a caller that then deletes
+  the watched tree no longer races the close. The reader's last two descriptor
+  closes can still trail that wait by microseconds, so this narrows the window
+  rather than closing it: only a fix in fsnotify removes the double close. This
+  was also the intermittent macOS failure of the `TestProjectWatchManager_*`
+  tests, whose clean-up removed watched directories during the close.
+- **A linked worktree of a trusted project gets the project's approved
+  capability values.** Trust is keyed on the path, so a worktree at
+  `<project>/.claude/worktrees/<name>` had no grant and fell back to the global
+  `[git]` policy and task commands, although it reads the same checked-in
+  `.plumb/config.toml`. The content-bound grants now also match in a linked
+  worktree of the same repository whose request is identical to the approved
+  one; a branch that changes the capability config stays untrusted, and a
+  directory with a forged `.git` link does not qualify: the worktree's git
+  directory must sit inside the trusted repository's own `worktrees/`. When a
+  worktree is trusted this way, `session_start`, `plumb config show` and the
+  daemon log name the checkout the grant is shared from. When an untrusted
+  project config is why a git tier is off, the refusal now says so and names
+  the `plumb trust` command for that path. (#530)
+- **The `git` tool's tiers read options as git does.** The argument-dependent
+  classifiers matched options by exact spelling, but git expands abbreviations
+  and unpacks bundled short flags. So `switch --disc`, `branch --del`, `branch
+  -dr`, `tag --del`, `restore --staged --work` and `checkout -b x -f` were
+  classified a tier BELOW the operation git performed. They now match git's
+  unambiguous-prefix rule, unpack bundles and consume option values, and a
+  `--staged` after `--` or given as another option's value no longer lowers
+  `restore` to the write tier. The checks that LOWER a tier now honour what
+  cancels them: `--end-of-options` ends options as `--` does, a later
+  `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
+  counts as branch list mode, so `branch -fv side main` cannot force-move a
+  branch at the read tier. `checkout -B`, `switch -C` and `tag -f` are
+  destructive when the ref they name already exists, because they move or
+  replace it like `reset --keep`, and a write when the name is new. Creating a
+  new ref with them stays a write, but only for a plain name given once: the
+  option appears one time, and the name is ASCII letters, digits and `. _ - /`
+  with no `@`, `{` or `..`, that `git check-ref-format` accepts and prints back
+  unchanged, and that does not exist yet. git expands `@{-1}`, `@{u}`, `@{push}`
+  and `<branch>@{upstream}` to a real local branch before it acts, and keeps the
+  last of a repeated `-B`, so the call could reset a branch the existence check
+  never looked at; those stay destructive, as does a call git cannot answer
+  for. Every forced `git branch` form (`-f`, `--force`, `-M`, `-C`, `-D`) is
+  destructive whether or not the branch exists: branch's option grammar defeated
+  each attempt to tell a creation from a reset (`--no-move` cancels the mode
+  that picks which argument is the name, `-C` inside a bundle such as `-qC`
+  slips past the global-flag denylist that refuses only a bare `-C`, and
+  `--recurse-submodules` resets the submodules' branch of the same name too).
+  `branch -M` is `--move --force` and `-C` is `--copy --force`, and both used to
+  be a write that overwrote their target. Branch's upstream and description
+  options are writes. (#530)
+- **Plumb's own git operations are no longer reported as a peer's edits.** After
+  a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
+  the next `read_file` of a file plumb had written warned that "a peer or
+  external process may have edited it". Files the operation changed are now
+  re-recorded as plumb's; a peer's edit before or after the operation still
+  warns, and so does a write by a hook the operation ran (merge's
+  `pre-merge-commit`, switch's `post-checkout`) to a file git did not
+  produce. (#529)
+
+- **`make test`, `make test-race`, `make cover` and `make integration-test`
+  no longer stop `go test` at 10 minutes.** The `internal/cli` package alone has
+  come within a second of it on a loaded machine, so a slow CI runner could
+  fail on time rather than on a test. They now take `GO_TEST_TIMEOUT`
+  (default `20m`).
+- **An agent pinned to its own project runs that project's tasks and
+  commands.** On a `plumb serve` connection shared by several agents, an agent
+  that pinned itself with `session_start` to project B while the connection
+  stayed on project A ran `run_task` and `mutation_test` with A's
+  `[tasks.<lang>]` commands, `working_dir` and `env` against B's root, and
+  `run_command` with A's `[[command]]` list under A's trust. A's
+  `working_dir = "plumb"` sent the agent's build into `<B>/plumb`, which did not
+  exist. These tools, `topology_affected`'s test targets and `session_start`'s
+  task section now read B's config and B's `plumb trust` state, and
+  `agent_config` writes B's config rather than A's. An agent on the
+  connection's own project, and a connection with one agent, are unchanged. A
+  project's own `[[command]]` entries and task overrides in a worktree now need
+  `plumb trust` in that worktree, as they already did for a connection pinned
+  there. A working directory that does not exist is now refused before the
+  command starts, naming the directory and the `working_dir` setting that
+  produced it. Before, Go reported
+  `fork/exec <binary>: no such file or directory`, which blamed a binary that
+  exists. (#522)
+- **`mutation_test` names the run holding its slot, and frees the slot when
+  that run's client goes.** (#545) A second run is still refused (one run per
+  daemon keeps two agents from reading each other's mutant as their own result),
+  but the refusal said only "another mutation run is already in progress", so
+  agents waited over an hour unable to tell a long run from a stuck one. It now
+  names the holder's session name and id, workspace, how long ago it started,
+  and its progress (checking its mutants, the unmutated baseline, or mutant *k*
+  of *n* and its compile or test step). And the MCP server never cancelled a
+  call whose client disconnected, so a crashed agent's run held the slot until
+  it finished, for a report nobody could receive. A run whose connection closes
+  is now cancelled: the step in flight is killed, the file restored, the slot
+  released, and no further mutant is started.
+- **The pre-commit hook no longer fails on a peer's lint, and no longer
+  rewrites files behind a commit.** (#545) With two agents committing at once,
+  golangci-lint refused the second with "parallel golangci-lint is running" and
+  the commit failed on contention, not a finding; the hook now passes
+  `--allow-parallel-runners`. And its `run --fix` reformatted files after the
+  commit's content was chosen, so a passing commit left a dirty tree whose
+  rewrite drifted into the next unrelated commit. The hook now only checks: an
+  unformatted file fails the commit, is listed by name, and the message gives
+  the fix (`golangci-lint run --fix ./...`, then re-stage). `make
+  check-pre-commit`, part of `make verify`, pins both against a stub linter.
+- **`workspace_sessions` no longer times out when several agents list at
+  once.** (#545) The session list opened and parsed every session file on
+  every call, under an exclusive lock, and ended sessions are kept for a day so
+  a reconnecting agent can inherit its name: on a busy machine that was about a
+  thousand files and ~290 ms per list, queued behind every other caller, against
+  `workspace_sessions`' 500 ms budget, so the second of two concurrent calls
+  returned "timed out reading session or stats data". An ended session's file
+  does not change, so the list now remembers it by the file's identity (inode,
+  size and modification time) and settles it with a stat instead of an open;
+  a changed file is read again. On that directory a list now takes ~34 ms, and
+  sixteen concurrent lists finish within ~240 ms instead of 1.7 s. The budget is
+  unchanged.
+- **A daemon restart no longer deletes a long-lived session's pins and read
+  records.** The daemon pruned persisted session state older than
+  `[session] persist_state_ttl_minutes` (24h by default) at start-up, before
+  any `plumb serve` had reconnected, so it could not spare sessions still in
+  use. Rows refresh only when rewritten, so a serve kept open for more than a
+  day came back from a restart without its per-agent pins or its read records,
+  and the "changed since you read it" guard then let an edit through for any
+  file read more than a day earlier. Nothing is pruned at start-up now. The idle
+  reaper prunes instead: its first pass runs 5 minutes after start, once
+  surviving serves have reconnected, and it skips every connected session, so a
+  dead session's state is still removed once it is older than the TTL. The
+  identity record is still kept regardless of age. (#525)
 - **The identity hook re-asks a daemon that was swapped within the minute.**
   The Claude Code identity hook caches, for a minute, the daemon's version
   and whether it accepts `plumb_agent`. If the daemon was replaced inside
@@ -72,6 +233,51 @@
   property, about 80 bytes per tool, but the profile surcharge measured the
   schemas without it. It now measures the schemas as that connection is served
   them. (#515)
+- **A shared connection refuses a write under an identity nobody declared.**
+  When several conversations shared one `plumb serve`, a state-changing call
+  carrying a per-call identity that no `session_start` on that connection had
+  declared (a model typing `plumb_agent: "my-session"`, or a client sending
+  `_meta` it never announced) was admitted. It got a fresh per-agent state
+  seeded from the connection's workspace, so a relative write landed in whatever
+  checkout the connection held, often another agent's. Now such a call is
+  refused, and the refusal says to call `session_start` first, with the
+  `workspace` the agent works in so that declaring does not leave it on another
+  agent's checkout. Reads are never refused. A connection used by one
+  conversation only (a main thread and its own subagents, as in the Claude Code
+  CLI) needs no declaration. A subagent stamped
+  `<conversation>/<agent>` is admitted on its conversation's declaration and
+  works in its conversation's workspace rather than the connection's. It starts
+  there, and it follows when its conversation later moves itself to another
+  workspace, unless the subagent chose a workspace of its own. So a subagent of
+  an agent working in a worktree no longer writes into the main checkout. If
+  such a subagent moves the connection's pin (`scope: "connection"`), it stays
+  on its conversation's workspace, and `session_start` now says so rather than
+  naming the connection's new root as where its relative paths go.
+  Declarations are saved under the proxy session and restored when it
+  reconnects, including after a daemon restart. One is reclaimed only when the
+  idle reaper finds its `plumb serve` disconnected and the declaration older
+  than `[session] persist_state_ttl_minutes` (24 hours by default), and each
+  state-changing call refreshes it at most once per quarter of that (at most an
+  hour). With `persist_state` off, or after such a reclaim, an agent is refused
+  once and declares again with `session_start` (#513).
+- **A connection that closes mid-attach no longer leaks a language server,
+  and a burst of roots notifications settles on the newest roots.** When
+  a client reported a workspace change (`notifications/roots/list_changed`)
+  and the connection closed while plumb was attaching it, the attach could
+  finish after the close had already released the connection's resources.
+  The language-server reference it took was then never released, so the
+  pooled server never idled out. The same held for the quality runner, the
+  shared write budget and the project-config watcher. OnInit's attach and
+  the refresh after `enable-lsp` had the same gap. Each of these now checks
+  the connection under the same lock the close uses, and gives up without
+  taking anything once the connection has closed. Separately, every roots
+  notification used to fetch the roots on its own, and whichever fetch
+  finished last won, so a slow answer to an early notification could replace
+  a newer one. Now one fetch runs at a time per connection. However many
+  notifications arrive during it, they trigger exactly one more fetch when
+  it finishes, so the pin follows the newest answer. An explicit
+  `session_start` pin still outranks client roots, and a reordered root list
+  still does not move the pin.
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,
@@ -149,11 +355,22 @@
   declared, an unidentified call still resolves against the connection's
   pin, as before.
 
-- **`session_start` no longer claims it re-pinned the connection.** It
-  printed "Re-pinned this connection" even when only the calling agent's own
-  pin moved; it now prints `Re-pinned: <from> → <to>`. The no-identity
-  notices, `plumb doctor`'s shared-connection fix and the client instruction
-  templates now describe the current refusal rule.
+- **`session_start` says which pin a re-pin moved, and where your next
+  relative path goes.** It printed "Re-pinned this connection" even when only
+  the calling agent's own pin moved. It also never said when an anonymous
+  re-pin on a shared connection moved the other agents' workspaces with it. With
+  `scope: "connection"`, an agent holding its own pin was shown its own root as
+  "from", and the header named the connection's new root although the agent's
+  relative paths still resolved against its own. The daemon now reports which
+  pin it moved, that pin's previous root and how many other agents followed it.
+  Both the full and the brief packet print "Re-pinned your pin" or "Re-pinned
+  this connection's pin (N other agents follow it)", plus a line naming what the
+  caller's next relative-path call resolves against. The `# Workspace:` header
+  names the caller's own root. Two callers racing to the same root no longer
+  both report moving the pin. A connection-scoped move now also clears the
+  caller's own refused-declaration marker. The no-identity notices,
+  `plumb doctor`'s shared-connection fix and the client instruction templates
+  now describe the current refusal rule. Closes #517.
 
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one
@@ -219,6 +436,68 @@
   overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
   file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
   naming the `go.work` when it applies (#521).
+- **The first agent to call after a daemon restart runs on its own restored pin
+  and read tracker.** (#523) On a connection shared by several agents, the
+  identities the daemon has seen start empty after a restart, so the first
+  stamped call, usually a subagent while its parent waits, read as the only agent
+  there is and ran on the connection's pin and read tracker. Its relative writes
+  landed in the parent's checkout, the parent's reloaded reads satisfied its
+  strict-mode checks, and its own reads were saved where its shard never looked
+  again. Any stamped agent on a connection recorded as shared (two agent
+  identities seen within the last six hours) now gets its own shard from its first call,
+  whether or not it holds a pin of its own. Most subagents hold none: they are
+  anchored to their parent's chosen root or simply follow the connection, so they
+  get that root (the parent's persisted pin, when the parent is not yet back) and
+  a read tracker of their own, not the connection's, which holds the parent's
+  reads. This changes where its calls are routed and nothing that refuses a call:
+  an unstamped write is admitted exactly as before. A lone agent is unaffected,
+  because a connection that only ever saw one identity carries no evidence of
+  being shared, and that agent's re-pins must keep moving the connection. The evidence that the connection was shared is
+  refreshed only by each agent's own calls, so a parent idle for more than six
+  hours while one subagent works drops out of it, and if the daemon restarts then
+  that subagent stays on the connection's pin and read tracker, as before.
+- **A shard that only followed the connection is no longer saved as its agent's
+  own pin.** (#527) Moving the connection's pin saved a per-agent row for each
+  shard it dragged along, and after a restart that row outranked the connection's
+  pin, so the agent was restored fixed at a place it was only ever taken to and
+  no later connection move reached it. Only an agent's own move or confirmation
+  writes its row now; a dragged shard's row is deleted. A restored shard counts as
+  having chosen its root, so a connection move no longer drags it off a workspace
+  its agent named when the two happened to coincide, as a live one never was. A
+  row an earlier release wrote for a shard that had only followed carries the
+  connection's origin: a `roots` origin can only be such a row and is ignored, so
+  that agent follows the connection again, but one with a `session_start` origin
+  cannot be told from a chosen one and is still honoured; that agent replaces it
+  by pinning again.
+- **A `session_start` that moved only your own pin is not replayed as the
+  connection's.** (#527) The serve proxy records a `session_start` workspace and
+  replays it after a reconnect as a connection-level pin that outranks the
+  client's roots. The result named the connection's workspace whichever pin the
+  call moved, so an agent-scope call made a roots-derived connection pin sticky,
+  and roots changes stopped moving it. A result now carries
+  `dev.plumbkit/pin-scope` (`agent` or `connection`), and a proxy that reads it
+  leaves its replay pin alone for `agent`. The proxy half takes effect when
+  `plumb serve` restarts, which a daemon restart does not do. Until then an older
+  proxy cannot read the scope, so the result still names the connection's
+  workspace for an `agent` call: that proxy records the connection's root, as it
+  did before, and never the agent's own worktree.
+- **The first connection pin on a shared connection moves the caller's fresh
+  shard.** (#567) `session_start` reported the new workspace, but the caller's
+  shard, created at no workspace before the pin, was left there because only
+  shards sitting on the previous root were dragged and there was none. The next
+  relative-path call resolved against nothing. Shards that follow the connection
+  and sit at no workspace now move with its first pin; an agent that chose a
+  root of its own does not.
+- **`daemon_info` and workspace-boundary refusals describe the pin that resolved
+  the call.** (#529) On a shared connection both quoted the connection's pin
+  (`set 32m ago via session_start`) to an agent that had re-pinned its own shard
+  minutes earlier. They now quote the agent's own pin: its time, its origin, the
+  root it replaced, and `restored on reconnect` when it came back from a restart.
+  A shard that follows the connection reports the connection's.
+- **The reconnect note no longer promises a pin it cannot keep.** (#529) It said
+  the daemon restores an explicit `session_start` workspace, which holds for an
+  agent with a pin of its own and not for one that only followed the connection's.
+  It now says which is which.
 
 ## 0.20.3 (2026-09-30)
 

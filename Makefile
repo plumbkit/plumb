@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -89,14 +89,24 @@ else
 	@echo "codesign: skipping on $(UNAME_S) (macOS-only)"
 endif
 
+# GO_TEST_TIMEOUT replaces go test's 10-minute default, which the cli package
+# alone has come within a second of on a loaded machine; a slow CI runner
+# (test-race especially) would fail on time, not on a test. integration-test
+# shares it: its untagged half runs the same packages. Empty means the default.
+GO_TEST_TIMEOUT ?= 20m
+ifeq ($(strip $(GO_TEST_TIMEOUT)),)
+GO_TEST_TIMEOUT := 20m
+endif
+export GO_TEST_TIMEOUT
+
 test: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -timeout=$(GO_TEST_TIMEOUT) ./...
 
 test-race: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race -timeout=$(GO_TEST_TIMEOUT) ./...
 
 integration-test: $(TESTCACHE)
-	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=10m ./...
+	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -tags=integration -timeout=$(GO_TEST_TIMEOUT) ./...
 
 # fuzz runs every fuzz target in the tree for FUZZTIME each (default 60s).
 #
@@ -269,6 +279,13 @@ check-changelog-placement:
 check-changelog-placement-test:
 	./scripts/check-changelog-placement-test.sh
 
+# check-pre-commit runs the pre-commit hook against a stub golangci-lint: it must
+# pass --allow-parallel-runners (a peer's lint must not fail this commit) and must
+# check formatting rather than rewrite files after the commit's content is chosen
+# (#545). Hermetic and offline, so it is part of verify.
+check-pre-commit:
+	./scripts/pre-commit-test.sh
+
 # cover measures statement coverage and fails below the floor in
 # scripts/check-coverage.sh. Not in `verify` — it re-runs the whole suite with
 # instrumentation, so it would roughly double the local edit loop; CI runs it on
@@ -388,7 +405,7 @@ blog:
 # VERIFY_CHECKS is the check list verify and verify-full share. verify-full omits
 # `test` because `go test -tags=integration ./...` already runs every non-tagged
 # test too, so listing both would run the unit suite twice.
-VERIFY_CHECKS := lint build-integration build-clients check-size check-brief check-changelog check-site-claims check-verify-disclosure tidy-check
+VERIFY_CHECKS := lint build-integration build-clients check-size check-brief check-changelog check-site-claims check-verify-disclosure check-pre-commit tidy-check
 verify: build test $(VERIFY_CHECKS)
 	@printf '\n%s\n%s\n%s\n%s\n%s\n\n' \
 		'verify: PASSED — but the //go:build integration suite was COMPILED, not RUN.' \

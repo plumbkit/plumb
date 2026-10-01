@@ -18,7 +18,7 @@ var gitSchema = json.RawMessage(`{
   "properties": {
     "subcommand": {
       "type": "string",
-      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, cherry-pick, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
+      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, merge, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
     },
     "args": {
       "type": "array",
@@ -78,6 +78,9 @@ type Git struct {
 	intentsOn       func() bool
 	collabStore     func() *collab.Store
 	hintBudgetBytes func() int
+	// projectGit is the session's captured project [git] request (nil-safe),
+	// read only to explain a tier refusal (git_untrusted_note.go).
+	projectGit func() ProjectGitStatus
 }
 
 func NewGit(deps WriteDeps, policy GitPolicyFn) *Git {
@@ -116,13 +119,29 @@ func (t *Git) WithPeerIntents(on func() bool, store func() *collab.Store, hintBu
 	return t
 }
 
+// WithProjectPolicy wires the session's captured project-config [git] request
+// — the same snapshot session_start's git-policy notice reads — so a tier
+// refusal can say when an untrusted project config is why the tier is off.
+// Returns the receiver for chaining.
+func (t *Git) WithProjectPolicy(fn func() ProjectGitStatus) *Git {
+	t.projectGit = fn
+	return t
+}
+
+func (t *Git) projectGitStatus() ProjectGitStatus {
+	if t.projectGit == nil {
+		return ProjectGitStatus{}
+	}
+	return t.projectGit()
+}
+
 func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
 	return "Run git through one tiered, policy-gated tool (no shell, no agent-supplied " +
 		"command line). Read subcommands (status, log, diff, show, blame, " +
 		"shortlog, branch/tag/stash listing) always run. Write (add, commit, " +
-		"switch, mv, branch/tag create, stash push/pop) needs [git] allow_writes " +
+		"switch, mv, merge, branch/tag create, stash push/pop) needs [git] allow_writes " +
 		"(default on). Destructive (reset, clean, checkout, restore, rebase, " +
 		"revert, cherry-pick, branch/tag delete, stash drop) needs " +
 		"allow_destructive AND confirm:true. Network (push, fetch, pull) needs " +
@@ -169,24 +188,13 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	// global-flag denylist (which otherwise refuses the colliding -c/-C).
 	newArgs, switchNote := normaliseSwitchCreate(a.Subcommand, a.Args)
 	a.Args = newArgs
-	if err := checkGitGlobalFlags(a.Args); err != nil {
+	tier, err := classifyGitCall(a)
+	if err != nil {
 		return "", err
 	}
-	if err := rejectDuplicatedLeadingSubcommand(a.Subcommand, a.Args); err != nil {
-		return "", err
-	}
-	tier := classifyGit(a.Subcommand, a.Args)
-	if tier == tierReject {
-		if a.Subcommand == "stash" && len(a.Args) > 0 {
-			return "", fmt.Errorf("git stash: sub-command %q is not permitted; use list, show, push, pop, apply, drop, or clear", a.Args[0])
-		}
-		if a.Subcommand == "rm" {
-			return "", errors.New("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
-		}
-		return "", fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
-	}
+	tier = t.refineTier(ctx, a, tier) // git_ref_reset.go: creating a NEW ref is a write
 	policy := t.resolvePolicy()
-	if err := gateGit(tier, policy, a.Confirm); err != nil {
+	if err := t.gate(tier, policy, a.Confirm); err != nil {
 		return "", err
 	}
 	if err := checkPushProtection(a, policy, tier); err != nil {
@@ -203,6 +211,20 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 		return "", err
 	}
 	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), gitChildSpecFor(policy))
+}
+
+// gate applies the tier policy (gateGit), adding the untrusted-project note
+// when an untrusted project config is why the tier is off.
+func (t *Git) gate(tier gitTier, policy GitPolicy, confirm bool) error {
+	err := gateGit(tier, policy, confirm)
+	if err == nil {
+		return nil
+	}
+	if note := untrustedTierNote(t.projectGitStatus(), tier, policy); note != "" {
+		// A note means the tier's switch is off, so err is the disabled refusal.
+		return policyDisabled(err.Error() + note)
+	}
+	return err
 }
 
 // commitTrailerToken returns the `Plumb-Session: <session-name>` trailer to
@@ -274,7 +296,7 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		}
 	}
 	guard := t.armRefGuard(a, tier)
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.sessionKey())
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.deps.writes(ctx), t.sessionKey())
 	if err != nil {
 		return "", err
 	}
