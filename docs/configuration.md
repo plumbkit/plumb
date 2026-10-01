@@ -1344,7 +1344,8 @@ an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout
 `[tasks.<lang>]` and `[[command]]` from the calling agent's own workspace. On a
 `plumb serve` connection that several agents share, an agent that pinned itself
 to another project (or a worktree) with `session_start` gets that project's
-commands, `working_dir`, `env` and `plumb trust` state, not the connection's.
+commands, `working_dir`, `env` and `plumb trust` state, not the connection's,
+and its `agent_config` writes go to that project's `.plumb/config.toml`.
 
 ### `{target}` and its default
 

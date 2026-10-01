@@ -47,12 +47,16 @@
   `run_command` with A's `[[command]]` list under A's trust. A's
   `working_dir = "plumb"` sent the agent's build into `<B>/plumb`, which did not
   exist. These tools, `topology_affected`'s test targets and `session_start`'s
-  task section now read B's config and B's `plumb trust` state. An agent on the
+  task section now read B's config and B's `plumb trust` state, and
+  `agent_config` writes B's config rather than A's. An agent on the
   connection's own project, and a connection with one agent, are unchanged. A
-  working directory that does not exist is now refused before the command
-  starts, naming the directory and the `working_dir` setting that produced it.
-  Before, Go reported `fork/exec <binary>: no such file or directory`, which
-  blamed a binary that exists. (#522)
+  project's own `[[command]]` entries and task overrides in a worktree now need
+  `plumb trust` in that worktree, as they already did for a connection pinned
+  there. A working directory that does not exist is now refused before the
+  command starts, naming the directory and the `working_dir` setting that
+  produced it. Before, Go reported
+  `fork/exec <binary>: no such file or directory`, which blamed a binary that
+  exists. (#522)
 - **A daemon restart no longer deletes a long-lived session's pins and read
   records.** The daemon pruned persisted session state older than
   `[session] persist_state_ttl_minutes` (24h by default) at start-up, before

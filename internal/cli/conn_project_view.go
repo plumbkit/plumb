@@ -22,10 +22,15 @@ import (
 // [tasks.<lang>], [[command]], [command_policy] and the exec trust resolved with
 // them — describe the calling agent's effective workspace, and that workspace.
 //
-// A call on the connection's own root gets the connection's view untouched: a
-// single-agent connection, an unattributed call, and an agent pinned to the
-// connection's project behave exactly as before. Only an agent whose shard
-// holds a DIFFERENT root has those blocks resolved for that root.
+// A call on the root the connection's view was LOADED for gets that view
+// untouched: a single-agent connection, an unattributed call, and an agent
+// pinned to the connection's project behave exactly as before. Every other root
+// has those blocks resolved for it. The test is configRoot, not acquiredRoot: a
+// re-pin moves acquiredRoot before applyProjectConfig swaps the new root's
+// config in, and keying on acquiredRoot handed a call in that window the new
+// root paired with the old project's commands and trust. A view no project
+// config was ever applied to holds only the global config, which no root can
+// borrow anything from, so it is used as is.
 //
 // That resolution is done per call, from disk, rather than cached on the shard.
 // The calls that read it (run_task, mutation_test, run_command, and the
@@ -37,7 +42,7 @@ import (
 func (s *connSession) projectViewFor(ctx context.Context) (sessionView, string) {
 	ws := s.workspaceFor(ctx)
 	v := s.view()
-	if ws == "" || ws == v.acquiredRoot {
+	if ws == "" || ws == v.configRoot || (v.configRoot == "" && ws == v.acquiredRoot) {
 		return v, ws
 	}
 	lang := v.acquiredLanguage
