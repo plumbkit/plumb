@@ -74,8 +74,13 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 	// view and is re-applied; any other root is read per call (projectViewFor), so
 	// the agent's next call already sees the write. Re-applying THAT root here
 	// would swap another project's config into the connection's view.
-	if v := s.view(); ws == v.configRoot || ws == v.acquiredRoot {
-		s.applyProjectConfig(ws)
+	//
+	// The same test is asked again inside the lane, where the swap commits: a
+	// re-pin that lands between this read and the commit has applied its own root,
+	// and the apply of this one must then be dropped, not laid over it (#558).
+	holdsWS := func(v *sessionView) bool { return ws == v.configRoot || ws == v.acquiredRoot }
+	if v := s.view(); holdsWS(&v) {
+		s.applyProjectConfigIf(ws, holdsWS)
 	}
 	s.log().Info("daemon: agent wrote project config", "workspace", ws, "keys", changed)
 	return fmt.Sprintf(

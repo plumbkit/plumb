@@ -57,6 +57,18 @@
 
 ### Fixed
 
+- **`agent_config` no longer re-installs the old project's config on a connection
+  that has since re-pinned.** (#558) The tool read the connection's cached view,
+  loaded the config, and applied it outside the connection's mutation lane. A
+  re-pin to another project settling in between had applied its own root, and the
+  late apply then put the old project's `[git]` tiers, edits, collab and path
+  policy back on a connection pinned to the new one, and pointed the project
+  config watcher at the old root, until the next reload. The check that the
+  connection still holds the written root is now made inside the lane, where the
+  swap commits, and a stale apply is dropped whole. Task and command execution
+  were never exposed: they already fell back to a per-call load on a root
+  mismatch (#555).
+
 - **`move_symbol` no longer moves a different symbol behind a healthy language
   server, and the symbol-edit tools no longer blame it.** (#571) With a struct
   field `T.Run` and a method `(*S).Run`, `move_symbol Run` moved the method under

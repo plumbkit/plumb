@@ -364,9 +364,8 @@ type connSession struct {
 	chatWatch    *chatWatch
 	writeLimiter *tools.RateLimiter
 
-	// hintSeen tracks the memory names already hinted on this connection, so a
-	// memory is pointed out once per session, not on every read of a hot path.
-	// Lazily created; cleared on re-pin.
+	// hintSeen: memory names already hinted on this connection, so each is pointed
+	// out once per session, not on every hot-path read. Lazily created; cleared on re-pin.
 	hintSeen   map[string]bool
 	hintSeenMu sync.Mutex
 
@@ -376,10 +375,11 @@ type connSession struct {
 	unsubscribe    func()          // removes the store-change listener on close
 
 	// initSettled closes when OnInit's attach ladder has run (conn_roots.go).
-	initSettled      chan struct{}
-	initSettledOnce  sync.Once
-	roots            rootsCoalescer // roots/list_changed coalescing (conn_roots.go)
-	beforeLiveMutate func()         // test seam, see mutateLive (conn_lane.go)
+	initSettled        chan struct{}
+	initSettledOnce    sync.Once
+	roots              rootsCoalescer // roots/list_changed coalescing (conn_roots.go)
+	beforeLiveMutate   func()         // test seam, see mutateLive (conn_lane.go)
+	beforeConfigCommit func()         // test seam, see applyProjectConfigIf (conn_config.go)
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex

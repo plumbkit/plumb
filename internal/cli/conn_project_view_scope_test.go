@@ -147,3 +147,53 @@ func readProjectConfig(t *testing.T, ws string) string {
 	}
 	return string(body)
 }
+
+// #558. agent_config decides to apply from a read of the connection's view, then
+// loads the config and commits the swap. A connection re-pin that settles in
+// between has applied ITS root, and the apply of the old one must be dropped:
+// laid over it, it put A's git tiers, edits, collab and path policy on a
+// connection pinned to B. The window is reproduced exactly, by the seam between
+// the load and the commit: A's config loaded, and the root already moved to B.
+func TestAgentConfig_ApplyDroppedWhenARepinSettlesBeforeTheCommit(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	a := t.TempDir()
+	writeExecProject(t, a, connProjectA)
+	grantExecTrust(t, a)
+	s := execTrustSession(t, a)
+	b := t.TempDir() // no project config: B's view is the shipped defaults
+	ctx := context.Background()
+
+	// Positive control: with the root unmoved the write is applied live, so the
+	// guard below is not dropping every apply.
+	if _, err := s.applyAgentConfig(ctx, map[string]any{"tasks.go.lint": "go vet -v ./..."}); err != nil {
+		t.Fatalf("agent_config on A: %v", err)
+	}
+	if got := s.view().tasks["go"].Lint; got != "go vet -v ./..." {
+		t.Fatalf("control: the write to A is not live in its view: lint = %q", got)
+	}
+
+	wantBuild := config.Defaults().Tasks["go"].Build
+	s.beforeConfigCommit = func() {
+		s.beforeConfigCommit = nil
+		s.mutate(func(v *sessionView) { v.acquiredRoot = b })
+		s.applyProjectConfig(b) // the re-pin to B settles
+	}
+	if _, err := s.applyAgentConfig(ctx, map[string]any{"tasks.go.lint": "go vet ./..."}); err != nil {
+		t.Fatalf("agent_config racing a re-pin: %v", err)
+	}
+
+	v := s.view()
+	if v.configRoot != b {
+		t.Errorf("configRoot = %q, want B %q: the stale apply of A was committed over the re-pin", v.configRoot, b)
+	}
+	if got := v.tasks["go"].Build; got != wantBuild {
+		t.Errorf("B's connection carries A's [tasks.go] build %q, want the default %q", got, wantBuild)
+	}
+	if got := v.tasks["go"].Lint; got == "go vet ./..." || got == "go vet -v ./..." {
+		t.Errorf("B's connection carries A's lint %q", got)
+	}
+	if len(v.commands) != 0 || v.execTrusted {
+		t.Errorf("B's connection carries A's exec grant: %d commands, trusted=%v", len(v.commands), v.execTrusted)
+	}
+}
