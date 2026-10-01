@@ -129,7 +129,6 @@ type Item struct {
 	Added, Removed int // pre-computed for sensitive items
 }
 
-//nolint:unused // consumed by writer in Task 7
 func (it Item) contentBytes() int64 {
 	return int64(len(it.Before.Content) + len(it.After.Content))
 }
