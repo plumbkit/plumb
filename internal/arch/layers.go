@@ -123,6 +123,7 @@ var Layers = map[string]Layer{
 
 	// ── Domain ──
 	"internal/config":       LayerDomain,
+	"internal/history":      LayerDomain, // write-diff history store
 	"internal/session":      LayerDomain,
 	"internal/sessionstate": LayerDomain,
 	"internal/stats":        LayerDomain,
