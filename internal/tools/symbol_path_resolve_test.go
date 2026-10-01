@@ -9,6 +9,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/topology"
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // genericReceiverSrc has two methods named Run: A's value-receiver one first,
@@ -141,6 +142,45 @@ func TestTopologyNodeByPath_ParentByContainment(t *testing.T) {
 	// other node called run encloses one.
 	if n := topologyNodeByPath(nodes[:2], "run/run"); n != nil {
 		t.Errorf("run/run resolved the node at line %d: a node is not its own parent", n.StartLine)
+	}
+}
+
+// TestTopologyNodeByPath_PythonMembersByContainment is the containment rule on
+// the real Python extractor, whose nodes carry no parent in Qualified: the
+// fallback must keep resolving Class/method for a language that never names the
+// class in the member, and must not answer for a class that has no such member.
+func TestTopologyNodeByPath_PythonMembersByContainment(t *testing.T) {
+	const src = "class Greeter:\n" + // 1
+		"    def run(self):\n" + // 2
+		"        return 1\n" + // 3
+		"\n" + // 4
+		"class Other:\n" + // 5
+		"    def run(self):\n" + // 6
+		"        return 2\n" + // 7
+		"\n" + // 8
+		"def helper():\n" + // 9
+		"    return 3\n" // 10
+	nodes, _, err := treesitter.NewPython().Extract(context.Background(), "demo.py", []byte(src))
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	for _, tc := range []struct {
+		path      string
+		wantStart int // 0: not found
+	}{
+		{"Greeter/run", 2},
+		{"Other/run", 6},
+		{"Nope/run", 0},
+		{"Greeter/helper", 0},
+		{"Greeter/Greeter", 0},
+	} {
+		n := topologyNodeByPath(nodes, tc.path)
+		switch {
+		case tc.wantStart == 0 && n != nil:
+			t.Errorf("%q resolved the node at line %d, want not found", tc.path, n.StartLine)
+		case tc.wantStart != 0 && (n == nil || n.StartLine != tc.wantStart):
+			t.Errorf("%q = %+v, want the node at line %d", tc.path, n, tc.wantStart)
+		}
 	}
 }
 
