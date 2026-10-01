@@ -31,6 +31,7 @@ language `none`.
 | [`plumb config`](#plumb-config) | Inspect resolved configuration |
 | [`plumb sessions`](#plumb-sessions) | List active sessions |
 | [`plumb mail`](#plumb-mail) | Report whether a session has unread agent-to-agent messages |
+| [`plumb history`](#plumb-history) | Review the diffs of every file write plumb made |
 | [`plumb stats`](#plumb-stats) | Show tool-call statistics (alias: `status`) |
 | [`plumb diagnostics`](#plumb-diagnostics) | Print LSP diagnostics (alias: `diag`, `diags`) |
 | [`plumb log-level`](#plumb-log-level) | Change the running daemon's log level |
@@ -690,6 +691,57 @@ reader then has to win the claim race for.)
 
 The `plumb-chat` skill's `references/idle-agent-wake-hook.md` gives the full
 Claude Code Stop-hook recipe built on this command.
+
+---
+
+## `plumb history`
+
+```
+plumb history [--workspace PATH|--all] [--session ID] [--agent ID] [--tool NAME]
+              [--file PATH] [--since T] [--until T] [--limit N=50] [--json]
+plumb history show <seq | call_id> [--json]
+plumb history prune --before T [--workspace PATH] [--yes] [--vacuum]
+```
+
+Review the diffs of every file change plumb made on an agent's behalf. Changes are recorded in `~/.local/share/plumb/history.db` across all mutation tools (`write_file`, `edit_file`, `find_replace`, `delete_file`, `rename_file`, `copy_file`, `undo_edit`, `rename_symbol`, `move_symbol`, `transaction_apply`, and project configuration/memory writes).
+
+### Subcommands
+
+- **`plumb history`** (list): lists changes newest first.
+  - Line format: `<timestamp>  <op>[ dir]  <tool>  <session>[/<agent>]  <path>  +A -R  [<content>]`.
+  - When a file changed outside plumb's write tools between two recorded writes, an unrecorded-change marker line is printed:
+    `  ⋯ unrecorded change (outside plumb's write tools)`
+    If rows were dropped due to a queue overflow in that interval, it appends `; history dropped rows in this interval`.
+- **`plumb history show <seq | call_id>`**: displays the unified diff(s) and associated `stats.tool_calls` metadata (duration, success/failure, session). If call metadata is not available (e.g. from an older version of plumb), the diffs are still printed.
+- **`plumb history prune --before T`**: deletes write history entries older than `T`. Requires `--yes` in non-interactive mode. With `--vacuum`, reclaims file space with SQLite `VACUUM` (refused while the daemon is running to prevent database lock contention).
+
+### Flags
+
+| Command | Flag | Default | Effect |
+|---|---|---|---|
+| `history` | `--workspace <path>` | Current workspace | Filter changes to the specified workspace path. |
+| `history` | `--all` | `false` | List changes across all workspaces. |
+| `history` | `--session <id>` | — | Filter to a specific session ID. |
+| `history` | `--agent <name>` | — | Filter to a specific logical agent. |
+| `history` | `--tool <name>` | — | Filter to a specific tool (e.g. `edit_file`, `transaction_apply`). |
+| `history` | `--file <path>` | — | Filter to a specific file path (canonicalised so different path spellings match). |
+| `history` | `--since <T>` | — | Only show changes newer than `T` (RFC 3339, YYYY-MM-DD, or relative age like `2h`, `7d`). |
+| `history` | `--until <T>` | — | Only show changes older than `T`. |
+| `history` | `--limit <N>` | `50` | Maximum number of entries to return. |
+| `history`, `show` | `--json` | `false` | Emit JSON array. In `show`, each entry includes the decompressed `diff`. |
+| `prune` | `--before <T>` | — | Delete changes older than `T` (required). |
+| `prune` | `--workspace <path>` | — | Limit pruning to changes from a specific workspace. |
+| `prune` | `--yes` | `false` | Confirm deletion without interactive prompt. |
+| `prune` | `--vacuum` | `false` | Reclaim database file space with `VACUUM` (requires stopping the daemon first via `plumb stop`). |
+
+### Content markers
+
+For files whose diff content was withheld, the list and show outputs display a bracketed marker instead of a diff:
+- `[sensitive]`: path matched `sensitive_globs` in configuration;
+- `[binary]`: file contained NUL bytes or failed UTF-8 check;
+- `[too large]`: file size or diff exceeded byte limits;
+- `[redacted]`: secret patterns were masked in the recorded diff;
+- `[omitted]`: content not recorded (e.g. directory deletions).
 
 ---
 

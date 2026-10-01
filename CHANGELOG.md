@@ -60,6 +60,10 @@
   `SKILL.md.<timestamp>.bak`, installs the shipped copy and removes the stale
   `.plumb-new`; the row reports `replaced` with the backup's path. `--check
   --force` previews the replacements without writing.
+- **Write history.** Every file change plumb makes (create, update, delete, rename,
+  copy, and automatic reverts) is recorded as a timestamped diff in `history.db`,
+  linked to its tool call; review it with `plumb history` (list, `show`,
+  `prune`). Sensitive files are recorded as metadata only.
 - **Each tool call now carries a `call_id`**, recorded in the stats database
   (schema v21), linking a call to the file changes it made.
 - **`[history]` configuration**: `enabled`, `sensitive_globs`, `max_content_bytes`, `max_diff_bytes`.

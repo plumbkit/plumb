@@ -337,6 +337,7 @@ Rung 1 outranks client roots because it is the workspace the caller chose, not w
 | `~/.local/share/plumb/sessions/<id>.json` | daemon | Active session metadata (one file per MCP connection) |
 | `~/.local/share/plumb/session_state.db` | daemon | Per-proxy-session state that outlives a daemon restart, keyed by the proxy secret: pins, reads, the durable identity record, and each logical agent's declaration and roster name and session ID (schema v10) |
 | `~/.local/share/plumb/stats.db` | daemon (writer) / TUI + `plumb stats` (readers) | Global tool call statistics, SQLite WAL, row-scoped by workspace and session |
+| `~/.local/share/plumb/history.db` | daemon (writer) / `plumb history` (readers) | Write diff history, SQLite WAL, row-scoped by workspace, path, and call |
 | `<runtime>/plumb.sock` | daemon | Unix socket for MCP proxy connections |
 | `<runtime>/plumb.pid` | daemon | PID for `plumb stop` lookup |
 | `<runtime>/plumb.version` | daemon | Build version; `plumb serve` warns on mismatch |
@@ -400,7 +401,7 @@ and cache files (socket, pid, locks) under `~/Library/Caches/plumb/`. A pre-0.9.
 
 ### Databases at a glance
 
-plumb persists to **three** SQLite databases — one **global**, two **per
+plumb persists to **four** SQLite databases — two **global**, two **per
 project** — alongside plain files (config, sessions, markdown memories). The
 split follows ownership: the daemon is a singleton shared across every
 conversation, so global state lives in one file keyed by `workspace` and
@@ -409,21 +410,23 @@ conversation, so global state lives in one file keyed by `workspace` and
 
 | Database | Scope | Location (Linux / macOS) | Tables | Lifecycle |
 |---|---|---|---|---|
-| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 16) |
+| `stats.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `tool_calls`, `episodic_memories`, `health_daily` | Durable primary data; forward-migrated (`PRAGMA user_version`, currently 21) |
+| `history.db` | **Global** — every project, one per daemon | `~/.local/share/plumb/` · `~/Library/Application Support/plumb/` | `changes`, `workspaces`, `paths`, `meta` | Durable write diff history; forward-migrated (`PRAGMA user_version`, currently 1) |
 | `topology.db` | **Per project** | `<workspace>/.plumb/` | `topology_files`, `topology_nodes`, `topology_edges`, `topology_fts`, `topology_embeddings` | Rebuildable index; dropped & recreated on a version bump |
 | `memory.db` | **Per project** | `<workspace>/.plumb/` | `memory_files`, `memory_records`, `memory_fts` | Rebuildable index over the markdown memories |
 
-Only `stats.db` holds primary data, so it is the only one with data-preserving
+Only `stats.db` and `history.db` hold primary data, so they are the only ones with data-preserving
 migrations. The two per-project databases are *rebuildable* indexes — their
 source of truth lives elsewhere (the working tree for `topology.db`, the
 markdown files under `.plumb/memories/` for `memory.db`) — so `.plumb/.gitignore`
 excludes them and a schema bump simply drops and rebuilds rather than migrating.
-All three open in WAL mode.
+All four open in WAL mode.
 
 ```mermaid
 flowchart TD
     D["plumb daemon (singleton)"]
     D --> SDB[("stats.db — GLOBAL<br/>~/…/share/plumb/")]
+    D --> HDB[("history.db — GLOBAL<br/>~/…/share/plumb/")]
     D --> W1["workspace /projects/foo"]
     D --> W2["workspace /projects/bar"]
     W1 --> T1[(".plumb/topology.db")]
@@ -460,7 +463,12 @@ CREATE TABLE tool_calls (
     savings_model_version INTEGER NOT NULL DEFAULT 0,  -- scoring-model version (0 = pre-redesign, excluded)
     capability_tokens     INTEGER NOT NULL DEFAULT 0,  -- work a thin client couldn't do natively
     efficiency_tokens     INTEGER NOT NULL DEFAULT 0,  -- fewer tokens for the same result
-    purpose               TEXT    NOT NULL DEFAULT ''  -- optional session purpose tag (session.Info.Purpose)
+    purpose               TEXT    NOT NULL DEFAULT '', -- optional session purpose tag (session.Info.Purpose)
+    error_kind            TEXT    NOT NULL DEFAULT '',
+    error_retryable       INTEGER NOT NULL DEFAULT 0,
+    remediation_class     TEXT    NOT NULL DEFAULT '',
+    logical_agent         TEXT    NOT NULL DEFAULT '',
+    call_id               TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX idx_tc_called_at ON tool_calls(called_at);
@@ -468,6 +476,7 @@ CREATE INDEX idx_tc_session   ON tool_calls(session_id);
 CREATE INDEX idx_tc_workspace ON tool_calls(workspace);
 CREATE INDEX idx_tc_ws_session ON tool_calls(workspace, session_id);
 CREATE INDEX idx_tc_tool_dur  ON tool_calls(tool, duration_ms);
+CREATE INDEX idx_tc_call      ON tool_calls(call_id);
 ```
 
 The second table, `episodic_memories` (added in schema v8), stores the
@@ -514,7 +523,7 @@ workspace, session, timing, and I/O sizes. The workspace and session fields are
 required row attributes because the single stats database contains all projects
 served by the single daemon.
 
-Schema versioning is driven by `PRAGMA user_version` (currently 16). `stats.Open()`
+Schema versioning is driven by `PRAGMA user_version` (currently 21). `stats.Open()`
 (the daemon — the single writer) applies forward migrations (`ALTER TABLE ADD
 COLUMN`) when the on-disk version is older, then stamps the current version, so
 existing history is preserved across upgrades. `OpenReadOnly()` (TUI, `plumb
