@@ -76,6 +76,19 @@ func (s *connSession) lspDiagMode() string {
 // reverse (issue #546). ws naming the connection's own root keeps the primary
 // path, so a single-agent connection renders exactly as before.
 
+// lspServerIn names the language whose server serves ws and whether it has
+// started. The connection's own root reports its attached primary, as before.
+// Any other — a subagent's own pin — has a server only once a call has been
+// routed there: the per-agent re-pin starts none, so on the subagent's first
+// session_start nothing is running to be ready (PR #559 review B2).
+func (s *connSession) lspServerIn(ws string) (string, bool) {
+	if s.servesConnectionRoot(ws) {
+		l := s.acquiredLanguageName()
+		return l, l != ""
+	}
+	return s.sessionProxy.WorkspaceServer(ws)
+}
+
 // lspWarmingIn is lspWarming for the server serving ws.
 func (s *connSession) lspWarmingIn(ws string) (bool, time.Duration) {
 	if s.servesConnectionRoot(ws) {

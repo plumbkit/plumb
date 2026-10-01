@@ -36,9 +36,14 @@ These apply across many tools:
   `ReceiverType.MethodName`). Prefer names when available; plumb resolves them
   to the identifier's `SelectionRange.Start` and avoids hand-computed positions.
   A plain name matches a method at any depth, Go methods included (gopls names
-  them `(*Recv).Method`). A name several symbols share is never resolved to one
-  silently: the read-only tools answer for every match, and `rename_symbol`
-  refuses with the `Receiver.Method` names that single each one out.
+  them `(*Recv).Method`). A symbol literally carrying the name beats a method
+  that matches only once its receiver is stripped, so `Run` is the function
+  `Run` even beside a method `(*S).Run`. Equally good matches (two methods
+  `(*A).Run` and `(*B).Run`) are never resolved to one silently: the read-only
+  tools answer for every match; `rename_symbol` refuses and lists, for each, the
+  `Receiver.Method` name that singles it out, or the `line`/`character` to retry
+  with when no name does; `move_symbol` refuses and lists the `name_path` for
+  each (`A/Run`, which the topology index resolves by receiver).
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.

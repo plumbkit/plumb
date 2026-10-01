@@ -268,6 +268,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithPinProvenance(s.pinProvenance).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
+		WithLSPServer(s.lspServerIn).
 		WithLSPWarmup(s.lspWarmingIn).
 		WithLSPDiagMode(s.lspDiagModeIn).
 		WithLSPGoWorkOff(s.lspGoWorkOffIn).

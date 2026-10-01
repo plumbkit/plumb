@@ -143,15 +143,18 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, ws stri
 		sb.WriteString("Active errors detected — start with `diagnostics` to review them.\n\n")
 	case t.writeLSPWarming(sb, ws):
 		// warming advisory already written
-	case t.lspAttached():
-		// Warming was checked first, so attached here means the handshake is
+	case t.lspServerStarted(ws):
+		// Warming was checked first, so started here means the handshake is
 		// complete — "ready" is a guarantee, not a hope. A non-default diagnostics
 		// mode (anything but push) is noted so the agent knows what was negotiated.
+		// Both are asked of the server serving ws, the caller's own (#546).
 		if mode := t.lspDiagMode(ws); mode != "" && mode != "push" {
 			fmt.Fprintf(sb, "LSP is ready (diagnostics: %s) — use `workspace_symbols` to survey the codebase.\n\n", mode)
 		} else {
 			sb.WriteString("LSP is ready — use `workspace_symbols` to survey the codebase.\n\n")
 		}
+	case t.writeLSPNotStarted(sb, ws):
+		// not-started advisory already written
 	case t.writeLSPRouted(sb):
 		// routed advisory already written
 	case t.topologyActive():

@@ -102,8 +102,9 @@ func TestResolveSymbolsByName_StripsArgList(t *testing.T) {
 
 // TestResolveSymbolsByName_PlainGoMethodName covers issue #546: a plain method
 // name matches gopls' flat "(*Recv).Method" symbols, the way it already
-// matches a nested method at any depth. A name shared by a function and
-// methods matches every one of them, in document order — never one silently.
+// matches a nested method at any depth. A symbol literally carrying the name
+// beats one that matches only once its receiver is stripped; equally good
+// matches all come back, in document order — never one silently.
 func TestResolveSymbolsByName_PlainGoMethodName(t *testing.T) {
 	syms := []protocol.DocumentSymbol{
 		{Name: "WriteTracker", Kind: protocol.SKStruct, Children: []protocol.DocumentSymbol{
@@ -119,7 +120,7 @@ func TestResolveSymbolsByName_PlainGoMethodName(t *testing.T) {
 		want  []string
 	}{
 		{"WroteMtime", []string{"(*WriteTracker).WroteMtime"}},
-		{"Close", []string{"(*WriteTracker).Close", "Close", "(ReadTracker).Close"}},
+		{"Close", []string{"Close"}}, // the function literally named Close wins
 		{"mtimes", []string{"mtimes"}},
 		{"Wrote", nil},                             // exact method name only, never a prefix
 		{"WriteTracker", []string{"WriteTracker"}}, // the receiver is not its methods
@@ -129,5 +130,10 @@ func TestResolveSymbolsByName_PlainGoMethodName(t *testing.T) {
 		if strings.Join(got, ",") != strings.Join(c.want, ",") {
 			t.Errorf("%q: got %v, want %v", c.query, got, c.want)
 		}
+	}
+	// With no function named Close, the two methods are equally good matches.
+	methods := []protocol.DocumentSymbol{syms[2], syms[4]}
+	if got := docSymNames(resolveSymbolsByName(methods, "Close")); strings.Join(got, ",") != "(*WriteTracker).Close,(ReadTracker).Close" {
+		t.Errorf("methods only: got %v, want both methods", got)
 	}
 }

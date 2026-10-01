@@ -362,7 +362,7 @@ func (t *MoveSymbol) resolveMoveTarget(ctx, lspCtx context.Context, uri, namePat
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
 		}); err == nil {
 			if m := resolveSymbolsByName(syms, namePath); len(m) > 1 {
-				return nil, fallbackNotUsed, moveAmbiguousErr(len(m), namePath, uri)
+				return nil, fallbackNotUsed, moveAmbiguousErr(len(m), namePath, uri, moveNamePaths(syms, m))
 			}
 		}
 	}
@@ -377,18 +377,11 @@ func (t *MoveSymbol) resolveMoveTarget(ctx, lspCtx context.Context, uri, namePat
 	if bare && reason != fallbackNotUsed {
 		if nodes, ok := freshTopologyNodes(ctx, t.topo, uri); ok {
 			if n := len(topologyNodesByName(nodes, namePath)); n > 1 {
-				return nil, fallbackNotUsed, moveAmbiguousErr(n, namePath, uri)
+				return nil, fallbackNotUsed, moveAmbiguousErr(n, namePath, uri, nil)
 			}
 		}
 	}
 	return sym, reason, nil
-}
-
-// moveAmbiguousErr is the single refusal both ambiguity checks return, so the
-// message an agent reads does not depend on which tree answered.
-func moveAmbiguousErr(n int, namePath, uri string) error {
-	return fmt.Errorf("move_symbol: %d symbols named %q in %s — ambiguous; v1 moves one declaration, "+
-		"disambiguate with a slash-separated name_path", n, namePath, paths.URIToPath(uri))
 }
 
 // buildDestPlan computes the destination file's after-content: the moved

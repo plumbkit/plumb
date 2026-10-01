@@ -59,13 +59,14 @@ func TestSessionStart_LSPStateAsksAboutTheCallersWorkspace(t *testing.T) {
 		WithLSPLanguage(func() string { return "go" }).
 		WithLSPGoWorkOff(func(got string) string { note("gowork", got); return "" }).
 		WithLSPWarmup(func(got string) (bool, time.Duration) { note("warming", got); return false, 0 }).
-		WithLSPDiagMode(func(got string) string { note("diagmode", got); return "" })
+		WithLSPDiagMode(func(got string) string { note("diagmode", got); return "" }).
+		WithLSPServer(func(got string) (string, bool) { note("server", got); return "go", true })
 	for _, detail := range []string{"full", "brief"} {
 		if _, err := tool.Execute(context.Background(), json.RawMessage(`{"detail":"`+detail+`"}`)); err != nil {
 			t.Fatalf("Execute %s: %v", detail, err)
 		}
 	}
-	for _, what := range []string{"gowork", "warming", "diagmode"} {
+	for _, what := range []string{"gowork", "warming", "diagmode", "server"} {
 		if len(asked[what]) == 0 {
 			t.Errorf("%s: never asked", what)
 		}
@@ -73,6 +74,48 @@ func TestSessionStart_LSPStateAsksAboutTheCallersWorkspace(t *testing.T) {
 			if got != ws {
 				t.Errorf("%s: asked about %q, want the caller's workspace %q", what, got, ws)
 			}
+		}
+	}
+}
+
+// TestSessionStart_ServerNotStartedYet is the PR #559 review B2 at the tool
+// boundary: when no language server has started for the caller's workspace (a
+// subagent's first session_start in a worktree), the packet says so instead of
+// "LSP is ready" — which described the connection's server — and names the
+// go.work the server WILL start with GOWORK=off against.
+func TestSessionStart_ServerNotStartedYet(t *testing.T) {
+	ws := briefGitInit(t)
+	newTool := func(started bool) *SessionStart {
+		return NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{}, nil, nil,
+			func() string { return "claude-code" }, nil).
+			WithLSPLanguage(func() string { return "go" }). // the CONNECTION's server is attached
+			WithLSPServer(func(string) (string, bool) { return "go", started }).
+			WithLSPGoWorkOff(func(string) string { return "/src/go.work" }).
+			WithLSPDiagMode(func(string) string { return "pull" })
+	}
+	out, err := newTool(false).Execute(context.Background(), json.RawMessage(`{"detail":"full"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{
+		"Go LSP:   will start with GOWORK=off — /src/go.work lists another copy of this module",
+		"The Go language server for this workspace has not started yet",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("not-started packet lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "LSP is ready") {
+		t.Errorf("a server that has not started must not be reported ready:\n%s", out)
+	}
+
+	out, err = newTool(true).Execute(context.Background(), json.RawMessage(`{"detail":"full"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{"Go LSP:   runs with GOWORK=off", "LSP is ready (diagnostics: pull)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("started packet lacks %q:\n%s", want, out)
 		}
 	}
 }

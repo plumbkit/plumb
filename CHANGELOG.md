@@ -45,28 +45,34 @@
   `read_symbol` found it through its tree-sitter fallback. The shared resolver
   now matches a plain name against a Go method's own name, the way it already
   matched a nested method, so every tool that takes a symbol name resolves it
-  alike. A name several symbols share is never resolved to one silently:
-  `find_references`, `get_definition`, `read_symbol` and the hierarchies answer
-  for each match, `rename_symbol` refuses with the `Receiver.Method` names that
-  single each one out, `move_symbol` refuses as ambiguous, and
-  `topology_impact`'s cross-file callers report nothing rather than another
-  receiver's callers.
+  alike. A symbol literally carrying the name still wins, so `Run` stays the
+  function `Run` beside a method `(*S).Run`, and `rename_symbol` and
+  `move_symbol` keep working on it. Equally good matches are never resolved to
+  one silently: the read-only tools and the hierarchies answer for each match,
+  `rename_symbol` refuses with the `Receiver.Method` names that single each one
+  out, and `move_symbol` refuses with the `Receiver/Method` name_path for each.
+  `topology_impact` picks the method its node names by line, so a name several
+  receivers share (`Close`, `String`) still gets its cross-file callers.
 - **The brief `session_start` keeps its `Git:` line on a detached HEAD.**
   (#546) Both packets keyed the branch line and the git-policy section on a
   branch name, so a detached HEAD, the standard setup for a review worktree,
   dropped both. They now show `Branch: detached at <short sha>` and the policy.
 - **`session_start` describes the calling agent's own language server.** (#546)
-  The `Go LSP: runs with GOWORK=off` line, the warm-up advisory and the
-  diagnostics mode read the connection's primary server, so on a shared
-  connection a subagent pinned to a worktree was not told its server runs with
-  `GOWORK=off`, and one on the main checkout was told it did. They now describe
-  the server serving the workspace `session_start` resolved for the caller.
+  The `Go LSP: runs with GOWORK=off` line, the warm-up advisory, the "LSP is
+  ready" line and the diagnostics mode read the connection's primary server, so
+  on a shared connection a subagent pinned to a worktree was not told its
+  server runs with `GOWORK=off`, and one on the main checkout was told it did.
+  They now describe the server serving the workspace `session_start` resolved
+  for the caller. A subagent's re-pin starts no server, so on its first
+  `session_start` the packet says the server has not started yet and names the
+  `go.work` it will start with `GOWORK=off` against, decided from disk.
   `daemon_info` still reports the connection's own server.
-- **docs: a `go.work` edit reaches the Go language server only after `plumb
-  restart`.** (#546) The `GOWORK=off` decision is made once per server start,
-  and docs/configuration.md now says so. The paragraph moved to its own
-  `[lsp.<language>]` subsection, so it no longer sits between the `[git] env`
-  text and the note on how project entries compose with global ones.
+- **docs: when a `go.work` edit reaches the Go language server.** (#546) The
+  `GOWORK=off` decision is made once per server start, so a running server keeps
+  it until it starts again: `plumb restart`, or, for a workspace's primary
+  server, its idle teardown. The paragraph moved to its own `[lsp.<language>]`
+  subsection, so it no longer sits between the `[git] env` text and the note on
+  how project entries compose with global ones.
 - **An agent pinned to its own project runs that project's tasks and
   commands.** On a `plumb serve` connection shared by several agents, an agent
   that pinned itself with `session_start` to project B while the connection

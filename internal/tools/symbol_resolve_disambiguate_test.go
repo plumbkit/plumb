@@ -66,22 +66,20 @@ func TestDisambiguatedNames_GoFlatMethodForm(t *testing.T) {
 	}
 }
 
-// TestDisambiguatedNames_PlainGoMethodName: a plain name shared by two
-// receivers' methods and a function (issue #546) offers each method its
-// "Recv.Method" form, proven to round-trip, and the function — which no
-// symbol_name singles out — its line and character.
+// TestDisambiguatedNames_PlainGoMethodName: a plain name only two receivers'
+// methods carry (issue #546) is ambiguous, and each method is offered its
+// "Recv.Method" form, proven to round-trip.
 func TestDisambiguatedNames_PlainGoMethodName(t *testing.T) {
 	syms := []protocol.DocumentSymbol{
 		{Name: "(*Foo).Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 3, Character: 15}}},
-		{Name: "Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 6, Character: 5}}},
 		{Name: "(Bar).Close", SelectionRange: protocol.Range{Start: protocol.Position{Line: 9, Character: 14}}},
 	}
 	matches := resolveSymbolsByName(syms, "Close")
-	if len(matches) != 3 {
-		t.Fatalf("setup: expected the plain name to match both methods and the function, got %d", len(matches))
+	if len(matches) != 2 {
+		t.Fatalf("setup: expected the plain name to match both methods, got %d", len(matches))
 	}
 	cands := assertRoundTrips(t, syms, matches)
-	for i, want := range []string{"Foo.Close", "", "Bar.Close"} {
+	for i, want := range []string{"Foo.Close", "Bar.Close"} {
 		if cands[i].SymbolName != want {
 			t.Errorf("candidate[%d].SymbolName = %q, want %q", i, cands[i].SymbolName, want)
 		}

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ type CallerSite struct {
 // topology_impact's inward section misses callers in other files/packages. The
 // language server resolves them accurately, so the daemon fills the gap rather
 // than leaving the agent to run a second find_references call.
-type CrossFileCallersFunc func(ctx context.Context, path, name string) []CallerSite
+type CrossFileCallersFunc func(ctx context.Context, path, name string, startLine, endLine int) []CallerSite
 
 // NewLSPCrossFileCallers builds a CrossFileCallersFunc backed by the language
 // server. It resolves the symbol's identifier position via the DocumentSymbol
@@ -47,7 +48,7 @@ func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time
 	if client == nil {
 		return nil
 	}
-	return func(ctx context.Context, path, name string) []CallerSite {
+	return func(ctx context.Context, path, name string, startLine, endLine int) []CallerSite {
 		if name == "" || path == "" {
 			return nil
 		}
@@ -64,17 +65,14 @@ func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time
 		defer cancel()
 
 		syms := cachedDocumentSymbols(ctx, client, c, ttl, uri)
-		matches := resolveSymbolsByName(syms, name)
-		// One match or nothing: topology passes a Go method's bare name, which
-		// several receivers in one file can share, and reporting the first one's
-		// callers would attribute them to the wrong method.
-		if len(matches) != 1 {
+		target, ok := crossFileTarget(syms, name, startLine, endLine)
+		if !ok {
 			return nil
 		}
 
 		locs, err := client.References(ctx, protocol.ReferenceParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-			Position:     matches[0].SelectionRange.Start,
+			Position:     target.SelectionRange.Start,
 			Context:      protocol.ReferenceContext{IncludeDeclaration: false},
 		})
 		if err != nil {
@@ -82,6 +80,43 @@ func NewLSPCrossFileCallers(client lsp.Client, c *cache.Cache, ttl, timeout time
 		}
 		return crossFileSites(locs, uri, root)
 	}
+}
+
+// crossFileTarget picks the document symbol a topology node names. Topology
+// passes a Go method's bare name, which several receivers in one file share
+// (Close, String, Execute), so the node's 1-based span [startLine, endLine]
+// chooses among every symbol carrying the name, method or not: two declarations
+// never overlap. Without a span, or when the span picks out no single one (a
+// stale index), only a name exactly one symbol carries resolves — reporting the
+// first match's callers would attribute them to the wrong symbol.
+func crossFileTarget(syms []protocol.DocumentSymbol, name string, startLine, endLine int) (protocol.DocumentSymbol, bool) {
+	if strings.Contains(name, ".") {
+		if matches := resolveSymbolsByName(syms, name); len(matches) == 1 {
+			return matches[0], true
+		}
+		return protocol.DocumentSymbol{}, false
+	}
+	exact, methods := plainNameCandidates(syms, name)
+	cands := slices.Concat(exact, methods)
+	if startLine > 0 {
+		if endLine < startLine {
+			endLine = startLine
+		}
+		from, to := uint32(startLine-1), uint32(endLine-1) //nolint:gosec // both positive, checked above
+		var hit []protocol.DocumentSymbol
+		for _, s := range cands {
+			if s.Range.Start.Line <= to && s.Range.End.Line >= from {
+				hit = append(hit, s)
+			}
+		}
+		if len(hit) == 1 {
+			return hit[0], true
+		}
+	}
+	if len(cands) == 1 {
+		return cands[0], true
+	}
+	return protocol.DocumentSymbol{}, false
 }
 
 // cachedDocumentSymbols returns the document symbols for uri, reusing the

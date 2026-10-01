@@ -67,14 +67,31 @@ func (r *routingProxy) DiagMode(uri string) string {
 
 // GoWorkOff reports the go.work the language server serving the workspace ws
 // (the connection's primary, when ws is empty) was started with GOWORK=off
-// against (goLSPEnv), or "" when it runs with the environment it inherited or
-// nothing is pooled. Resolution-only, like DiagMode.
+// against (goLSPEnv), or "" when it runs with the environment it inherited.
+// For a ws whose server has not started — a subagent's own workspace before its
+// first semantic call — it is the decision that server WILL start with, made
+// from disk the same way (PR #559 review B2). Resolution-only: it never starts
+// a server.
 func (r *routingProxy) GoWorkOff(ws string) string {
 	root, language := r.workspaceTarget(ws)
 	if root == "" || language == "" || language == LanguageNone {
 		return ""
 	}
+	if ws != "" && !r.pool.hasEntry(root, language) {
+		return r.pool.plannedGoWorkOff(root, language)
+	}
 	return r.pool.goWorkOffFor(root, language)
+}
+
+// WorkspaceServer reports the language whose server serves the workspace ws
+// ("" for none) and whether that server has started. A per-agent re-pin starts
+// none; the first call routed to the workspace does. Resolution-only.
+func (r *routingProxy) WorkspaceServer(ws string) (language string, started bool) {
+	root, language := r.workspaceTarget(ws)
+	if root == "" || language == "" || language == LanguageNone {
+		return "", false
+	}
+	return language, r.pool.hasEntry(root, language)
 }
 
 // WorkspaceWarmup is WarmupStatus for the server serving the workspace ws

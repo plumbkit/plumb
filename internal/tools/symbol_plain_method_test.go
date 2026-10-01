@@ -126,17 +126,18 @@ func TestPlainGoMethodName_AmbiguousListsEveryMatch(t *testing.T) {
 
 // TestLSPCrossFileCallers_AmbiguousPlainNameAnswersNothing: topology_impact
 // passes a Go method's bare name, which several receivers in one file can
-// share. The resolver must not report one receiver's callers as another's.
+// share. With no span to pick by, the resolver must not report one receiver's
+// callers as another's (TestLSPCrossFileCallers_PicksTheCentreByLine has one).
 func TestLSPCrossFileCallers_AmbiguousPlainNameAnswersNothing(t *testing.T) {
 	mock := &mockLSP{
 		docSymbols: goplsMethodSymbols(),
 		locations:  []protocol.Location{loc("file:///ws/other.go", 3)},
 	}
 	fn := tools.NewLSPCrossFileCallers(mock, nil, time.Minute, 0, func() string { return "/ws" })
-	if sites := fn(context.Background(), "p.go", "Close"); sites != nil {
+	if sites := fn(context.Background(), "p.go", "Close", 0, 0); sites != nil {
 		t.Errorf("an ambiguous name must answer nothing rather than guess a receiver, got %+v", sites)
 	}
-	if sites := fn(context.Background(), "p.go", "WroteMtime"); len(sites) != 1 {
+	if sites := fn(context.Background(), "p.go", "WroteMtime", 0, 0); len(sites) != 1 {
 		t.Errorf("a unique plain method name must resolve its cross-file callers, got %+v", sites)
 	}
 }

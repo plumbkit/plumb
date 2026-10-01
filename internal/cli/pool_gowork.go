@@ -30,10 +30,7 @@ import (
 // GOWORK=off ("" when the environment was left alone). Only the Go server is
 // considered: GOWORK means nothing to a server that does not run the go command.
 func goLSPEnv(language, root string, lspCfg config.LSPConfig, env []string) ([]string, string) {
-	if language != "go" || goplsEnvSetsGoWork(lspCfg.InitializationOptions) {
-		return env, ""
-	}
-	workFile := tools.GoWorkBypass(root, env)
+	workFile := goLSPGoWorkOff(language, root, lspCfg, env)
 	if workFile == "" {
 		return env, ""
 	}
@@ -41,6 +38,38 @@ func goLSPEnv(language, root string, lspCfg config.LSPConfig, env []string) ([]s
 		"so workspace mode would answer from that copy (set GOWORK in [lsp.go] env to keep workspace mode)",
 		"root", root, "go_work", workFile)
 	return setEnvVar(env, "GOWORK", "off"), workFile
+}
+
+// goLSPGoWorkOff is goLSPEnv's decision alone: the go.work the server of
+// (language, root) is started with GOWORK=off against, or "". Pure apart from
+// reading go.work and go.mod, so the orientation can ask it about a server that
+// has not started (plannedGoWorkOff) without logging a start that never happened.
+func goLSPGoWorkOff(language, root string, lspCfg config.LSPConfig, env []string) string {
+	if language != "go" || goplsEnvSetsGoWork(lspCfg.InitializationOptions) {
+		return ""
+	}
+	return tools.GoWorkBypass(root, env)
+}
+
+// plannedGoWorkOff is the GOWORK decision a server for (root, language) would
+// start with now, from the same config and environment startOrReuse would give
+// it — for orienting an agent whose workspace has no server yet. "" when the
+// language is not enabled for root.
+func (p *workspacePool) plannedGoWorkOff(root, language string) string {
+	lspCfg, ok := p.cfgForWorkspace(root, language)
+	if !ok {
+		return ""
+	}
+	return goLSPGoWorkOff(language, root, lspCfg, envFor(lspCfg))
+}
+
+// hasEntry reports whether the pool holds a server for (root, language), in
+// any lifecycle state. Resolution-only.
+func (p *workspacePool) hasEntry(root, language string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.entries[poolKey{root, language}]
+	return ok
 }
 
 // goplsEnvSetsGoWork reports whether gopls's `env` setting, passed through
