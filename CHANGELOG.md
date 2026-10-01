@@ -60,6 +60,8 @@
   `SKILL.md.<timestamp>.bak`, installs the shipped copy and removes the stale
   `.plumb-new`; the row reports `replaced` with the backup's path. `--check
   --force` previews the replacements without writing.
+- **Each tool call now carries a `call_id`**, recorded in the stats database
+  (schema v21), linking a call to the file changes it made.
 
 ### Fixed
 

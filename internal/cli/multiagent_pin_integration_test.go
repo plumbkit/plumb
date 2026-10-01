@@ -117,7 +117,7 @@ func (m *multiAgentConn) call(t *testing.T, metaAgent, name string, args map[str
 	if err != nil {
 		errMsg = err.Error()
 	}
-	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent)
+	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent, "")
 	return err
 }
 

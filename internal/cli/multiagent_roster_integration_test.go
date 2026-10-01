@@ -447,7 +447,7 @@ func callOutput(t *testing.T, m *multiAgentConn, metaAgent, name string, args ma
 	if err != nil {
 		errMsg = err.Error()
 	}
-	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent)
+	m.s.onAfterTool(name, raw, out, errMsg, 0, err != nil, nil, metaAgent, "")
 	return out, err
 }
 
