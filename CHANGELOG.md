@@ -39,10 +39,12 @@
 
 ### Fixed
 
-- **`read_file` keeps the blank lines a `start_line` window begins with.** A
-  window whose first line was blank dropped it, so every later line was
-  labelled one line too low and the header under-counted the window. A
-  range-mode edit built on that view hit the wrong lines.
+- **`read_file` and `read_symbol` keep blank lines at the edges of what they
+  return.** A `read_file` window whose first line was blank dropped it, so
+  every later line was labelled one line too low and the header under-counted
+  the window; a range-mode edit built on that view hit the wrong lines. A
+  window or symbol body ending on a blank line lost that last row. Lines in a
+  ranged read are now each returned with their terminator.
 - **An agent pinned to its own project runs that project's tasks and
   commands.** On a `plumb serve` connection shared by several agents, an agent
   that pinned itself with `session_start` to project B while the connection

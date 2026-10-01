@@ -357,11 +357,11 @@ func readSymbolBody(start, end int, lines []string) string {
 		return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
 	}
 	var sb strings.Builder
+	// Terminate every line rather than join them: a joined body ending on a blank
+	// line reads as a terminator to withLineGutter, which drops that row.
 	for i := lo; i < hi; i++ {
-		if i > lo {
-			sb.WriteByte('\n')
-		}
 		sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
+		sb.WriteByte('\n')
 	}
 	return withLineGutter(sb.String(), lo+1)
 }

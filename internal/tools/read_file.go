@@ -566,11 +566,10 @@ func readLineRange(src io.Reader, start, end int) (string, bool, error) {
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024) // up to 4 MiB per line
 	var sb strings.Builder
 	lineNo := 0
-	// wrote, not sb.Len(), decides the separator: an empty first line leaves the
-	// builder empty, and keying on its length dropped that line and numbered
-	// every later one a line too low, so a range edit built on the view hit the
-	// wrong lines.
-	wrote := false
+	// Every line is written WITH its terminator. Joining with separators made a
+	// blank line at either edge of the window ambiguous: a leading one vanished
+	// (every later line numbered one too low, so a range edit hit the wrong
+	// lines) and a trailing one read as the last line's terminator.
 	for scanner.Scan() {
 		lineNo++
 		if lineNo < start {
@@ -579,11 +578,8 @@ func readLineRange(src io.Reader, start, end int) (string, bool, error) {
 		if end >= 0 && lineNo > end {
 			break
 		}
-		if wrote {
-			sb.WriteByte('\n')
-		}
-		wrote = true
 		sb.WriteString(scanner.Text())
+		sb.WriteByte('\n')
 	}
 	if err := scanner.Err(); err != nil {
 		return "", false, err
