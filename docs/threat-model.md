@@ -245,11 +245,11 @@ state-changing calls are refused once two identities have been seen — see
 declared itself through `session_start` on the connection is refused the same
 way rather than given a fresh shard of the connection's root (#513), unless
 every identity on the connection belongs to one conversation. Declarations
-persist under the proxy session and survive a daemon restart only if the
-conversation called `session_start` within `persist_state_ttl_minutes`, or made
-a state-changing call within that time less one refresh interval
-(min(TTL/4, 1 h)); with
-`persist_state` off or after a longer idle, the agent is refused once and must
+persist under the proxy session and survive a daemon restart that the serve
+reconnects across. The idle reaper reclaims one only when it finds the serve
+disconnected and the declaration older than `persist_state_ttl_minutes`;
+state-changing calls refresh it at most once per min(TTL/4, 1 h). With
+`persist_state` off, or after such a reclaim, the agent is refused once and must
 call `session_start` again.
 
 ### A2 — Path escape via alias or traversal

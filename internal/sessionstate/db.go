@@ -428,16 +428,18 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 }
 
 // BackdateSession ages every EXPENDABLE row under a proxy session — its reads,
-// its pins and its logical-agent declarations — for tests that need state older
-// than the TTL without sleeping. The identity record is left alone, as Prune
-// leaves it.
+// its pins, the logical agents it observed and the conversations that declared
+// themselves on it — for tests that need state older than the TTL without
+// sleeping. The identity record is left alone, as Prune leaves it. The list
+// must name every table Prune sweeps, or a test of the sweep cannot age, and so
+// cannot cover, the table it leaves out.
 func (s *Store) BackdateSession(proxySessionID string, to time.Time) error {
 	if s == nil || proxySessionID == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, tbl := range []string{"read_tracking", "pinned_workspace", "logical_agent"} {
+	for _, tbl := range []string{"read_tracking", "pinned_workspace", "logical_agent", "declared_linkage"} {
 		if _, err := s.db.Exec(`UPDATE `+tbl+` SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil { //nolint:gosec // G202: tbl is a constant from the list above
 			return fmt.Errorf("sessionstate: backdate %s: %w", tbl, err)
 		}

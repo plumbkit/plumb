@@ -147,9 +147,10 @@ func TestDeclarationsSurviveADaemonRestart(t *testing.T) {
 	}
 }
 
-// declared_linkage ages out with the TTL; the identity record's own linkage is
-// never pruned, so the conversation the session is linked to stays declared
-// even when a restart pruned its row.
+// declared_linkage ages out with the TTL when the idle reaper runs while its
+// serve is not connected; the identity record's own linkage is never pruned, so
+// the conversation the session is linked to stays declared even when such a
+// pass reclaimed its row.
 func TestIdentityRecordLinkageSurvivesAPrunedDeclaration(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-513-pruned"
@@ -230,13 +231,22 @@ func TestUndeclaredRefusalNamesTheConversationForASubagent(t *testing.T) {
 	if plain == nil || !strings.Contains(plain.Error(), "the identity you are stamping") {
 		t.Errorf("control: a plain id's refusal names it as the stamped identity: %v", plain)
 	}
+	// Review N5: declaring alone leaves the caller on the connection's root,
+	// possibly another agent's checkout, so both refusals ask for workspace too.
+	for _, err := range []error{sub, plain} {
+		if err != nil && !strings.Contains(err.Error(), "and workspace set to the absolute path of the project you are working in") {
+			t.Errorf("the refusal does not ask for workspace: %v", err)
+		}
+	}
 }
 
-// Review of #535, item 3: a declared_linkage row is written by session_start
-// and reclaimed by the startup prune after the TTL, so a conversation that
-// keeps working must keep its row young. An admitted state-changing call from a
-// declared linkage refreshes it; a read does not; an undeclared linkage never
-// gains a row (update, never insert).
+// Review of #535, item 3: a declared_linkage row is written by session_start,
+// and the idle reaper reclaims it once it is older than the TTL if its serve is
+// not connected at that pass (one between connections, say; nothing is pruned at
+// daemon start since #525). So a conversation that keeps working must keep its
+// row young. An admitted state-changing call from a declared linkage refreshes
+// it; a read does not; an undeclared linkage never gains a row (update, never
+// insert). The Prune below, with no live sessions, is such a pass.
 func TestAdmittedWritesKeepADeclarationYoung(t *testing.T) {
 	store, ss := newOriginStore(t)
 	const proxyID = "proxy-513-refresh"

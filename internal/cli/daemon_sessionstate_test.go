@@ -56,8 +56,9 @@ func TestSweepLegacyWidePins_NilStore(t *testing.T) {
 }
 
 // seedAgedSession writes every kind of expendable row a long-lived serve
-// accumulates — a connection-level read and pin, a per-agent read and pin, and a
-// logical-agent declaration — then ages them all a month past the default TTL.
+// accumulates — a connection-level read and pin, a per-agent read and pin, a
+// logical-agent record and a conversation's declaration (#513) — then ages them
+// all a month past the default TTL.
 func seedAgedSession(t *testing.T, ss *sessionstate.Store, proxyID, ws string) {
 	t.Helper()
 	file := filepath.Join(ws, "a.go")
@@ -72,14 +73,17 @@ func seedAgedSession(t *testing.T, ss *sessionstate.Store, proxyID, ws string) {
 	if err := ss.RecordLogicalAgent(proxyID, "agent-a"); err != nil {
 		t.Fatal(err)
 	}
+	if err := ss.RecordDeclaredLinkage(proxyID, "agent-a"); err != nil {
+		t.Fatal(err)
+	}
 	if err := ss.BackdateSession(proxyID, time.Now().Add(-30*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 // expendableRows counts what survives of seedAgedSession's rows, in its order:
-// two reads, two pins, one logical-agent declaration.
-func expendableRows(t *testing.T, ss *sessionstate.Store, proxyID, ws string) (reads, pins, agents int) {
+// two reads, two pins, one logical agent, one declared conversation.
+func expendableRows(t *testing.T, ss *sessionstate.Store, proxyID, ws string) (reads, pins, agents, declared int) {
 	t.Helper()
 	for _, agent := range []string{"", "agent-a"} {
 		recs, err := ss.LoadReadsForAgent(proxyID, agent, ws)
@@ -97,7 +101,11 @@ func expendableRows(t *testing.T, ss *sessionstate.Store, proxyID, ws string) (r
 	if err != nil {
 		t.Fatal(err)
 	}
-	return reads, pins, len(ids)
+	linkages, err := ss.DeclaredLinkagesFor(proxyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reads, pins, len(ids), len(linkages)
 }
 
 // Issue #525: the daemon's start-up maintenance must not age out expendable
@@ -112,10 +120,10 @@ func TestStartupMaintenance_KeepsAgedStateOfSessionsThatMayReconnect(t *testing.
 
 	maintainSessionStateAtStart(ss)
 
-	if reads, pins, agents := expendableRows(t, ss, "proxyX", ws); reads != 2 || pins != 2 || agents != 1 {
-		t.Fatalf("after start-up maintenance: %d reads, %d pins, %d agent declarations; want 2, 2, 1 — "+
+	if reads, pins, agents, declared := expendableRows(t, ss, "proxyX", ws); reads != 2 || pins != 2 || agents != 1 || declared != 1 {
+		t.Fatalf("after start-up maintenance: %d reads, %d pins, %d logical agents, %d declared conversations; want 2, 2, 1, 1 — "+
 			"start-up cannot know whether a serve is about to reconnect, so it must leave aged state to the reaper",
-			reads, pins, agents)
+			reads, pins, agents, declared)
 	}
 }
 
@@ -145,13 +153,13 @@ func TestReaper_PrunesAgedStateOfDeadSessionsOnly(t *testing.T) {
 	close(ticks)
 	<-done
 
-	if reads, pins, agents := expendableRows(t, ss, "live", ws); reads != 2 || pins != 2 || agents != 1 {
-		t.Errorf("connected session after a reaper pass: %d reads, %d pins, %d agent declarations; want 2, 2, 1",
-			reads, pins, agents)
+	if reads, pins, agents, declared := expendableRows(t, ss, "live", ws); reads != 2 || pins != 2 || agents != 1 || declared != 1 {
+		t.Errorf("connected session after a reaper pass: %d reads, %d pins, %d logical agents, %d declared conversations; want 2, 2, 1, 1",
+			reads, pins, agents, declared)
 	}
-	if reads, pins, agents := expendableRows(t, ss, "dead", ws); reads != 0 || pins != 0 || agents != 0 {
-		t.Errorf("disconnected session after a reaper pass: %d reads, %d pins, %d agent declarations; want none — "+
-			"a dead session's state must still be reclaimed", reads, pins, agents)
+	if reads, pins, agents, declared := expendableRows(t, ss, "dead", ws); reads != 0 || pins != 0 || agents != 0 || declared != 0 {
+		t.Errorf("disconnected session after a reaper pass: %d reads, %d pins, %d logical agents, %d declared conversations; want none — "+
+			"a dead session's state must still be reclaimed", reads, pins, agents, declared)
 	}
 	for _, id := range []string{"live", "dead"} {
 		if _, ok, err := ss.LoadIdentity(id); err != nil || !ok {

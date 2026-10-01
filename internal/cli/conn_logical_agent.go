@@ -424,6 +424,11 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 // session_start on this connection declared (issue #513). The session_id it
 // names is the LINKAGE — for a hook-stamped subagent `<conv>/<agent>` that is
 // its conversation's id, not the stamp — so the wording says which.
+//
+// It also asks for `workspace`. A session_start that only declares leaves the
+// caller on whatever root its shard was seeded with, usually the connection's,
+// which on a shared connection may be another agent's checkout: the declaration
+// would then admit exactly the misrouted write this refusal stopped.
 func undeclaredIdentityErr(name, logicalAgent string) error {
 	stamp := stats.SanitiseAgentID(logicalAgent)
 	linkage := linkageIDOf(logicalAgent)
@@ -431,7 +436,7 @@ func undeclaredIdentityErr(name, logicalAgent string) error {
 	if linkage != logicalAgent {
 		which = "your conversation's id, the part of your stamp before `/`; a subagent is covered once its conversation has declared itself"
 	}
-	return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (%s) first, then retry",
+	return fmt.Errorf("shared connection: %s carries the logical-agent identity %q, but no session_start on this connection has declared it, so plumb cannot tell which workspace it belongs to and will not guess — call session_start with session_id %q (%s) and workspace set to the absolute path of the project you are working in, then retry. Without workspace, your relative paths may resolve against the connection's root, which can be another agent's checkout",
 		name, stamp, stats.SanitiseAgentID(linkage), which)
 }
 

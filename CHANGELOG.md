@@ -78,20 +78,26 @@
   `_meta` it never announced) was admitted. It got a fresh per-agent state
   seeded from the connection's workspace, so a relative write landed in whatever
   checkout the connection held, often another agent's. Now such a call is
-  refused, and the refusal says to call `session_start` first. Reads are never
-  refused. A connection used by one conversation only (a main thread and its own
-  subagents, as in the Claude Code CLI) needs no declaration. A subagent stamped
+  refused, and the refusal says to call `session_start` first, with the
+  `workspace` the agent works in so that declaring does not leave it on another
+  agent's checkout. Reads are never refused. A connection used by one
+  conversation only (a main thread and its own subagents, as in the Claude Code
+  CLI) needs no declaration. A subagent stamped
   `<conversation>/<agent>` is admitted on its conversation's declaration and
   works in its conversation's workspace rather than the connection's. It starts
   there, and it follows when its conversation later moves itself to another
   workspace, unless the subagent chose a workspace of its own. So a subagent of
-  an agent working in a worktree no longer writes into the main checkout.
-  Declarations are saved under the proxy session and restored after a daemon
-  restart if the conversation called `session_start` within `[session]
-  persist_state_ttl_minutes` (24 hours by default), or made a state-changing
-  call within that time less one refresh interval (a quarter of it, at most an
-  hour). With `persist_state` off, or after a longer idle, an agent is refused
-  once after a restart and declares again with `session_start` (#513).
+  an agent working in a worktree no longer writes into the main checkout. If
+  such a subagent moves the connection's pin (`scope: "connection"`), it stays
+  on its conversation's workspace, and `session_start` now says so rather than
+  naming the connection's new root as where its relative paths go.
+  Declarations are saved under the proxy session and restored when it
+  reconnects, including after a daemon restart. One is reclaimed only when the
+  idle reaper finds its `plumb serve` disconnected and the declaration older
+  than `[session] persist_state_ttl_minutes` (24 hours by default), and each
+  state-changing call refreshes it at most once per quarter of that (at most an
+  hour). With `persist_state` off, or after such a reclaim, an agent is refused
+  once and declares again with `session_start` (#513).
 - **A read records the version it showed.** `read_file` took the file's mtime
   from a `stat`, the content from a read, and the SHA-256 from a second read of
   the path. `read_symbol` took the SHA only after the language-server round trip,

@@ -116,15 +116,23 @@ func (s *connSession) declareLogicalAgent(id string) {
 
 // refreshDeclaration keeps a working conversation's durable declaration young.
 //
-// A declared_linkage row is otherwise written only by session_start, and the
-// startup prune reclaims rows older than [session] persist_state_ttl_minutes
-// (24 h by default) with no live exemption — nothing is live at startup. So a
-// conversation that declared once and then worked for a day came back from a
-// restart undeclared. An ADMITTED state-changing call from an already-declared
-// linkage now refreshes the row, at most once per declarationRefreshEvery
-// (min(TTL/4, 1 h)). So a row survives a restart if the conversation's last
-// session_start or refresh was within the TTL, which means its last
-// state-changing call was within the TTL minus up to one refresh interval.
+// A declared_linkage row is otherwise written only by session_start. The idle
+// reaper reclaims a row older than [session] persist_state_ttl_minutes (24 h by
+// default) unless its proxy session is connected at that pass, and nothing is
+// pruned at daemon start (#525). So a connected serve keeps its declarations
+// however old, across restarts it reconnects through. The exemption does not
+// cover a serve that is between connections when a pass runs, such as one
+// reconnecting after its transport dropped, and there a conversation that
+// declared once and then worked for a day would lose its row and be refused.
+//
+// Kept for that window. An ADMITTED state-changing call from an already-declared
+// linkage refreshes the row, at most once per declarationRefreshEvery
+// (min(TTL/4, 1 h)), so a working conversation's row is never old enough for
+// such a pass to reclaim it. The cost is one UPDATE per linkage per interval.
+// Unlike a pin's or a logical agent's, a declaration's updated_at is no other
+// evidence (LogicalAgentIDsFor windows by the pin and logical-agent rows,
+// never by it), so refreshing it skews nothing — the reason #525 gave for not
+// refreshing every live row does not apply.
 //
 // UPDATE only, never insert: admission is not declaration. A call admitted
 // under the one-conversation exemption must not become durable evidence that
@@ -197,7 +205,8 @@ func (s *connSession) declareSessionStartCaller(ctx context.Context, toolName st
 // process's own 122-bit secret (see inheritSessionID), so presenting it is
 // proof of being the connection that made those declarations. The identity
 // record is included because Prune never reclaims it, while declared_linkage
-// ages out with the TTL like every other expendable row; logical_agent is
+// ages out with the TTL like every other expendable row of a serve that is not
+// connected when the reaper passes; logical_agent is
 // deliberately NOT a source — it records every OBSERVED identity, so an
 // invented id that made one admitted read would come back declared.
 //
@@ -208,10 +217,12 @@ func (s *connSession) declareSessionStartCaller(ctx context.Context, toolName st
 // KNOWN LIMITS, both of which cost one refusal whose remedy (session_start)
 // re-declares:
 //   - With [session] persist_state off nothing is saved, so nothing comes back.
-//   - declared_linkage ages out with persist_state_ttl_minutes, and the startup
-//     prune has no live exemption. refreshDeclaration keeps a WORKING
-//     conversation's row young (see its slack); one idle past the TTL, that is
-//     not the identity record's linkage, comes back undeclared.
+//   - declared_linkage ages out with persist_state_ttl_minutes, but only when an
+//     idle-reaper pass finds the serve disconnected (connected sessions are
+//     exempt, and nothing is pruned at daemon start, #525). refreshDeclaration
+//     keeps a WORKING conversation's row young (see its slack); one idle past
+//     the TTL at such a pass, that is not the identity record's linkage, comes
+//     back undeclared.
 func (s *connSession) restoreDeclaredLinkages(proxySessionID string) {
 	if s.sessionState == nil || !s.view().session.PersistState || proxySessionID == "" {
 		return
