@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -134,10 +136,20 @@ func (t *UndoEdit) checkUndoSafe(path string, snap undoSnapshot, force bool) err
 // the pre-write content otherwise.
 func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot) (string, error) {
 	uri := "file://" + path
+	wrote, _ := hex.DecodeString(snap.afterSHA)
 	if !snap.existedBefore {
+		cur := t.deps.historySide(path)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return "", fmt.Errorf("undo_edit: removing %q: %w", path, err)
 		}
+		t.deps.recordHistory(ctx, history.Change{
+			Op:         history.OpRevert,
+			Tool:       "undo_edit",
+			Path:       path,
+			Before:     cur,
+			RevertsSHA: wrote,
+			Reason:     "undo_edit",
+		})
 		t.notifyUndo(ctx, path, uri, protocol.FileDeleted)
 		return fmt.Sprintf("undid %s: removed %s (it had been newly created)", snap.tool, path), nil
 	}
@@ -151,6 +163,15 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 	if err != nil {
 		return "", fmt.Errorf("undo_edit: %w", err)
 	}
+	t.deps.recordHistory(ctx, history.Change{
+		Op:         history.OpRevert,
+		Tool:       "undo_edit",
+		Path:       path,
+		Before:     history.SideFromBytes(current),
+		After:      history.SideFromBytes([]byte(snap.before)),
+		RevertsSHA: wrote,
+		Reason:     "undo_edit",
+	})
 	t.notifyUndo(ctx, path, uri, protocol.FileChanged)
 	t.deps.recordWritten(ctx, path, res.written)
 	t.deps.notifyTopology(path)

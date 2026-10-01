@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -140,6 +141,10 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 
 	_, statErr := os.Stat(path)
 	isNew := os.IsNotExist(statErr)
+	histBefore := history.Side{}
+	if !isNew {
+		histBefore = t.deps.historySide(path)
+	}
 	uri := "file://" + path
 
 	oldContent, undoBefore, undoOK := t.writeFileCapture(ctx, path, isNew, a.FailOnNewErrors)
@@ -164,6 +169,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if undoOK {
 		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
+	t.recordWriteHistory(ctx, path, histBefore, a.Content, isNew)
 	// Prefer the untruncated pre-write content for the differential: oldContent
 	// is capped for diff rendering, and an unknown "before" costs the
 	// re-index-lag suppression that keeps phantom errors out of the delta — which
@@ -184,6 +190,20 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, diag)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
+}
+
+func (t *WriteFile) recordWriteHistory(ctx context.Context, path string, before history.Side, content string, isNew bool) {
+	op := history.OpUpdate
+	if isNew {
+		op = history.OpCreate
+	}
+	t.deps.recordHistory(ctx, history.Change{
+		Op:     op,
+		Tool:   "write_file",
+		Path:   path,
+		Before: before,
+		After:  history.SideFromBytes([]byte(content)),
+	})
 }
 
 func parseWriteFileArgs(raw json.RawMessage) (writeFileArgs, error) {
