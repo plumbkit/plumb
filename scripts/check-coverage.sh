@@ -53,7 +53,7 @@ echo "coverage: running tests with -covermode=atomic (this takes a few minutes)â
 # `if !` rather than `set -e` doing the aborting: the log has to be printed
 # between the failure and the exit, which needs the failure to be catchable.
 LOG="${LOG:-$ROOT/.testcache/coverage-test.log}"
-if ! GOTMPDIR="$ROOT/.testcache" go test -covermode=atomic -coverpkg=./... \
+if ! GOTMPDIR="$ROOT/.testcache" go test -timeout="${GO_TEST_TIMEOUT:-20m}" -covermode=atomic -coverpkg=./... \
 	-coverprofile="$PROFILE" ./... >"$LOG" 2>&1; then
 	echo "coverage: the test run FAILED â€” this is a test failure, not a coverage regression." >&2
 	echo "" >&2
