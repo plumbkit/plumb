@@ -14,6 +14,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
@@ -431,10 +432,10 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 	if t.deps.WorkspaceFn != nil {
 		workspace = t.deps.WorkspaceFn(ctx)
 	}
-	txl, txErr := txlog.Begin(workspace)
+	txl, txErr := txlog.Begin(workspace, mcp.CallIDFromCtx(ctx))
 	if txErr != nil {
 		slog.Warn("transaction_apply: txlog unavailable — rollback not durable", "err", txErr)
-		txl, _ = txlog.Begin("")
+		txl, _ = txlog.Begin("", "")
 	}
 
 	written := make([]txPrepared, 0, len(prepared))

@@ -3,12 +3,14 @@ package cli
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/paths"
+	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 func TestConnSessionRecordHistory(t *testing.T) {
@@ -103,5 +105,59 @@ func TestConnSessionRecordHistory(t *testing.T) {
 	}
 	if enqueuedBefore == 0 {
 		t.Errorf("positive control: enqueued count before should be > 0, got %d", enqueuedBefore)
+	}
+}
+
+func TestTxlogRecoveryRowsAreReverts(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	s := newPersistSession(t, store, ss, "proxy-recovery")
+	s.historyStore = newHistoryStore(nil)
+	defer s.historyStore.Close()
+
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+
+	sink := s.txlogRecoverySink(root)
+	sink(txlog.Restored{
+		Path:          filepath.Join(root, "f"),
+		Before:        []byte("b\n"),
+		After:         []byte("a\n"),
+		BeforeExisted: true,
+		CallID:        "",
+	})
+
+	if err := s.historyStore.store().Sync(context.Background()); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	r, err := history.OpenReadOnlyAt(history.DBPath())
+	if err != nil {
+		t.Fatalf("OpenReadOnlyAt: %v", err)
+	}
+	defer r.Close()
+
+	entries, err := r.List(history.Filter{Workspace: root})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.Op != history.OpRevert {
+		t.Errorf("Op = %v, want revert", e.Op)
+	}
+	if e.Reason != "crash_recovery" {
+		t.Errorf("Reason = %q, want crash_recovery", e.Reason)
+	}
+	if e.Tool != "txlog_recovery" {
+		t.Errorf("Tool = %q, want txlog_recovery", e.Tool)
+	}
+	if !strings.HasPrefix(e.CallID, "recovery-") {
+		t.Errorf("CallID = %q, want prefix recovery-", e.CallID)
 	}
 }

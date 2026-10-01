@@ -209,7 +209,7 @@ func TestRollback_UsesInMemoryManifestNotDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	l, err := Begin(ws)
+	l, err := Begin(ws, "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}

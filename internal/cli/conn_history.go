@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
 // recordHistory is WriteDeps.HistoryFn: it stamps the connection's identity,
@@ -57,4 +59,32 @@ func (s *connSession) recordHistory(ctx context.Context, c history.Change) {
 func pathArg(p string) json.RawMessage {
 	b, _ := json.Marshal(map[string]string{"file_path": p})
 	return b
+}
+
+// txlogRecoverySink records txlog crash-recovery restores as reverts
+// (reason crash_recovery). A manifest from before call_id linking gets a
+// synthetic recovery-<ulid> call id; its reverts_seq stays NULL.
+func (s *connSession) txlogRecoverySink(_ string) txlog.RestoreSink {
+	return func(r txlog.Restored) {
+		callID := r.CallID
+		if callID == "" {
+			callID = "recovery-" + mcp.NewCallID()
+		}
+		before := history.Side{}
+		if r.BeforeExisted {
+			before = history.SideFromBytes(r.Before)
+		}
+		ctx := mcp.WithCallID(context.Background(), callID)
+		s.recordHistory(ctx, history.Change{
+			At:             time.Now(),
+			Op:             history.OpRevert,
+			Kind:           history.KindFile,
+			Tool:           "txlog_recovery",
+			Path:           r.Path,
+			Before:         before,
+			After:          history.SideFromBytes(r.After),
+			RevertsOwnCall: r.CallID != "",
+			Reason:         "crash_recovery",
+		})
+	}
 }

@@ -28,7 +28,7 @@ func TestWriteManifest_AtomicUnderConcurrentScan(t *testing.T) {
 	if err := os.WriteFile(target, []byte("snapshot-base"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	live, err := Begin(ws)
+	live, err := Begin(ws, "")
 	if err != nil {
 		t.Fatal(err)
 	}

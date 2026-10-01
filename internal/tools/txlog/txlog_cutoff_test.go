@@ -21,7 +21,7 @@ func TestScan_SkipsCurrentRunButRollsBackOrphan(t *testing.T) {
 	if err := os.WriteFile(orphanTarget, []byte("orig"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	orphan, err := Begin(ws)
+	orphan, err := Begin(ws, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestScan_SkipsCurrentRunButRollsBackOrphan(t *testing.T) {
 	if err := os.WriteFile(liveTarget, []byte("live-base"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	live, err := Begin(ws)
+	live, err := Begin(ws, "")
 	if err != nil {
 		t.Fatal(err)
 	}
