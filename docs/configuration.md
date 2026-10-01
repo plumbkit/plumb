@@ -324,8 +324,9 @@ environment, so `PATH` (git finding its own subcommands), `HOME` (`~/.gitconfig`
 untouched. An entry whose name is already present replaces that value — that is
 the point, `GOWORK = "off"` has to beat an inherited `GOWORK`. There is no way to
 *unset* an inherited variable; setting a name to `""` sets it to the empty
-string. With no entries the child inherits exactly as it always did, apart from
-the one automatic `GOWORK` decision described next.
+string. With no entries the child inherits as it always did, apart from the
+non-interactive defaults under **Editors** below and the one automatic `GOWORK`
+decision described next.
 
 **`GOWORK` is decided per repository, so the example above is rarely needed.**
 A static `GOWORK = "off"` is project-wide, and the main checkout of a Go
@@ -415,18 +416,30 @@ so a project cannot drop one of your global entries by choosing a spelling.)
 > substitute — the dangerous set is open-ended and reaches into other tools'
 > variables entirely, so the trust boundary is the whole mechanism.
 
-**Editors.** `git rebase -i` and `git tag -a` invoke `GIT_EDITOR`
-unconditionally, and plumb passes it no terminal, so the editor blocks. plumb
-does not set `GIT_EDITOR` for you — that would silently accept a default commit
-message you never wrote. Set it yourself if you want those verbs to be
-non-interactive:
+**Editors and prompts.** plumb runs git with no terminal and nobody to type
+into one, so it gives every git child three variables of its own:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `GIT_EDITOR` | `true` | `rebase --continue`, `cherry-pick -e`, `revert --edit` and the like keep the message git prepared, as `--no-edit` would. A verb with no prepared message (`tag -a` without `-m`) gets an empty one, which git refuses. |
+| `GIT_SEQUENCE_EDITOR` | `true` | `rebase -i` runs the todo list git wrote, unchanged. |
+| `GIT_TERMINAL_PROMPT` | `0` | An HTTPS credential prompt fails instead of waiting. |
+
+Before these, such a verb launched `core.editor` and failed (`cannot exec
+'/usr/local/bin/nvim'`) or waited on it, holding the repository's git lock.
+They replace an **inherited** value — unlike `GOWORK`, whose inherited value is
+used as is — because a `GIT_EDITOR` in the daemon's environment is the
+interactive editor of whatever shell started it, the one thing that cannot run
+here. A value under `env` here is a choice about plumb and wins; to run a
+non-interactive editor script of your own:
 
 ```toml
 [git]
-env = { GIT_EDITOR = "true" }
+env = { GIT_EDITOR = "/path/to/write-message.sh" }
 ```
 
-Either way plumb no longer hangs on it: the child wait is bounded (5s past the
+If an editor configured there does wait on a terminal, plumb still does not
+hang on it: the child wait is bounded (5s past the
 child's exit), and cancellation kills the whole process group rather than the
 direct child alone. If a process the command started outlives git while still
 holding its output pipes, plumb stops waiting and says so — quoting git's own

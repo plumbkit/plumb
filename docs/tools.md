@@ -710,6 +710,16 @@ check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
 Replacing an entire declaration? Prefer `replace_symbol_body` (see *LSP
 semantic edits* above) — addressed by `name_path`, no coordinates needed.
 
+**Line-range edits.** An `edits` entry with `start_line` (and optionally
+`end_line`, default `start_line`; `-1` runs to the last line) replaces whole
+lines instead of matching `old_string`; `start_line: -1` appends. `new_string`
+is treated as whole lines: when it is non-empty and has no trailing newline, the
+line ending of the replaced text is added, so the edit never joins the next
+line. A range running to the end of a file with no final newline (or an append
+to such a file) keeps the file without one. An empty `new_string` deletes the
+range. Several range edits in one call apply in order, each to the content the
+previous one produced.
+
 **Anchor-bounded mode (alternative to `edits`).** Instead of an exact
 `old_string`, supply `start_anchor` + `end_anchor` (two unique substrings) and a
 `new_string` that replaces the span they bound. The two request shapes are
@@ -988,6 +998,13 @@ file needs no `git rm`). Pre-commit hooks always run. Every non-read call consum
 write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
+
+No git child opens an editor or a credential prompt: each runs with
+`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`, so
+`rebase --continue`, `cherry-pick -e` and `revert --edit` keep the message git
+prepared and `rebase -i` runs its todo list unchanged. A value under
+`[git] env` wins (see
+[`configuration.md`](configuration.md#the-git-childs-environment)).
 
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`

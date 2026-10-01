@@ -100,6 +100,16 @@
   X that it kept an identity. It now says a new session started, names it, and
   asks the agent to `session_start` with its `session_id`.
 
+- **The `git` tool no longer opens an editor.** plumb runs git with no
+  terminal, so `rebase --continue`, `rebase -i`, `cherry-pick -e` and
+  `revert --edit` launched `core.editor` and failed with `cannot exec
+  '<editor>'`, or waited on it until the write timeout while holding the
+  repository's git lock. Every git child the tool runs now gets
+  `GIT_EDITOR=true` and `GIT_SEQUENCE_EDITOR=true`, which accept the message
+  or todo list git prepared as written, and `GIT_TERMINAL_PROMPT=0`, so an
+  HTTPS credential prompt fails instead of waiting. These replace a value the
+  daemon inherited, which is usually your interactive editor; a value set
+  under `[git] env` is still used as is. (#544)
 - **The Claude Code identity hook stamps from its cached answer when the daemon
   probe fails, and fails less often.** (#556) The hook gates every stamp on a
   probe of the daemon's control socket, and any probe failure was an answer of
@@ -487,6 +497,18 @@
   overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
   file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
   naming the `go.work` when it applies (#521).
+- **`edit_file` range mode no longer glues a replacement onto the next line.**
+  A range edit (`start_line`/`end_line`) whose non-empty `new_string` had no
+  trailing newline was joined onto the line after the range, while an empty
+  `new_string` deleted its lines cleanly. Replacing one line with two this way
+  silently merged the second new line with the next one and broke the build.
+  Range mode now works in whole lines: a missing trailing newline is added,
+  using the line ending of the text replaced, so a CRLF file stays CRLF. A range
+  that runs to the end of a file with no final newline, and an append
+  (`start_line: -1`) to such a file, keep the file without one. Appending to a
+  file that ends with a newline now leaves it ending with one, and the separator
+  added before appending to a CRLF file with no final newline is `\r\n`. The same
+  applies with `apply_partial`. (#543)
 - **The first agent to call after a daemon restart runs on its own restored pin
   and read tracker.** (#523) On a connection shared by several agents, the
   identities the daemon has seen start empty after a restart, so the first
