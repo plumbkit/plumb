@@ -123,7 +123,7 @@ func doctorSections(ws string) []doctorSection {
 		{"Configuration", func() []checkResult { return checkConfigs(ws) }, false},
 		{"Dev Tools", checkDevTools, false},
 		{"Integrations", func() []checkResult { return checkRastro(ws) }, false},
-		{"Data", func() []checkResult { return checkStatsDB(ws) }, false},
+		{"Data", func() []checkResult { return append(checkStatsDB(ws), checkHistoryDB()...) }, false},
 		{"Indexing", func() []checkResult { return checkTopology(ws) }, false},
 	}
 }

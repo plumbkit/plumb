@@ -516,7 +516,7 @@ func TestIdleReaperEvictsLiveConnection(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		handleConn(context.Background(), serverConn, pool, nil, nil, nil, store, nil, nil, time.Now(), newSharedBudgets(), registry, nil)
+		handleConn(context.Background(), serverConn, pool, nil, nil, nil, store, nil, nil, nil, time.Now(), newSharedBudgets(), registry, nil)
 		close(done)
 	}()
 

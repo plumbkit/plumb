@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -155,6 +156,12 @@ type WriteDeps struct {
 	// UndoFor, when set, resolves the UndoStore for the logical agent in the
 	// call ctx (PLAN-286). Takes precedence over Undo when it returns non-nil.
 	UndoFor func(ctx context.Context) *UndoStore
+	// HistoryFn, when non-nil, receives every successful write from mutating
+	// tools to record in write-diff history. nil disables history recording.
+	HistoryFn func(ctx context.Context, c history.Change)
+	// HistoryEnabledFn reports whether write-diff history is enabled for this
+	// session/call. nil means enabled when HistoryFn is non-nil.
+	HistoryEnabledFn func() bool
 }
 
 // limiter resolves the rate limiter for this call: the per-logical-agent limiter

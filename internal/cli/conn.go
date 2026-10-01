@@ -271,9 +271,10 @@ type sessionView struct {
 // and watcherOnce are orthogonal and kept as-is. All exported methods are safe
 // for concurrent use.
 type connSession struct {
-	pool       *workspacePool
-	store      *config.Store
-	statsStore *statsStore
+	pool         *workspacePool
+	store        *config.Store
+	statsStore   *statsStore
+	historyStore *historyStore
 	// sessionState persists read-tracking + the pinned workspace across daemon
 	// restarts. nil when persistence could not be opened ⇒ all persist/rehydrate
 	// calls no-op (see conn_persist.go).

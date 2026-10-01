@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -314,6 +313,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	statsStore := newStatsStore()
 	defer statsStore.Close()
 
+	historyStore := newHistoryStore(func() int64 { return store.Current().History.MaxDiffBytes })
+	defer historyStore.Close()
+
 	// session_state.db persists the per-connection state (strict-mode read tracking
 	// + the pinned workspace) that must survive a daemon restart, so the resilient
 	// proxy's reconnect is transparent. A failure to open degrades gracefully:
@@ -442,7 +444,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
+	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 	return nil
 }
 
@@ -457,7 +459,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 // match `ps`. Extracted from runDaemon so the strip is pinned by a test.
 func daemonStartTime() time.Time { return time.Now().Round(0) }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
+func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
@@ -508,59 +510,17 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 						"stack", string(debug.Stack()))
 				}
 			}()
-			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
+			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 		})
 	}
 }
 
-// serverWriteTimeout is the per-connection response-write deadline. A blocked
-// socket write would otherwise hold the connection's write mutex forever and
-// wedge every later reply. PLUMB_WRITE_TIMEOUT
-// accepts a Go duration; "0"/"off"/"disable" disables the deadline. An unset or
-// unparseable value uses mcp's built-in default.
-func serverWriteTimeout() time.Duration {
-	v := strings.TrimSpace(os.Getenv("PLUMB_WRITE_TIMEOUT"))
-	if v == "" {
-		return mcp.DefaultWriteTimeout
-	}
-	switch strings.ToLower(v) {
-	case "0", "off", "disable", "disabled", "none":
-		return 0
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		return mcp.DefaultWriteTimeout
-	}
-	return d
-}
-
-// serverToolExecTimeout bounds a single Execute call for tools that opt into it
-// (the filesystem read/list tools). Without a cap a stat/open/readdir on a slow
-// or unresponsive mount runs unbounded until the MCP client abandons the call at
-// its own multi-minute timeout. PLUMB_TOOL_EXEC_TIMEOUT accepts a Go duration;
-// "0"/"off"/"disable" disables the bound. An unset or unparseable value uses
-// mcp's built-in default.
-func serverToolExecTimeout() time.Duration {
-	v := strings.TrimSpace(os.Getenv("PLUMB_TOOL_EXEC_TIMEOUT"))
-	if v == "" {
-		return mcp.DefaultToolExecTimeout
-	}
-	switch strings.ToLower(v) {
-	case "0", "off", "disable", "disabled", "none":
-		return 0
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		return mcp.DefaultToolExecTimeout
-	}
-	return d
-}
-
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
-func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
+func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
 	defer conn.Close()
 	s := newConnSession(ctx, pool, topoPool, store, statsStore, sessState, budgets)
+	s.historyStore = historyStore
 	s.memoryPool = memPool
 	s.collabPool = collabPool
 	s.daemonStartedAt = daemonStartedAt
