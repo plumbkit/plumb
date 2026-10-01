@@ -229,6 +229,17 @@ func (s *Store) NodesByKind(ctx context.Context, kinds ...NodeKind) ([]Node, err
 // symbol-edit fallback needs when the language server cannot parse the file.
 // Returns (nil, nil) when no extractor handles the path.
 func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
+	nodes, _, err := s.ExtractFileGraph(ctx, path)
+	return nodes, err
+}
+
+// ExtractFileGraph is ExtractFile that also returns the edges the extractor drew
+// between the nodes. Nothing is persisted, so no ID has been assigned: an edge's
+// FromID and ToID are 0-based indices into the returned nodes slice, as every
+// extractor emits them. The symbol-edit fallback reads the containment edges for
+// the links no span carries — a Rust method is linked to its type through an
+// `impl` block that is not a node of its own.
+func (s *Store) ExtractFileGraph(ctx context.Context, path string) ([]Node, []Edge, error) {
 	rel := s.toRelative(paths.URIToPath(path))
 	abs := rel
 	if !filepath.IsAbs(abs) {
@@ -236,10 +247,10 @@ func (s *Store) ExtractFile(ctx context.Context, path string) ([]Node, error) {
 	}
 	src, ex, _, _, err := s.idx.readAndHash(abs, rel)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out, err := s.idx.extractFile(ctx, ex, rel, src)
-	return out.nodes, err
+	return out.nodes, out.edges, err
 }
 
 // Explore performs a bounded BFS neighbourhood from the named symbol.

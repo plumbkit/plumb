@@ -62,7 +62,7 @@ var skillContentCounts = map[string]skillCounts{
 	// for cheap subagent re-orientation, on top of the existing 14 discovery-
 	// ladder roster bullets.
 	"plumb-explore": {calls: 1, bullets: 14},
-	"plumb-git":     {calls: 10, bullets: 3},
+	"plumb-git":     {calls: 11, bullets: 3},
 	"plumb-memory":  {calls: 8, bullets: 0},
 	// 1, not 0: PLAN-376 added a minimal_diff_review(mode="changed") worked
 	// example alongside the Low-confidence-cap doctrine it now teaches.

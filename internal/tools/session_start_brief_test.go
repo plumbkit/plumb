@@ -14,7 +14,7 @@ import (
 )
 
 // briefGitInit mirrors TestSessionStart_GitPolicySection's gitInit helper: an
-// initialised-but-empty repo is enough for gitBranch(ws) to report a branch
+// initialised-but-empty repo is enough for gitHeadLabel(ws) to report a branch
 // (git's unborn HEAD already names it), which is what gates both the full
 // and brief git-policy sections on.
 func briefGitInit(t *testing.T) string {

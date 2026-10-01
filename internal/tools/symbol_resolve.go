@@ -35,36 +35,62 @@ func symbolNameMatches(symName, query string) bool {
 // tree-sitter extractors), and the flat shape, where the method is a top-level
 // symbol named "(*Recv).Method" or "(Recv).Method" (gopls' Go output — methods
 // are never nested under the receiver type). For plain names it matches at any
-// depth.
+// depth, and a flat Go method by its method name, so "WroteMtime" resolves
+// "(*WriteTracker).WroteMtime" just as a plain name resolves a nested method
+// (issue #546).
+//
+// A symbol literally carrying the name beats a flat method that matches only
+// once its receiver is stripped: "Run" is the function Run, as it always was,
+// even beside a method (*S).Run. Equally good matches all come back, in
+// document order — each caller lists them or refuses, and never picks one.
 func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protocol.DocumentSymbol {
-	if parent, child, ok := strings.Cut(name, "."); ok {
-		parentType := goReceiverType(parent)
-		var out []protocol.DocumentSymbol
-		for _, s := range syms {
-			if symbolNameMatches(s.Name, parent) {
-				for _, c := range s.Children {
-					if symbolNameMatches(c.Name, child) {
-						out = append(out, c)
-					}
-				}
-			}
-			if recv, method, ok := goMethodReceiver(s.Name); ok && recv == parentType && method == child {
-				out = append(out, s)
-			}
-		}
-		return out
+	if strings.Contains(name, ".") {
+		return resolveDottedName(syms, name)
 	}
-	var out []protocol.DocumentSymbol
+	exact, methods := plainNameCandidates(syms, name)
+	if len(exact) > 0 {
+		return exact
+	}
+	return methods
+}
+
+// plainNameCandidates returns, in document order, the symbols carrying name
+// itself at any depth (exact), and the flat Go methods whose method name it is
+// (methods). resolveSymbolsByName prefers the first set; a caller that can
+// pick by position instead (cross-file callers) needs both.
+func plainNameCandidates(syms []protocol.DocumentSymbol, name string) (exact, methods []protocol.DocumentSymbol) {
 	var walk func([]protocol.DocumentSymbol)
 	walk = func(ss []protocol.DocumentSymbol) {
 		for _, s := range ss {
 			if symbolNameMatches(s.Name, name) {
-				out = append(out, s)
+				exact = append(exact, s)
+			} else if _, method, ok := goMethodReceiver(s.Name); ok && method == name {
+				methods = append(methods, s)
 			}
 			walk(s.Children)
 		}
 	}
 	walk(syms)
+	return exact, methods
+}
+
+// resolveDottedName is resolveSymbolsByName for a "ReceiverType.MethodName".
+func resolveDottedName(syms []protocol.DocumentSymbol, name string) []protocol.DocumentSymbol {
+	parent, child, _ := strings.Cut(name, ".")
+	parentType := goReceiverType(parent)
+	var out []protocol.DocumentSymbol
+	for _, s := range syms {
+		if symbolNameMatches(s.Name, parent) {
+			for _, c := range s.Children {
+				if symbolNameMatches(c.Name, child) {
+					out = append(out, c)
+				}
+			}
+		}
+		if recv, method, ok := goMethodReceiver(s.Name); ok && recv == parentType && method == child {
+			out = append(out, s)
+		}
+	}
 	return out
 }
 
@@ -72,6 +98,37 @@ func resolveSymbolsByName(syms []protocol.DocumentSymbol, name string) []protoco
 // "(*Foo)", "*Foo", or "Foo" all normalise to "Foo".
 func goReceiverType(parent string) string {
 	return strings.TrimPrefix(strings.Trim(parent, "()"), "*")
+}
+
+// stripTypeParams drops the type-parameter list of a Go generic type: "S[T]"
+// and "M[K, V]" both name the type S / M. The list must be a complete suffix —
+// its brackets balanced, closing at the last character — so an unclosed or
+// trailing bracket ("S[", "S[T", "S[T]x") is no spelling of S and comes back
+// unchanged, as does a name with no leading identifier ("[]T"). Every resolver
+// of a Recv/Method name_path applies it to the receiver, so the path an agent
+// copies from a declaration (S[T]/Run) and the one the refusal offers (S/Run)
+// address the same method, and garbage addresses none.
+func stripTypeParams(name string) string {
+	i := strings.IndexByte(name, '[')
+	if i <= 0 || name[len(name)-1] != ']' || strings.Contains(name[:i], "]") {
+		return name
+	}
+	depth := 0
+	for j := i; j < len(name); j++ {
+		switch name[j] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 && j != len(name)-1 {
+				return name // the list closes early: "S[T][U]"
+			}
+		}
+	}
+	if depth != 0 {
+		return name
+	}
+	return name[:i]
 }
 
 // goMethodReceiver splits a gopls Go method symbol name — "(*Recv).Method" or

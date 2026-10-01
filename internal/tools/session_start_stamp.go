@@ -66,12 +66,18 @@ func (t *SessionStart) WithStampChannel(fn func(ctx context.Context) StampChanne
 // plumb_agent, the hook works there too, so it is the remedy most callers can
 // apply. The transport remedy (one plumb serve per agent) follows, for a client
 // that cannot stamp at all.
+//
+// For a hook that is already installed it names bare `plumb hooks`, which
+// reports a missing or stale hook and a daemon that cannot take the stamp. It
+// says "checks", not "says why": with a current hook and a daemon that accepts
+// the stamp it has nothing to report, so it cannot promise a diagnosis.
 const stampChannelRefusedNotice = "NOTE: state-changing calls from this session are being refused. " +
 	"This connection serves more than one logical agent and this call carried no per-call identity, " +
 	"so plumb cannot tell which agent's workspace a write belongs to and will not guess. Your session_id " +
 	"declaration IS recorded, but it identifies this call only. Stamp every call: on Claude Code, " +
-	"`plumb hooks install claude-code` (on Claude desktop, restart the app after upgrading plumb); a client " +
-	"whose transport can set it sends a per-call _meta identity; otherwise run one plumb serve per agent.\n"
+	"`plumb hooks install claude-code` (on Claude desktop, restart the app after upgrading plumb); if the hook is " +
+	"installed, `plumb hooks` checks it and the daemon. A client whose transport can set " +
+	"it sends a per-call _meta identity; otherwise run one plumb serve per agent.\n"
 
 // stampChannelDormantNotice is emitted when this call carried no per-call
 // identity but the connection is still single-agent. Nothing is refused yet,
@@ -79,7 +85,7 @@ const stampChannelRefusedNotice = "NOTE: state-changing calls from this session 
 const stampChannelDormantNotice = "NOTE: this call carried no per-call logical-agent identity. Nothing is " +
 	"refused while you are the only agent on this connection, but once a second agent attaches, your " +
 	"unstamped state-changing calls are refused. On Claude Code, `plumb hooks install claude-code` stamps " +
-	"every call.\n"
+	"every call; if the hook is installed, `plumb hooks` checks it and the daemon.\n"
 
 // stampChannelNote renders the disclosure, or "" when there is nothing to say:
 // the accessor is unwired, or the channel is live. Rendered alongside

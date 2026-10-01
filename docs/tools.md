@@ -35,6 +35,38 @@ These apply across many tools:
   `character`) or a symbol name (`symbol_name` / `name`, plain or dotted
   `ReceiverType.MethodName`). Prefer names when available; plumb resolves them
   to the identifier's `SelectionRange.Start` and avoids hand-computed positions.
+  A plain name matches a method at any depth, Go methods included (gopls names
+  them `(*Recv).Method`). A symbol literally carrying the name beats a method
+  that matches only once its receiver is stripped, so `Run` is the function
+  `Run` even beside a method `(*S).Run`. That includes a struct field or an
+  interface method named `Run`: either hides every `(*T).Run` from a plain `Run`
+  lookup, and the method is addressed by its receiver (`T.Run`; `T/Run` for
+  `move_symbol`). Only when no symbol carries the name itself do methods
+  compete, and then equally good matches (two methods `(*A).Run` and
+  `(*B).Run`) are never resolved to one silently: the read-only tools answer for
+  every match; `rename_symbol` refuses and lists, for each, the
+  `Receiver.Method` name that singles it out, or the `line`/`character` to retry
+  with when no name does; `move_symbol` refuses and lists the `name_path` for
+  each (`A/Run`, resolved against the language server's flat `(*A).Run` symbol
+  and, when the server cannot answer, the topology index). A generic receiver's
+  type parameters are left out: `(*S[T]).Run` is `S/Run`, and `S[T]/Run` names
+  the same method, as do `*S/Run` and `(*S)/Run`; a bracket never closed
+  (`S[/Run`) names nothing. When the tree-sitter fallback resolves a `name_path`
+  because the language server cannot (`replace_symbol_body`, `insert_*`,
+  `move_symbol`), `Parent/Name` names a declaration whose *direct* parent is
+  `Parent`, and `P1/P2/Name` one whose parent is `P2`, whose parent is `P1` —
+  never one that merely sits somewhere inside `Parent`, so `Outer/run` is
+  `Outer`'s own `run`, not that of a class nested in it. A declaration's parent
+  is the smallest named node enclosing it, or the node its extractor links it to
+  (a Rust method to the type of its `impl` block, when the file declares that
+  type), though not the package node Go links every top-level declaration to
+  (`p/Run` is refused) or a C# file-scoped namespace; a qualified name that
+  spells out the whole chain (`(*S).Run`, `Foo::run`) counts too. A path no declaration matches is refused, and so is one
+  that several match — overloads, a class nested in a class of the same name, a
+  C++ or Objective-C declaration beside its definition, a TypeScript class beside
+  a same-named one in a `namespace` — with their lines listed. A TypeScript
+  namespace is not a node, so no path through one resolves. Neither case is ever
+  resolved to a same-named declaration elsewhere in the file.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
@@ -573,6 +605,11 @@ both files.
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.
 >
+> `include_doc_comment` extends the edit over the doc comment of the symbol the
+> tool resolved, and never resolves the `name_path` a second time: the extractor's
+> byte-precise span when a tree-sitter node of that name starts on the symbol's
+> first line, the contiguous comment lines above it otherwise.
+>
 > All four append a unified diff of the change to their response — a preview in
 > `dry_run`, the applied change otherwise — gated by `[edits].show_write_diff`
 > (default on; same toggle as `edit_file`/`write_file`).
@@ -998,6 +1035,13 @@ file needs no `git rm`). Pre-commit hooks always run. Every non-read call consum
 write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
+
+No git child opens an editor or a credential prompt: each runs with
+`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`, so
+`rebase --continue`, `cherry-pick -e` and `revert --edit` keep the message git
+prepared and `rebase -i` runs its todo list unchanged. A value under
+`[git] env` wins (see
+[`configuration.md`](configuration.md#the-git-childs-environment)).
 
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
