@@ -34,7 +34,7 @@ var (
 	}
 	// Classified by inspecting their args, so they belong in the skill's
 	// argument-dependent bullets rather than any single tier row.
-	gitArgDependent = []string{"switch", "restore", "branch", "tag", "stash", "checkout"}
+	gitArgDependent = []string{"switch", "restore", "branch", "tag", "stash", "checkout", "merge"}
 	// Refused at every tier.
 	gitRejected = []string{"rm"}
 )

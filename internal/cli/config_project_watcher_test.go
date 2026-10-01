@@ -10,11 +10,15 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -38,6 +42,12 @@ import (
 // 2× the window rather than the 5× they used to.
 const testDebounce = 750 * time.Millisecond
 
+// testCloseGrace is the close grace the manager tests run with. Production's
+// projectWatchCloseGrace suits a daemon that is about to exit anyway; a test
+// wants close to wait out every watch goroutine, so a loaded machine cannot cut
+// the wait short and let a temp-dir clean-up race the watcher's close.
+const testCloseGrace = 30 * time.Second
+
 // testWatchManager builds a manager with a test debounce and a dispatch that
 // forwards to registry.reloadProject AND signals the returned channel once per
 // dispatch — the deterministic "watcher fired" signal the tests wait on.
@@ -53,8 +63,73 @@ func testWatchManager(t *testing.T, registry *connRegistry) (*projectConfigWatch
 		sig <- ws
 	})
 	m.debounce = testDebounce
+	m.closeGrace = testCloseGrace
 	t.Cleanup(m.close)
 	return m, sig
+}
+
+// watchedTempDir is t.TempDir for a directory m will watch. Clean-ups run
+// last-registered first, so registering m.close AFTER the directory makes the
+// manager finish closing every watcher before the directory is removed.
+// Removing a watched tree while its watcher closes is exactly the race in
+// fsnotify's kqueue backend that double-closes a descriptor (see
+// closeFSWatcher) — on macOS CI the stray close killed the NEXT test's
+// watcher or temp-dir clean-up with "bad file descriptor".
+func watchedTempDir(t *testing.T, m *projectConfigWatchManager) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(m.close)
+	return dir
+}
+
+// captureWatchers wraps m's watcher constructor so the test receives every OS
+// watcher the manager builds, in order, and opens m.testErrs so the test can
+// hand a run loop an error as if that watcher had reported it.
+func captureWatchers(m *projectConfigWatchManager) <-chan *fsnotify.Watcher {
+	m.testErrs = make(chan error)
+	ch := make(chan *fsnotify.Watcher, 16)
+	m.newWatcher = func() (*fsnotify.Watcher, error) {
+		w, err := fsnotify.NewWatcher()
+		if err == nil {
+			ch <- w
+		}
+		return w, err
+	}
+	return ch
+}
+
+// nextWatcher returns the next watcher the manager builds, failing the test
+// if none appears within 10s.
+func nextWatcher(t *testing.T, ch <-chan *fsnotify.Watcher) *fsnotify.Watcher {
+	t.Helper()
+	select {
+	case w := <-ch:
+		return w
+	case <-time.After(10 * time.Second):
+		t.Fatal("no OS watcher built within 10s")
+		return nil
+	}
+}
+
+// requireClosed fails unless watcher is already closed and its reader has
+// stopped delivering, so Events is closed — without waiting for it. It cannot
+// see the reader's last two descriptor closes, which come just after.
+func requireClosed(t *testing.T, watcher *fsnotify.Watcher, why string) {
+	t.Helper()
+	select {
+	case _, ok := <-watcher.Events:
+		if ok {
+			t.Fatalf("watcher still delivering events: %s", why)
+		}
+	default:
+		t.Fatalf("watcher still open: %s", why)
+	}
+}
+
+// lostWatcherErr is the error fsnotify's kqueue reader sends, again and
+// again, once its kqueue descriptor has been closed underneath it.
+func lostWatcherErr() error {
+	return fmt.Errorf("fsnotify.readEvents: %w", syscall.EBADF)
 }
 
 // awaitDispatch fails the test unless a dispatch for want arrives within the
@@ -99,7 +174,7 @@ func writeProjectCfg(t *testing.T, ws, body string) {
 
 func TestProjectWatchManager_OneWatcherPerWorkspace(t *testing.T) {
 	m, _ := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 
 	m.acquire(ws)
 	m.acquire(ws)
@@ -130,8 +205,8 @@ func TestProjectWatchManager_OneWatcherPerWorkspace(t *testing.T) {
 
 func TestProjectWatchManager_SymlinkAliasSharesWatcher(t *testing.T) {
 	m, _ := testWatchManager(t, nil)
-	realDir := t.TempDir()
-	link := filepath.Join(t.TempDir(), "link")
+	realDir := watchedTempDir(t, m)
+	link := filepath.Join(watchedTempDir(t, m), "link")
 	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
@@ -149,7 +224,7 @@ func TestProjectWatchManager_SymlinkAliasSharesWatcher(t *testing.T) {
 
 func TestProjectWatchManager_DispatchesOnWrite(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
 
@@ -159,7 +234,7 @@ func TestProjectWatchManager_DispatchesOnWrite(t *testing.T) {
 
 func TestProjectWatchManager_DispatchesOnDelete(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
 
@@ -171,7 +246,7 @@ func TestProjectWatchManager_DispatchesOnDelete(t *testing.T) {
 
 func TestProjectWatchManager_ConfigCreatedAfterAttach(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir() // no .plumb yet — the watcher must see it appear
+	ws := watchedTempDir(t, m) // no .plumb yet — the watcher must see it appear
 	m.acquire(ws)
 
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
@@ -180,7 +255,7 @@ func TestProjectWatchManager_ConfigCreatedAfterAttach(t *testing.T) {
 
 func TestProjectWatchManager_DebounceBurstCollapsesToOneDispatch(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
 
@@ -214,7 +289,7 @@ func TestProjectWatchManager_DebounceBurstCollapsesToOneDispatch(t *testing.T) {
 
 func TestProjectWatchManager_NeverReloadsAnotherWorkspace(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	wsA, wsB := t.TempDir(), t.TempDir()
+	wsA, wsB := watchedTempDir(t, m), watchedTempDir(t, m)
 	writeProjectCfg(t, wsA, "")
 	m.acquire(wsA)
 	m.acquire(wsB)
@@ -227,7 +302,7 @@ func TestProjectWatchManager_NeverReloadsAnotherWorkspace(t *testing.T) {
 
 func TestProjectWatchManager_NoDispatchAfterLastRelease(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
 	m.release(ws)
@@ -242,7 +317,7 @@ func TestProjectWatchManager_NoDispatchAfterLastRelease(t *testing.T) {
 // itself must NOT dispatch (it is not config.toml); the rename must.
 func TestProjectWatchManager_DispatchesOnAtomicRenameSave(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
 
@@ -265,7 +340,7 @@ func TestProjectWatchManager_DispatchesOnAtomicRenameSave(t *testing.T) {
 // with healthy() still true so the poll fallback never engaged.
 func TestProjectWatchManager_PlumbDirSwapKeepsWatching(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
 
@@ -292,7 +367,7 @@ func TestProjectWatchManager_PlumbDirSwapKeepsWatching(t *testing.T) {
 // loop has exited (dead) gets a fresh attempt.
 func TestProjectWatchManager_FailedRetryWaitsForLoopExit(t *testing.T) {
 	m, _ := testWatchManager(t, nil)
-	ws := t.TempDir()
+	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
 

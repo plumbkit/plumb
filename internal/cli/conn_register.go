@@ -165,7 +165,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessionID, s.sessionName).
 		WithSessionNameFor(s.sessionNameFor).
 		WithPeerIntents(func() bool { return s.collabConfig().Intents }, s.collabStoreIfExists,
-			func() int { return s.collabConfig().HintBudgetBytes }))
+			func() int { return s.collabConfig().HintBudgetBytes }).
+		WithProjectPolicy(s.projectGitStatus))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
 	srv.Register(tools.NewMutationTest(wd, s.taskResolver).WithSession(s.sessionNameFor, s.sessionIDFor))
