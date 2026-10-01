@@ -48,11 +48,11 @@ var editFileSchema = json.RawMessage(`{
           },
           "new_string": {
             "type": "string",
-            "description": "Replacement text. Use empty string to delete. When start_line is set, replaces the specified line range (or appends at end of file when start_line is -1)."
+            "description": "Replacement text. Use empty string to delete. With start_line set it replaces (or, at -1, appends) whole lines: a missing trailing newline is added unless at EOF of a file that has none."
           },
           "start_line": {
             "type": "integer",
-            "description": "First line to replace (1-based, inclusive). When set, old_string is not used. Use -1 to append new_string at end of file. Use end_line: -1 to extend the range to the last line."
+            "description": "First line to replace (1-based, inclusive); old_string is then unused. -1 appends new_string at EOF; end_line: -1 runs the range to the last line."
           },
           "end_line": {
             "type": "integer",
