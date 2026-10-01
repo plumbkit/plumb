@@ -66,7 +66,7 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // grows a second "sections" knob to pick among them.
 //
 // Three signals are NOT optional, even though the rest of the identity block
-// (writeSessionIdentity) is full-only: inheritedName and repinnedFrom, plus
+// (writeSessionIdentity) is full-only: inheritedName and repinLine, plus
 // the wired lspSkipNoteFn, are exactly the loud, one-shot announcements full
 // always carries — the PR #181 re-pin guarantee, the #316 why-no-server note,
 // and the resumed session's own peer-addressable name (how a woken agent
@@ -77,12 +77,13 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // woken session must still see its pending mail, or the wake flow loses its
 // point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
 // so it costs nothing when there is nothing to deliver.
-func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string, claimable bool) string {
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, linked bool, stampNote string, claimable bool) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
-	if repinnedFrom != "" {
-		sb.WriteString(repinnedFrom)
-	}
+	// The same re-pin block the full packet renders: which pin moved, how many
+	// other agents followed it, and what this caller's next relative path
+	// resolves against (issue #517).
+	sb.WriteString(repinLine)
 	if lang != "" {
 		fmt.Fprintf(&sb, "Language: %s\n", lang)
 	}
@@ -95,9 +96,13 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	// or resumed session that auto-briefs is exactly the case where the workspace
 	// on the line above may not be the one this agent chose.
 	sb.WriteString(t.contestedPinNote())
-	branch := gitBranch(ws)
-	if branch != "" {
-		fmt.Fprintf(&sb, "Branch:   %s\n", branch)
+	// And the GOWORK=off line (#521): a subagent in a worktree is the typical
+	// brief caller, and the one whose language server would otherwise look
+	// inconsistent with the go commands its own shell runs.
+	sb.WriteString(t.lspGoWorkNote(ws))
+	head := gitHeadLabel(ws)
+	if head != "" {
+		fmt.Fprintf(&sb, "Branch:   %s\n", head)
 	}
 	// The same unconditional self line the full packet renders, through the same
 	// function. Brief is where it matters MOST: a woken or auto-briefed agent has
@@ -110,7 +115,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinnedFrom string
 	// place it will definitely look is here.
 	sb.WriteString(t.linkageNote(linked))
 	sb.WriteString(stampNote)
-	if t.gitPolicyFn != nil && branch != "" {
+	if t.gitPolicyFn != nil && head != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))
 	}
 	fmt.Fprintf(&sb, "Diagnostics: %d\n", t.diagnosticsCount())

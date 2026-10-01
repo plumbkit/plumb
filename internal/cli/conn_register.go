@@ -165,10 +165,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewGit(wd, s.gitPolicy).WithSession(s.sessionID, s.sessionName).
 		WithSessionNameFor(s.sessionNameFor).
 		WithPeerIntents(func() bool { return s.collabConfig().Intents }, s.collabStoreIfExists,
-			func() int { return s.collabConfig().HintBudgetBytes }))
+			func() int { return s.collabConfig().HintBudgetBytes }).
+		WithProjectPolicy(s.projectGitStatus))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
-	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
+	srv.Register(tools.NewMutationTest(wd, s.taskResolver).WithSession(s.sessionNameFor, s.sessionIDFor))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
@@ -202,14 +203,14 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			}
 			return p, hiddenToolCount(srv), reason
 		}).
-		WithPinProvenance(s.pinProvenance).
+		WithPinProvenanceFor(s.pinProvenanceFor).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
 		WithAgentIdentity(s.rosterIdentity).
 		WithAgentName(s.addressableNameFor).
 		WithCollabStoreFor(s.collabStoreIfExistsForWorkspace).
-		WithInheritedSessions(s.inheritedSessionIDs).
+		WithInheritedSessionsFor(s.inheritedSessionIDsFor).
 		WithTopology(topoFn).
 		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).
 		WithCollab(
@@ -250,8 +251,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv), reason
 		}).
 		WithEpisodic(s.latestEpisodic).
-		WithSelfSession(s.sessionID).
-		WithSelfIdentity(s.sessionName).
+		WithCallerIdentity(s.sessionNameFor, s.sessionIDFor).
 		WithSurcharge(func() (int, int, int) {
 			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
 			return r.TotalBytes, r.Tokens, r.ToolCount
@@ -260,16 +260,18 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
 		}).
-		WithMailbox(func() (bool, tools.Inbox) {
-			return s.collabConfig().Mailbox, s.inbox()
+		WithMailboxFor(func(ctx context.Context) (bool, tools.Inbox) {
+			return s.collabConfig().Mailbox, s.inboxFor(ctx)
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPSkipNote(s.lspHomeSkipNote).
 		WithPinProvenance(s.pinProvenance).
 		WithLSPLanguages(s.acquiredLanguageLabels).
 		WithLSPRouted(s.routedLanguageNames).
-		WithLSPWarmup(s.lspWarming).
-		WithLSPDiagMode(s.lspDiagMode).
+		WithLSPServer(s.lspServerIn).
+		WithLSPWarmup(s.lspWarmingIn).
+		WithLSPDiagMode(s.lspDiagModeIn).
+		WithLSPGoWorkOff(s.lspGoWorkOffIn).
 		WithXcodeHint(xcodeHintFn).
 		WithTasks(s.taskState).
 		WithProjectPolicy(s.projectGitStatus).
@@ -280,9 +282,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLinkageState(func() tools.LinkageState {
 			return tools.LinkageState{ExternalID: s.externalID(), Recovery: string(s.recovery())}
 		}).
-		WithResumedNewIdentity(func() bool { return s.view().resumedNewIdentity }).
 		WithStampChannel(s.stampChannelState).
-		WithExternalID(s.linkExternalID))
+		WithLinkage(s.linkExternalID))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))

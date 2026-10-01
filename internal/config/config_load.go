@@ -216,6 +216,9 @@ func applyGitEnv(cfg *Config) {
 	if d, ok := envDuration("PLUMB_GIT_WRITE_TIMEOUT"); ok {
 		cfg.Git.WriteTimeout = Duration{d}
 	}
+	if d, ok := envDuration("PLUMB_GIT_DETACH_AFTER"); ok {
+		cfg.Git.DetachAfter = Duration{d}
+	}
 }
 
 // envBool reads key from the environment. ok is true when the variable is
@@ -355,13 +358,14 @@ func LoadProjectWithPolicy(base Config, workspace string) (Config, ProjectPolicy
 		// Extras merge per slot onto whatever the global layer supplied, so a
 		// project naming one extra does not erase the others.
 		merged.Tasks = applyExtraTaskSlots(cloneTasks(merged.Tasks), extraTaskSlots(raw))
+		merged.Tasks = composeTaskEnv(base.Tasks, merged.Tasks)
 	}
 	// The spec is computed from the same bytes that were just merged, so the
 	// content trust is checked against is exactly the content in play — a second
 	// read of the file could see a different version.
 	st := ProjectPolicyStatus{Path: path, Spec: projectPolicySpecFrom(raw)}
 	if !st.Spec.IsEmpty() {
-		st.Trusted = projectPolicyTrust().IsTrustedForPolicy(workspace, st.Spec)
+		st.Trusted, st.InheritedFrom = projectPolicyTrust().PolicyGrant(workspace, st.Spec)
 	}
 	if !st.InEffect() {
 		forceCapabilityFieldsToBase(base, &merged)

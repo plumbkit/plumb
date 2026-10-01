@@ -51,7 +51,7 @@ func (m Model) adjustCycle(it settingItem, dir int) (Model, tea.Cmd) {
 		return m.setLogFormat(cycleOption(logFormatOptions, m.settingsCfg.LogFormat, dir)), nil
 	case skPathStyle:
 		return m.setPathStyle(cycleOption(pathStyleOptions, m.settingsCfg.UI.PathStyle, dir)), nil
-	case skCacheTTL, skLSPTimeout, skSemTimeout, skXcodeTimeout, skGitWriteTimeout:
+	case skCacheTTL, skLSPTimeout, skSemTimeout, skXcodeTimeout, skGitWriteTimeout, skGitDetachAfter:
 		return m.setDuration(it.key, dir), nil
 	default:
 		return m.setCycle(it, dir), nil
@@ -399,6 +399,8 @@ func durField(c *config.Config, key settingKey) (*config.Duration, []string) {
 		return &c.Xcode.Timeout, xcodeTimeoutOptions
 	case skGitWriteTimeout:
 		return &c.Git.WriteTimeout, gitWriteTimeoutOptions
+	case skGitDetachAfter:
+		return &c.Git.DetachAfter, gitDetachAfterOptions
 	default:
 		return nil, nil
 	}
@@ -434,6 +436,8 @@ func durLabel(key settingKey) string {
 		return "xcode timeout"
 	case skGitWriteTimeout:
 		return "git write timeout"
+	case skGitDetachAfter:
+		return "git detach after"
 	default:
 		return ""
 	}

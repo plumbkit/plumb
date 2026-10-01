@@ -21,7 +21,7 @@ func runTask(t *testing.T, tool *Tasks, args string) (string, error) {
 // what IS configured. Before project-defined slots existed both were one
 // closed-set check, and that check is what made the vocabulary Go-shaped.
 func TestRunTask_ValidateSlot(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(context.Context, string, string, string) (TaskCommand, error) { return TaskCommand{}, nil })
+	tool := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) { return TaskCommand{}, nil })
 
 	for _, bad := range []string{"Deploy", "9deploy", "de ploy", "deploy!", ""} {
 		args, _ := json.Marshal(map[string]any{"slot": bad})
@@ -41,7 +41,8 @@ func TestRunTask_ValidateSlot(t *testing.T) {
 // rather than being refused by a closed set in this package.
 func TestRunTask_ProjectDefinedSlotReachesResolver(t *testing.T) {
 	var got string
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		got = slot
 		return TaskCommand{Slot: slot, Provenance: "project", Steps: [][]string{{"true"}}}, nil
 	})
@@ -75,7 +76,7 @@ func TestRunTask_SchemaHasNoSlotEnum(t *testing.T) {
 }
 
 func TestRunTask_TargetMustBeShellSafe(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(context.Context, string, string, string) (TaskCommand, error) { return TaskCommand{}, nil })
+	tool := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) { return TaskCommand{}, nil })
 	if _, err := runTask(t, tool, `{"slot":"test","target":"foo; rm -rf /"}`); err == nil {
 		t.Error("expected a target with shell metacharacters to be refused")
 	}
@@ -89,7 +90,7 @@ func TestRunTask_NoResolver(t *testing.T) {
 }
 
 func TestRunTask_ResolverErrorPropagates(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) {
 		return TaskCommand{}, errors.New("untrusted: run `plumb trust`")
 	})
 	_, err := runTask(t, tool, `{"slot":"build"}`)
@@ -120,7 +121,8 @@ func TestRunTask_RunsInTheResolvedWorkingDir(t *testing.T) {
 	}
 
 	tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return root }},
-		func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+		func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+			slot := req.Slot
 			return TaskCommand{
 				Slot:       slot,
 				Provenance: "project",
@@ -175,7 +177,8 @@ func assertSameDir(t *testing.T, got, want, msg string) {
 func TestRunTask_FallsBackToTheWorkspaceRoot(t *testing.T) {
 	root := t.TempDir()
 	tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return root }},
-		func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+		func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+			slot := req.Slot
 			return TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{{"/bin/pwd"}}}, nil
 		})
 	out, err := runTask(t, tool, `{"slot":"build"}`)
@@ -187,7 +190,7 @@ func TestRunTask_FallsBackToTheWorkspaceRoot(t *testing.T) {
 }
 
 func TestRunTask_RunsStepsAndStopsOnFailure(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) {
 		return TaskCommand{
 			Slot:       "verify",
 			Provenance: "default",
@@ -207,7 +210,7 @@ func TestRunTask_RunsStepsAndStopsOnFailure(t *testing.T) {
 }
 
 func TestRunTask_AllStepsOK(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) {
 		return TaskCommand{Slot: "build", Provenance: "global", Steps: [][]string{{"true"}}}, nil
 	})
 	out, err := runTask(t, tool, `{"slot":"build"}`)
@@ -234,7 +237,8 @@ func TestRunTask_AllStepsOK(t *testing.T) {
 // satisfied by an echo of the request.
 func TestRunTask_NoCommandRefusalCarriesItsRemedy(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), ".plumb", "config.toml")
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		return TaskCommand{
 			Slot: slot, Language: "go",
 			Configured: []string{"build", "test"},
@@ -255,7 +259,8 @@ func TestRunTask_NoCommandRefusalCarriesItsRemedy(t *testing.T) {
 	// The fallback direction: a resolver that could not name a file must still
 	// point at one, or the remedy is unactionable. Asserting only the presence of
 	// cfgPath above would be satisfied by a message that hardcoded it.
-	bare := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	bare := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		return TaskCommand{Slot: slot, Language: "go"}, nil
 	})
 	_, err = runTask(t, bare, `{"slot":"lint"}`)
@@ -283,7 +288,8 @@ func TestRunTask_TargetRefusalReachesTheCallerIntact(t *testing.T) {
 		`{target} placeholder. Stored command: "go test -count=1 ./..." (from /tmp/ws/.plumb/config.toml). ` +
 		`To scope this slot, restore the placeholder plumb ships for it ("go test {target:./...}") ` +
 		`under [tasks.go] test`
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, _, target, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		target := req.Target
 		if target == "" {
 			return TaskCommand{Slot: "test", Steps: [][]string{{"true"}}}, nil
 		}
@@ -315,7 +321,8 @@ func TestRunTask_TargetRefusalReachesTheCallerIntact(t *testing.T) {
 // looks like from the caller's side.
 func TestRunTask_NotesReachTheResponse(t *testing.T) {
 	const note = `the target "./internal/cli" was NOT applied: verify is a composite`
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, target, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot, target := req.Slot, req.Target
 		cmd := TaskCommand{Slot: slot, Provenance: "default", Steps: [][]string{{"true"}}}
 		if target != "" {
 			cmd.Notes = []string{note}
@@ -353,7 +360,8 @@ func TestRunTask_NotesReachTheResponse(t *testing.T) {
 // telemetry — so the message has to say so, and has to name the alternative that
 // needs no trust.
 func TestRunTask_NoCommandRemedyClosesTheTrustLoop(t *testing.T) {
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot := req.Slot
 		return TaskCommand{Slot: slot, Language: "go", Configured: []string{"build"}}, nil
 	})
 	_, err := runTask(t, tool, `{"slot":"lint"}`)
@@ -377,7 +385,8 @@ func TestRunTask_NoCommandRemedyClosesTheTrustLoop(t *testing.T) {
 // which is the exact failure the argument exists to prevent.
 func TestRunTask_ExecutePassesLanguageToResolver(t *testing.T) {
 	var gotSlot, gotTarget, gotLanguage string
-	tk := NewTasks(WriteDeps{}, func(_ context.Context, slot, target, language string) (TaskCommand, error) {
+	tk := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		slot, target, language := req.Slot, req.Target, req.Language
 		gotSlot, gotTarget, gotLanguage = slot, target, language
 		return TaskCommand{}, nil // no Steps ⇒ Execute returns noCommandError, which is fine here
 	})
@@ -396,7 +405,8 @@ func TestRunTask_ExecutePassesLanguageToResolver(t *testing.T) {
 // resolving the primary.
 func TestRunTask_OmittedLanguageReachesResolverEmpty(t *testing.T) {
 	got := "unset"
-	tk := NewTasks(WriteDeps{}, func(_ context.Context, _, _, language string) (TaskCommand, error) {
+	tk := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+		language := req.Language
 		got = language
 		return TaskCommand{}, nil
 	})
@@ -412,7 +422,7 @@ func TestRunTask_OmittedLanguageReachesResolverEmpty(t *testing.T) {
 // something nobody could have written into the message.
 func TestRunTask_MalformedLanguageRefusedBeforeResolving(t *testing.T) {
 	called := false
-	tk := NewTasks(WriteDeps{}, func(_ context.Context, _, _, _ string) (TaskCommand, error) {
+	tk := NewTasks(WriteDeps{}, func(context.Context, TaskRequest) (TaskCommand, error) {
 		called = true
 		return TaskCommand{}, nil
 	})

@@ -9,6 +9,8 @@ package sessionstate
 // declaration (PLAN-440 item 2).
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -43,6 +45,72 @@ func (s *Store) RecordLogicalAgent(proxySessionID, logicalAgentID string) error 
 	return nil
 }
 
+// RosterIdentity is the session row one logical agent holds on a shared
+// connection: the name peers address it by and the session ID its mail is bound
+// to.
+type RosterIdentity struct {
+	// Name and SessionID are both set on any identity this package returns.
+	Name      string
+	SessionID string
+}
+
+// RecordRosterIdentity durably notes the name and session ID the agent
+// logicalAgentID holds on this connection, so a reconnecting proxy (the same
+// proxySessionID) can give it back to that agent and nobody else (#526).
+//
+// An upsert on the same key RecordLogicalAgent uses, so it fills the columns on
+// a row that was already observed and creates the row when it was not.
+// nil-safe; a blank key or identity is dropped, because a half-recorded identity
+// would reserve a name no session could ever claim.
+func (s *Store) RecordRosterIdentity(proxySessionID, logicalAgentID, name, sessionID string) error {
+	if s == nil || proxySessionID == "" || logicalAgentID == "" || name == "" || sessionID == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO logical_agent (proxy_session_id, logical_agent_id, updated_at, roster_name, roster_session_id)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(proxy_session_id, logical_agent_id)
+		 DO UPDATE SET updated_at=excluded.updated_at,
+		               roster_name=excluded.roster_name,
+		               roster_session_id=excluded.roster_session_id`,
+		proxySessionID, logicalAgentID, time.Now().UnixMilli(), name, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("sessionstate: record roster identity: %w", err)
+	}
+	return nil
+}
+
+// RosterIdentityFor returns the identity logicalAgentID held under THIS proxy
+// session, and false when none was recorded. nil-safe.
+//
+// Both halves of the key are required and are the whole authorisation: the proxy
+// session ID is the secret only the serve process holds, so a different proxy
+// session stamping the same agent id finds nothing here. The agent id alone is a
+// string a model can type, and selects nothing.
+func (s *Store) RosterIdentityFor(proxySessionID, logicalAgentID string) (RosterIdentity, bool, error) {
+	if s == nil || proxySessionID == "" || logicalAgentID == "" {
+		return RosterIdentity{}, false, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var r RosterIdentity
+	err := s.db.QueryRow(
+		`SELECT roster_name, roster_session_id FROM logical_agent
+		   WHERE proxy_session_id=? AND logical_agent_id=? AND roster_name<>'' AND roster_session_id<>''`,
+		proxySessionID, logicalAgentID,
+	).Scan(&r.Name, &r.SessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RosterIdentity{}, false, nil
+	}
+	if err != nil {
+		return RosterIdentity{}, false, fmt.Errorf("sessionstate: load roster identity: %w", err)
+	}
+	return r, true, nil
+}
+
 // BackdateLogicalAgents ages every declaration under a proxy session, for tests
 // that need to distinguish history from concurrency without sleeping.
 func (s *Store) BackdateLogicalAgents(proxySessionID string, to time.Time) error {
@@ -56,6 +124,9 @@ func (s *Store) BackdateLogicalAgents(proxySessionID string, to time.Time) error
 	}
 	if _, err := s.db.Exec(`UPDATE pinned_workspace SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
 		return fmt.Errorf("sessionstate: backdate pins: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil {
+		return fmt.Errorf("sessionstate: backdate declarations: %w", err)
 	}
 	return nil
 }
@@ -100,6 +171,78 @@ func (s *Store) LogicalAgentIDsFor(proxySessionID string, since time.Time) ([]st
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("sessionstate: list logical agents: %w", err)
+	}
+	return out, nil
+}
+
+// RecordDeclaredLinkage durably notes that the conversation linkage declared
+// itself on this connection through session_start (issue #513). It is the
+// evidence that lets a reconnecting daemon keep admitting that conversation's
+// stamped writes instead of refusing them as undeclared. Refreshed on every
+// declaration, so a conversation that re-orients keeps its row young against
+// Prune. nil-safe; blank values are dropped.
+func (s *Store) RecordDeclaredLinkage(proxySessionID, linkage string) error {
+	if s == nil || proxySessionID == "" || linkage == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(
+		`INSERT INTO declared_linkage (proxy_session_id, linkage, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(proxy_session_id, linkage)
+		 DO UPDATE SET updated_at=excluded.updated_at`,
+		proxySessionID, linkage, time.Now().UnixMilli(),
+	)
+	if err != nil {
+		return fmt.Errorf("sessionstate: record declared linkage: %w", err)
+	}
+	return nil
+}
+
+// TouchDeclaredLinkage refreshes an EXISTING declaration's timestamp, so a
+// conversation that keeps working stays ahead of Prune. It never inserts: an
+// admitted call is not a declaration, and a row Prune already reclaimed stays
+// gone until session_start declares again. nil-safe.
+func (s *Store) TouchDeclaredLinkage(proxySessionID, linkage string) error {
+	if s == nil || proxySessionID == "" || linkage == "" {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.db.Exec(`UPDATE declared_linkage SET updated_at=? WHERE proxy_session_id=? AND linkage=?`,
+		time.Now().UnixMilli(), proxySessionID, linkage); err != nil {
+		return fmt.Errorf("sessionstate: touch declared linkage: %w", err)
+	}
+	return nil
+}
+
+// DeclaredLinkagesFor returns every linkage declared under proxySessionID that
+// Prune has not yet reclaimed. nil-safe; an empty result means "no evidence".
+func (s *Store) DeclaredLinkagesFor(proxySessionID string) ([]string, error) {
+	if s == nil || proxySessionID == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(
+		`SELECT linkage FROM declared_linkage WHERE proxy_session_id=? AND linkage<>''`,
+		proxySessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sessionstate: list declared linkages: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			return nil, fmt.Errorf("sessionstate: scan declared linkage: %w", err)
+		}
+		out = append(out, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sessionstate: list declared linkages: %w", err)
 	}
 	return out, nil
 }

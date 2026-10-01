@@ -86,29 +86,33 @@ func docCommentStart(path string, symStart protocol.Position) protocol.Position 
 	return protocol.Position{Line: uint32(first), Character: 0}
 }
 
-// docCommentStartPreferTopology resolves the start position of namePath's
-// leading doc comment. It first asks the topology index for a node carrying a
-// byte-precise doc span (which the structural extractors record exactly), and
-// falls back to the docCommentStart line-scan heuristic when topology is
-// unavailable, has no matching node, or that node has no doc span. The line-scan
-// remains the fallback for the LSP-only path, so this never regresses callers.
-func docCommentStartPreferTopology(ctx context.Context, topo topologyStoreFn, uri, namePath string, symStart protocol.Position) protocol.Position {
-	path := paths.URIToPath(uri)
-	if pos, ok := topologyDocCommentStart(ctx, topo, uri, namePath); ok {
+// docCommentStartPreferTopology resolves the start position of sym's leading doc
+// comment, where sym is the symbol the tool ALREADY resolved — from the language
+// server or from the fallback. It first looks for the topology node of that
+// symbol (topologyNodeOfSymbol: same name, span starting on the symbol's line)
+// carrying a byte-precise doc span, which the structural extractors record
+// exactly, and falls back to the docCommentStart line-scan heuristic when topology
+// is unavailable, no node matches exactly, or the node has no doc span. It never
+// resolves the name_path again: a second resolution through another tree could
+// answer with a different symbol (a nested class's method of the same name), and
+// the edit would then cover that symbol's doc comment instead of the one being
+// edited.
+func docCommentStartPreferTopology(ctx context.Context, topo topologyStoreFn, uri string, sym *protocol.DocumentSymbol) protocol.Position {
+	if pos, ok := topologyDocCommentStart(ctx, topo, uri, sym); ok {
 		return pos
 	}
-	return docCommentStart(path, symStart)
+	return docCommentStart(paths.URIToPath(uri), sym.Range.Start)
 }
 
-// topologyDocCommentStart returns the precise start position of namePath's doc
-// comment from a fresh topology parse, or ok=false when no node with a doc span
-// resolves.
-func topologyDocCommentStart(ctx context.Context, topo topologyStoreFn, uri, namePath string) (protocol.Position, bool) {
+// topologyDocCommentStart returns the precise start position of sym's doc
+// comment from a fresh topology parse, or ok=false when no node of sym with a doc
+// span is found.
+func topologyDocCommentStart(ctx context.Context, topo topologyStoreFn, uri string, sym *protocol.DocumentSymbol) (protocol.Position, bool) {
 	nodes, ok := freshTopologyNodes(ctx, topo, uri)
 	if !ok {
 		return protocol.Position{}, false
 	}
-	node := topologyNodeByPath(nodes, namePath)
+	node := topologyNodeOfSymbol(nodes, sym)
 	if node == nil || !node.HasDocSpan() {
 		return protocol.Position{}, false
 	}
@@ -138,82 +142,6 @@ func isCommentLine(trimmed string) bool {
 		return true
 	}
 	return false
-}
-
-// symbolFallbackReason says why the tree-sitter fallback answered instead of
-// the language server. The distinction reaches the agent: a server that is
-// ABSENT and one that simply did not answer inside its attempt budget call for
-// different responses (give up on the LSP vs. retry once it is warm), and both
-// hand back a line-granular range rather than a byte-precise one.
-type symbolFallbackReason int
-
-const (
-	fallbackNotUsed symbolFallbackReason = iota
-	fallbackLSPUnavailable
-	fallbackLSPTimedOut
-)
-
-// resolveSymbolOrFallback resolves namePath via the LSP document-symbol tree,
-// falling back to a fresh tree-sitter parse (topology) when the language server
-// errors. The reason reports which path produced the symbol, and why, so the
-// caller can annotate its output (the fallback range is line-granular, not
-// byte-precise). When the LSP fails and no fallback resolves the symbol, the
-// original LSP error is returned.
-//
-// It takes TWO contexts on purpose. lspCtx bounds the server attempt and is
-// spent once that attempt misses its budget; ctx is the caller's live context
-// and is what the fallback runs on. Handing the fallback lspCtx — which is what
-// every symbol-edit tool used to do — makes it inoperative rather than merely
-// late: topology's safeExtract refuses to start a parse on an expired context,
-// so the tool surfaces the very timeout the fallback exists to replace
-// (PLAN-390, PLAN-403). See withFallbackLSPDeadline.
-func resolveSymbolOrFallback(ctx, lspCtx context.Context, client lsp.Client, topo topologyStoreFn, uri, namePath string) (sym *protocol.DocumentSymbol, reason symbolFallbackReason, err error) {
-	sym, lspErr := resolveSymbol(lspCtx, client, uri, namePath)
-	if lspErr == nil {
-		return sym, fallbackNotUsed, nil
-	}
-	if IsWorkspaceBoundaryError(lspErr) {
-		return nil, fallbackNotUsed, lspErr
-	}
-	nodes, ok := freshTopologyNodes(ctx, topo, uri)
-	if !ok {
-		return nil, fallbackNotUsed, lspErr
-	}
-	node := topologyNodeByPath(nodes, namePath)
-	if node == nil {
-		return nil, fallbackNotUsed, lspErr
-	}
-	ds := nodeToDocSymbol(*node, fileLines(paths.URIToPath(uri)))
-	return &ds, lspFallbackReason(lspCtx), nil
-}
-
-// lspFallbackReason classifies a failed server attempt from the attempt context
-// itself, so the error text the LSP path returns stays untouched: an expired
-// lspCtx means the server was too slow, anything else means it could not answer
-// at all.
-func lspFallbackReason(lspCtx context.Context) symbolFallbackReason {
-	if errors.Is(lspCtx.Err(), context.DeadlineExceeded) {
-		return fallbackLSPTimedOut
-	}
-	return fallbackLSPUnavailable
-}
-
-// resolveSymbol fetches the DocumentSymbol tree for uri and locates namePath.
-func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string) (*protocol.DocumentSymbol, error) {
-	syms, err := client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, errors.New("language server did not respond in time (it may still be indexing the workspace — retry shortly)")
-		}
-		return nil, fmt.Errorf("documentSymbols: %w", err)
-	}
-	sym := findSymbolByPath(syms, namePath)
-	if sym == nil {
-		return nil, fmt.Errorf("symbol %q not found in %s", namePath, paths.URIToPath(uri))
-	}
-	return sym, nil
 }
 
 // ─── insert_before_symbol ──────────────────────────────────────────────────
@@ -320,13 +248,13 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert before", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
 		start := sym.Range.Start
 		if a.IncludeDocComment {
-			start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
+			start = docCommentStartPreferTopology(ctx, t.topo, a.URI, sym)
 		}
 		return protocol.TextEdit{
 			Range:   protocol.Range{Start: start, End: start},
@@ -435,7 +363,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert after", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
@@ -551,13 +479,13 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "replace", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
 		rng := sym.Range
 		if a.IncludeDocComment {
-			rng.Start = docCommentStartPreferTopology(ctx, t.topo, a.URI, a.NamePath, sym.Range.Start)
+			rng.Start = docCommentStartPreferTopology(ctx, t.topo, a.URI, sym)
 		}
 		return protocol.TextEdit{
 			Range:   rng,

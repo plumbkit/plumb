@@ -209,7 +209,8 @@ func TestMutationTest_AWorktreeUnderANonGitHolderIsRefused(t *testing.T) {
 	gwGit(t, repo, "worktree", "add", "-q", "-b", "wt", wt)
 	ran := filepath.Join(t.TempDir(), "ran")
 	tool := NewMutationTest(WriteDeps{WorkspaceFn: func(context.Context) string { return holder }},
-		func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+		func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+			slot := req.Slot
 			return TaskCommand{Slot: slot, Steps: [][]string{{"/bin/sh", "-c", "echo x >> " + shellQuote(ran)}}, Provenance: "default"}, nil
 		})
 

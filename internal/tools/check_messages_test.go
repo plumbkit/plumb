@@ -486,7 +486,7 @@ func TestCheckMessages_ReceiptIsSilentWhenEverythingWasRead(t *testing.T) {
 func TestCheckMessages_DeliversMailBoundToAnInheritedSession(t *testing.T) {
 	deps, local, _ := chatTestDeps(t, CollabPolicy{Mailbox: true}, "alice")
 	const predecessor = "sess-alice-before-restart"
-	deps.InheritedSessionIDs = func() []string { return []string{predecessor} }
+	deps.InheritedSessionIDs = func(context.Context) []string { return []string{predecessor} }
 
 	// Written to alice while the PRE-RESTART session held the name, so the row is
 	// bound to a session ID this connection does not have.

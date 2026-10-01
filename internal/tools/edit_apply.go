@@ -80,13 +80,15 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	}
 
 	var modified []string
-	for _, p := range plans {
-		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+	for i, p := range plans {
+		res, err := safeWrite(p.path, p.after, p.mode)
+		if err != nil {
 			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
 		}
+		plans[i].written = res.written
 		modified = append(modified, p.path)
 	}
 	if onApplied != nil {
@@ -100,6 +102,8 @@ type workspaceEditPlan struct {
 	before []byte
 	after  []byte
 	mode   os.FileMode
+	// written is the version the apply published, set once the write lands.
+	written fileSnapshot
 }
 
 // workspaceEditTarget is one file's share of a WorkspaceEdit, resolved to a
@@ -423,12 +427,41 @@ func offsetForPosition(data []byte, pos protocol.Position) (int, bool) {
 // symbolNameMatches, so a plain "show" addresses a member a server reports
 // with its signature ("show()", sourcekit-lsp) — keeping the semantic-edit
 // tools' by-name addressing in step with the read/query tools.
+//
+// gopls never nests a Go method under its type: it lists "(*Recv).Method" at the
+// top level. A two-segment "Recv/Method" that the nested walk misses is
+// therefore tried against those flat symbols (findFlatGoMethod), so the name_path
+// move_symbol's refusal offers for a method resolves from the language server
+// alone, with no topology index wired.
 func findSymbolByPath(syms []protocol.DocumentSymbol, namePath string) *protocol.DocumentSymbol {
 	parts := strings.Split(namePath, "/")
 	if len(parts) == 0 || parts[0] == "" {
 		return nil
 	}
-	return findSymbolRecursive(syms, parts)
+	if found := findSymbolRecursive(syms, parts); found != nil {
+		return found
+	}
+	if len(parts) == 2 {
+		return findFlatGoMethod(syms, parts[0], parts[1])
+	}
+	return nil
+}
+
+// findFlatGoMethod finds the top-level gopls symbol "(*Recv).Method" or
+// "(Recv).Method" for a Recv/Method name_path. The receiver is compared with its
+// type parameters stripped on both sides — gopls names a generic receiver
+// "(*S[T]).Run", and a name_path says S/Run (or S[T]/Run) — and a receiver the
+// caller wrote in Go's own form ("(*S)", "*S") is accepted as the dotted names
+// are. nil when no method of that receiver carries the name.
+func findFlatGoMethod(syms []protocol.DocumentSymbol, recv, method string) *protocol.DocumentSymbol {
+	want := stripTypeParams(goReceiverType(recv))
+	for i := range syms {
+		r, m, ok := goMethodReceiver(syms[i].Name)
+		if ok && m == method && stripTypeParams(r) == want {
+			return &syms[i]
+		}
+	}
+	return nil
 }
 
 func findSymbolRecursive(syms []protocol.DocumentSymbol, parts []string) *protocol.DocumentSymbol {

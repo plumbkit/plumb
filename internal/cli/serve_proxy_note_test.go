@@ -213,3 +213,34 @@ func TestReconnectNoteText_ReportsObservedFactsOnly(t *testing.T) {
 		})
 	}
 }
+
+// TestReconnectNoteText_PinPromiseIsAccurateForBothKindsOfAgent (issue #529,
+// item 3): the note is read by whichever agent calls next, and used to promise
+// that "the daemon restores an explicit session_start workspace" to all of them.
+// That is true of an agent holding a pin of its own, and not of one that only
+// followed the connection's pin, which comes back wherever the connection now
+// is. The proxy cannot know which reader it has, so the note has to tell the two
+// apart rather than promise either.
+func TestReconnectNoteText_PinPromiseIsAccurateForBothKindsOfAgent(t *testing.T) {
+	t.Parallel()
+
+	note := reconnectNoteText("1.2.3", "1.2.3", true, reconnectOutcome{instanceKnown: true, restarted: true, recovery: string(recoveryRestored)})
+
+	for _, want := range []string{
+		// An agent with a pin of its own, on a shared connection.
+		"an agent that set its own pin gets that pin back",
+		// An agent that followed the connection.
+		"one that only followed the connection's pin comes back on whatever the connection holds now",
+		// And the condition on the restore itself: it verifies the directory.
+		"if its directory still resolves to itself",
+		// The remedy survives for the agent that set nothing.
+		"confirm the pin",
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note does not state %q: %q", want, note)
+		}
+	}
+	if strings.Contains(note, "The daemon restores an explicit session_start workspace") {
+		t.Errorf("the note still makes the unconditional promise: %q", note)
+	}
+}

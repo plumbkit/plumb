@@ -1,6 +1,8 @@
 package mcp_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -134,5 +136,66 @@ func TestStrippingHost_IdentitySurvivesOnlyWhenDeclared(t *testing.T) {
 	serveOn(t, s, callWith("rename_thing", kept))
 	if *agent != "conv-1" {
 		t.Fatalf("declared stamp did not survive the stripping host: agent %q (args %s)", *agent, kept)
+	}
+}
+
+// servedEntryBytes serves tools/list on s and returns, per tool, the byte size
+// of its entry as served — name, description and inputSchema, re-encoded with
+// the field set ToolSchemaBytes measures (the `_meta` block excluded).
+func servedEntryBytes(t *testing.T, s *mcp.Server) map[string]int {
+	t.Helper()
+	var out bytes.Buffer
+	if err := s.Serve(context.Background(), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`+"\n"), &out); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	type entry struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"inputSchema"`
+	}
+	var resp struct {
+		Result struct {
+			Tools []entry `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &resp); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	sizes := map[string]int{}
+	for _, e := range resp.Result.Tools {
+		b, err := json.Marshal(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sizes[e.Name] = len(b)
+	}
+	if len(sizes) == 0 {
+		t.Fatal("tools/list advertised no tools")
+	}
+	return sizes
+}
+
+// TestToolSchemaBytes_MatchesTheAdvertisedSchemas (#515): the size reported
+// for the surcharge is the size of what this connection is actually served,
+// so a connection that gets the declared identity property is charged for it
+// on every tool and one that does not is not.
+func TestToolSchemaBytes_MatchesTheAdvertisedSchemas(t *testing.T) {
+	s, _, _ := identityServer(t)
+	plain := s.ToolSchemaBytes()
+	for _, declare := range []bool{false, true} {
+		s.DeclareIdentityArg = func() bool { return declare }
+		got, served := s.ToolSchemaBytes(), servedEntryBytes(t, s)
+		if len(got) != len(served) {
+			t.Fatalf("declare=%v: ToolSchemaBytes covers %d tools, tools/list serves %d", declare, len(got), len(served))
+		}
+		for name, want := range served {
+			if got[name] != want {
+				t.Errorf("declare=%v: %s reported as %d bytes, served as %d", declare, name, got[name], want)
+			}
+			grew := got[name] > plain[name]
+			if grew != declare {
+				t.Errorf("declare=%v: %s is %d bytes against %d undecorated", declare, name, got[name], plain[name])
+			}
+		}
 	}
 }

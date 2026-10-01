@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -80,6 +79,15 @@ func gitReadArgv(argv []string) []string {
 	return append([]string{gitNoOptionalLocks}, argv...)
 }
 
+// gitArgvForTier applies gitReadArgv to a read-tier argv and leaves every
+// other tier's untouched.
+func gitArgvForTier(argv []string, tier gitTier) []string {
+	if tier == tierRead {
+		return gitReadArgv(argv)
+	}
+	return argv
+}
+
 // runGit runs a git subcommand in the repository containing repo. Non-read tiers
 // (index/ref-mutating + network) are serialised per repo so concurrent
 // plumb-initiated writes queue rather than collide on .git/index.lock; read-tier
@@ -103,77 +111,107 @@ func gitReadArgv(argv []string) []string {
 // wired, it runs right after the guard's pre-execution check — a refused op
 // never warns — and its advisory block leads the successful response.
 //
-// child carries how the git child is RUN (git_child.go): its environment, built
-// from [git] env, and the [git] write_timeout bound. A nil Env means inherit
-// the daemon's environment, which is what an unconfigured knob resolves to and
-// what every git child got before it existed — except that execGitCmd may add
-// GOWORK=off, never over a GOWORK already set (git_gowork.go). This is the ONE git child plumb
-// spawns that runs the repository's hooks or can open an editor, so it is the
-// one whose environment is configurable; the auxiliary read queries around it
+// child carries how the git child is RUN (git_child.go): its environment — the
+// daemon's, plus the non-interactive defaults (GIT_EDITOR=true and friends,
+// gitNonInteractiveEnv), plus [git] env — and the [git] write_timeout bound.
+// startGitCmd may add GOWORK=off, never over a GOWORK already set
+// (git_gowork.go). This is the ONE git child plumb spawns that runs the
+// repository's hooks or can open an editor, so it is the one whose environment
+// is configurable; the auxiliary read queries around it
 // (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
 // parses, and are deliberately left inheriting.
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec) (string, error) {
+//
+// writes (may be nil) is the calling session's WriteTracker. When this op can
+// rewrite the working tree, the files the session wrote that git then changes
+// are re-recorded afterwards (git_own_writes.go), so the next read does not blame a
+// peer for plumb's own switch, merge or restore. A child that outlives the call
+// (git_background.go) is re-recorded by its finisher when it exits, not when the
+// call returns.
+//
+// sessKey names the calling session for the once-per-session report of a
+// background op's outcome (git_background.go).
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker, sessKey string) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
 	}
-	execCtx := ctx
-	writeTimeout := child.writeTimeout()
+	// A write an earlier call left running in the background (#549,
+	// git_background.go) is reported before anything else, and blocks every
+	// further non-read op on the repository until it finishes: queued behind the
+	// per-repo lock, such an op would outlive its own call exactly as the first
+	// one did. Reads carry the note and run.
+	notice, ack := gitBackgroundNotice(repoRoot, sessKey)
 	if tier != tierRead {
-		var cleanup func()
-		execCtx, cleanup, err = beginSerialisedGit(ctx, repoRoot, sub, tier, writeTimeout)
+		if err := refuseWhileGitBackground(repoRoot, sub); err != nil {
+			return "", err
+		}
+	}
+	out, err := runGitIn(ctx, repoRoot, sub, argv, tier, guard, intentWarn, child, writes)
+	if err != nil {
+		return "", err
+	}
+	ack()
+	return notice + out, nil
+}
+
+// runGitIn is runGit once the repository is resolved and clear of a background
+// op: it serialises a non-read tier, runs the pre-execution guards, and hands
+// the child to gitChildRun.
+//
+// For the index/ref-mutating tiers the whole call — the wait for the per-repo
+// lock included — is bounded by [git] detach_after, measured from here. The
+// lock wait is cut to that bound because a call queued behind a slow holder
+// would otherwise outlive its client just as the holder did, and then commit
+// after the client had been told it timed out. A wait cut short runs nothing
+// and says so; a child still running at the bound is detached, never killed.
+func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker) (string, error) {
+	r := &gitChildRun{ctx: ctx, execCtx: ctx, repoRoot: repoRoot, sub: sub, argv: argv, tier: tier, child: child, guard: guard, start: time.Now(), cleanup: func() {}, afterExit: func() {}}
+	lockWait := child.writeTimeout()
+	if d, ok := child.detachAfter(); ok && r.mutating() {
+		r.detachAfter = d
+		lockWait = d
+	}
+	if tier != tierRead {
+		var err error
+		r.execCtx, r.cleanup, err = beginSerialisedGit(ctx, repoRoot, sub, tier, child.writeTimeout(), lockWait)
 		if err != nil {
 			return "", err
 		}
-		defer cleanup()
 	}
-	if err := guardRefPreExec(execCtx, guard, repoRoot, sub); err != nil {
+	// Deferred, not called inline, so a panic below cannot strand the per-repo
+	// lock; skipped only once the finisher has taken ownership of it.
+	detached := false
+	defer func() {
+		if !detached {
+			r.cleanup()
+		}
+	}()
+	if err := guardRefPreExec(r.execCtx, guard, repoRoot, sub); err != nil {
 		return "", err
 	}
-	warning := ""
+	// Taken under the per-repo lock and refreshed on EVERY exit below: a merge
+	// that stops on conflicts fails and has still rewritten files. A child that
+	// is detached instead is refreshed by its finisher once it has exited (the
+	// files change while it runs, not when this call returns), still under the
+	// lock.
+	r.afterExit = trackOwnGitWrites(writes, repoRoot, sub, tier)
+	defer func() {
+		if !detached {
+			r.afterExit()
+		}
+	}()
 	if intentWarn != nil {
-		warning = intentWarn(execCtx, repoRoot)
+		r.warning = intentWarn(r.execCtx, repoRoot)
 	}
-	if tier == tierRead {
-		argv = gitReadArgv(argv)
+	argv = gitArgvForTier(argv, tier)
+	out, op, err := r.exec(argv)
+	if op != nil {
+		// Detached: the background finisher owns cleanup, and with it the
+		// per-repo lock and the drain token, until the child exits.
+		detached = true
+		return gitStillRunningMessage(op), nil
 	}
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(execCtx, "git", argv...)
-	cmd.Dir = repoRoot
-	cmd.Env = child.Env
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	mutating := tier == tierWrite || tier == tierDestructive
-	goWorkOff, err := execGitCmd(cmd, mutating, repoRoot)
-	if err != nil {
-		// git check-ignore exits 1 when NONE of the listed paths are ignored —
-		// a normal "no match" result, not a failure.
-		if sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(stderr.String()) == "" {
-			return postProcessGit(ctx, repoRoot, sub, stdout.String())
-		}
-		// A child plumb itself killed must not be reported as a refusal by git.
-		// execCtx is decoupled from ctx (context.WithoutCancel) for exactly the
-		// mutating tiers, so a DeadlineExceeded here can ONLY be the bound
-		// beginSerialisedGit applied — never the caller's deadline, and never a
-		// daemon shutdown. Without this branch a SIGKILLed child (ExitCode() ==
-		// -1) rendered as `git commit: exit code -1` under a remediation stating
-		// that no plumb setting changes the outcome, which inverts the truth: it
-		// was plumb's bound, and [git] write_timeout is the setting.
-		if mutating && errors.Is(execCtx.Err(), context.DeadlineExceeded) {
-			return "", gitWriteTimeoutError(repoRoot, sub, argv, writeTimeout, stdout.String(), stderr.String(), warning)
-		}
-		// warning is attached here too, not just on the success path below: a
-		// failure is exactly when a peer's claim ("rebasing ops main") is most
-		// likely to be the explanation, and the query cost was already paid.
-		return "", gitCommandError(repoRoot, sub, argv, err, stdout.String(), stderr.String(), warning, goWorkOff)
-	}
-	guard.postExec(execCtx)
-	out := stdout.String()
-	if strings.TrimSpace(out) == "" {
-		out = stderr.String() // switch/push and friends report on stderr
-	}
-	processed, err := postProcessGit(ctx, repoRoot, sub, out)
-	return warning + processed, err
+	return out, err
 }
 
 // beginSerialisedGit prepares a non-read git op: it refuses new work while the
@@ -181,26 +219,29 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 // per-repo lock, and — for index/ref-mutating tiers — reaps any attributable
 // stale lock left by a dead daemon and returns a cancellation-decoupled, bounded
 // exec context so a shutdown mid-commit lets git finish. (The owner sidecar is
-// stamped by execGitCmd once the child pid is known.) The returned cleanup
-// closure (which the caller defers) reverses all of it. Network tiers serialise
-// and drain-gate but keep request-context cancellation (a push can hang on auth
-// — it must stay interruptible) and write no owner sidecar (they do not create
-// index.lock).
+// stamped by startGitCmd once the child pid is known.) The returned cleanup
+// closure (which the caller runs once the child is done) reverses all of it.
+// Network tiers serialise and drain-gate but keep request-context cancellation
+// (a push can hang on auth — it must stay interruptible) and write no owner
+// sidecar (they do not create index.lock).
 //
-// writeTimeout is the resolved [git] write_timeout, and it bounds BOTH halves:
-// the exec context for a mutating tier, and how long this call queues for the
-// per-repository lock. One number rather than two is deliberate — when the lock
-// wait was its own shorter constant, a legitimate holder taking longer than that
-// constant made every queued peer fail with "another git operation is in
-// progress" for a wait that was always going to be satisfiable. A peer should be
-// willing to wait exactly as long as a holder is permitted to run.
-func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier, writeTimeout time.Duration) (context.Context, func(), error) {
+// writeTimeout is the resolved [git] write_timeout and bounds the exec context
+// for a mutating tier. lockWait bounds how long this call queues for the
+// per-repository lock. It is write_timeout unless the call has a shorter
+// foreground deadline ([git] detach_after, see runGitIn). Deriving it from
+// write_timeout rather than a shorter constant of its own is deliberate — when
+// the lock wait was its own shorter constant, a legitimate holder taking longer
+// than that constant made every queued peer fail with "another git operation is
+// in progress" for a wait that was always going to be satisfiable. A peer should
+// be willing to wait exactly as long as a holder is permitted to run, or as long
+// as its own caller will wait, whichever is shorter.
+func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier, writeTimeout, lockWait time.Duration) (context.Context, func(), error) {
 	if gitWriteDrainActive() {
 		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, errGitDraining),
 			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait)
 	}
 	gitWriteInflight.Add(1)
-	release, err := lockRepo(ctx, repoRoot, writeTimeout)
+	release, err := lockRepo(ctx, repoRoot, lockWait)
 	if err != nil {
 		gitWriteInflight.Done()
 		// Classified on the same terms as the drain refusal above, and for the
@@ -209,7 +250,7 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier,
 		// unclassified internal error — no kind, no remediation — so "another git
 		// operation is in progress … timed out" reached the caller with no hint
 		// that retrying is exactly the right move.
-		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w", sub, err),
+		return nil, nil, toolerror.Wrap(fmt.Errorf("git %s: %w; nothing was run", sub, err),
 			toolerror.KindDaemonTransport, toolerror.ClassRetryAfterWait)
 	}
 	execCtx := ctx
@@ -226,11 +267,12 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier,
 	return execCtx, cleanup, nil
 }
 
-// execGitCmd applies the child-wait bound (boundGitChildWait — see the
-// unbounded-Wait hazard documented there), starts cmd, stamps the owner sidecar
-// with the git child's pid for a mutating op (so a stranded index.lock is
-// attributable to the actual lock holder, not the daemon), and waits. Returns
-// the child's run error.
+// startGitCmd applies the child-wait bound (boundGitChildWait — see the
+// unbounded-Wait hazard documented there), starts cmd, and stamps the owner
+// sidecar with the git child's pid for a mutating op (so a stranded index.lock
+// is attributable to the actual lock holder, not the daemon). It returns the
+// wait half separately so a caller can stop waiting without killing the child
+// (awaitOrDetach); wait clears the sidecar once the child has exited.
 //
 // The hygiene is applied here rather than at the callsite so every git child
 // that goes through this chokepoint gets it, and so a test can exercise the
@@ -241,18 +283,40 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier,
 // every go command its hooks run, and this is the one place every hook-running
 // git child — commit, rebase, cherry-pick, push — passes through. goWorkOff is
 // the go.work that was switched off ("" when none was), so a failure can say so.
-func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) (goWorkOff string, err error) {
+//
+// A nil cmd.Env is filled in with gitChildEnv(nil) for the same reason again:
+// the non-interactive defaults (GIT_EDITOR=true, GIT_TERMINAL_PROMPT=0, …) must
+// reach every git child — a detached background one (git_background.go)
+// included, since it is started here too — and a nil Env would inherit the
+// daemon's editor.
+func startGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) (goWorkOff string, wait func() error, err error) {
 	boundGitChildWait(cmd)
+	if cmd.Env == nil {
+		cmd.Env = gitChildEnv(nil)
+	}
 	goWorkOff = applyAutoGoWork(cmd)
 	pinChildPWD(cmd)
 	if err := cmd.Start(); err != nil {
-		return goWorkOff, err
+		return goWorkOff, nil, err
 	}
 	if mutating {
 		recordGitLockOwner(repoRoot, cmd.Process.Pid)
-		defer clearGitLockOwner(repoRoot)
 	}
-	return goWorkOff, cmd.Wait()
+	return goWorkOff, func() error {
+		if mutating {
+			defer clearGitLockOwner(repoRoot)
+		}
+		return cmd.Wait()
+	}, nil
+}
+
+// execGitCmd is startGitCmd followed by the wait: the run-to-completion form.
+func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) error {
+	_, wait, err := startGitCmd(cmd, mutating, repoRoot)
+	if err != nil {
+		return err
+	}
+	return wait()
 }
 
 // postProcessGit replaces the raw output of add/commit with the concise

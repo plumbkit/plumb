@@ -269,7 +269,7 @@ func (t *MoveSymbol) applyMove(ctx, lspCtx context.Context, waited time.Duration
 			return
 		}
 		for _, p := range plans {
-			deps.recordWritten(ctx, p.path)
+			deps.recordWritten(ctx, p.path, p.written)
 			deps.recordUndo(ctx, p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
 		}
 	}
@@ -315,7 +315,7 @@ func (t *MoveSymbol) buildMovePlans(ctx, lspCtx context.Context, waited time.Dur
 	}
 	rng := sym.Range
 	if includeDoc {
-		rng.Start = docCommentStartPreferTopology(ctx, t.topo, src, a.NamePath, sym.Range.Start)
+		rng.Start = docCommentStartPreferTopology(ctx, t.topo, src, sym)
 	}
 	srcBefore, err := os.ReadFile(srcPath)
 	if err != nil {
@@ -342,53 +342,6 @@ func (t *MoveSymbol) buildMovePlans(ctx, lspCtx context.Context, waited time.Dur
 	}
 	note := symbolEditFallbackNote(reason, t.warmup, src, waited)
 	return []movePlan{srcPlan, destPlan}, sym.Name, note, nil
-}
-
-// resolveMoveTarget locates name_path in the source, refusing an ambiguous bare
-// name (two top-level declarations share it — moving "the first" would be a
-// silent guess). It then delegates to the shared LSP → tree-sitter resolver so
-// the move works even when the language server is cold or cannot parse the file.
-//
-// The refusal is asked of WHICHEVER TREE ANSWERED. Gating it on the language
-// server alone made it fire exactly when it was least needed (healthy server)
-// and skipped it exactly where the tool is least sure of itself: a cold or slow
-// server leaves the answer to a line-granular tree-sitter parse, and
-// topologyNodeByPath returns the FIRST node with a matching name, so the move
-// proceeded on a silent guess and rewrote two files (PLAN-403 review §1).
-func (t *MoveSymbol) resolveMoveTarget(ctx, lspCtx context.Context, uri, namePath string) (*protocol.DocumentSymbol, symbolFallbackReason, error) {
-	bare := !strings.Contains(namePath, "/")
-	if bare && t.client != nil {
-		if syms, err := t.client.DocumentSymbols(lspCtx, protocol.DocumentSymbolParams{
-			TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-		}); err == nil {
-			if m := resolveSymbolsByName(syms, namePath); len(m) > 1 {
-				return nil, fallbackNotUsed, moveAmbiguousErr(len(m), namePath, uri)
-			}
-		}
-	}
-	sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, uri, namePath)
-	if err != nil {
-		return nil, fallbackNotUsed, fmt.Errorf("move_symbol: %w", err)
-	}
-	// Only when tree-sitter answered: the check above never ran (the server
-	// errored or timed out before returning a tree), so the ambiguity is asked
-	// of the index instead. A warm resolve keeps the server's own verdict —
-	// re-asking topology there would refuse moves gopls considers unambiguous.
-	if bare && reason != fallbackNotUsed {
-		if nodes, ok := freshTopologyNodes(ctx, t.topo, uri); ok {
-			if n := len(topologyNodesByName(nodes, namePath)); n > 1 {
-				return nil, fallbackNotUsed, moveAmbiguousErr(n, namePath, uri)
-			}
-		}
-	}
-	return sym, reason, nil
-}
-
-// moveAmbiguousErr is the single refusal both ambiguity checks return, so the
-// message an agent reads does not depend on which tree answered.
-func moveAmbiguousErr(n int, namePath, uri string) error {
-	return fmt.Errorf("move_symbol: %d symbols named %q in %s — ambiguous; v1 moves one declaration, "+
-		"disambiguate with a slash-separated name_path", n, namePath, paths.URIToPath(uri))
 }
 
 // buildDestPlan computes the destination file's after-content: the moved
@@ -540,6 +493,8 @@ type movePlan struct {
 	after         []byte
 	mode          os.FileMode
 	existedBefore bool
+	// written is the version the move published, set once the write lands.
+	written fileSnapshot
 }
 
 // applyMovePlans writes each plan in order and rolls every prior write back on a
@@ -550,13 +505,15 @@ type movePlan struct {
 // also directly unit-testable.
 func applyMovePlans(plans []movePlan, onApplied func()) ([]string, error) {
 	var written []movePlan
-	for _, p := range plans {
-		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+	for i, p := range plans {
+		res, err := safeWrite(p.path, p.after, p.mode)
+		if err != nil {
 			if rbErr := rollbackMove(written); rbErr != nil {
 				return nil, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return nil, fmt.Errorf("writing %s: %w", p.path, err)
 		}
+		plans[i].written = res.written
 		written = append(written, p)
 	}
 	if onApplied != nil {

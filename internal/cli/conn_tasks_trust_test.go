@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // newTaskTrustSession builds a minimal session pinned to ws with a Go language
@@ -38,7 +39,7 @@ func TestTaskResolver_TrustBoundToCommandSet(t *testing.T) {
 	s := newTaskTrustSession(t, ws, tasks)
 
 	// Untrusted: refused with a clear message.
-	if _, err := s.taskResolver(context.Background(), "build", "", ""); err == nil {
+	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil {
 		t.Fatal("expected refusal for an untrusted project command")
 	} else if !strings.Contains(err.Error(), "not trusted") {
 		t.Errorf("refusal message = %q, want it to mention 'not trusted'", err)
@@ -52,7 +53,7 @@ func TestTaskResolver_TrustBoundToCommandSet(t *testing.T) {
 	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.taskResolver(context.Background(), "build", "", ""); err != nil {
+	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err != nil {
 		t.Fatalf("trusted command should resolve, got %v", err)
 	}
 
@@ -62,7 +63,7 @@ func TestTaskResolver_TrustBoundToCommandSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	s2 := newTaskTrustSession(t, ws, map[string]config.TasksConfig{"go": {Build: "bash -c curlevil"}})
-	if _, err := s2.taskResolver(context.Background(), "build", "", ""); err == nil {
+	if _, err := s2.taskResolver(context.Background(), tools.TaskRequest{Slot: "build"}); err == nil {
 		t.Error("a rewritten command must be refused (trust bound to the prior command set)")
 	} else if !strings.Contains(err.Error(), "changed") && !strings.Contains(err.Error(), "not trusted") {
 		t.Errorf("refusal message = %q, want it to mention the command change", err)
@@ -84,7 +85,7 @@ func TestTaskResolver_ProjectDefinedSlotIsTrustGated(t *testing.T) {
 	tasks := map[string]config.TasksConfig{"go": {Extra: map[string]string{"check": "go vet ./..."}}}
 	s := newTaskTrustSession(t, ws, tasks)
 
-	if _, err := s.taskResolver(context.Background(), "check", "", ""); err == nil {
+	if _, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "check"}); err == nil {
 		t.Fatal("an untrusted project-defined slot must be refused, not run")
 	} else if !strings.Contains(err.Error(), "not trusted") {
 		t.Errorf("refusal message = %q, want it to mention 'not trusted'", err)
@@ -97,7 +98,7 @@ func TestTaskResolver_ProjectDefinedSlotIsTrustGated(t *testing.T) {
 	if err := config.NewTrustStore().SetTrustedForProject(ws, cmds, nil); err != nil {
 		t.Fatal(err)
 	}
-	cmd, err := s.taskResolver(context.Background(), "check", "", "")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "check"})
 	if err != nil {
 		t.Fatalf("a trusted project-defined slot should resolve, got %v", err)
 	}
@@ -118,7 +119,7 @@ func TestTaskResolver_UnconfiguredSlotNamesWhatIsConfigured(t *testing.T) {
 	}}
 	s := newTaskTrustSession(t, ws, tasks)
 
-	cmd, err := s.taskResolver(context.Background(), "nosuchslot", "", "")
+	cmd, err := s.taskResolver(context.Background(), tools.TaskRequest{Slot: "nosuchslot"})
 	if err != nil {
 		t.Fatalf("a well-formed unconfigured slot resolves to an empty command, got %v", err)
 	}

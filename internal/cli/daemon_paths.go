@@ -29,6 +29,19 @@ func daemonPIDPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.pid")
 }
 
+// publishDaemonPID writes this process's PID file, first removing the control
+// socket. The identity hook names a daemon instance by the PID file plus the
+// control socket's inode and mtime. After a kill -9 both survive, and a
+// successor that reuses the PID would show the dead daemon's marker until it
+// re-binds the socket, so the hook would serve the dead daemon's cached answer.
+// With the socket gone first, that window reads as an empty marker, which never
+// matches a cache. writeFile is os.WriteFile; it is a parameter so a test can
+// see the socket's state at the instant the PID file appears.
+func publishDaemonPID(writeFile func(name string, data []byte, perm os.FileMode) error) error {
+	_ = os.Remove(daemonCtrlSocketPath())
+	return writeFile(daemonPIDPath(), fmt.Appendf(nil, "%d", os.Getpid()), 0o600)
+}
+
 // daemonVersionPath returns the path where the daemon publishes its build
 // version (read by `plumb serve` to detect a stale daemon).
 func daemonVersionPath() string {

@@ -66,12 +66,16 @@ type sessionView struct {
 	// purpose arg. Descriptive only; stamped on this session's stats rows and
 	// surfaced by daemon_info. "" when unset.
 	purpose string
-	// resumedNewIdentity: this connection resumed a predecessor's NAME through
-	// the external-ID linker while running under a NEW internal session ID —
-	// the linker never adopts the predecessor's ID, so the session_start
-	// identity line discloses what did not follow it (mail, threads).
-	resumedNewIdentity bool
-	lastCfgMtime       time.Time
+	// pendingResume: the connection took back a predecessor's NAME through the
+	// external-ID linker and its owner has not been told. The agent whose call
+	// linked it is often not the owner (after a restart a subagent is routinely
+	// first), so the news waits here (see conn_link_external.go).
+	pendingResume *resumeState
+	lastCfgMtime  time.Time
+	// configRoot is the root applyProjectConfig last loaded the blocks above for
+	// ("" before any). A re-pin moves acquiredRoot before applying the new config,
+	// so projectViewFor keys on this, never on acquiredRoot (#522).
+	configRoot string
 	// projectWatchRoot: the canonical root this session holds a project-config
 	// watcher reference on (PLAN-414), acquired on every config apply, released
 	// on re-pin / close. fallbackWarned latches the one-time poll-fallback log
@@ -200,9 +204,9 @@ type sessionView struct {
 	// _meta, which is what lets a reconnect note state an outcome rather than
 	// assume one. "" until restoreIdentity runs, and read through recovery().
 	recovery recoveryOutcome
-	// inheritedSessionIDs are predecessor plumb session IDs this connection may
-	// also read mailbox messages for, granted ONLY by the proxy-authenticated
-	// persisted-state path (see inheritSessionID). Nil for every other session.
+	// inheritedSessionIDs are predecessor session IDs the connection's OWNER may
+	// also read mail and threads for, granted ONLY by the proxy-authenticated path
+	// (see inheritSessionID) and to no other agent (inheritedSessionIDsFor). Nil otherwise.
 	inheritedSessionIDs []string
 
 	// workspaceHint is the workspace pre-pin the serve proxy transported in the
@@ -360,9 +364,8 @@ type connSession struct {
 	chatWatch    *chatWatch
 	writeLimiter *tools.RateLimiter
 
-	// hintSeen tracks the memory names already hinted on this connection, so a
-	// memory is pointed out once per session, not on every read of a hot path.
-	// Lazily created; cleared on re-pin.
+	// hintSeen: memory names already hinted on this connection, so each is pointed
+	// out once per session, not on every hot-path read. Lazily created; cleared on re-pin.
 	hintSeen   map[string]bool
 	hintSeenMu sync.Mutex
 
@@ -372,8 +375,11 @@ type connSession struct {
 	unsubscribe    func()          // removes the store-change listener on close
 
 	// initSettled closes when OnInit's attach ladder has run (conn_roots.go).
-	initSettled     chan struct{}
-	initSettledOnce sync.Once
+	initSettled        chan struct{}
+	initSettledOnce    sync.Once
+	roots              rootsCoalescer // roots/list_changed coalescing (conn_roots.go)
+	beforeLiveMutate   func()         // test seam, see mutateLive (conn_lane.go)
+	beforeConfigCommit func()         // test seam, see applyProjectConfigIf (conn_config.go)
 
 	clientRequest mcp.RequestFn
 	requestMu     sync.RWMutex

@@ -235,7 +235,7 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 	snaps := s.snapshotTools()
 	filter := s.ToolFilter     // set before Serve; read without the lock
 	alwaysLoad := s.AlwaysLoad // set before Serve; read without the lock
-	declareIdentity := s.DeclareIdentityArg != nil && s.DeclareIdentityArg()
+	declareIdentity := s.declaresIdentityArg()
 	defs := make([]toolDef, 0, len(snaps))
 	for _, sn := range snaps {
 		// A filtered-out tool is hidden from the advertised list but stays
@@ -246,10 +246,7 @@ func (s *Server) handleToolsList(req mcpRequest) mcpResponse {
 		def := toolDef{
 			Name:        sn.name,
 			Description: sn.description,
-			InputSchema: sn.schema,
-		}
-		if declareIdentity {
-			def.InputSchema = withIdentityProperty(sn.schema)
+			InputSchema: advertisedSchema(sn.schema, declareIdentity),
 		}
 		// Pin the hot tools into the client's context so it never runs an MCP
 		// tool-search round-trip (or guesses parameter names) for them; the long
@@ -331,6 +328,9 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 
 	logicalAgent := resolveLogicalAgent(params.Meta, argAgent)
 	ctx = WithLogicalAgent(ctx, logicalAgent)
+	// The scratchpad a tool's callbacks note their decisions in, for ToolResultMeta
+	// to read after the run (result_notes.go).
+	ctx = WithResultNotes(ctx)
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
 	}

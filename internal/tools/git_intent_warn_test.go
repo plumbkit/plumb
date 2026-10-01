@@ -481,6 +481,8 @@ func TestRepoStateVerb(t *testing.T) {
 		{"commit", tierWrite, true},
 		{"switch", tierWrite, true},
 		{"checkout", tierWrite, true}, // checkout -b
+		{"merge", tierWrite, true},    // moves HEAD and rewrites the working tree
+		{"merge", tierDestructive, true},
 		{"add", tierWrite, false},     // index only
 		{"restore", tierWrite, false}, // restore --staged: index only
 		{"stash", tierWrite, false},   // stash push: tree/index only

@@ -170,7 +170,7 @@ func TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace(t *testing.T) {
 	s.recordLogicalAgentAttach("agent-here")
 	s.recordLogicalAgentCall("agent-elsewhere")
 	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
-	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+	if _, moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
 		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
 	}
 	if got := s.workspaceFor(ctx); got != agentRoot {
@@ -236,7 +236,7 @@ func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
 	s.recordLogicalAgentAttach("agent-here")
 	s.recordLogicalAgentCall("agent-elsewhere")
 	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
-	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+	if _, moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
 		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
 	}
 	if got := s.workspaceFor(ctx); got != agentRoot {
@@ -305,7 +305,7 @@ func TestAfterToolFilesAGitCallUnderItsRepo(t *testing.T) {
 	s.recordLogicalAgentAttach("agent-here")
 	s.recordLogicalAgentCall("agent-elsewhere")
 	ctx := mcp.WithLogicalAgent(context.Background(), "agent-elsewhere")
-	if moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+	if _, moved, refused := s.repinAgent(ctx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
 		t.Fatalf("agent pin: moved=%v refused=%v", moved, refused)
 	}
 

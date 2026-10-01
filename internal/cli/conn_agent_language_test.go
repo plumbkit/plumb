@@ -132,7 +132,7 @@ func TestSameRootLanguageSwitchPreservesShardTrackers(t *testing.T) {
 	// A same-root language change, as an ordinary re-pin would produce it. It
 	// reports a change — the shard's language really did move — which is what
 	// makes keeping the trackers a deliberate exception rather than a no-op.
-	changed, refused := s.repinAgent(ctxA, root, "go", sessionstate.PinSourceSessionStart, false)
+	_, changed, refused := s.repinAgent(ctxA, root, "go", sessionstate.PinSourceSessionStart, false)
 	if refused != nil {
 		t.Fatalf("same-root language change on a shard: %v", refused)
 	}
@@ -146,7 +146,7 @@ func TestSameRootLanguageSwitchPreservesShardTrackers(t *testing.T) {
 	// The contrast: moving the agent to another project does start clean.
 	other := freshTempDir(t)
 	mustGitDir(t, other)
-	if moved, refused := s.repinAgent(ctxA, other, "go", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
+	if _, moved, refused := s.repinAgent(ctxA, other, "go", sessionstate.PinSourceSessionStart, true); refused != nil || !moved {
 		t.Fatalf("agent move: changed=%v err=%v", moved, refused)
 	}
 	if s.writeTrackerFor(ctxA).Wrote(written) {
@@ -214,15 +214,24 @@ func TestShardLanguageOverride_NoOpIsNotRefused(t *testing.T) {
 // itself at 300.
 func TestRepinStickyRemedyFitsTheDashboardAlert(t *testing.T) {
 	const budget = 300
+	// The contested remedy reaches the same alert (repinRemedy). It fitted at
+	// 421 characters on 80 columns; 572 pushed every remedy into the elided
+	// middle, leaving only "force: true".
+	if n := len(repinContestedRemedy); n > 421 {
+		t.Errorf("repinContestedRemedy is %d chars, over the 421 that still fits the dashboard alert", n)
+	}
 	if n := len(repinStickyRemedy); n > budget {
 		t.Errorf("repinStickyRemedy is %d chars, over the %d-char budget — the dashboard alert elides its middle, "+
 			"so the identity and one-serve-per-agent remedies would be dropped and only `force: true` would survive", n, budget)
 	}
 	// It must still carry both real remedies, or shortening it has traded one
 	// failure for the other.
-	for _, want := range []string{"session_start.session_id", "plumb serve"} {
+	for _, want := range []string{"plumb hooks install claude-code", "_meta", "plumb serve"} {
 		if !strings.Contains(repinStickyRemedy, want) {
 			t.Errorf("repinStickyRemedy no longer names %q", want)
+		}
+		if !strings.Contains(repinContestedRemedy, want) {
+			t.Errorf("repinContestedRemedy no longer names %q", want)
 		}
 	}
 }

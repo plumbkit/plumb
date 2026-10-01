@@ -74,7 +74,7 @@ func (p *OrientPrompt) Expand(_ context.Context, args map[string]string) ([]Prom
 		"```",
 		"",
 		"If your client stated a conversation id (Claude Code's SessionStart hook does), add it as `session_id`:",
-		"it is what lets peers address you and keeps your workspace pin your own on a shared connection.",
+		"it is what lets peers address you, and it makes this call's re-pin move your own pin (later calls need the identity hook).",
 		"",
 		"Once you have the output, give me a 3–5 sentence summary covering:",
 		"1. What the project does and its primary language.",

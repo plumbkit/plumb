@@ -97,6 +97,9 @@ func validateGit(g GitConfig) error {
 	if g.WriteTimeout.Duration < 0 {
 		return fmt.Errorf("git.write_timeout must not be negative (got %s)", g.WriteTimeout.Duration)
 	}
+	if g.DetachAfter.Duration < 0 {
+		return fmt.Errorf("git.detach_after must not be negative (got %s)", g.DetachAfter.Duration)
+	}
 	for k := range g.Env {
 		switch {
 		case k == "":
@@ -250,6 +253,9 @@ func validateTasks(tasks map[string]TasksConfig) error {
 		// symlink passes every lexical check and still lands outside the tree.
 		if err := validateCommandWorkingDir(t.WorkingDir); err != nil {
 			return fmt.Errorf("tasks.%s: %w", lang, err)
+		}
+		if err := validateTaskEnv(lang, t.Env); err != nil {
+			return err
 		}
 	}
 	return nil

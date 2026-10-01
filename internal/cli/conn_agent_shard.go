@@ -40,6 +40,14 @@ type agentShard struct {
 	// pinOrigin mirrors sessionView.pinOrigin so the per-agent sticky-pin guard
 	// (repinAgent) can apply the same session_start-vs-roots distinction.
 	pinOrigin sessionstate.PinSource
+	// prov is how, when and from where the pin this shard resolves against was
+	// set, so daemon_info and a boundary refusal describe THIS agent's pin rather
+	// than the connection's (#529). It is the provenance of the pin in force: the
+	// connection's, copied, while the shard follows it; the agent's own once it
+	// moves or confirms one; "restore:…" when it came back from its row. Contested
+	// is never stored — it is the connection's displacement history, filled in on
+	// read (pinProvenanceFor).
+	prov tools.PinProvenance
 	// selfPinned records that THIS agent successfully re-pinned its shard to a
 	// root of its own choosing (repinAgent, changed=true). A shard that has
 	// never done so is where the CONNECTION seeded it, and follows the
@@ -56,12 +64,24 @@ type agentShard struct {
 	// "did this agent choose its root?" must accept either — see the
 	// declaration-refusal marker in repinAgent.
 	restored bool
+	// parentSeeded: seeded from its conversation's PERSISTED pin (parent not in
+	// memory), so a connection move must not drag it (#513).
+	parentSeeded bool
 
-	// rosterID is the session.Info registered for THIS agent, so the workspace
-	// it actually works in lists it (issue #472). Empty until the agent holds a
-	// root of its own; guarded by mu with the scalars above.
-	rosterID   string
-	rosterName string
+	// rosterID is the session.Info registered for THIS agent: the row the
+	// workspace it works in lists it by (issue #472) and, for every agent but the
+	// connection's owner, the identity peers address and its commits are signed
+	// with (#556). Empty until the agent first needs one; guarded by mu with the
+	// scalars above. rosterFolder is the Folder last written to the row, so a root
+	// that moved since is noticed without reading the row back.
+	rosterID     string
+	rosterName   string
+	rosterFolder string
+	// regMu serialises registering and retiring the row, which is disk I/O under
+	// the session-directory flock and so must never run under mu: held across the
+	// I/O, taking mu only for the brief reads and writes inside it (order: regMu,
+	// then mu).
+	regMu sync.Mutex
 
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
@@ -83,7 +103,13 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	// agent declaring one the connection has not recorded yet is still a second
 	// agent, and must be routed to its own shard without that routing being
 	// written down. See sharedWith for why the commitment waits for success.
-	if !s.logicalAgents.sharedWith(id) {
+	//
+	// restoresShardFor is the other way in: after a restart the identities seen
+	// start empty, so the first stamped caller reads as the only agent, yet durable
+	// evidence says the connection was shared (#523). Any stamped agent is routed
+	// to its shard then, whether or not it holds a pin row: a subagent anchored to
+	// its parent's root has none. Routing only; nothing that gates a call consults it.
+	if !s.logicalAgents.sharedWith(id) && !s.restoresShardFor(id) {
 		return nil
 	}
 	if id == "" {
@@ -95,6 +121,14 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		// peer's project. Fail closed to the connection-level state instead.
 		return nil
 	}
+	return s.shardOf(id)
+}
+
+// shardOf returns the shard for id, creating it on first use seeded as shardFor's
+// doc describes. It is the creation half of shardFor, split out for the one caller
+// that needs a shard the routing rule did not ask for: the identity of a subagent
+// that is alone on its connection (conn_agent_identity.go callerFor).
+func (s *connSession) shardOf(id string) *agentShard {
 	s.shardsMu.Lock()
 	defer s.shardsMu.Unlock()
 	if sh, ok := s.shards[id]; ok {
@@ -110,7 +144,14 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		undoStore:    tools.NewUndoStore(),
 		writeLimiter: tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute),
 		pinOrigin:    v.pinOrigin,
+		prov:         pinProvenanceOf(&v),
 	}
+	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
+	// where the connection happens to sit (issue #513 review). Seeding it from
+	// the connection pin sent a subagent of a parent that had re-pinned itself
+	// to a worktree into whichever checkout the connection held — another
+	// agent's — the exact misroute the declaration gate exists to prevent.
+	s.seedFromParentLocked(sh)
 	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
 	// precedence over the connection's current pin. A pin that no longer verifies
 	// is ignored, so the shard keeps the connection's root rather than resurrecting
@@ -120,13 +161,15 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 			sh.root = resolved
 			sh.language = language
 			sh.pinOrigin = origin
+			sh.prov = restoredProvenance(origin)
 			// A persisted per-agent row is a root this agent DECLARED (only
-			// repinAgent's move path and confirmShardPin write one), so the
-			// declaration-refusal marker must not treat it as a seed.
+			// repinAgent's move path, confirmShardPin and attributeConnectionPin
+			// write one), so the declaration-refusal marker must not treat it as a
+			// seed, and a connection move must not drag it (followsConnectionLocked).
 			sh.restored = true
 		}
 	}
-	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
+	sh.policy = s.buildAgentPolicy(sh.root, sh.language, sh.prov)
 	// The agent that WAS the connection until a peer turned it shared has its
 	// strict-mode reads in the connection tracker, persisted under the empty
 	// agent id where the per-agent rehydration below cannot see them. Seed its
@@ -160,13 +203,15 @@ func (s *connSession) repinShard(ctx context.Context) *agentShard {
 
 // buildAgentPolicy builds a PathPolicy for a (root, language) pair using the
 // connection's shared config blocks (extra roots, read roots, allow-dirs,
-// dep-roots, pin provenance). The sessionView is copied and its root/language
-// overridden, so buildPathPolicy's many config reads stay unchanged while the
-// two per-agent facts come from the shard.
-func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy {
+// dep-roots). The sessionView is copied and its root/language overridden, so
+// buildPathPolicy's many config reads stay unchanged while the per-agent facts
+// come from the shard — including the pin provenance a boundary refusal quotes,
+// which is the shard's own pin's and not the connection's (#529).
+func (s *connSession) buildAgentPolicy(root, language string, prov tools.PinProvenance) *tools.PathPolicy {
 	v := s.view()
 	v.acquiredRoot = root
 	v.acquiredLanguage = language
+	v.pinVia, v.pinAt, v.pinPrev, v.pinForced = prov.Source, prov.At, prov.Previous, prov.Forced
 	return s.buildPathPolicy(&v)
 }
 
@@ -174,7 +219,7 @@ func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy 
 // back to the connection's pin when the connection is not shared (or the call is
 // unattributed). workspace() stays the ctx-less default for background goroutines.
 func (s *connSession) workspaceFor(ctx context.Context) string {
-	if _, pending := s.pendingDeclarationFor(mcp.LogicalAgentFromCtx(ctx)); pending {
+	if _, _, pending := s.pendingDeclarationForCall(ctx); pending {
 		// A refused declaration leaves nothing trustworthy to anchor to: the
 		// shard's root is one this agent explicitly tried to leave. "" makes the
 		// implicit resolvers — relative paths, git's default repository,
@@ -286,10 +331,14 @@ func (s *connSession) rateLimiterFor(ctx context.Context) *tools.RateLimiter {
 // connection being unusable, and flagging it would raise a dashboard alert
 // against the coordinator for a peer's call. The log line is greppable, carries
 // the agent id and both roots, and does not expire.
-func (s *connSession) repinAgent(ctx context.Context, root, language string, origin sessionstate.PinSource, force bool) (changed bool, refused error) {
+//
+// prev is the shard's root BEFORE the call, read under the same sh.mu
+// acquisition that moves it, so session_start can report the pin's previous
+// root without a second, racy read (issue #517).
+func (s *connSession) repinAgent(ctx context.Context, root, language string, origin sessionstate.PinSource, force bool) (prev string, changed bool, refused error) {
 	sh := s.repinShard(ctx)
 	if sh == nil {
-		return false, nil
+		return "", false, nil
 	}
 	// The roster sync registers or moves a session.Info, which takes a flock on
 	// the session directory. Doing that while holding sh.mu wedges the whole
@@ -298,15 +347,19 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// agent then blocks on shardsMu behind it — all waiting on one agent's disk
 	// I/O. Registered before the unlock defer so LIFO runs it AFTER sh.mu is
 	// released, and it re-takes the lock itself.
-	var syncRoot, syncLang string
+	var syncRoot, syncLang, movedFrom string
 	defer func() {
 		if syncRoot != "" {
 			s.syncAgentRoster(sh, syncRoot, syncLang)
 		}
+		// After sh.mu is released: it takes shardsMu, then each shard's mu.
+		if movedFrom != "" {
+			s.followParentShard(sh.id, movedFrom)
+		}
 	}()
 	sh.mu.Lock()
 	defer sh.mu.Unlock()
-	prev := sh.root
+	prev = sh.root
 	// The guard keys on the pin ORIGIN, which a seeded shard inherits wholesale:
 	// shardFor copies the CONNECTION's pin and its origin onto a new shard, and
 	// attachOrRepinTo's same-root promotion branch upgrades a roots-held pin to
@@ -332,7 +385,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// retry is safe here (and is not at connection scope, conn_repin.go).
 		// Error() stays byte-identical — the classification is a side-car.
 		refused = toolerror.Wrap(
-			fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true; to run several agents over one connection, each must identify itself (session_start.session_id or per-call _meta)", mcp.LogicalAgentFromCtx(ctx), prev, root),
+			fmt.Errorf("refusing to re-pin logical agent %q from %s to %s: this agent's pin was set by an explicit session_start and is sticky — issue #182. To switch this agent's project, call session_start again with force: true. For agents sharing a connection: %s", mcp.LogicalAgentFromCtx(ctx), prev, root, tools.PerCallIdentityRemedy),
 			toolerror.KindPinRefused,
 			toolerror.ClassPassForce,
 			toolerror.WithTool("session_start"),
@@ -360,7 +413,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		s.log().Warn("daemon: per-agent session_start re-pin refused — this agent's pin is sticky (issue #182)",
 			"agent", sh.id, "pinned", prev, "requested", root,
 			"remedy", "call session_start again with force: true to move THIS agent, or run one plumb serve per agent")
-		return false, refused
+		return prev, false, refused
 	}
 	if root == prev && language == sh.language {
 		// Nothing moves — but naming the root the shard already holds is still
@@ -380,7 +433,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 		// issue #472 describes, by a path no live-move test exercises.
 		// confirmShardPin cannot host this: it returns early for a shard that is
 		// already selfPinned, which a restored-and-reconfirming one is.
-		return false, nil
+		return prev, false, nil
 	}
 	changed = true
 	// The agent has CHOSEN this root (even back to the seeded one, via a
@@ -390,7 +443,12 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.root = root
 	sh.language = language
 	sh.pinOrigin = origin
-	sh.policy = s.buildAgentPolicy(root, language)
+	// Not Forced, though force may have been passed: what a force overrides here is
+	// this agent's OWN earlier pin, and Forced is the claim that someone else's
+	// was displaced — it makes a refusal tell the caller another agent took its
+	// pin, which an agent that moved itself did not suffer.
+	sh.prov = tools.PinProvenance{Source: pinViaLabel(origin, pinTriggerLive), At: time.Now(), Previous: prev}
+	sh.policy = s.buildAgentPolicy(root, language, sh.prov)
 	// Read/write/undo state is workspace-relative, so only a MOVE invalidates
 	// it. A same-root language switch changes no file — and it is reachable
 	// without an override at all, since repinWorkspaceFrom passes Detect's
@@ -398,6 +456,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	// used to wipe an agent's dirty-guard writes and undo history (PLAN-428).
 	// The connection path keeps them under the same rule.
 	if root != prev {
+		movedFrom = prev
 		sh.readTracker.Reset()
 		sh.writeTracker.Reset()
 		sh.undoStore.Reset()
@@ -405,7 +464,7 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	s.rehydrateReadsForAgent(sh, root)
 	s.persistPinForAgent(sh, root, language, origin)
 	syncRoot, syncLang = root, language
-	return changed, nil
+	return prev, changed, nil
 }
 
 // seedShardOnLink hydrates the linkage owner's shard from the connection's
@@ -437,62 +496,6 @@ func (s *connSession) seedShardOnLink(linkage string) {
 		return
 	}
 	sh.readTracker.Hydrate(s.readTracker.Records())
-}
-
-// followConnectionShards re-seeds every shard that never chose a workspace of
-// its own (!selfPinned) from the connection's NEW pin, after the connection
-// itself moved away from prevRoot. A shard is seeded from the connection pin at
-// first use — shardFor caches it BEFORE repinAgent can refuse, so one refused
-// ask left the agent cached at a root whose sticky seed then refused the
-// agent's next, entirely legitimate call (the exact PLAN-398 reproduction),
-// while a fresh agent asking the same thing succeeded: the fresh shard seeded
-// from the CURRENT pin, the stale one had not followed. Re-seeding here restores
-// the invariant "a seeded shard sits where the connection sits" without
-// touching shards whose agent deliberately pinned elsewhere — per-agent
-// isolation means the connection's move cannot drag an agent that chose its own
-// root. Runs OUTSIDE the connection mutate lane, in the documented lock order
-// (shardsMu before sh.mu, s.mu innermost), so the per-tool-call hot path's lock
-// pattern is unchanged; the writes mirror repinAgent's success path, held under
-// one sh.mu acquisition each.
-func (s *connSession) followConnectionShards(prevRoot string) {
-	if prevRoot == "" {
-		return
-	}
-	v := s.view()
-	if v.acquiredRoot == "" || v.acquiredRoot == prevRoot {
-		return
-	}
-	s.shardsMu.Lock()
-	defer s.shardsMu.Unlock()
-	for _, sh := range s.shards {
-		sh.mu.Lock()
-		if sh.selfPinned || sh.root != prevRoot {
-			sh.mu.Unlock()
-			continue
-		}
-		sh.root = v.acquiredRoot
-		sh.language = v.acquiredLanguage
-		sh.pinOrigin = v.pinOrigin
-		// The connection landed on the root this agent asked for, so what its
-		// refusal was about is now simply true; holding the gate would refuse
-		// calls that are safe again.
-		if p, ok := s.pendingDeclarationFor(sh.id); ok && p.requested == sh.root {
-			s.clearDeclarationRefused(sh.id)
-		}
-		sh.policy = s.buildAgentPolicy(sh.root, sh.language)
-		sh.readTracker.Reset()
-		sh.writeTracker.Reset()
-		sh.undoStore.Reset()
-		// Copy what the calls below need while the lock is still held.
-		// shardsMu does not exclude repinAgent — that takes sh.mu alone — so
-		// reading sh.root/sh.language after the unlock would race a concurrent
-		// per-agent re-pin and could persist a root this shard no longer has.
-		// Same rule persistReadShard states: the shard's root is read under sh.mu.
-		root, language := sh.root, sh.language
-		sh.mu.Unlock()
-		s.rehydrateReadsForAgent(sh, root)
-		s.persistPinForAgent(sh, root, language, v.pinOrigin)
-	}
 }
 
 // persistReadShard mirrors a per-agent recorded read to the durable store, keyed
@@ -540,44 +543,4 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 	}
 	sh.readTracker.Hydrate(out)
 	s.log().Info("daemon: rehydrated per-agent read-tracking", "agent", sh.id, "root", root, "count", len(out))
-}
-
-// persistPinForAgent records the logical agent's pin under (proxy session,
-// agent), so a shared connection's per-agent workspace survives a daemon restart
-// (PLAN-286). Mirrors persistPin, scoped to the agent.
-func (s *connSession) persistPinForAgent(sh *agentShard, root, language string, origin sessionstate.PinSource) {
-	s.persistPinForAgentID(sh.id, root, language, origin)
-}
-
-// persistPinForAgentID is persistPinForAgent keyed on the id alone, for the
-// caller that has an identity but no shard yet: an agent whose explicit
-// session_start was routed to the CONNECTION because it is the only identity
-// the connection has seen. Attributing that pin is what lets the shard built
-// later — once a peer declares itself and the connection turns shared — restore
-// the workspace the agent actually chose.
-func (s *connSession) persistPinForAgentID(id, root, language string, origin sessionstate.PinSource) {
-	if id == "" || origin == sessionstate.PinSourceUnknown {
-		return
-	}
-	v := s.view()
-	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
-		return
-	}
-	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, id, root, language, origin); err != nil {
-		s.log().Debug("daemon: persist agent pin failed", "err", err)
-	}
-}
-
-// loadPinForAgent returns the pin a logical agent persisted under (proxy session,
-// agent). ok=false when nothing is recorded or persistence is disabled.
-func (s *connSession) loadPinForAgent(id string) (root, language string, origin sessionstate.PinSource, ok bool) {
-	v := s.view()
-	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
-		return "", "", sessionstate.PinSourceUnknown, false
-	}
-	root, language, origin, ok, err := s.sessionState.LoadPinForAgent(v.proxySessionID, id)
-	if err != nil || !ok || root == "" {
-		return "", "", sessionstate.PinSourceUnknown, false
-	}
-	return root, language, origin, true
 }

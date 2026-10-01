@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -45,7 +46,7 @@ type ExecResult struct {
 //
 // Concurrency: safe for concurrent use — each call owns its process and buffers.
 func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
-	return runArgv(ctx, workdir, argv, timeout, false)
+	return runArgv(ctx, workdir, argv, nil, timeout, false)
 }
 
 // RunTaskArgv is RunArgv for a stored [tasks.<lang>] command (run_task,
@@ -55,14 +56,25 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 // workdir (git_gowork.go says when, and why run_command is not included).
 // res.GoWorkOff names the go.work that was switched off.
 //
+// env is the command's [tasks.<lang>] env, already expanded (KEY=VALUE). Each
+// entry replaces an inherited one of that name, and they are in place BEFORE the
+// GOWORK decision looks at the environment, so an explicit GOWORK there is used
+// as is — the rule an inherited GOWORK already follows — and a GOENV or PATH
+// set there informs the decision the way it will inform go.
+//
 // Concurrency: as RunArgv.
-func RunTaskArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
-	return runArgv(ctx, workdir, argv, timeout, true)
+func RunTaskArgv(ctx context.Context, workdir string, argv, env []string, timeout time.Duration) (ExecResult, error) {
+	return runArgv(ctx, workdir, argv, env, timeout, true)
 }
 
-func runArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration, autoGoWork bool) (ExecResult, error) {
+func runArgv(ctx context.Context, workdir string, argv, env []string, timeout time.Duration, autoGoWork bool) (ExecResult, error) {
 	if len(argv) == 0 {
 		return ExecResult{}, errors.New("run task: empty command")
+	}
+	// Before exec, not after: os/exec reports a missing cmd.Dir as the BINARY
+	// missing (see WorkingDirError).
+	if err := checkWorkingDir(workdir); err != nil {
+		return ExecResult{}, err
 	}
 	if timeout <= 0 {
 		timeout = defaultTaskTimeout
@@ -77,6 +89,16 @@ func runArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 	// config.ParseTaskCommand. The argv is never built from agent free-text.
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...) //nolint:gosec // see comment above
 	cmd.Dir = workdir
+	if len(env) > 0 {
+		// cmd.Environ(), not os.Environ(): for a nil Env it is the inherited
+		// environment plus PWD=<workdir>, which os/exec adds only while Env is nil.
+		child := cmd.Environ()
+		for _, kv := range env {
+			k, v, _ := strings.Cut(kv, "=")
+			child = withEnvVar(child, k, v)
+		}
+		cmd.Env = child
+	}
 	goWorkOff := ""
 	if autoGoWork {
 		goWorkOff = applyAutoGoWork(cmd)

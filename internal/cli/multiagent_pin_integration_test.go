@@ -87,11 +87,9 @@ func newMultiAgentConn(t *testing.T) *multiAgentConn {
 	start := tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).
-		WithExternalID(func(id string) string {
-			session.SetExternalID(s.sessionID(), id)
-			s.recordLogicalAgentAttach(id)
-			return ""
-		})
+		// The real linker, not a stand-in that lets the last session_start win: which
+		// agent owns the connection decides which identity each agent answers to.
+		WithLinkage(s.linkExternalID)
 	return &multiAgentConn{s: s, start: start, write: tools.NewWriteFile(s.buildWriteDeps())}
 }
 
@@ -246,8 +244,10 @@ func testUndeclaredAgentsForcePingPongIsContested(t *testing.T) {
 	if err == nil {
 		t.Fatal("the sticky guard stopped refusing once contested; this must change advice, never permission")
 	}
-	if !strings.Contains(err.Error(), "Identify each agent instead") {
-		t.Errorf("the contested refusal does not name the real remedy: %v", err)
+	for _, want := range []string{"Stamp each agent's calls", "plumb hooks install claude-code", "one plumb serve per agent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the contested refusal does not name the real remedy %q: %v", want, err)
+		}
 	}
 
 	// Forcing still WORKS. plumb cannot know which undeclared agent is entitled
@@ -464,9 +464,11 @@ func testAnonymousStateChangeStillRefused(t *testing.T) {
 			t.Errorf("refusal missing %q: %s", want, err)
 		}
 	}
-	// An identified call on the same connection is not refused.
+	// An identified call on the same connection is not refused once its
+	// identity has been declared through session_start (issue #513).
+	m.s.declareSessionStartCaller(mcp.WithLogicalAgent(context.Background(), "agent-a"), "session_start", false)
 	if err := m.s.refuseSharedStateChange(context.Background(), "write_file", "agent-a"); err != nil {
-		t.Errorf("an identified state-changing call must not be refused: %v", err)
+		t.Errorf("a declared, identified state-changing call must not be refused: %v", err)
 	}
 	// Reads are never refused: sharing read-only state is safe.
 	if err := m.s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {

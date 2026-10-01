@@ -142,6 +142,10 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// .git/index.lock and leaves a half-written index; a repository could make
 	// every commit in its own worktree fail that way.
 	"git.write_timeout": ClassTrustGated,
+	// detach_after only decides when a CALL stops waiting, never when the child
+	// dies, but it is part of the [git] block that is reset whole
+	// (forceCapabilityFieldsToBase), so it is gated with the rest of it.
+	"git.detach_after": ClassTrustGated,
 
 	// --- Session lifecycle. persist_state only makes this connection's own
 	// state more or less sticky, and writes to a plumb-owned fixed path.
@@ -329,6 +333,11 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// verb and leave the object open. taskProvenance therefore reports every slot
 	// of a language as project-supplied once its working_dir is project-supplied.
 	"tasks.<lang>.working_dir": ClassTrustGated,
+	// env is gated for the same reason, more so: LD_LIBRARY_PATH, PATH or
+	// GOFLAGS=-toolexec=… decide what the argv RUNS. Its entries are hashed with the
+	// commands (taskSpecsFrom), and a project env makes every slot of the language
+	// project-supplied, as working_dir does.
+	"tasks.<lang>.env": ClassTrustGated,
 	// The whole [[command]] array is one ProjectPolicySpec entry, so adding or
 	// rewriting any entry invalidates the grant. Order is part of the hash because
 	// FindCommand takes the first match by name.

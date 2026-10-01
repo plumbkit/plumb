@@ -156,8 +156,9 @@ func TestWorkspaceBoundaryError_ContestedSwapsTheAdvice(t *testing.T) {
 		t.Errorf("contested error still leads with force: true:\n%s", contested)
 	}
 	for _, frag := range []string{
-		"identify yourself with session_start.session_id",
-		"one `plumb serve` per agent",
+		"plumb hooks install claude-code",
+		"covers only its own call",
+		"one plumb serve per agent",
 		"use force: true only if",
 	} {
 		if !strings.Contains(contested, frag) {
@@ -186,5 +187,22 @@ func TestWorkspaceBoundaryError_ReadOnlyRootIgnoresDisplacement(t *testing.T) {
 	}
 	if !strings.Contains(msg, "is under a read-only root") {
 		t.Errorf("the read-only sentence was disturbed:\n%s", msg)
+	}
+}
+
+// TestWorkspaceBoundaryError_ContestedAndDisplacedSaysTheRemedyOnce: the
+// realistic contested case is also a displacement (Forced, Previous set), and
+// the displaced agent is its likeliest reader. The remedy appears once.
+func TestWorkspaceBoundaryError_ContestedAndDisplacedSaysTheRemedyOnce(t *testing.T) {
+	got := WorkspaceBoundaryError{
+		Workspace:  "/w",
+		Path:       "/prev/x.go",
+		Provenance: PinProvenance{Source: "session_start", At: time.Now(), Forced: true, Previous: "/prev", Contested: true},
+	}.Error()
+	if n := strings.Count(got, PerCallIdentityRemedy); n != 1 {
+		t.Fatalf("remedy appears %d times, want 1:\n%s", n, got)
+	}
+	if !strings.Contains(got, "force-re-pinned away from /prev") {
+		t.Fatalf("control: the displacement notice is missing:\n%s", got)
 	}
 }

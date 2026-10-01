@@ -98,7 +98,8 @@ func TestSeededShardDoesNotInheritAPeersStickiness(t *testing.T) {
 	// The reporting agent's FIRST session_start, naming its own worktree. It
 	// has never pinned anything on this connection.
 	ctxAgent := mcp.WithLogicalAgent(context.Background(), "agent-A")
-	root, err := s.repinWorkspace(ctxAgent, worktree, "", false, false)
+	rootRep, err := s.repinWorkspace(ctxAgent, worktree, "", false, false)
+	root := rootRep.Root
 	if err != nil {
 		t.Fatalf("an agent's first explicit pin was refused off a root it never chose: %v", err)
 	}
@@ -172,7 +173,8 @@ func TestAgentPinSurvivesItsShardMaterialising(t *testing.T) {
 	// rebuild): same proxy session, a fresh connection whose observed-identity
 	// set starts empty, so this agent is once again the only identity known.
 	second := newPersistSession(t, store, ss, "proxy-drift")
-	root, err := second.repinWorkspace(ctxAgent, worktree, "", false, false)
+	rootRep, err := second.repinWorkspace(ctxAgent, worktree, "", false, false)
+	root := rootRep.Root
 	if err != nil {
 		t.Fatalf("the agent's explicit session_start: %v", err)
 	}

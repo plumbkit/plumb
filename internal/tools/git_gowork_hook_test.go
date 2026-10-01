@@ -62,7 +62,7 @@ type goWorkFixture struct {
 	seen   string
 	remote string
 	// side and pick are commits reachable only from branches of the same names,
-	// for rebase and cherry-pick to act on.
+	// for rebase and cherry-pick to act on; a third branch, mrg, is for merge.
 	sideSHA string
 	pickSHA string
 }
@@ -111,6 +111,7 @@ func newGoWorkFixture(t *testing.T, shape goWorkShape) *goWorkFixture {
 
 	f.sideSHA = gwBranchWithCommit(t, f.main, "side", "side.txt")
 	f.pickSHA = gwBranchWithCommit(t, f.main, "pick", "pick.txt")
+	gwBranchWithCommit(t, f.main, "mrg", "mrg.txt")
 
 	switch shape {
 	case shapeInsideUsedDir:
@@ -141,7 +142,7 @@ func newGoWorkFixture(t *testing.T, shape goWorkShape) *goWorkFixture {
 // real hook does.
 func (f *goWorkFixture) installHooks(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"pre-commit", "post-commit", "pre-rebase", "pre-push"} {
+	for _, name := range []string{"pre-commit", "post-commit", "pre-rebase", "pre-merge-commit", "pre-push"} {
 		body := fmt.Sprintf("#!/bin/sh\nprintf '%%s' \"${GOWORK-UNSET}\" > %q\nprintf '%%s' \"${PWD-UNSET}\" > %q\n",
 			filepath.Join(f.seen, name), filepath.Join(f.seen, name+".pwd"))
 		if name == "pre-commit" {
@@ -397,12 +398,12 @@ func TestGit_ADeviceGoWorkDoesNotStallTheDaemon(t *testing.T) {
 // --- every hook-running verb goes through the same chokepoint ----------------
 
 // TestGit_EveryHookRunningVerbGetsTheAutomaticGoWork walks the verbs that run a
-// repository hook — commit, rebase, cherry-pick, push — through the tool in the
-// failing shape and reads what each hook saw. execGitCmd is the single seam all
-// of them share; this is the evidence that none of them reaches git around it.
-// `merge` is absent on purpose: the tool classifies it tierReject, so it never
-// spawns a child at all (a `pull` that merges is a network-tier verb and takes
-// the same seam as push).
+// repository hook — commit, rebase, cherry-pick, merge, push — through the tool
+// in the failing shape and reads what each hook saw. startGitCmd is the single
+// seam all of them share; this is the evidence that none of them reaches git
+// around it. The merge is --no-ff so that it makes a commit and so runs
+// pre-merge-commit (a `pull` that merges is a network-tier verb and takes the
+// same seam as push).
 func TestGit_EveryHookRunningVerbGetsTheAutomaticGoWork(t *testing.T) {
 	f := newGoWorkFixture(t, shapeInsideUsedDir)
 	tool := gwTool(nil)
@@ -416,6 +417,7 @@ func TestGit_EveryHookRunningVerbGetsTheAutomaticGoWork(t *testing.T) {
 		{"commit", "pre-commit", nil}, // already run above
 		{"rebase", "pre-rebase", map[string]any{"subcommand": "rebase", "args": []string{"side"}, "confirm": true, "repo": f.repo}},
 		{"cherry-pick", "post-commit", map[string]any{"subcommand": "cherry-pick", "args": []string{f.pickSHA}, "confirm": true, "repo": f.repo}},
+		{"merge", "pre-merge-commit", map[string]any{"subcommand": "merge", "args": []string{"--no-ff", "--no-edit", "mrg"}, "repo": f.repo}},
 		{"push", "pre-push", map[string]any{"subcommand": "push", "args": []string{"origin", "feature"}, "confirm": true, "repo": f.repo}},
 	}
 	for _, s := range steps {
@@ -499,7 +501,8 @@ func TestRunTask_InAShadowedWorktreeBuilds(t *testing.T) {
 	}{{f.wt, true}, {f.main, false}} {
 		dir := tc.dir
 		tool := NewTasks(WriteDeps{WorkspaceFn: func(context.Context) string { return dir }},
-			func(_ context.Context, slot, _, _ string) (TaskCommand, error) {
+			func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+				slot := req.Slot
 				return TaskCommand{Slot: slot, Steps: [][]string{{"go", "build", "./..."}}, Provenance: "default"}, nil
 			})
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"slot":"build"}`))

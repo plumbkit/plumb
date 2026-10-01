@@ -58,7 +58,7 @@ type daemonInfo struct {
 	purpose       func() string                                      // optional; nil when no purpose accessor is wired
 	lspStatus     func() LSPStatus                                   // optional; nil when no LSP accessor is wired
 	toolProfile   func() (profile string, hidden int, reason string) // optional; nil when no tool-profile accessor is wired
-	pinProvenance func() PinProvenance                               // optional; nil when no provenance accessor is wired
+	pinProvenance func(context.Context) PinProvenance                // optional; nil when no provenance accessor is wired
 	protocol      func() ProtocolStatus                              // optional; nil when no protocol accessor is wired
 	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
 	proxyVersion  func() string                                      // optional; nil when no serve proxy declared one
@@ -184,6 +184,21 @@ func (t *daemonInfo) WithToolProfile(fn func() (profile string, hidden int, reas
 // is the zero PinProvenance, daemon_info omits the provenance line. Returns
 // the receiver for chaining.
 func (t *daemonInfo) WithPinProvenance(fn func() PinProvenance) *daemonInfo {
+	if fn == nil {
+		t.pinProvenance = nil
+		return t
+	}
+	t.pinProvenance = func(context.Context) PinProvenance { return fn() }
+	return t
+}
+
+// WithPinProvenanceFor is WithPinProvenance for an accessor that resolves the
+// pin of the CALLER: on a connection shared by several logical agents the pin
+// that resolved this call is the agent's own shard, not the connection's, and
+// reporting the connection's one told an agent that had re-pinned itself that
+// its pin was set by someone else, at another time, from elsewhere (#529).
+// Nil-safe, like WithPinProvenance. Returns the receiver for chaining.
+func (t *daemonInfo) WithPinProvenanceFor(fn func(ctx context.Context) PinProvenance) *daemonInfo {
 	t.pinProvenance = fn
 	return t
 }
@@ -285,7 +300,7 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 		formatUptime(time.Since(t.startedAt)),
 	)
 	if t.pinProvenance != nil {
-		if prov := t.pinProvenance().String(); prov != "" {
+		if prov := t.pinProvenance(ctx).String(); prov != "" {
 			out += "\n" + prov
 		}
 	}

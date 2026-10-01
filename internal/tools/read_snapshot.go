@@ -78,6 +78,28 @@ func snapshotLines(path string) ([]string, fileSnapshot, error) {
 	return lines, snap, err
 }
 
+// stagedSnapshot is the version a write is about to publish: the SHA-256 of the
+// bytes plumb wrote into its staged file, and that file's mtime. The rename that
+// publishes the staged file moves its inode, mtime included, so this IS the
+// target's version the moment the rename lands — known without re-reading a path
+// an outside writer may already have replaced (issue #528, the write-side twin of
+// the read race above).
+//
+// Call it after the staged file is CLOSED and before the rename: some
+// filesystems (SMB, WSL's drvfs) stamp the mtime at close, so a stat of the
+// still-open descriptor would trail the published mtime and the session's own
+// next write would look stale. The staged name is plumb's own (a CreateTemp
+// name, or the sibling under the path lock); Lstat describes exactly the entry
+// the rename will move.
+func stagedSnapshot(staged string, data []byte) (fileSnapshot, error) {
+	info, err := os.Lstat(staged)
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	sum := sha256.Sum256(data)
+	return fileSnapshot{mtime: info.ModTime(), size: int64(len(data)), sha: hex.EncodeToString(sum[:])}, nil
+}
+
 func readSnapshotOnce(path string, consume func(io.Reader) error) (fileSnapshot, bool, error) {
 	f, err := os.Open(path) //nolint:gosec // G304: path was resolved and boundary-checked by the calling tool
 	if err != nil {

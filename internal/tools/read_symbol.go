@@ -188,12 +188,11 @@ func (t *ReadSymbol) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	}
 	matches := resolveSymbolsByName(syms, a.Name)
 	if len(matches) == 0 {
-		// The LSP answered but did not resolve the name (commonly a cold server,
-		// or a bare method name it indexes only as a qualified symbol). Try the
-		// structural Map before giving up — the Go extractor names methods by their
-		// bare name, so it resolves what the LSP missed. The server DID answer
-		// here, so no attempt budget was missed and the banner keeps its
-		// historical wording.
+		// The LSP answered but did not resolve the name (commonly a cold server
+		// with an incomplete symbol tree). Try the structural Map before giving
+		// up, so it resolves what the LSP missed. The server DID answer here, so
+		// no attempt budget was missed and the banner keeps its historical
+		// wording.
 		if fb, ok := t.topologyReadFallback(ctx, fallbackNotUsed, 0, fpath, uri, a.Name); ok {
 			return fb, nil
 		}
@@ -357,11 +356,11 @@ func readSymbolBody(start, end int, lines []string) string {
 		return fmt.Sprintf("(no lines in range %d–%d)\n", start, end)
 	}
 	var sb strings.Builder
+	// Terminate every line rather than join them: a joined body ending on a blank
+	// line reads as a terminator to withLineGutter, which drops that row.
 	for i := lo; i < hi; i++ {
-		if i > lo {
-			sb.WriteByte('\n')
-		}
 		sb.WriteString(strings.TrimSuffix(lines[i], "\r"))
+		sb.WriteByte('\n')
 	}
 	return withLineGutter(sb.String(), lo+1)
 }

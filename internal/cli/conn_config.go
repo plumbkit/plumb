@@ -33,6 +33,19 @@ import (
 // through applies the global config in full — not just [git], but every block
 // the previous project could have set.
 func (s *connSession) applyProjectConfig(workspace string) {
+	s.applyProjectConfigIf(workspace, nil)
+}
+
+// applyProjectConfigIf is applyProjectConfig for a caller that decided to apply
+// from an earlier read of the view. The config is loaded off the lane, as ever,
+// so that read can be stale by the time the swap commits: a re-pin that settles
+// in between has applied ITS root, and this apply would put the old project's
+// git tiers, edits, collab and path policy back on a connection now pinned to
+// the new one, and point the project config watcher at the old root (#558).
+// stillTarget is therefore re-asked inside the lane; when it is false the apply
+// is skipped whole, side effects included. A nil stillTarget always applies
+// (attach, re-pin and reload apply the root they just moved to).
+func (s *connSession) applyProjectConfigIf(workspace string, stillTarget func(v *sessionView) bool) {
 	if workspace == "" {
 		return
 	}
@@ -68,16 +81,22 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		// is not even a `plumb trust` to reach for.
 		projectGit = tools.ProjectGitStatus{Unreadable: true}
 	}
+	// The root this snapshot belongs to, so a git tier refusal names the path a
+	// `plumb trust` would have to be run for.
+	projectGit.Workspace = workspace
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
 		cfgMtime = info.ModTime()
 	}
+	if s.beforeConfigCommit != nil {
+		s.beforeConfigCommit()
+	}
 	// One mutation: swap the four config blocks, seed the config mtime, and rebuild
 	// the boundary policy eagerly (configured roots may have changed). muMutate
 	// subsumes the former applyMu — the lane already serialises config apply across
 	// attach / the 30s poll / the global-config subscription.
-	s.mutate(func(v *sessionView) {
+	applied := s.mutateIf(stillTarget, func(v *sessionView) {
 		// Diff BEFORE the swap: a change in the collaboration capability switches
 		// is surfaced to the agent on its next tool result / session_start, so a
 		// newly granted (or revoked) mailbox / cross-project consent is never
@@ -101,11 +120,15 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.execTrusted = execTrusted
 		v.projectCommands = projectCommands
 		v.projectGit = projectGit
+		v.configRoot = workspace
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}
 		v.policy = s.buildPathPolicy(v)
 	})
+	if !applied {
+		return
+	}
 	// The [lsp.<lang>] block is resolved by the pool, not held in the view: it
 	// decides which language servers this workspace may run, which is a
 	// daemon-wide pool question rather than a per-session one. Dropping the pool's
@@ -115,23 +138,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// primary never resolved re-detects instead of waiting for its next attach.
 	s.invalidatePoolLanguages(workspace)
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
-	if projectCfg.Edits.Strict != base.Edits.Strict ||
-		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
-		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
-		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
-		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
-		projectCfg.Git.AllowPush != base.Git.AllowPush ||
-		projectCfg.Git.CommitTrailer != base.Git.CommitTrailer {
-		s.log().Info("daemon: project config applied",
-			"workspace", workspace,
-			"strict", projectCfg.Edits.Strict,
-			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
-			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
-			"git.allow_writes", projectCfg.Git.AllowWrites,
-			"git.allow_destructive", projectCfg.Git.AllowDestructive,
-			"git.allow_push", projectCfg.Git.AllowPush,
-			"git.commit_trailer", projectCfg.Git.CommitTrailer)
-	}
+	s.logProjectConfigApplied(workspace, projectCfg, base)
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.
 	s.bindWriteLimiterParent()
@@ -178,6 +185,29 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	s.maybeNotifyToolProfileChange()
 }
 
+// logProjectConfigApplied leaves the apply breadcrumb, but only when the project
+// config moved something a user debugging "my project config does nothing" would
+// look for: edits, the home-root refusal or a git tier differing from the global.
+func (s *connSession) logProjectConfigApplied(workspace string, projectCfg, base config.Config) {
+	if projectCfg.Edits.Strict != base.Edits.Strict ||
+		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
+		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
+		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
+		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
+		projectCfg.Git.AllowPush != base.Git.AllowPush ||
+		projectCfg.Git.CommitTrailer != base.Git.CommitTrailer {
+		s.log().Info("daemon: project config applied",
+			"workspace", workspace,
+			"strict", projectCfg.Edits.Strict,
+			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
+			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
+			"git.allow_writes", projectCfg.Git.AllowWrites,
+			"git.allow_destructive", projectCfg.Git.AllowDestructive,
+			"git.allow_push", projectCfg.Git.AllowPush,
+			"git.commit_trailer", projectCfg.Git.CommitTrailer)
+	}
+}
+
 // logProjectPolicy leaves the attach-time breadcrumb for a workspace whose
 // project config asks for capability-granting settings ([git], the exec-deciding
 // [lsp.<lang>] fields). Untrusted, those are silently forced back to the global
@@ -190,7 +220,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 	}
 	if st.Trusted {
 		s.log().Info("daemon: project capability config trusted and applied",
-			"workspace", workspace, "keys", st.Spec.Keys())
+			"workspace", workspace, "keys", st.Spec.Keys(), "inherited_from", st.InheritedFrom)
 		return
 	}
 	s.log().Warn("daemon: project capability config IGNORED (untrusted) — global values in force; run `plumb trust` to honour them",
@@ -201,7 +231,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 // session_start renders. Pure, so the capture at config apply is the only place
 // the answer is decided.
 func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
-	out := tools.ProjectGitStatus{Trusted: st.Trusted}
+	out := tools.ProjectGitStatus{Trusted: st.Trusted, InheritedFrom: st.InheritedFrom}
 	for _, e := range st.Spec {
 		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}
@@ -510,25 +540,39 @@ func (s *connSession) bindWriteLimiterParent() {
 	_, limit, _ := s.writeLimiter.Snapshot()
 	key := name + "/" + version + "\x00" + root
 
+	// The acquire runs inside the lane, together with publishing the key, and
+	// only while the connection is open (issue #514). close() reads
+	// boundBudgetKey under the lane and releases it, so an acquire made outside
+	// the lane — after close() had read the key, or after close() had run —
+	// held a budget reference nobody released. sharedBudgets.mu is a leaf lock
+	// and SetParent an atomic store, so neither can invert a lock order.
 	var prevKey string
-	s.mutate(func(v *sessionView) {
+	bound := s.mutateLive(func(v *sessionView) {
 		prevKey = v.boundBudgetKey
+		if prevKey == key {
+			return
+		}
+		// Acquire-before-release: pin the new budget before dropping the old so
+		// a re-pin back to a recently-left key never reclaims it mid-flight.
+		parent := s.budgets.acquire(key, limit)
 		v.boundBudgetKey = key
+		// Re-parent in the same critical section: two concurrent binds then
+		// leave the limiter pointing at the budget of whichever key was
+		// published last, never at one the other bind has since released.
+		s.writeLimiter.SetParent(parent)
 	})
-
+	if !bound {
+		return
+	}
 	// Same key (a reload or a repeat bind on the same workspace): refresh the cap
 	// without touching the refcount or re-parenting.
 	if prevKey == key {
 		s.budgets.setLimit(key, limit)
 		return
 	}
-	// Acquire-before-release: pin the new budget before dropping the old so a
-	// re-pin back to a recently-left key never reclaims it mid-flight.
-	parent := s.budgets.acquire(key, limit)
 	if prevKey != "" {
 		s.budgets.release(prevKey)
 	}
-	s.writeLimiter.SetParent(parent)
 }
 
 // gitPolicyFrom adapts the resolved [git] config into the tools package's
@@ -549,5 +593,6 @@ func gitPolicyFrom(c config.GitConfig) tools.GitPolicy {
 		CommitTrailer:     c.CommitTrailer,
 		Env:               c.Env,
 		WriteTimeout:      c.WriteTimeout.Duration,
+		DetachAfter:       c.DetachAfter.Duration,
 	}
 }

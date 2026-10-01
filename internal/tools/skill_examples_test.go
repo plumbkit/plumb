@@ -62,7 +62,7 @@ var skillContentCounts = map[string]skillCounts{
 	// for cheap subagent re-orientation, on top of the existing 14 discovery-
 	// ladder roster bullets.
 	"plumb-explore": {calls: 1, bullets: 14},
-	"plumb-git":     {calls: 10, bullets: 3},
+	"plumb-git":     {calls: 11, bullets: 3},
 	"plumb-memory":  {calls: 8, bullets: 0},
 	// 1, not 0: PLAN-376 added a minimal_diff_review(mode="changed") worked
 	// example alongside the Low-confidence-cap doctrine it now teaches.
@@ -76,8 +76,9 @@ var skillContentCounts = map[string]skillCounts{
 	// a target run_task can take (PLAN-378) — the very composition this file's
 	// doc comment names as the defect class it exists to catch — and a third when
 	// run_task took a `language` argument, so a polyglot workspace's non-primary
-	// commands became reachable through the tool.
-	"plumb-testing": {calls: 7, bullets: 0},
+	// commands became reachable through the tool. 8 since run_task took a `run`
+	// test-name filter (#538).
+	"plumb-testing": {calls: 8, bullets: 0},
 }
 
 // TestSkillExamplesUseRealToolArguments ties worked examples in a shipped skill

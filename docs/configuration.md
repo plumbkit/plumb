@@ -260,13 +260,14 @@ and network calls additionally require `confirm: true` per call.
 
 | Field | Type | Default | Env | Effect |
 |---|---|---|---|---|
-| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `branch`/`tag` create, `stash` push/pop. |
-| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
+| `allow_writes` | bool | `true` | `PLUMB_GIT_ALLOW_WRITES` | Safe-write tier: `add`, `commit`, `switch`, `merge`, `branch`/`tag` create, `stash` push/pop. |
+| `allow_destructive` | bool | `false` | `PLUMB_GIT_ALLOW_DESTRUCTIVE` | Destructive tier: `reset`, `clean`, `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, `merge --abort`/`--quit`, `switch -C`/`checkout -B`/`tag -f` on an existing ref (or on any name that is not a plain new one given once; on a new plain name they are writes), every forced `branch` form (`-f`, `-M`, `-C`, `-D`) whether or not the branch exists, branch/tag delete, `stash` drop. Also needs `confirm:true`. |
 | `allow_push` | bool | `false` | `PLUMB_GIT_ALLOW_PUSH` | Network tier: `push`, `fetch`, `pull`. Also needs `confirm:true`. |
 | `protected_branches` | []string | `["main", "master"]` | — | Branch names that may never be force-pushed, even with `allow_push` + `confirm`. |
 | `commit_trailer` | bool | `false` | `PLUMB_GIT_COMMIT_TRAILER` | Stamp each plumb-mediated commit with a `Plumb-Session: <session-name>` trailer, attributing it to the authoring agent session. **Requires git ≥ 2.32** — `git commit --trailer` does not exist on older git, and plumb runs no version probe, so enabling this against an older binary fails every commit issued through the tool. Attribution is queryable without it — `workspace_sessions` lists recent commits per session either way. |
 | `env` | table | `{}` | — | Environment variables set on the git child process. See [The git child's environment](#the-git-childs-environment) below. |
 | `write_timeout` | duration | `"10m"` | `PLUMB_GIT_WRITE_TIMEOUT` | How long plumb waits for an index/ref-mutating git child before killing it. See [When plumb stops waiting](#when-plumb-stops-waiting) below. |
+| `detach_after` | duration | `"45s"` | `PLUMB_GIT_DETACH_AFTER` | How long a write/destructive git **call** waits before returning "still running in the background" and letting the child finish. See [When the call stops waiting](#when-the-call-stops-waiting) below. |
 
 ### When plumb stops waiting
 
@@ -299,6 +300,37 @@ denial of service on every commit, and lengthening it lets a hostile hook hold
 the repository lock. Neither is a choice a cloned repository's
 `.plumb/config.toml` should make unasked.
 
+### When the call stops waiting
+
+`write_timeout` bounds the git child; `detach_after` bounds the **call**. They
+differ because the MCP client has a timeout of its own — commonly 60 seconds —
+and a pre-commit hook can easily outlast it. When one did, the client reported
+`Request timed out` while the commit carried on inside the daemon and landed a
+minute later: a caller that believed the error retried, collided on
+`.git/index.lock` or, once the lock cleared, committed the same change twice.
+
+With `detach_after` (default `45s`, below that client timeout) a write- or
+destructive-tier call that is still waiting at the deadline — on the child, or
+on the per-repository lock in front of it — stops waiting. A child that is
+running is **not killed** (that strands `index.lock`); the call returns a
+success result saying the operation is **still running in the background**,
+with the child's pid, when it started and the HEAD at that moment. Until it
+finishes:
+
+- every further write, destructive or network call on that repository is
+  refused with that explanation, and nothing is run;
+- reads (`status`, `log`, `diff`, …) keep working and carry a note that the
+  operation is still in flight.
+
+Once it has finished, the next `git` call from each session leads with the
+outcome — `landed as <sha> <subject>`, or `FAILED` with git's and the hook's
+output. A call whose wait for the per-repository lock reaches the deadline runs
+nothing and says so.
+
+`0` means the default. A value at or above `write_timeout` never detaches, which
+restores the old wait-it-out behaviour. It sits in `[git]`, so a project value
+needs `plumb trust` like the rest of the block.
+
 ### The git child's environment
 
 The daemon is long-lived and its environment is whatever started it — a login
@@ -324,8 +356,9 @@ environment, so `PATH` (git finding its own subcommands), `HOME` (`~/.gitconfig`
 untouched. An entry whose name is already present replaces that value — that is
 the point, `GOWORK = "off"` has to beat an inherited `GOWORK`. There is no way to
 *unset* an inherited variable; setting a name to `""` sets it to the empty
-string. With no entries the child inherits exactly as it always did, apart from
-the one automatic `GOWORK` decision described next.
+string. With no entries the child inherits as it always did, apart from the
+non-interactive defaults under **Editors** below and the one automatic `GOWORK`
+decision described next.
 
 **`GOWORK` is decided per repository, so the example above is rarely needed.**
 A static `GOWORK = "off"` is project-wide, and the main checkout of a Go
@@ -378,8 +411,10 @@ Makefile or a script reading `$PWD` would trust.
 
 The same decision is made for the stored `[tasks.<lang>]` commands `run_task` and
 `mutation_test` run, keyed on the directory the command runs in, and `run_task`
-reports it. It is not made for `run_command`, whose commands are the agent's own —
-one of them may be exactly the `go work use .` that fixes a workspace.
+reports it, and for the Go language server (see [The Go language server and
+`GOWORK`](#the-go-language-server-and-gowork)). It is not made for
+`run_command`, whose commands are the agent's own — one of them may be exactly
+the `go work use .` that fixes a workspace.
 
 It applies to the git process plumb runs on your behalf — the one that runs
 hooks and can open an editor. The auxiliary read queries around it (`ls-files`,
@@ -405,18 +440,30 @@ so a project cannot drop one of your global entries by choosing a spelling.)
 > substitute — the dangerous set is open-ended and reaches into other tools'
 > variables entirely, so the trust boundary is the whole mechanism.
 
-**Editors.** `git rebase -i` and `git tag -a` invoke `GIT_EDITOR`
-unconditionally, and plumb passes it no terminal, so the editor blocks. plumb
-does not set `GIT_EDITOR` for you — that would silently accept a default commit
-message you never wrote. Set it yourself if you want those verbs to be
-non-interactive:
+**Editors and prompts.** plumb runs git with no terminal and nobody to type
+into one, so it gives every git child three variables of its own:
+
+| Variable | Value | Effect |
+|---|---|---|
+| `GIT_EDITOR` | `true` | `rebase --continue`, `cherry-pick -e`, `revert --edit` and the like keep the message git prepared, as `--no-edit` would. A verb with no prepared message (`tag -a` without `-m`) gets an empty one, which git refuses. |
+| `GIT_SEQUENCE_EDITOR` | `true` | `rebase -i` runs the todo list git wrote, unchanged. |
+| `GIT_TERMINAL_PROMPT` | `0` | An HTTPS credential prompt fails instead of waiting. |
+
+Before these, such a verb launched `core.editor` and failed (`cannot exec
+'/usr/local/bin/nvim'`) or waited on it, holding the repository's git lock.
+They replace an **inherited** value — unlike `GOWORK`, whose inherited value is
+used as is — because a `GIT_EDITOR` in the daemon's environment is the
+interactive editor of whatever shell started it, the one thing that cannot run
+here. A value under `env` here is a choice about plumb and wins; to run a
+non-interactive editor script of your own:
 
 ```toml
 [git]
-env = { GIT_EDITOR = "true" }
+env = { GIT_EDITOR = "/path/to/write-message.sh" }
 ```
 
-Either way plumb no longer hangs on it: the child wait is bounded (5s past the
+If an editor configured there does wait on a terminal, plumb still does not
+hang on it: the child wait is bounded (5s past the
 child's exit), and cancellation kills the whole process group rather than the
 direct child alone. If a process the command started outlives git while still
 holding its output pipes, plumb stops waiting and says so — quoting git's own
@@ -532,7 +579,7 @@ paced; write-triggered upserts are never delayed.
 | `idle_threshold_minutes` | int | `30` | — | How long after the last tool call a session is shown idle (a `~` marker) in the TUI Sessions panel. Cosmetic. |
 | `eviction_ttl_minutes` | int | `60` | — | How long after the last tool call the daemon force-closes an idle connection — reclaiming a `plumb serve` whose agent silently disconnected but kept its stdio pipe open. A reaper checks every 5 min (fixed). `0` disables eviction. Read live (hot-reloaded). |
 | `persist_state` | bool | `true` | `PLUMB_PERSIST_SESSION_STATE` | Persist a connection's session state (pinned workspace, strict-mode read-tracking, session identity) to disk so it survives a daemon restart/upgrade transparently, instead of resetting on reconnect. Identity recovery requires it: with no durable record there is nothing that proves which session a reconnecting proxy continues, so it comes back as a new one. |
-| `persist_state_ttl_minutes` | int | `1440` | — | How long the EXPENDABLE persisted state (read-tracking, the pinned workspace) is honoured on restart before it's treated as stale and discarded. It does **not** apply to the durable identity record, which is retained regardless of age — see below. |
+| `persist_state_ttl_minutes` | int | `1440` | — | How long the EXPENDABLE persisted state (read-tracking, the pinned workspace) of a session that is **no longer connected** is kept before it's discarded. A connected session's state never expires, however old. It does **not** apply to the durable identity record, which is retained regardless of age — see below. |
 
 Global or per-project; no environment override except `persist_state`. Activity is a tool call: the session file's mtime is advanced after each call (`session.Touch`) and read back as the last-seen time.
 
@@ -540,8 +587,8 @@ Global or per-project; no environment override except `persist_state`. Activity 
 
 What is stored divides into two kinds with **opposite expiry rules**, and the distinction is the point:
 
-- **Expendable state** — strict-mode read-tracking and the pinned workspace. Losing it costs a re-read or a re-declaration, so it expires: `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers. It is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads.
-- **The durable identity record** — the connection's internal session ID, its current name, and its authorised external-conversation linkage. This is **never expired by age**. Deleting it would not degrade a session, it would fork one: the surviving proxy comes back as a stranger under a new ID and name, and mail addressed to the old one is orphaned. Elapsed time is no evidence that a serve process died, and the sweep that matters runs at daemon start, before any connection exists to be exempted — so retention is a property of the record, not of a live-session exemption list. The cost is one small row per proxy session, kept indefinitely, whose **name stays reserved** so no new session can be handed it. Reclaiming one would need explicit retirement semantics (proof the serve is gone, not a guess from age), which plumb deliberately does not invent.
+- **Expendable state** — strict-mode read-tracking and the pinned workspace (the connection's and each agent's). Losing it costs a re-read or a re-declaration, so it expires: `persist_state_ttl_minutes` (config-only, default 24h; `0` disables pruning) bounds how long state left by a serve proxy that died without reconnecting lingers. The retention rule: every 5 minutes the idle reaper deletes a row that was last written more than the TTL ago **unless its session is connected at that moment**. Rows refresh only when rewritten (a read when that file is re-read, a pin when it moves), so a session connected for days holds rows older than the TTL, and the connected-session exemption is what keeps them. For the same reason nothing is pruned at daemon start: no surviving serve has reconnected yet, so a live session cannot be told from a dead one. The reaper's first pass, 5 minutes after start, comes after they have (a serve retries within seconds). A dead session's state is therefore gone within 5 minutes of the TTL elapsing, once the daemon has stayed up for 5 minutes (a daemon restarted more often than that, such as one in a crash loop, never prunes). It is independent of `eviction_ttl_minutes` (eviction must not delete state a reconnect may rehydrate). Rehydration is **safe by construction**: a restored read still passes `checkStrictRead`'s on-disk `os.Stat`+mtime comparison, so it can only satisfy an unchanged file, never bypass a dirty-file check. Read-tracking is scoped by `(proxy session, workspace)`, so a re-pin to a different project never resurrects the old project's reads.
+- **The durable identity record** — the connection's internal session ID, its current name, and its authorised external-conversation linkage. This is **never expired by age**. Deleting it would not degrade a session, it would fork one: the surviving proxy comes back as a stranger under a new ID and name, and mail addressed to the old one is orphaned. Elapsed time is no evidence that a serve process died, and a sweep can find a surviving serve between connections, with nothing to exempt it — so retention is a property of the record, not of a live-session exemption list. The cost is one small row per proxy session, kept indefinitely, whose **name stays reserved** so no new session can be handed it. Reclaiming one would need explicit retirement semantics (proof the serve is gone, not a guess from age), which plumb deliberately does not invent.
 
 On reconnect the fresh daemon resolves the identity from that record and RESUMES it — same internal session ID, same name, same linkage — before any tool is served, and states the outcome in the `initialize` result's `_meta` so the proxy can report it accurately rather than guess. Stats, memories and collab therefore see one continuous identity. No extra `session_start` is needed, and recovery does not depend on the caller having named a workspace, linked a conversation, or made any tool call at all.
 
@@ -1091,6 +1138,27 @@ task command does not disturb the LSP grant — but rewriting a trusted `command
 does mean the new command is not honoured until you re-run `plumb trust`. An
 unreadable or corrupt trust store fails closed.
 
+**Linked git worktrees share their repository's grant — for identical content
+only.** A grant is keyed on the path `plumb trust` ran in, and a worktree
+(`git worktree add`, e.g. `<project>/.claude/worktrees/<name>`) is a new path.
+The two content-bound grants — the capability config (`[git]`, the exec-deciding
+`[lsp.<lang>]` fields) and the task commands — therefore also match when the
+workspace is a linked worktree of the same repository (one common git directory)
+as another trusted checkout, **and** its request hashes to what that checkout's
+grant approved. A branch that widens `[git]` or rewrites a task command is
+untrusted there exactly as anywhere else. The worktree must be one git vouches
+for: its `.git` link must name a directory inside the trusted repository's own
+`worktrees/` whose back-link (written there by git) names the worktree, so a
+directory carrying a forged `.git` file, or a whole forged layout of its own,
+does not qualify. A shared grant lives on the checkout it was recorded for:
+`session_start`, `plumb config show` and the daemon log name that checkout, and
+`plumb trust --revoke` in the worktree removes nothing but says where to revoke
+it (`plumb trust --revoke <that checkout>`). The coarse grant behind
+`[[command]]`, `[commands]` and the Xcode build server is not content-bound, so it
+stays per path. When a tier is refused because an untrusted project config asked
+for it, the `git` tool's refusal says so and names the `plumb trust` command for
+that path.
+
 Nothing about this is silent. An untrusted request is reported by `plumb doctor`
 (a warning naming the keys and the fix), by `plumb config show` (the row's
 provenance reads `global config — project asked, UNTRUSTED`, and the requested
@@ -1277,6 +1345,32 @@ build_on_save_step   = "check"   # a step defined in your build.zig
 > you do not trust means opening it can run that repository's build script. plumb
 > never turns build-on-save on for you; leave it unset for untrusted code.
 
+### The Go language server and `GOWORK`
+
+The `GOWORK` decision [the git child gets](#the-git-childs-environment) is also
+made for the **Go language server** plumb starts for a workspace root, keyed on
+that root: gopls resolves the same `go.work`, and from a worktree it would
+otherwise answer `workspace_symbols` from the main checkout and never type-check
+the worktree's files. A `GOWORK` under `[lsp.go]`'s `env`, or in gopls's own
+`env` setting under `[lsp.go.initialization_options]`, is a choice and is used as
+is. `session_start` shows a `Go LSP:` line naming the `go.work` when the server
+serving the calling agent's workspace runs with `GOWORK=off` — or, when that
+server has not started yet (a subagent's own worktree before its first semantic
+call), the `go.work` it **will start** with `GOWORK=off` against, decided from
+disk the same way. The daemon log says so when it starts one.
+
+**The decision is made once per language-server start.** A running server keeps
+the environment it started with, and so does one restarted after a crash or woken
+from hibernation. Editing `go.work` — `go work use` to list a worktree, or
+dropping a `use` line — therefore changes nothing for a server already running
+for that root until it starts again. `plumb restart` is always enough. It is not
+the only way: a workspace's primary server is torn down 90 s after the last
+session on that root detaches, and the next one decides again. A server started
+on demand for another root (a subagent's worktree, say) runs until the daemon
+stops, so for that one `plumb restart` is the way. The git child and the
+`[tasks.<lang>]` commands decide afresh for every command, so they follow the
+edit at once.
+
 ### Multiple language servers in one project
 
 Enabling more than one language binds them all to the same workspace: a single
@@ -1316,18 +1410,26 @@ any slot the project names for itself — run by the `run_task` tool and the
 [tasks.go]
 build       = "go build ./..."
 lint        = "golangci-lint run"
-test        = "go test {target:./...}"   # {target} with a default — see below
+test        = "go test {verbose:-v} {run:-run} {target:./...}"   # placeholders — see below
 e2e         = "go test -tags=integration ./..."
 working_dir = ""                         # relative to the workspace root; "" or "." is the root
+env         = { GOTMPDIR = "{workspace}/.testcache" }   # optional — see `env` below
 # verify is a COMPOSITE (build then test); it stores no command of its own
 ```
 
 A command is a **single argv executed without a shell** — shell metacharacters
 (`&&`, `;`, `|`, `$(`, backtick, redirects) are rejected (`config.ParseTaskCommand`).
 The only agent-supplied input that reaches the argv is a shell-safe `{target}`
-(`^[A-Za-z0-9._/:@-]+$`). Shipped defaults exist
+(`^[A-Za-z0-9._/:@-]+$`) and a `{run}` test-name filter (see below). Shipped defaults exist
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
+
+**Which project's block.** `run_task`, `mutation_test` and `run_command` read
+`[tasks.<lang>]` and `[[command]]` from the calling agent's own workspace. On a
+`plumb serve` connection that several agents share, an agent that pinned itself
+to another project (or a worktree) with `session_start` gets that project's
+commands, `working_dir`, `env` and `plumb trust` state, not the connection's,
+and its `agent_config` writes go to that project's `.plumb/config.toml`.
 
 ### `{target}` and its default
 
@@ -1350,6 +1452,43 @@ is the *absence* of an argument (`cargo test`, `swift test`).
 `typescript`, `swift` and `zig` ship without a placeholder: they scope through
 runner-specific flags whose spelling depends on the project, and a wrong guess is
 worse than none. Add your own `{target}` to those slots.
+
+### `{run}` and `{verbose}` — a test-name filter and verbose output
+
+`{target}` fills one positional — in practice a package — so it cannot run one
+test, a pattern of tests, or show which tests were skipped. `run_task`'s `run`
+and `verbose` arguments (and `mutation_test`'s `test_run`) fill two more
+placeholders. Both follow `{target}`'s rule that an absent value adds nothing, so
+an unscoped run builds the argv it always did:
+
+| written | not asked for | asked for |
+|---|---|---|
+| `{run}` | omitted | the filter, as one argument |
+| `{run:-run}` | omitted | `-run <filter>` |
+| `{verbose:-v}` | omitted | `-v` |
+
+The shipped defaults carry them where the runner has one: `go test {verbose:-v}
+{run:-run} {target:./...}`, `pytest {verbose:-v} {run:-k} {target:}`, and
+`cargo test {target:} {run:--}` (the filter goes to libtest after `--`, since
+cargo's one positional is already `{target}`; cargo already lists every test, so
+rust has no `{verbose}`). `typescript`, `swift` and `zig` carry neither.
+
+The filter is validated like a target but admits what a test-name expression
+needs: letters, digits, space and `._/:@|^$*+?()[]-`, up to 256 characters, not
+starting with `-` or a space (a bare `{run}` would otherwise put a flag such as
+`-exec=…` on the command line). It reaches the command as **one** argv element and
+no shell ever sees it, so `TestA|TestB` and `slow and not db` are inert text.
+
+A filter given to a command with no `{run}` is **refused**, as a target is — an
+unfiltered run would report a green over tests nobody asked about — and the
+refusal quotes the stored command and the placeholder to add. `verbose` on a
+command with no `{verbose:<flag>}` is only **noted**: ignoring it changes how much
+is printed, never what ran. On the composite `verify`, `verbose` reaches both
+steps while `target` and `run` are not applied (and a note says so).
+
+A command stored as an earlier shipped default — `go test {target:./...}`, or
+`go test ./...` — is reconciled to the current one, by the equivalence described
+next: with nothing asked for, all three build the same argv.
 
 #### A stored command with the placeholder spelled out
 
@@ -1447,7 +1586,9 @@ and again **after symlink resolution** when it is resolved, so a `working_dir`
 naming a symlink out of the tree is refused rather than silently followed. A
 project-supplied `working_dir` is trust-gated exactly like a command, and it
 makes *every* slot for that language project-supplied — choosing where the
-shipped default runs is as much influence as choosing what it runs.
+shipped default runs is as much influence as choosing what it runs. A
+`working_dir` that does not exist is refused before the command starts, naming
+the directory and the setting it came from.
 
 **Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
 not run until the workspace is trusted with `plumb trust` (recorded per workspace
@@ -1462,6 +1603,61 @@ untrusted and re-confirmed once on the next `plumb trust`. When it records trust
 interpreter with inline code (`bash -c`, `sh -c`, `python -c`, `node -e`,
 `perl -e`, `ruby -e`) — arbitrary code execution by design, so review it before
 trusting. Default- and global-config commands always run.
+
+### `env` — the environment the commands run with
+
+`env` sets environment variables on every command of the language — `run_task`,
+`mutation_test`'s compile and test steps, and `plumb build|test|…`:
+
+```toml
+[tasks.go.env]
+GOTMPDIR = "{workspace}/.testcache"   # what plumb's own `make test` sets
+```
+
+It exists so a stored command can run the way the project's CI does. plumb's CI
+runs `make test`, which puts `t.TempDir()` inside the checkout; `go test` under
+`run_task` put it in the system temp directory, so a test that depended on the
+difference passed locally and failed on CI. plumb's own `.plumb/config.toml` sets
+exactly the entry above.
+
+- **It extends the inherited environment**, like `[git] env`: an entry replaces
+  the inherited value of its name, and the rest survive. A project's entries
+  compose with your global ones per name, whichever TOML spelling it uses.
+- **Placeholders.** `{workspace}` is the workspace root and `{working_dir}` the
+  directory the command runs in; they expand at run time, so when `mutation_test`
+  re-roots a command into another worktree they follow it there. Any other
+  `{…}` token is rejected at load.
+- **`GOTMPDIR` / `TMPDIR` directories are created** when they lie inside the
+  workspace (checked after resolving symlinks), because `go` refuses to run
+  without them and a fresh worktree has none — the job `make test`'s
+  `$(TESTCACHE)` prerequisite does. Nothing outside the workspace is created.
+- **`GOWORK`.** The entries are in place before the automatic `GOWORK=off`
+  decision (see [`[git]`](#the-git-childs-environment)), so a `GOWORK` here is used
+  as is — the same rule an inherited `GOWORK` follows.
+- **Reported.** `run_task` prints the applied entries (`env: GOTMPDIR=…`); a value
+  whose name marks it a credential (`…TOKEN`, `…SECRET`, `…PASSWORD`, …) or that
+  the redactor recognises is shown as `[REDACTED]`. `plumb config show` lists each
+  entry with its provenance.
+
+**Trust.** An environment variable changes what a command runs as surely as the
+command does (`PATH`, `GOFLAGS=-toolexec=…`, `LD_LIBRARY_PATH`), so a project's
+`env` is trust-gated like a command: every entry is part of the hash `plumb trust`
+records, a changed value needs a new `plumb trust`, and a project `env` makes
+*every* slot of that language project-supplied, shipped defaults included — the
+rule `working_dir` follows. The one exception is Go's scratch directory inside
+the workspace: `GOTMPDIR` set to `{workspace}` or `{workspace}/<relative path>`
+moves go's temporary files and changes neither what runs nor where, so on its
+own it needs no trust (it is still hashed, and still applied); a checked-in
+`GOTMPDIR = "{workspace}/.testcache"` therefore works in every fresh clone and
+worktree. A refused command names the setting that made it project-supplied.
+`plumb trust` lists the entries and flags the ones that change which program or
+code runs (`PATH`, `GOFLAGS`, `GOENV`, `GOPROXY`, `CC`, `HOME`, `GIT_*`, `CGO_*`,
+`NODE_OPTIONS`, `PYTHONPATH`, `RUSTC_WRAPPER`, `CARGO_TARGET_*`, `DYLD_*`, …). Names must be portable
+(`^[A-Za-z_][A-Za-z0-9_]*$`), values may not contain NUL, and the dynamic-loader
+injection variables `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and
+`DYLD_FORCE_FLAT_NAMESPACE` are refused in every layer: they run extra code in
+every process a command starts, and no build or test needs them. `env` is not
+agent-writable.
 
 ## `[[command]]` / `[commands]` — safe command execution
 
@@ -1586,6 +1782,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_GIT_ALLOW_PUSH` | `git.allow_push` |
 | `PLUMB_GIT_COMMIT_TRAILER` | `git.commit_trailer` |
 | `PLUMB_GIT_WRITE_TIMEOUT` | `git.write_timeout` |
+| `PLUMB_GIT_DETACH_AFTER` | `git.detach_after` |
 | `PLUMB_AUTO_ATTACH` | `workspace.auto_attach` |
 | `PLUMB_AUTO_ATTACH_PERSIST` | `workspace.auto_attach_persist` |
 | `PLUMB_LSP_QUERY_TIMEOUT` | `lsp_query.timeout` |
@@ -1652,6 +1849,7 @@ protected_branches = ["main", "master"]     # never force-pushable
 commit_trailer     = false                  # stamp commits with a Plumb-Session: <name> trailer
 env                = {}                     # extra env for the git child (hooks see it); trust-gated
 write_timeout      = "10m"                  # bound on a mutating git child before plumb kills it; trust-gated
+detach_after       = "45s"                  # a slower write returns "still running in the background"; trust-gated
 
 [quality]                                   # GLOBAL ONLY — a project value is never read
 enabled               = false               # post-write offline analysers

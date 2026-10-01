@@ -278,7 +278,6 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"note_ttl_minutes", strconv.Itoa(col.NoteTTLMinutes), sourceFor("note_ttl_minutes", dcol.NoteTTLMinutes, gcol.NoteTTLMinutes, col.NoteTTLMinutes)},
 		{"keep_delivered_notes", strconv.FormatBool(col.KeepDeliveredNotes), sourceFor("keep_delivered_notes", dcol.KeepDeliveredNotes, gcol.KeepDeliveredNotes, col.KeepDeliveredNotes)},
 	})
-
 	for _, lang := range sortedLSPKeys(projectCfg.LSP) {
 		cfg := projectCfg.LSP[lang]
 		globCfg := globalCfg.LSP[lang]
@@ -295,6 +294,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 			{"env", fmt.Sprintf("%v", cfg.Env), policySourceFor(policy, prefix+"env", sourceFor("env", defCfg.Env, globCfg.Env, cfg.Env))},
 		})
 	}
+	addTaskEnvSections(cfgTable, globalCfg, projectCfg)
 
 	fmt.Println(renderConfigShowTable(cfgTable))
 	fmt.Println(configShowMutedStyle().Render("LSP eligibility is derived from this command's merged config and PATH; use plumb debug lsp for running servers."))
@@ -353,38 +353,6 @@ func policySourceFor(st config.ProjectPolicyStatus, key, base string) string {
 		return "global config"
 	}
 	return base
-}
-
-// printProjectPolicyNotice states, in one place and in full, what this project's
-// config asked for in the capability-granting sections and whether it is in
-// force. It prints the requested VALUES, not just the key names, because that is
-// what a user needs in order to decide whether to trust them — and because there
-// is otherwise nowhere at all to see them: the resolved table above shows the
-// value in effect, which for an untrusted request is precisely not what the
-// project wrote.
-func printProjectPolicyNotice(ws string, st config.ProjectPolicyStatus) {
-	if st.Spec.IsEmpty() {
-		return
-	}
-	if st.Trusted {
-		fmt.Println(configShowOkStyle().Render(
-			fmt.Sprintf("✓ this project's capability-granting config is trusted — %d key(s) in effect:", len(st.Spec))))
-		for _, line := range st.Spec.Describe() {
-			fmt.Println(configShowMutedStyle().Render("    " + line))
-		}
-		fmt.Println()
-		return
-	}
-	fmt.Println(configShowWarnStyle().Render(
-		fmt.Sprintf("! this project's .plumb/config.toml sets %d capability-granting key(s) that are NOT in effect —", len(st.Spec)) +
-			"\n  plumb ignores [git] and the exec-deciding [lsp.<lang>] fields from an untrusted project config" +
-			"\n  (a cloned repository ships one, and it would otherwise run its own argv on attach):"))
-	for _, line := range st.Spec.Describe() {
-		fmt.Println(configShowWarnStyle().Render("    " + line))
-	}
-	fmt.Println(configShowWarnStyle().Render(
-		"  → run `plumb trust " + ws + "` to honour them; the values above are what you would be approving"))
-	fmt.Println()
 }
 
 // printDirectoriesSection lists the base directories plumb resolves through
@@ -529,10 +497,8 @@ func contractConfigPath(p string) string {
 // the config field registry. It drifted precisely because it was an inline
 // literal: git.commit_trailer and git.write_timeout were added to the registry
 // and never gained a row, and envVarFor had no commit_trailer case either — so
-// `plumb config show` could not confirm PLUMB_GIT_COMMIT_TRAILER, which is
-// exactly the check session_start's ignored-[git] notice tells the reader to run.
-// A notice that names a variable and a command that cannot show it leave the
-// reader with no way to answer the question either one raises.
+// `plumb config show` could not confirm PLUMB_GIT_COMMIT_TRAILER — exactly the
+// check session_start's ignored-[git] notice tells the reader to run.
 //
 // The list stays hand-written rather than generated: each row needs a typed
 // accessor and its own formatting (bool, duration, slice), and the registry
@@ -545,6 +511,7 @@ func gitConfigRows(defaultsCfg, globalCfg, projectCfg config.Config, policy conf
 		{"protected_branches", fmt.Sprintf("%v", projectCfg.Git.ProtectedBranches), policySourceFor(policy, "git.protected_branches", sourceFor("protected_branches", defaultsCfg.Git.ProtectedBranches, globalCfg.Git.ProtectedBranches, projectCfg.Git.ProtectedBranches))},
 		{"commit_trailer", strconv.FormatBool(projectCfg.Git.CommitTrailer), policySourceFor(policy, "git.commit_trailer", sourceFor("commit_trailer", defaultsCfg.Git.CommitTrailer, globalCfg.Git.CommitTrailer, projectCfg.Git.CommitTrailer))},
 		{"write_timeout", projectCfg.Git.WriteTimeout.String(), policySourceFor(policy, "git.write_timeout", sourceFor("write_timeout", defaultsCfg.Git.WriteTimeout, globalCfg.Git.WriteTimeout, projectCfg.Git.WriteTimeout))},
+		{"detach_after", projectCfg.Git.DetachAfter.String(), policySourceFor(policy, "git.detach_after", sourceFor("detach_after", defaultsCfg.Git.DetachAfter, globalCfg.Git.DetachAfter, projectCfg.Git.DetachAfter))},
 	}
 }
 
@@ -592,6 +559,7 @@ var fieldEnvVars = map[string]string{
 	"allow_push":                "PLUMB_GIT_ALLOW_PUSH",
 	"commit_trailer":            "PLUMB_GIT_COMMIT_TRAILER",
 	"write_timeout":             "PLUMB_GIT_WRITE_TIMEOUT",
+	"detach_after":              "PLUMB_GIT_DETACH_AFTER",
 	"timeout":                   "PLUMB_LSP_QUERY_TIMEOUT",
 }
 

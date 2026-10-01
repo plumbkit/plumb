@@ -270,6 +270,9 @@ type Reservation struct {
 // the answer does not depend on the order rows come back in, and every row stays
 // intact as the proof of which session a reconnecting proxy is.
 //
+// The roster names of logical agents (logical_agent.roster_name, #526) are
+// included on the same terms, held for the agent's own session ID.
+//
 // Rows with no plumb_session_id are skipped: such a row reserves a name that no
 // session could ever claim as its own, which locks the name out permanently
 // rather than holding it for someone.
@@ -304,6 +307,44 @@ func (s *Store) Reservations() ([]Reservation, error) {
 	out := make([]Reservation, 0, len(claims))
 	for _, c := range independentClaims(claims) {
 		out = append(out, Reservation{Name: c.Name, SessionID: c.SessionID, ExternalID: c.ExternalID})
+	}
+	roster, err := s.rosterReservationsLocked()
+	if err != nil {
+		return nil, err
+	}
+	return append(out, roster...), nil
+}
+
+// rosterReservationsLocked returns the names the logical agents of shared
+// connections hold (#526): the same promise a connection's own name gets, for the
+// same reason. An agent whose connection died with the daemon has no live session
+// row, so without this its name goes to the next session to draw it and every
+// note written to that name is claimable by a stranger when the agent comes back
+// under a new one.
+//
+// They carry no external ID, since a roster row has no conversation linkage of its
+// own, so only the agent's own session ID is entitled to one, and the TTL prune
+// bounds how long each is held: the pool is finite and these are not retained for
+// ever. Caller holds s.mu.
+func (s *Store) rosterReservationsLocked() ([]Reservation, error) {
+	rows, err := s.db.Query(
+		`SELECT roster_name, roster_session_id FROM logical_agent
+		   WHERE roster_name<>'' AND roster_session_id<>''`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sessionstate: roster reservations: %w", err)
+	}
+	defer rows.Close()
+	var out []Reservation
+	for rows.Next() {
+		var r Reservation
+		if err := rows.Scan(&r.Name, &r.SessionID); err != nil {
+			return nil, fmt.Errorf("sessionstate: scan roster reservation: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sessionstate: roster reservations: %w", err)
 	}
 	return out, nil
 }

@@ -111,20 +111,22 @@ const gitWriteDrainGrace = 2 * time.Second
 // step of the orderly path is now itself bounded, so the total is provably
 // under this deadline (the watchdog only ever fires on a genuine wedge):
 //
-//	acceptDrainGrace   (2s) — connection drain          (accept loop)
-//	gitWriteDrainGrace (2s) — in-flight git write drain  (accept loop)
-//	topoStopAllGrace   (2s) — topology indexer stops     (topologyPool.StopAll)
-//	poolCloseGrace     (2s) — LSP shutdown handshake     (workspacePool.close)
-//	supStopGrace       (1s) — supervisor stops           (workspacePool.close)
-//	                   ----
-//	                    9s  < shutdownHardDeadline (10s) — 1s slack
+//	acceptDrainGrace       (2s)   — connection drain          (accept loop)
+//	gitWriteDrainGrace     (2s)   — in-flight git write drain  (accept loop)
+//	topoStopAllGrace       (2s)   — topology indexer stops     (topologyPool.StopAll)
+//	poolCloseGrace         (2s)   — LSP shutdown handshake     (workspacePool.close)
+//	supStopGrace           (1s)   — supervisor stops           (workspacePool.close)
+//	projectWatchCloseGrace (0.5s) — project config watchers    (projectConfigWatchManager.close)
+//	                       ------
+//	                       9.5s   < shutdownHardDeadline (10s) — 0.5s slack
 //
 // The topology-indexer and LSP-supervisor stops used to be unbounded — a wedged
 // indexer or supervisor made the watchdog the only way out, and a slow-but-normal
 // shutdown could trip it and truncate a topology resync (WAL-safe, but lost).
 // They are now wrapped in waitWithTimeout at their shutdown call sites, so an
 // abandoned-but-logged component at process exit replaces the silent infinite
-// wait. TestShutdownHardDeadlineExceedsInnerGraces pins the sum below.
+// wait. The project watchers' close is bounded alike (a goroutine can wedge in
+// dispatch). TestShutdownHardDeadlineExceedsInnerGraces pins the sum below.
 const shutdownHardDeadline = acceptDrainGrace + gitWriteDrainGrace + poolCloseGrace + 4*time.Second
 
 // armShutdownWatchdog forces process exit shutdownHardDeadline after ctx is
@@ -296,7 +298,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer ln.Close()
 
 	pidPath := daemonPIDPath()
-	if err := os.WriteFile(pidPath, fmt.Appendf(nil, "%d", os.Getpid()), 0o600); err != nil {
+	if err := publishDaemonPID(os.WriteFile); err != nil {
 		slog.Warn("daemon: could not write PID file", "path", pidPath, "err", err)
 	}
 	defer os.Remove(pidPath)
@@ -322,9 +324,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		sessState = nil
 	}
 	defer sessState.Close()
-	pruneSessionState(sessState, cfg.Session.PersistStateTTLMinutes)
-	sweepLegacyWidePins(sessState)
-	reportLegacyNameConflicts(sessState)
+	// No TTL prune here: the idle reaper runs it once serves have reconnected,
+	// with connected sessions exempt (issue #525).
+	maintainSessionStateAtStart(sessState)
 
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()

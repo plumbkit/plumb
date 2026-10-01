@@ -20,9 +20,18 @@ import (
 //
 // Concurrency: all methods are safe for concurrent use; mu guards the map and
 // every entry's refs. The limiter inside an entry is itself internally locked.
+// mu is a LEAF lock: no method calls out or takes another lock while holding
+// it, so callers may use it under their own locks — connSession binds its
+// budget inside the mutation lane (issue #514). Keep it that way.
 type sharedBudgets struct {
 	mu sync.Mutex
 	m  map[string]*budgetEntry
+
+	// onAcquire and onRelease, when set, run at the start of acquire and
+	// release. Test seams only: they let a test observe a caller's ordering
+	// and locking around the budget (issue #514).
+	onAcquire func()
+	onRelease func(key string)
 }
 
 type budgetEntry struct {
@@ -41,6 +50,9 @@ func newSharedBudgets() *sharedBudgets {
 func (b *sharedBudgets) acquire(key string, limit int) *tools.RateLimiter {
 	if b == nil {
 		return nil
+	}
+	if b.onAcquire != nil {
+		b.onAcquire()
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -74,6 +86,9 @@ func (b *sharedBudgets) setLimit(key string, limit int) {
 func (b *sharedBudgets) release(key string) {
 	if b == nil || key == "" {
 		return
+	}
+	if b.onRelease != nil {
+		b.onRelease(key)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

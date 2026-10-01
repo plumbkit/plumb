@@ -35,6 +35,38 @@ These apply across many tools:
   `character`) or a symbol name (`symbol_name` / `name`, plain or dotted
   `ReceiverType.MethodName`). Prefer names when available; plumb resolves them
   to the identifier's `SelectionRange.Start` and avoids hand-computed positions.
+  A plain name matches a method at any depth, Go methods included (gopls names
+  them `(*Recv).Method`). A symbol literally carrying the name beats a method
+  that matches only once its receiver is stripped, so `Run` is the function
+  `Run` even beside a method `(*S).Run`. That includes a struct field or an
+  interface method named `Run`: either hides every `(*T).Run` from a plain `Run`
+  lookup, and the method is addressed by its receiver (`T.Run`; `T/Run` for
+  `move_symbol`). Only when no symbol carries the name itself do methods
+  compete, and then equally good matches (two methods `(*A).Run` and
+  `(*B).Run`) are never resolved to one silently: the read-only tools answer for
+  every match; `rename_symbol` refuses and lists, for each, the
+  `Receiver.Method` name that singles it out, or the `line`/`character` to retry
+  with when no name does; `move_symbol` refuses and lists the `name_path` for
+  each (`A/Run`, resolved against the language server's flat `(*A).Run` symbol
+  and, when the server cannot answer, the topology index). A generic receiver's
+  type parameters are left out: `(*S[T]).Run` is `S/Run`, and `S[T]/Run` names
+  the same method, as do `*S/Run` and `(*S)/Run`; a bracket never closed
+  (`S[/Run`) names nothing. When the tree-sitter fallback resolves a `name_path`
+  because the language server cannot (`replace_symbol_body`, `insert_*`,
+  `move_symbol`), `Parent/Name` names a declaration whose *direct* parent is
+  `Parent`, and `P1/P2/Name` one whose parent is `P2`, whose parent is `P1` —
+  never one that merely sits somewhere inside `Parent`, so `Outer/run` is
+  `Outer`'s own `run`, not that of a class nested in it. A declaration's parent
+  is the smallest named node enclosing it, or the node its extractor links it to
+  (a Rust method to the type of its `impl` block, when the file declares that
+  type), though not the package node Go links every top-level declaration to
+  (`p/Run` is refused) or a C# file-scoped namespace; a qualified name that
+  spells out the whole chain (`(*S).Run`, `Foo::run`) counts too. A path no declaration matches is refused, and so is one
+  that several match — overloads, a class nested in a class of the same name, a
+  C++ or Objective-C declaration beside its definition, a TypeScript class beside
+  a same-named one in a `namespace` — with their lines listed. A TypeScript
+  namespace is not a node, so no path through one resolves. Neither case is ever
+  resolved to a same-named declaration elsewhere in the file.
 - **`dry_run`.** The LSP semantic-edit tools (`rename_symbol`,
   `replace_symbol_body`, `insert_*`, `safe_delete_symbol`) default to
   `dry_run: true` — they preview the change. Pass `dry_run: false` to apply.
@@ -121,7 +153,14 @@ key, or `plumb_agent`, placed by a client **runtime** as a top-level key inside
 `plumb hooks install claude-code` PreToolUse hook is the emitter — it stamps
 every `mcp__plumb__*` call and also fills `session_id` on this tool); and
 `session_id` itself, which identifies this call only: on a connection other agents
-share, a later write without a per-call identity is refused. Pass a stable value per agent:
+share, a later write without a per-call identity is refused. It is also the
+declaration a per-call identity needs there: a state-changing call whose
+conversation half no successful `session_start` on the connection has declared
+(its `session_id`, or the per-call identity it ran under) is refused with that
+remedy, plus `workspace` so the declared agent is not left on the connection's
+root, unless every identity on the connection belongs to one conversation. A
+subagent stamped `<conversation>/<agent>` rides its conversation's declaration
+and works in its conversation's workspace, following it when it re-pins. Pass a stable value per agent:
 the conversation id for a main thread, `<conversation>/<agent>` for a subagent.
 The session **record** — the name mail is addressed to, `plumb mail
 --external-id`, name inheritance on resume — is linked to the conversation half,
@@ -566,6 +605,11 @@ both files.
 > `name_path` is a slash-separated symbol path within the file, e.g.
 > `"ClassName/methodName"` or just `"funcName"` for a top-level symbol.
 >
+> `include_doc_comment` extends the edit over the doc comment of the symbol the
+> tool resolved, and never resolves the `name_path` a second time: the extractor's
+> byte-precise span when a tree-sitter node of that name starts on the symbol's
+> first line, the contiguous comment lines above it otherwise.
+>
 > All four append a unified diff of the change to their response — a preview in
 > `dry_run`, the applied change otherwise — gated by `[edits].show_write_diff`
 > (default on; same toggle as `edit_file`/`write_file`).
@@ -702,6 +746,16 @@ appear exactly once), `expected_mtime` / `expected_sha` (optional concurrency
 check), `apply_partial` (bool — apply each edit independently), `dirty_ok`.
 Replacing an entire declaration? Prefer `replace_symbol_body` (see *LSP
 semantic edits* above) — addressed by `name_path`, no coordinates needed.
+
+**Line-range edits.** An `edits` entry with `start_line` (and optionally
+`end_line`, default `start_line`; `-1` runs to the last line) replaces whole
+lines instead of matching `old_string`; `start_line: -1` appends. `new_string`
+is treated as whole lines: when it is non-empty and has no trailing newline, the
+line ending of the replaced text is added, so the edit never joins the next
+line. A range running to the end of a file with no final newline (or an append
+to such a file) keeps the file without one. An empty `new_string` deletes the
+range. Several range edits in one call apply in order, each to the content the
+previous one produced.
 
 **Anchor-bounded mode (alternative to `edits`).** Instead of an exact
 `old_string`, supply `start_anchor` + `end_anchor` (two unique substrings) and a
@@ -905,7 +959,7 @@ index is disabled or empty.
 Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
 `diff`, `show`, `blame`, `shortlog`, and branch/tag/stash listing). **Write**
 needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
-branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
+`merge`, branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, …) needs
 `allow_destructive` + `confirm:true`.
 **Network** (`push`, `fetch`, `pull`) needs `allow_push` + `confirm:true`.
@@ -916,20 +970,61 @@ narrower plumb tool to prefer over a destructive git command (`undo_edit`,
 `file_status`, `minimal_diff_review`).
 
 **Ambiguous subcommands are classified by their arguments**, biased towards the
-safer-to-deny higher tier:
+safer-to-deny higher tier, and read the way git's own parser reads them:
+abbreviated long options (`--disc` is `--discard-changes`), bundled short flags
+(`-dr`) and option values (`tag -m -d` is a message) all count as git counts
+them.
 
-- `checkout -b`/`-B` (branch creation) is **write**; any other `checkout` is
-  **destructive** (it can discard the working tree or detach HEAD). Prefer
-  `switch` for safe branch changes.
+- `checkout -b` (branch creation) is **write**; any other `checkout` is
+  **destructive** (it can discard the working tree or detach HEAD), including
+  `-b` with `-f`. `-B <name>` is **write** when `<name>` is a new branch and
+  **destructive** when it resets an existing one (a new branch means a plain
+  name given once; see the last bullet below). Prefer `switch` for safe branch
+  changes.
 - `switch` is **write**, but `switch -f`/`--force`/`--discard-changes` is
-  **destructive**.
+  **destructive**, and so is `-C`/`--force-create` on a branch that already
+  exists (on a new one it is a write).
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
-- `branch`/`tag`: creating or renaming is **write**, `--delete`/`-d`/`-D` is
-  **destructive**, and `--list`/`-a`/`-r`/… is **read**.
+- `branch`: creating, renaming (`-m`) or copying (`--copy`) is **write**, as are
+  the upstream and description options. Every forced form is **destructive**
+  whether or not the branch exists: `-f`/`--force`, `-M` (`--move --force`),
+  `-C` (`--copy --force`, also inside a bundle such as `-qC`) and
+  `-D`/`-d`/`--delete`. List mode (`--list`/`-a`/`-r`/`--contains`/…, or no
+  arguments) is **read**, and a later `--no-list` cancels it. `-v` alone does
+  not list once a name is given.
+- `tag`: creating is **write**; `--delete`/`-d` is **destructive**, and so is
+  `-f`/`--force` when the tag already exists (on a new one it is a write); list
+  mode is **read**.
+- `--end-of-options` ends option parsing exactly as `--` does.
+- A `checkout -B`, `switch -C` or `tag -f` call is lowered to **write** only
+  when the tool can show it creates a ref; `branch` is never lowered, because
+  its option grammar defeated every attempt to tell a creation from a reset. The
+  option appears exactly once, however it is spelled, because git keeps the last
+  of a repeated `-B`. The name is plain:
+  ASCII letters, digits and `.` `_` `-` `/`, with no leading `-`, no `@` or `{`,
+  no `..`, and not ending in `.lock` or `/`, because git expands `@{-1}`,
+  `@{u}`, `@{push}` and `<branch>@{upstream}` to an existing branch. `git
+  check-ref-format` accepts the name and prints it back unchanged. And git,
+  asked in the target repository just before the call, says the ref does not
+  exist. Any other call, including one git cannot answer, is **destructive**.
 - `stash`: bare `git stash`, `push`, `pop`, `apply`, `save`, `create`, `store`
   are **write**; `list`/`show` are **read**; `drop`/`clear` are **destructive**;
   an unknown `stash` sub-subcommand is rejected with the valid list.
+- `merge` (`--no-ff`, `--ff-only`, `--no-edit`, `-m`, a ref) is **write** and
+  runs `pre-merge-commit`/`commit-msg` as `commit` runs its hooks; `--abort` and
+  `--quit` (also abbreviated, as git expands them) are **destructive**.
+  `--continue`, `--no-verify`, `-e`/`--edit` and `-F`/`--file` are refused —
+  conclude a merge with `commit` and a message. A merge that stops on conflicts
+  fails naming the conflicted files and leaves git's merging state (`MERGE_HEAD`)
+  to resolve, `add`, and `commit`.
+
+A file plumb wrote this session and then changed on disk through this tool (a
+`switch`, `merge`, `restore`, `stash pop`, `reset`, `pull`, …) is re-recorded
+afterwards, so the next `read_file` does not report it as a peer's edit. A file a
+peer had already changed before the operation, or changes after it, still warns.
+When a tier is off because this workspace's untrusted project config asked for
+it, the refusal says so and names the `plumb trust` command for the path.
 
 `add` and `commit` are **typed, not pass-through**: `commit` only ever runs
 `commit -m <message>`, plus `-- <files>` when `files` is passed to limit the
@@ -941,14 +1036,33 @@ write-rate-limit slot. Output is capped (200 lines for `log`/`blame`, 100 KiB
 overall); `add` and `commit` return a concise summary (staged file count, or
 `<short-hash> <subject>`) rather than raw git output.
 
+**Slow writes do not outlive the call.** A write- or destructive-tier call still
+waiting after `[git] detach_after` (default 45 s, below the usual MCP client
+call timeout) returns a success result saying the operation is **still running
+in the background** — pid, start time, HEAD at that moment — instead of blocking until
+the client gives up while the commit lands anyway. The child is not killed.
+Until it finishes, further non-read calls on that repository are refused (reads
+still run, with a note); afterwards the next call from each session reports
+`landed as <sha>` or the failure with git's output. See
+[Configuration → When the call stops waiting](configuration.md#when-the-call-stops-waiting).
+
+No git child opens an editor or a credential prompt: each runs with
+`GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true` and `GIT_TERMINAL_PROMPT=0`, so
+`rebase --continue`, `cherry-pick -e` and `revert --edit` keep the message git
+prepared and `rebase -i` runs its todo list unchanged. A value under
+`[git] env` wins (see
+[`configuration.md`](configuration.md#the-git-childs-environment)).
+
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
-trailer; regardless of that knob, `workspace_sessions` always lists recent
+trailer naming the agent that made the call (on a connection shared by several
+agents, each has its own session name, and an agent with none is stamped with
+nothing rather than with another agent's); regardless of that knob, `workspace_sessions` always lists recent
 commits per session (short SHA, subject, repository) from its recent-writes
 feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
 
 With `[collab] intents = true`, a **repo-state op** — every destructive-tier op,
-plus the write-tier HEAD movers `commit`/`switch`/`checkout` — also surfaces any
+plus the write-tier HEAD movers `commit`/`switch`/`checkout`/`merge` — also surfaces any
 live peer `share_intent` claims covering the repository as an advisory
 `# plumb-warning:` block naming the peer and the claim.
 
@@ -1005,7 +1119,16 @@ tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
 (100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
-one shell-safe argument), `language` (optional, see below). A project-supplied
+one shell-safe argument), `run` (optional test-name filter for a `{run}`
+placeholder — `go test -run`, `pytest -k`, cargo's libtest filter — e.g.
+`TestA|TestB`), `verbose` (optional, fills a `{verbose:<flag>}` placeholder, e.g.
+`go test -v` to see skipped tests), `language` (optional, see below). The shipped
+go/python test defaults carry all three placeholders (rust: `{target}` and
+`{run}`); a `run` on a command without `{run}` is refused, an unplaceable
+`verbose` is noted — see
+[`configuration.md`](configuration.md#run-and-verbose--a-test-name-filter-and-verbose-output).
+Commands run with the language's `[tasks.<lang>] env`, which the response lists
+(`env: GOTMPDIR=…`, credentials redacted). A project-supplied
 command must be trusted first (`plumb trust`); defaults and global-config
 commands always run. Pairs with `topology_affected` (which says *which* tests to
 run) — the `plumb-testing` skill walks the whole post-edit loop.
@@ -1064,7 +1187,10 @@ restore the file. **Inputs:** `mutants` (array, 1–20, each `{file_path,
 old_string, new_string, label?}` — an exact-once `str_replace` in the style of
 `edit_file`; it does **not** generate mutants), `test_task` (slot, default
 `test`), `test_target` (fills the stored test command's `{target}` — the way to
-scope the run; ask `topology_affected` what to name), `compile_task` (slot,
+scope the run; ask `topology_affected` what to name), `test_run` (fills the test
+command's `{run}` test-name filter, as `run_task`'s `run` does, so each mutant runs
+only the tests that should kill it — seconds instead of a whole package),
+`compile_task` (slot,
 default `build`), `timeout_seconds` (per step, default 600).
 
 **Three outcomes.** `killed` — the mutant compiled and a test failed, so the
@@ -1145,7 +1271,15 @@ SHA-256 before the run reports clean. A file with **uncommitted changes is
 refused with no override** — a clean file is what makes `git checkout` a
 guaranteed recovery if the daemon dies mid-run. One run at a time per daemon; a
 second call is refused rather than queued, since concurrent runs would read each
-other's breakage as their own result.
+other's breakage as their own result. The refusal names the run in the way: its
+session name and id, workspace, how long ago it started, and its progress
+(checking its mutants, the unmutated baseline, or mutant *k* of *n* and the step
+it is on). A run whose owning connection closes — the client crashed or
+disconnected — is cancelled (the file is restored as on any cancellation) and
+the slot released, rather than holding it for a report nobody can receive. The
+slot stays per daemon, not per workspace: workspaces nest (a superproject and its
+submodule are two workspaces over one tree), so two of them can mutate and build
+the same files.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist

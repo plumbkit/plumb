@@ -17,6 +17,9 @@ import (
 
 func (s *connSession) agentConfigDeps() tools.AgentConfigDeps {
 	return tools.AgentConfigDeps{
+		// The connection's view answers for every agent on it: agent_config_writes
+		// is ClassForcedGlobal, so no project can set it and every project's
+		// resolved value is the global one.
 		Enabled:  func() bool { return s.view().agentConfigWrites },
 		Describe: agentDescribe,
 		Apply:    s.applyAgentConfig,
@@ -43,8 +46,12 @@ func agentDescribe() []tools.AgentConfigField {
 // live for this connection. The allowlist is enforced here at the cli seam AND
 // again inside config.AgentApplyBatch (defence in depth): a non-allowlisted key
 // is refused before any disk is touched, by two independent checks.
-func (s *connSession) applyAgentConfig(_ context.Context, pairs map[string]any) (string, error) {
-	ws := s.workspace()
+//
+// It writes the CALLING agent's project (#522). On a shared connection an
+// agent pinned to project B that set tasks.go.lint used to rewrite the
+// connection's project A, and its own run_task never saw the change.
+func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any) (string, error) {
+	ws := s.workspaceFor(ctx)
 	if ws == "" {
 		return "", errors.New("no workspace attached")
 	}
@@ -63,7 +70,18 @@ func (s *connSession) applyAgentConfig(_ context.Context, pairs map[string]any) 
 	if err != nil {
 		return "", err
 	}
-	s.applyProjectConfig(ws) // live for this connection before the tool returns
+	// Live before the tool returns. The connection's own project is cached in its
+	// view and is re-applied; any other root is read per call (projectViewFor), so
+	// the agent's next call already sees the write. Re-applying THAT root here
+	// would swap another project's config into the connection's view.
+	//
+	// The same test is asked again inside the lane, where the swap commits: a
+	// re-pin that lands between this read and the commit has applied its own root,
+	// and the apply of this one must then be dropped, not laid over it (#558).
+	holdsWS := func(v *sessionView) bool { return ws == v.configRoot || ws == v.acquiredRoot }
+	if v := s.view(); holdsWS(&v) {
+		s.applyProjectConfigIf(ws, holdsWS)
+	}
 	s.log().Info("daemon: agent wrote project config", "workspace", ws, "keys", changed)
 	return fmt.Sprintf(
 		"applied %d key(s) to %s/.plumb/config.toml (provenance=agent): %s\nrevert any with: plumb config unset <key> --workspace .",

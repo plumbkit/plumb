@@ -30,7 +30,11 @@ package cli
 //
 // Concurrency: all methods are safe for concurrent use. Each workspace runs
 // one goroutine for the watch's lifetime; the dispatch callback is invoked
-// from that goroutine and must not be called holding mu.
+// from that goroutine and must not be called holding mu. close waits — for at
+// most projectWatchCloseGrace — for every goroutine, including ones a release
+// cancelled, to stop and close its OS watcher; release does not wait, because
+// it can run on a watch goroutine's own dispatch path (a reload that moves a
+// session's pin).
 
 import (
 	"context"
@@ -48,6 +52,17 @@ import (
 // projectConfigDebounce collapses the event burst a single save emits into
 // one dispatch. Same window as the global config watcher.
 const projectConfigDebounce = 250 * time.Millisecond
+
+// projectWatchCloseGrace bounds how long close waits for the watch goroutines
+// to finish. A healthy goroutine stops and closes its watcher within
+// microseconds of its cancel; the bound exists for one that cannot, because it
+// is inside dispatch (connRegistry.reloadProject), which can queue on a
+// session's mutation lane while that lane is held across slow work. close runs
+// on the orderly daemon shutdown path, which must stay under shutdownHardDeadline
+// (TestShutdownHardDeadlineExceedsInnerGraces sums this grace in), so a wedged
+// dispatch is abandoned and logged instead of holding the daemon until the
+// watchdog forces the exit. Tests that need the full wait raise closeGrace.
+const projectWatchCloseGrace = 500 * time.Millisecond
 
 // projectConfigWatch is one workspace's registration: the refcount of live
 // connections pinned to it, the cancel that stops its goroutine, and two
@@ -72,24 +87,52 @@ type projectConfigWatch struct {
 // canonical workspace root so symlink and trailing-slash aliases share one
 // registration. Not nil-safe: callers hold a concrete manager or none.
 type projectConfigWatchManager struct {
-	// ctx parents every watch goroutine, so a daemon shutdown stops them all.
+	// ctx parents every watch goroutine, so a daemon shutdown — or close,
+	// through stop — ends them all, even one whose own cancel was lost.
 	ctx      context.Context
+	stop     context.CancelFunc
 	dispatch func(workspace string)
 	debounce time.Duration
+	// newWatcher builds each OS watcher: fsnotify.NewWatcher, or a test's
+	// wrapper that captures each watcher it builds.
+	newWatcher func() (*fsnotify.Watcher, error)
+	// recreateInterval is watcherRecreateInterval; tests widen it so "lost
+	// again straight away" does not depend on scheduling.
+	recreateInterval time.Duration
+	// closeGrace is projectWatchCloseGrace: how long close waits for the watch
+	// goroutines before abandoning them. Tests set it to wait out, or to bound
+	// tightly, a goroutine they hold open.
+	closeGrace time.Duration
+	// testErrs is a test seam: an error sent on it reaches a run loop exactly
+	// as if its OS watcher had reported it. Nil in production, and a nil
+	// channel never fires in a select. (Tests must not send on fsnotify's own
+	// Errors channel: its reader closes that channel.)
+	testErrs chan error
 
 	mu      sync.Mutex
 	watches map[string]*projectConfigWatch
+	// closed stops acquire starting goroutines once close has begun, so wg.Add
+	// can never race wg.Wait.
+	closed bool
+	// wg counts live run goroutines, released-but-still-closing ones included.
+	wg sync.WaitGroup
 }
 
 // newProjectConfigWatchManager builds the manager. dispatch is called once
 // per debounced change with the canonical workspace root — in production it
 // is connRegistry.reloadProject; tests substitute a signalling closure.
 func newProjectConfigWatchManager(ctx context.Context, dispatch func(workspace string)) *projectConfigWatchManager {
+	ctx, stop := context.WithCancel(ctx)
 	return &projectConfigWatchManager{
-		ctx:      ctx,
-		dispatch: dispatch,
-		debounce: projectConfigDebounce,
-		watches:  make(map[string]*projectConfigWatch),
+		ctx:        ctx,
+		stop:       stop,
+		dispatch:   dispatch,
+		debounce:   projectConfigDebounce,
+		newWatcher: fsnotify.NewWatcher,
+
+		recreateInterval: watcherRecreateInterval,
+		closeGrace:       projectWatchCloseGrace,
+		watches:          make(map[string]*projectConfigWatch),
 	}
 }
 
@@ -103,6 +146,10 @@ func (m *projectConfigWatchManager) acquire(workspace string) {
 		return
 	}
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
 	if w, ok := m.watches[root]; ok {
 		w.refs++
 		ready := w.ready
@@ -118,6 +165,7 @@ func (m *projectConfigWatchManager) acquire(workspace string) {
 			w.ready = ready
 			ctx, cancel := context.WithCancel(m.ctx)
 			w.cancel = cancel
+			m.wg.Add(1)
 			go m.run(ctx, w, root, ready)
 		}
 		m.mu.Unlock()
@@ -127,6 +175,7 @@ func (m *projectConfigWatchManager) acquire(workspace string) {
 	ctx, cancel := context.WithCancel(m.ctx)
 	w := &projectConfigWatch{refs: 1, cancel: cancel, ready: make(chan struct{})}
 	m.watches[root] = w
+	m.wg.Add(1)
 	m.mu.Unlock()
 	go m.run(ctx, w, root, w.ready)
 	<-w.ready
@@ -159,15 +208,30 @@ func (m *projectConfigWatchManager) healthy(workspace string) bool {
 	return ok && !w.failed.Load()
 }
 
-// close stops every watcher. Called on daemon shutdown; the parent ctx does
-// the same, so this exists for tests and orderly teardown.
+// close stops every watcher and waits until each watch goroutine has stopped
+// and closed its OS watcher (closeFSWatcher), but for no longer than
+// closeGrace: a goroutine stuck in dispatch is abandoned and logged, so the
+// orderly shutdown stays bounded. Called on daemon shutdown; tests call it
+// before removing the directories they watched, because fsnotify's kqueue
+// backend can close a descriptor twice when Close races a delete inside the
+// watched tree. The wait narrows that window rather than closing it: each
+// reader's final descriptor closes can trail it by microseconds (see
+// closeFSWatcher). Acquire is a no-op afterwards.
 func (m *projectConfigWatchManager) close() {
 	m.mu.Lock()
+	m.closed = true
 	for root, w := range m.watches {
 		w.cancel()
 		delete(m.watches, root)
 	}
+	m.stop()
 	m.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	waitWithTimeout(done, m.closeGrace, "project config watchers")
 }
 
 // refs reports the live-connection refcount on workspace's watcher (test seam).
@@ -186,80 +250,200 @@ func (m *projectConfigWatchManager) refs(workspace string) int {
 // marking the watch failed — so acquire never returns before the OS watch is
 // live. A watcher that cannot be created or attached marks the watch failed
 // and returns: the daemon keeps running and the per-session poll fallback
-// covers the workspace. Runtime errors mark the watch failed (the fallback
-// poll re-engages) but the loop keeps running: later events still dispatch,
-// and an fsnotify error is often a dropped-event notice rather than a dead
-// watcher.
+// covers the workspace. Runtime errors are projectWatchLoop.onError's call.
 func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWatch, root string, ready chan struct{}) {
+	// Deferred first so it runs last: close waits on wg, so it also waits for
+	// the OS watcher below to be closed.
+	defer m.wg.Done()
 	// dead lets acquire distinguish a loop that EXITED (safe to retry) from
 	// one that merely saw a transient error and is still running.
 	defer w.dead.Store(true)
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		w.failed.Store(true)
-		close(ready)
-		slog.Warn("daemon: project config watcher unavailable — 30s poll fallback active", "workspace", root, "err", err)
-		return
-	}
-	defer watcher.Close()
+	l := &projectWatchLoop{
+		root:       root,
+		plumbDir:   filepath.Join(root, ".plumb"),
+		debounce:   m.debounce,
+		newWatcher: m.newWatcher,
 
-	// The root always exists for a pinned workspace; .plumb may not. Watching
-	// the root (non-recursive) catches the .plumb dir itself being created,
-	// renamed or removed — the case where a project gains (or loses) its whole
-	// config after sessions attached.
-	if err := watcher.Add(root); err != nil {
+		recreateInterval: m.recreateInterval,
+	}
+	if err := l.open(); err != nil {
 		w.failed.Store(true)
 		close(ready)
 		slog.Warn("daemon: project config watcher unavailable — 30s poll fallback active", "workspace", root, "err", err)
 		return
 	}
-	plumbDir := filepath.Join(root, ".plumb")
-	plumbWatched := watchPlumbDir(watcher, plumbDir, false)
+	defer l.close()
 	close(ready)
 	slog.Debug("daemon: watching project config for changes", "workspace", root)
 
-	timer := time.NewTimer(m.debounce)
-	if !timer.Stop() {
-		<-timer.C
+	l.timer = time.NewTimer(m.debounce)
+	if !l.timer.Stop() {
+		<-l.timer.C
 	}
-	defer timer.Stop()
+	defer l.timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event, ok := <-watcher.Events:
+		case event, ok := <-l.watcher.Events:
 			if !ok {
 				return
 			}
-			if filepath.Clean(event.Name) == plumbDir {
-				// The .plumb entry itself changed. A remove/rename of the
-				// directory kills the OS watch on the old inode, so drop the
-				// latch first — otherwise every later config.toml edit stays
-				// silently invisible (and failed is never set, so the poll
-				// fallback never engages either). Then re-arm — a no-op while
-				// the dir is still the watched one — and reload: removing
-				// .plumb revokes what its config granted.
-				if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
-					plumbWatched = false
-				}
-				plumbWatched = watchPlumbDir(watcher, plumbDir, plumbWatched)
-				rearmProjectTimer(timer, m.debounce)
-				continue
-			}
-			if projectConfigEvent(event.Name, plumbDir, event.Op) {
-				rearmProjectTimer(timer, m.debounce)
-			}
-		case err, ok := <-watcher.Errors:
-			if !ok {
+			l.onEvent(event)
+		case err, ok := <-l.watcher.Errors:
+			if !ok || !l.onError(w, err) {
 				return
 			}
-			w.failed.Store(true)
-			slog.Warn("daemon: project config watcher error — 30s poll fallback active", "workspace", root, "err", err)
-		case <-timer.C:
+		case err := <-m.testErrs:
+			if !l.onError(w, err) {
+				return
+			}
+		case <-l.timer.C:
+			// Attach .plumb before dispatching, so the reload reads the file
+			// with the watch already live and a later edit cannot slip between.
+			l.attachPlumbDir()
 			m.dispatch(root)
 		}
 	}
+}
+
+// projectWatchLoop is one run goroutine's OS-watcher state. It is owned by
+// that goroutine alone and never shared, so it needs no locking.
+type projectWatchLoop struct {
+	root, plumbDir string
+	debounce       time.Duration
+	newWatcher     func() (*fsnotify.Watcher, error)
+
+	recreateInterval time.Duration
+
+	watcher      *fsnotify.Watcher
+	plumbWatched bool
+	timer        *time.Timer
+	recreatedAt  time.Time
+}
+
+// open creates the OS watcher and attaches it. The root always exists for a
+// pinned workspace; .plumb may not. Watching the root (non-recursive) catches
+// the .plumb dir itself being created, renamed or removed — the case where a
+// project gains (or loses) its whole config after sessions attached.
+//
+// An attach that fails because a descriptor was closed underneath it
+// (fsWatcherLost) says nothing about the workspace, so it gets one immediate
+// second attempt on a fresh watcher before the watch is declared failed.
+func (l *projectWatchLoop) open() error {
+	err := l.openOnce()
+	if fsWatcherLost(err) {
+		err = l.openOnce()
+	}
+	return err
+}
+
+func (l *projectWatchLoop) openOnce() error {
+	watcher, err := l.newWatcher()
+	if err != nil {
+		return err
+	}
+	if err := watcher.Add(l.root); err != nil {
+		closeFSWatcher(watcher)
+		return err
+	}
+	l.watcher = watcher
+	l.plumbWatched = watchPlumbDir(watcher, l.plumbDir, false)
+	return nil
+}
+
+// close closes the current OS watcher, if any, and waits for its reader to
+// stop delivering (see closeFSWatcher).
+func (l *projectWatchLoop) close() {
+	closeFSWatcher(l.watcher)
+	l.watcher = nil
+}
+
+// onEvent filters one fsnotify event and re-arms the debounce timer for a
+// reload-worthy one.
+func (l *projectWatchLoop) onEvent(event fsnotify.Event) {
+	if filepath.Clean(event.Name) == l.plumbDir {
+		// The .plumb entry itself changed. A remove/rename of the directory
+		// kills the OS watch on the old inode, so drop the latch — otherwise
+		// every later config.toml edit stays silently invisible (and failed is
+		// never set, so the poll fallback never engages either). Then reload:
+		// removing .plumb revokes what its config granted.
+		//
+		// The directory is NOT re-attached here but when the debounce timer
+		// fires (attachPlumbDir). On kqueue fsnotify's own reader also
+		// registers a directory created inside a watched one, a moment after
+		// it delivers this event, and an Add made now races that registration:
+		// both open the directory, and one descriptor is never closed (#568).
+		// Waiting out the debounce window lets the reader finish first, so
+		// the Add finds the directory already registered and reuses its
+		// descriptor. fsnotify's WatchList cannot make the Add idempotent
+		// instead, because it lists only paths the caller added, not the
+		// reader's own registrations. This keeps our Add out of the reader's
+		// window rather than closing the race, which only a fix inside
+		// fsnotify's check-then-open can do.
+		if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+			l.plumbWatched = false
+		}
+		rearmProjectTimer(l.timer, l.debounce)
+		return
+	}
+	if projectConfigEvent(event.Name, l.plumbDir, event.Op) {
+		rearmProjectTimer(l.timer, l.debounce)
+	}
+}
+
+// attachPlumbDir (re-)arms the .plumb directory watch if it is not attached:
+// a no-op while the latch says it is, and when .plumb does not exist the
+// failed Add leaves the latch clear for the next attempt. The timer fire is
+// the only caller (see onEvent for why not sooner). Anything written to .plumb
+// before this lands is picked up by the dispatch that follows it, which
+// re-reads the file.
+func (l *projectWatchLoop) attachPlumbDir() {
+	l.plumbWatched = watchPlumbDir(l.watcher, l.plumbDir, l.plumbWatched)
+}
+
+// onError handles one fsnotify error and reports whether the loop should keep
+// running.
+//
+// A lost watcher (fsWatcherLost) can never deliver another event — its
+// kqueue reader just spins on the same error — so it is closed and replaced
+// in place, and a reload is scheduled to pick up whatever changed while it
+// was blind. That turns a stolen descriptor into a sub-second blip instead of
+// a workspace left to the 30 s poll. Any other error keeps the long-standing
+// contract: mark the watch failed (the poll re-engages) and keep running,
+// because an fsnotify error is often a dropped-event notice, not a dead
+// watcher.
+func (l *projectWatchLoop) onError(w *projectConfigWatch, err error) bool {
+	if !fsWatcherLost(err) {
+		w.failed.Store(true)
+		slog.Warn("daemon: project config watcher error — 30s poll fallback active", "workspace", l.root, "err", err)
+		return true
+	}
+	// Lost again this soon is not a one-off: leave the workspace to the poll
+	// fallback and the next acquire's retry rather than spin recreating.
+	if !l.recreatedAt.IsZero() && time.Since(l.recreatedAt) < l.recreateInterval {
+		w.failed.Store(true)
+		slog.Warn("daemon: project config watcher lost again straight after a recreate — 30s poll fallback active", "workspace", l.root, "err", err)
+		return false
+	}
+	// Close the dead watcher BEFORE opening its replacement: descriptors are
+	// allocated lowest-free-first, so a replacement opened first could be
+	// handed the very number the dead watcher's reader closes on its way out.
+	// Closing first only shrinks that window: the reader closes its kqueue and
+	// pipe just after Events, so they can still trail the close by microseconds
+	// (see closeFSWatcher).
+	l.close()
+	if rerr := l.open(); rerr != nil {
+		w.failed.Store(true)
+		slog.Warn("daemon: project config watcher lost and not recreated — 30s poll fallback active", "workspace", l.root, "err", err, "recreate_err", rerr)
+		return false
+	}
+	l.recreatedAt = time.Now()
+	w.failed.Store(false)
+	slog.Warn("daemon: project config watcher lost its OS handle — recreated", "workspace", l.root, "err", err)
+	rearmProjectTimer(l.timer, l.debounce)
+	return true
 }
 
 // watchPlumbDir attaches the .plumb subdirectory watch unless the latch says

@@ -46,6 +46,10 @@ var defaults = Config{
 		// routinely runs past two minutes. It is still a bound — a child that is
 		// genuinely wedged cannot hold the repository lock forever.
 		WriteTimeout: Duration{10 * time.Minute},
+		// Below the 60s request timeout MCP clients commonly apply, so a slow
+		// hook yields "still running in the background" rather than a client
+		// timeout that hides a commit which then lands anyway (#549).
+		DetachAfter: Duration{45 * time.Second},
 	},
 	Quality: QualityConfig{
 		Enabled:            false,

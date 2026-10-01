@@ -1,6 +1,10 @@
 package tools
 
-import "time"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 // LSP-state accessors for the orientation packet, split out of session_start.go
 // to keep it under the file-size cap. These report what the session's language
@@ -33,41 +37,120 @@ func (t *SessionStart) lspRouted() []string {
 	return t.lspRoutedFn()
 }
 
-// WithLSPWarmup wires an accessor reporting whether the session's primary
-// language server is still warming (handshake incomplete) and for how long. When
-// it reports warming, session_start softens "LSP is ready" into a warming
-// advisory that steers the agent to topology/workspace_symbols meanwhile. Nil-safe:
-// unset means never warming. Returns the receiver for chaining.
-func (t *SessionStart) WithLSPWarmup(fn func() (bool, time.Duration)) *SessionStart {
+// The three accessors below take the workspace session_start resolved for the
+// CALLER (the per-agent pin), not the connection's: on a shared connection a
+// subagent pinned to a worktree is served by that worktree's language server,
+// and describing the connection primary's server instead told it the wrong
+// GOWORK, warm-up state and diagnostics mode (issue #546).
+
+// WithLSPServer wires an accessor naming the language whose server serves the
+// caller's workspace ("" for none) and whether that server has started. A
+// subagent's re-pin to a workspace of its own starts no server — the first call
+// that needs one does — so on its first session_start there is nothing running
+// to be ready, and "LSP is ready" would describe the connection's server instead
+// (PR #559 review B2). Nil-safe: unset falls back to the connection's attached
+// language, reported as started. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPServer(fn func(ws string) (language string, started bool)) *SessionStart {
+	t.lspServerFn = fn
+	return t
+}
+
+// lspServer reports the language whose server serves ws ("" for none) and
+// whether that server has started.
+func (t *SessionStart) lspServer(ws string) (language string, started bool) {
+	if t.lspServerFn != nil {
+		return t.lspServerFn(ws)
+	}
+	if t.lspAttached() {
+		return t.lspLangFn(), true
+	}
+	return "", false
+}
+
+// lspServerStarted reports whether a language server serving ws has started.
+func (t *SessionStart) lspServerStarted(ws string) bool {
+	lang, started := t.lspServer(ws)
+	return lang != "" && started
+}
+
+// writeLSPNotStarted covers a workspace whose language server exists but has not
+// started — the state a subagent's own workspace is in on its first
+// session_start — and reports whether it wrote anything.
+func (t *SessionStart) writeLSPNotStarted(sb *strings.Builder, ws string) bool {
+	lang, started := t.lspServer(ws)
+	if lang == "" || started {
+		return false
+	}
+	fmt.Fprintf(sb, "The %s language server for this workspace has not started yet — the first call that needs it "+
+		"starts it (`workspace_symbols`, `get_definition`, `find_references`, `diagnostics`). "+
+		"`topology_search` and `file_outline` answer now.\n\n", labelForLSPKey(lang))
+	return true
+}
+
+// WithLSPWarmup wires an accessor reporting whether the language server serving
+// the caller's workspace is still warming (handshake incomplete) and for how
+// long. When it reports warming, session_start softens "LSP is ready" into a
+// warming advisory that steers the agent to topology/workspace_symbols meanwhile.
+// Nil-safe: unset means never warming. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPWarmup(fn func(ws string) (bool, time.Duration)) *SessionStart {
 	t.lspWarmingFn = fn
 	return t
 }
 
-// lspWarming reports the primary LSP warm-up state, or (false, 0) when no
-// accessor is wired.
-func (t *SessionStart) lspWarming() (bool, time.Duration) {
+// lspWarming reports the warm-up state of the server serving ws, or (false, 0)
+// when no accessor is wired.
+func (t *SessionStart) lspWarming(ws string) (bool, time.Duration) {
 	if t.lspWarmingFn == nil {
 		return false, 0
 	}
-	return t.lspWarmingFn()
+	return t.lspWarmingFn(ws)
 }
 
-// WithLSPDiagMode wires an accessor for the resolved diagnostics mode of this
-// session's primary language server (push / pull / hybrid /
+// WithLSPDiagMode wires an accessor for the resolved diagnostics mode of the
+// language server serving the caller's workspace (push / pull / hybrid /
 // pull-requested-but-unavailable). session_start surfaces a non-default mode on
-// the "LSP is ready" line so an agent knows the connection negotiated something
+// the "LSP is ready" line so an agent knows the server negotiated something
 // other than the push default. Nil-safe: unset ⇒ the mode is never shown.
 // Returns the receiver for chaining.
-func (t *SessionStart) WithLSPDiagMode(fn func() string) *SessionStart {
+func (t *SessionStart) WithLSPDiagMode(fn func(ws string) string) *SessionStart {
 	t.lspDiagModeFn = fn
 	return t
 }
 
-// lspDiagMode returns the primary LSP's resolved diagnostics mode, or "" when no
-// accessor is wired.
-func (t *SessionStart) lspDiagMode() string {
+// lspDiagMode returns the diagnostics mode of the server serving ws, or "" when
+// no accessor is wired.
+func (t *SessionStart) lspDiagMode(ws string) string {
 	if t.lspDiagModeFn == nil {
 		return ""
 	}
-	return t.lspDiagModeFn()
+	return t.lspDiagModeFn(ws)
+}
+
+// WithLSPGoWorkOff wires an accessor for the go.work the language server serving
+// the caller's workspace was started with GOWORK=off against ("" when its
+// environment was left alone). session_start names it in the identity block: an
+// agent in a worktree otherwise has no way to tell why the server answers about
+// the worktree while `go` in its own shell, under the same go.work, does not
+// (#521). Nil-safe. Returns the receiver for chaining.
+func (t *SessionStart) WithLSPGoWorkOff(fn func(ws string) string) *SessionStart {
+	t.lspGoWorkFn = fn
+	return t
+}
+
+// lspGoWorkNote renders the GOWORK=off identity line, ending in a newline, or
+// "" when the server serving ws runs with the environment it inherited.
+func (t *SessionStart) lspGoWorkNote(ws string) string {
+	if t.lspGoWorkFn == nil {
+		return ""
+	}
+	work := t.lspGoWorkFn(ws)
+	if work == "" {
+		return ""
+	}
+	verb := "runs with"
+	if !t.lspServerStarted(ws) {
+		verb = "will start with" // decided from disk: no server runs for ws yet
+	}
+	return "Go LSP:   " + verb + " GOWORK=off — " + work + " lists another copy of this module " +
+		"(set GOWORK in [lsp.go] env to override)\n"
 }

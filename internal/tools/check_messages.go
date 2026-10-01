@@ -106,7 +106,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 	inbox := Inbox{
 		Self:         self,
 		SelfID:       t.deps.sessionID(ctx),
-		InheritedIDs: t.inheritedIDs(),
+		InheritedIDs: t.deps.inheritedIDs(ctx),
 		Root:         t.deps.workspace(ctx),
 		Policy:       policy,
 		Workspace:    func() *collab.Store { return t.deps.storeIfExists(ctx) },
@@ -157,15 +157,6 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, something claimed it first — a " +
 		"session_start here, or another session if it was addressed to \"next\".\n" + notice
-}
-
-// inheritedIDs are the predecessor identities this session may also read for,
-// or nil when it did not come back through the authenticated reconnect path.
-func (t *CheckMessages) inheritedIDs() []string {
-	if t.deps.InheritedSessionIDs == nil {
-		return nil
-	}
-	return t.deps.InheritedSessionIDs()
 }
 
 // receiptTimeout bounds the outbox read. It shares the delivery budget's

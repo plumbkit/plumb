@@ -266,7 +266,7 @@ func TestContestedPin_RemedyStopsLeadingWithForce(t *testing.T) {
 	if berr == nil {
 		t.Fatal("a path in a third project must still be refused")
 	}
-	if !strings.Contains(berr.Error(), "identify yourself with session_start.session_id") {
+	if !strings.Contains(berr.Error(), tools.PerCallIdentityRemedy) {
 		t.Errorf("contested boundary error does not name the real remedy: %v", berr)
 	}
 	if strings.Contains(berr.Error(), "retry with force: true") {
@@ -336,7 +336,9 @@ func TestContestedPin_MarksHealthWhenUnmarked(t *testing.T) {
 	if got != "contested_pin" {
 		t.Errorf("health = %q, want contested_pin", got)
 	}
-	if !strings.Contains(msg, "session_start.session_id") {
-		t.Errorf("health message gives the operator no next step: %q", msg)
+	for _, want := range []string{"plumb hooks install claude-code", "one plumb serve per agent"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("health message gives the operator no next step (%q): %q", want, msg)
+		}
 	}
 }

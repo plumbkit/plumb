@@ -502,7 +502,7 @@ func (t *RenameSymbol) recordRenameWrites(ctx context.Context, plans []workspace
 		return
 	}
 	for _, p := range plans {
-		deps.recordWritten(ctx, p.path)
+		deps.recordWritten(ctx, p.path, p.written)
 		deps.recordUndo(ctx, p.path, string(p.before), string(p.after), true, "rename_symbol")
 	}
 }

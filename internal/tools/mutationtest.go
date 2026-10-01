@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -29,24 +28,10 @@ import (
 // compile a _test.go suffix as a test file.
 //
 // Concurrency: Execute is safe for concurrent use. Each run holds the shared
-// mutationRunLock (one mutation run per daemon) and, per mutant, the per-path
-// lock every write tool uses, so no other plumb write can interleave with the
-// mutate → verify → restore cycle.
-
-// mutationRunLock serialises mutation runs across the whole daemon process.
-//
-// PROCESS-GLOBAL BY DESIGN, like pathLocks in file_write_helpers.go, and for
-// the same reason: the state being protected is the machine, not a session.
-// Tool instances are per-connection, so a field on MutationTest would let two
-// agents mutate the same working tree at once and read each other's breakage as
-// their own result — a mutant reported `survived` only because a peer's mutant
-// was the thing failing the suite. A mutation run also monopolises the build
-// and test toolchain (compiler cache, test binaries, ports), so serialising
-// daemon-wide is correct rather than merely convenient.
-//
-// TryLock, not Lock: queueing behind a suite that may run for minutes is worse
-// than an immediate, explicit refusal the agent can act on.
-var mutationRunLock sync.Mutex
+// mutationRun slot (one mutation run per daemon; mutationtest_slot.go) and, per
+// mutant, the per-path lock every write tool uses, so no other plumb write can
+// interleave with the mutate → verify → restore cycle. sessNameFor/sessIDFor
+// are set once at registration and only read afterwards.
 
 // MutationOutcome classifies one mutant's run. The three values are exhaustive
 // and deliberately few; the WHY of an invalid result lives in its reason.
@@ -94,6 +79,10 @@ const (
 type MutationTest struct {
 	deps    WriteDeps
 	resolve TaskResolverFn
+	// sessNameFor / sessIDFor name the calling session for the slot's holder
+	// record (WithSession); nil leaves a refusal naming only the workspace.
+	sessNameFor func(ctx context.Context) string
+	sessIDFor   func(ctx context.Context) string
 }
 
 // NewMutationTest constructs the tool. resolve is the same stored-task resolver
@@ -131,6 +120,10 @@ var mutationTestSchema = json.RawMessage(`{
       "type": "string",
       "description": "Optional value for the test command's {target} placeholder — THE way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). The shipped go/python/rust test defaults carry a defaulted placeholder, so this works with no config edit; a hand-written test command needs a {target} token of its own or the target is refused. Scoping matters: each mutant costs a full compile+test cycle, so the whole suite per mutant is the difference between minutes and tens of minutes. One shell-safe argument ([A-Za-z0-9._/:@-])."
     },
+    "test_run": {
+      "type": "string",
+      "description": "Optional test-name filter for the test command's {run} placeholder (go -run, pytest -k), to run only the tests that should kill the mutants, e.g. TestFoo|TestBar. Same rules as run_task's run."
+    },
     "compile_task": {
       "type": "string",
       "description": "Which stored slot proves the mutant COMPILES before its tests are trusted. Default \"build\". It always runs unscoped (no {target}) — a whole-module compile catches breakage a scoped test never reaches. Cannot be disabled: without it a non-compiling mutant looks exactly like a kill. The built-ins are build, lint, test, e2e and verify; a project-defined slot works here too."
@@ -153,80 +146,13 @@ func (*MutationTest) Description() string {
 	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
 		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
 		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, did not compile, could not be started, or timed out — it proves nothing and is NEVER reported as a kill; that false kill is why the compile gate exists). " +
-		"Scope the run with test_target, which fills the stored test command's {target} placeholder (topology_affected says which tests to name). " +
+		"Scope the run with test_target ({target}; topology_affected says which package) and test_run (the {run} test-name filter). " +
 		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
 		"They run from the git work-tree holding the mutated file: a file in another worktree of the commands' repository re-roots them there (same relative working_dir). Mutants spanning work-trees, or in a linked worktree they can't move into, are refused, never run on the wrong tree. " +
 		"Restoration is guaranteed on every exit path (including panic and cancellation): the pre-mutation bytes are snapshotted, rewritten under the per-path lock, and SHA-256-verified before the run is reported clean. " +
 		"It REFUSES a file with uncommitted changes (untracked included), no override — a clean file means `git checkout` recovers it if the daemon dies mid-run. " +
 		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant reads as killed for a reason unrelated to it. The refusal says which: suite red, timed out, or could not start — only the first is about your code. " +
 		"One mutation run at a time per daemon; a second call is refused rather than queued."
-}
-
-type mutantSpec struct {
-	Path  string `json:"file_path"`
-	Old   string `json:"old_string"`
-	New   string `json:"new_string"`
-	Label string `json:"label"`
-}
-
-type mutationTestArgs struct {
-	Mutants     []mutantSpec `json:"mutants"`
-	TestTask    string       `json:"test_task"`
-	TestTarget  string       `json:"test_target"`
-	CompileTask string       `json:"compile_task"`
-	TimeoutSecs int          `json:"timeout_seconds"`
-}
-
-// withDefaults returns a copy with the unset slots filled. A value receiver
-// keeps every method on mutationTestArgs consistent (recvcheck), and the
-// defaults stay stated in one readable place.
-func (a mutationTestArgs) withDefaults() mutationTestArgs {
-	if a.TestTask == "" {
-		a.TestTask = "test"
-	}
-	if a.CompileTask == "" {
-		a.CompileTask = "build"
-	}
-	if a.TimeoutSecs == 0 {
-		a.TimeoutSecs = int(defaultTaskTimeout / time.Second)
-	}
-	return a
-}
-
-func (a mutationTestArgs) validate() error {
-	if len(a.Mutants) == 0 {
-		return errors.New("mutation_test: mutants is required (at least one {file_path, old_string, new_string})")
-	}
-	if len(a.Mutants) > maxMutants {
-		return fmt.Errorf("mutation_test: %d mutants exceeds the limit of %d — each costs a full compile+test cycle", len(a.Mutants), maxMutants)
-	}
-	if !taskSlotName.MatchString(a.TestTask) {
-		return fmt.Errorf("mutation_test: test_task %q is not a valid slot name; the built-ins are build, lint, test, e2e, verify", a.TestTask)
-	}
-	if !taskSlotName.MatchString(a.CompileTask) {
-		return fmt.Errorf("mutation_test: compile_task %q is not a valid slot name; the built-ins are build, lint, test, e2e, verify", a.CompileTask)
-	}
-	if a.TestTarget != "" && !targetPattern.MatchString(a.TestTarget) {
-		return fmt.Errorf("mutation_test: test_target %q is not a single shell-safe argument ([A-Za-z0-9._/:@-])", a.TestTarget)
-	}
-	if a.TimeoutSecs < 0 || a.TimeoutSecs > maxMutationStepSeconds {
-		return fmt.Errorf("mutation_test: timeout_seconds must be between 1 and %d; got %d", maxMutationStepSeconds, a.TimeoutSecs)
-	}
-	return validateMutantSpecs(a.Mutants)
-}
-
-func validateMutantSpecs(specs []mutantSpec) error {
-	for i, m := range specs {
-		switch {
-		case strings.TrimSpace(m.Path) == "":
-			return fmt.Errorf("mutation_test: mutant %d: file_path is required", i+1)
-		case m.Old == "":
-			return fmt.Errorf("mutation_test: mutant %d: old_string is required (the exact text to mutate)", i+1)
-		case m.Old == m.New:
-			return fmt.Errorf("mutation_test: mutant %d: new_string equals old_string — that mutates nothing and would report a meaningless survival", i+1)
-		}
-	}
-	return nil
 }
 
 // mutationPlan is the resolved, ready-to-run command pair for a whole run. Both
@@ -259,11 +185,14 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	if !mutationRunLock.TryLock() {
-		return "", errors.New("mutation_test: another mutation run is already in progress on this daemon — " +
-			"concurrent runs would read each other's breakage as their own result. Wait for it to finish and retry")
+	if holder, ok := mutationRun.tryAcquire(t.holder(ctx, len(args.Mutants))); !ok {
+		return "", holder.busyError(time.Now())
 	}
-	defer mutationRunLock.Unlock()
+	defer mutationRun.release()
+	// Deferred after release, so it runs FIRST: the watcher is stopped before
+	// the slot is handed on.
+	ctx, cancel := cancelOnDisconnect(ctx)
+	defer cancel()
 
 	targets, warnings, err := t.preflight(ctx, args.Mutants)
 	if err != nil {
@@ -289,15 +218,7 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if restoreErr != nil {
 		return "", fmt.Errorf("%w\n\nresults before the failure:\n%s", restoreErr, report)
 	}
-	return report, nil
-}
-
-func parseMutationTestArgs(raw json.RawMessage) (mutationTestArgs, error) {
-	var a mutationTestArgs
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return a, fmt.Errorf("mutation_test: invalid arguments: %w", err)
-	}
-	return a.withDefaults(), nil
+	return report + skippedNote(len(results), len(targets)), nil
 }
 
 // resolvePlan resolves both stored commands up front. The compile command is
@@ -314,7 +235,7 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 	// compile gate and test command are the ones for the language that file is
 	// written in. run_task's language argument exists to reach a sibling
 	// language's commands; pointing a mutant's gate at one would prove nothing.
-	compile, err := t.resolve(ctx, a.CompileTask, "", "")
+	compile, err := t.resolve(ctx, TaskRequest{Slot: a.CompileTask})
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the compile gate (%s): %w", a.CompileTask, err)
 	}
@@ -323,7 +244,7 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 			"Without that proof a non-compiling mutant is indistinguishable from a kill, so the run is refused rather than reported unverifiably. "+
 			"Configure [tasks.<lang>] %s, or point compile_task at a slot that does compile", a.CompileTask, a.CompileTask)
 	}
-	test, err := t.resolve(ctx, a.TestTask, a.TestTarget, "")
+	test, err := t.resolve(ctx, TaskRequest{Slot: a.TestTask, Target: a.TestTarget, Run: a.TestRun})
 	if err != nil {
 		return mutationPlan{}, fmt.Errorf("mutation_test: resolving the test command (%s): %w", a.TestTask, err)
 	}
@@ -333,7 +254,7 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 	return mutationPlan{
 		compile: compile,
 		test:    test,
-		target:  a.TestTarget,
+		target:  testScopeLabel(a.TestTarget, a.TestRun),
 		timeout: time.Duration(a.TimeoutSecs) * time.Second,
 	}, nil
 }
@@ -367,10 +288,12 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 // It returns the plan with goWorkOff recorded from what the commands actually ran
 // with, for the report header.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) (mutationPlan, error) {
+	mutationRun.atStep(stepCompile)
 	compile := t.runStep(ctx, plan.compile, plan.timeout)
 	if compile.failed() {
 		return plan, t.baselineError(ctx, plan, plan.compile, compile, roleCompile)
 	}
+	mutationRun.atStep(stepTest)
 	test := t.runStep(ctx, plan.test, plan.timeout)
 	if test.failed() {
 		return plan, t.baselineError(ctx, plan, plan.test, test, roleTest)

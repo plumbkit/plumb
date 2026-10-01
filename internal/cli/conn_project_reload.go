@@ -24,25 +24,36 @@ func (s *connSession) trackProjectWatch(workspace string) {
 	if s.projectWatches == nil || workspace == "" {
 		return
 	}
-	// A closing session must not re-acquire: a dispatch that captured this
-	// session's reload hook just before registry removal can fire after close
-	// has run, and an acquire here would leak a watcher reference nobody
-	// releases. Releases stay unguarded — close cancels s.ctx BEFORE
-	// releaseProjectWatch runs.
+	canonical := paths.Canonical(workspace)
+	// Fast path: this session already holds canonical's reference.
+	if s.view().projectWatchRoot == canonical {
+		return
+	}
+	// A closing session must not re-acquire: a reload dispatch that captured
+	// this session's hook just before registry removal can fire after close.
+	// A cheap early out only; the authoritative check is mutateLive below.
 	if s.ctx != nil && s.ctx.Err() != nil {
 		return
 	}
-	canonical := paths.Canonical(workspace)
+	// Acquire BEFORE publishing, and outside the lane: acquire waits for the
+	// OS watcher to attach, and no lane may block on filesystem setup. Then
+	// publish under mutateLive. If close() took the lane first, drop our own
+	// reference; if we got there first, close() reads canonical and releases
+	// it. Either way no reference outlives the session (issue #514). The old
+	// order — publish, then acquire — let close() release a key whose acquire
+	// had not happened yet, and the acquire then leaked.
+	s.projectWatches.acquire(canonical)
 	var prev string
-	s.mutate(func(v *sessionView) {
+	live := s.mutateLive(func(v *sessionView) {
 		prev = v.projectWatchRoot
 		v.projectWatchRoot = canonical
 	})
-	if prev == canonical {
-		return
-	}
-	s.projectWatches.acquire(canonical)
-	if prev != "" {
+	switch {
+	case !live:
+		s.projectWatches.release(canonical)
+	case prev == canonical:
+		s.projectWatches.release(canonical) // a concurrent track already held it
+	case prev != "":
 		s.projectWatches.release(prev)
 	}
 }

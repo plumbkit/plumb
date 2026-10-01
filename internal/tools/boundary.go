@@ -102,12 +102,15 @@ func (p PinProvenance) DisplacementNotice(path string) string {
 	if !p.At.IsZero() {
 		when = " " + humaniseAge(time.Since(p.At)) + " ago"
 	}
+	remedy := " To keep each agent's pin separate, " + PerCallIdentityRemedy + "."
+	if p.Contested {
+		remedy = "" // repinAdvice carries the same remedy in the contested case; say it once
+	}
 	return fmt.Sprintf(
 		"NOTE: this connection was force-re-pinned away from %s%s by a session_start on this same connection. "+
 			"If that was not you, another agent is multiplexing this `plumb serve` without declaring an identity, "+
-			"and re-pinning back would displace it in turn — pass session_start.session_id on every call so plumb "+
-			"can keep each agent's pin separate, or run one `plumb serve` per agent.",
-		p.Previous, when,
+			"and re-pinning back would displace it in turn.%s",
+		p.Previous, when, remedy,
 	)
 }
 
@@ -175,9 +178,8 @@ func (e WorkspaceBoundaryError) Error() string {
 func (e WorkspaceBoundaryError) repinAdvice() string {
 	if e.Provenance.Contested {
 		return "this connection's pin has already been force-taken back and forth between projects, " +
-			"so forcing again would displace whoever holds it now: identify yourself with " +
-			"session_start.session_id, or run one `plumb serve` per agent — use force: true only if " +
-			"you are certain no other agent is using this connection"
+			"so forcing again would displace whoever holds it now. Instead, " + PerCallIdentityRemedy +
+			"; use force: true only if you are certain no other agent is using this connection"
 	}
 	return "if the re-pin is refused because an explicit session_start pin already holds this connection, " +
 		"identify yourself first (session_start.session_id, or on Claude Code the identity hook) so a shared connection gives you a pin of your own, " +

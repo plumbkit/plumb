@@ -33,7 +33,8 @@ func realToolServer() *mcp.Server {
 	s.Register(tools.NewFindFiles(nil))
 	s.Register(tools.NewFindReplace())
 	s.Register(tools.NewSearchInFiles(nil, nil, nil, 0))
-	s.Register(tools.NewTasks(tools.WriteDeps{}, func(_ context.Context, slot, _, _ string) (tools.TaskCommand, error) {
+	s.Register(tools.NewTasks(tools.WriteDeps{}, func(_ context.Context, req tools.TaskRequest) (tools.TaskCommand, error) {
+		slot := req.Slot
 		return tools.TaskCommand{}, fmt.Errorf("resolver saw slot=%s", slot)
 	}))
 	return s

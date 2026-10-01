@@ -67,3 +67,61 @@ func (s *connSession) lspDiagMode() string {
 	}
 	return s.sessionProxy.DiagMode("")
 }
+
+// The ...In accessors below are what session_start renders from. Each answers
+// for the language server serving ws — the workspace session_start resolved for
+// the CALLING agent — rather than for the connection's primary: on a shared
+// connection a subagent pinned to a worktree is served by the worktree's server,
+// and was told the main checkout's GOWORK, warm-up and diagnostics mode, or the
+// reverse (issue #546). ws naming the connection's own root keeps the primary
+// path, so a single-agent connection renders exactly as before.
+
+// lspServerIn names the language whose server serves ws and whether it has
+// started. The connection's own root reports its attached primary, as before.
+// Any other — a subagent's own pin — has a server only once a call has been
+// routed there: the per-agent re-pin starts none, so on the subagent's first
+// session_start nothing is running to be ready (PR #559 review B2).
+func (s *connSession) lspServerIn(ws string) (string, bool) {
+	if s.servesConnectionRoot(ws) {
+		l := s.acquiredLanguageName()
+		return l, l != ""
+	}
+	return s.sessionProxy.WorkspaceServer(ws)
+}
+
+// lspWarmingIn is lspWarming for the server serving ws.
+func (s *connSession) lspWarmingIn(ws string) (bool, time.Duration) {
+	if s.servesConnectionRoot(ws) {
+		return s.lspWarming()
+	}
+	return s.sessionProxy.WorkspaceWarmup(ws)
+}
+
+// lspDiagModeIn is lspDiagMode for the server serving ws.
+func (s *connSession) lspDiagModeIn(ws string) string {
+	if s.servesConnectionRoot(ws) {
+		return s.lspDiagMode()
+	}
+	return s.sessionProxy.WorkspaceDiagMode(ws)
+}
+
+// lspGoWorkOffIn returns the go.work the server serving ws was started with
+// GOWORK=off against, or "" when none was switched off. session_start names it,
+// so an agent in a worktree knows why the server answers about the worktree and
+// not the checkout its go.work lists (#521).
+func (s *connSession) lspGoWorkOffIn(ws string) string {
+	if s.servesConnectionRoot(ws) {
+		if s.acquiredLanguageName() == "" {
+			return ""
+		}
+		return s.sessionProxy.GoWorkOff("")
+	}
+	return s.sessionProxy.GoWorkOff(ws)
+}
+
+// servesConnectionRoot reports whether ws is answered by the connection's
+// primary server: it is the connection's own root (or unresolved), or there is
+// no routing proxy to ask about any other.
+func (s *connSession) servesConnectionRoot(ws string) bool {
+	return ws == "" || ws == s.workspace() || s.sessionProxy == nil
+}

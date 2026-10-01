@@ -66,6 +66,7 @@ const (
 	skGitPush
 	skGitCommitTrailer
 	skGitWriteTimeout
+	skGitDetachAfter
 	skCacheTTL
 	skCacheMaxSize
 	skLSPTimeout
@@ -228,6 +229,7 @@ var (
 	lspTimeoutOptions      = []string{"0s", "10s", "30s", "1m", "2m"}
 	xcodeTimeoutOptions    = []string{"30s", "1m", "2m", "5m", "10m"}
 	gitWriteTimeoutOptions = []string{"1m", "2m", "5m", "10m", "20m"}
+	gitDetachAfterOptions  = []string{"15s", "30s", "45s", "50s"}
 	pathStyleOptions       = []string{"compact", "truncate-middle", "full"}
 	qualityModeOptions     = []string{"background", "sync"}
 )
@@ -317,6 +319,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Git", label: "Git commit trailer", kind: settingToggle, key: skGitCommitTrailer, value: onOff(cfg.Git.CommitTrailer)},
 		{group: "Git", label: "Protected branches", kind: settingList, key: skProtectedBranches, value: listSummary(cfg.Git.ProtectedBranches), list: cfg.Git.ProtectedBranches},
 		{group: "Git", label: "Write timeout", kind: settingCycle, key: skGitWriteTimeout, value: durValue(cfg.Git.WriteTimeout, gitWriteTimeoutOptions), options: gitWriteTimeoutOptions},
+		{group: "Git", label: "Detach after", kind: settingCycle, key: skGitDetachAfter, value: durValue(cfg.Git.DetachAfter, gitDetachAfterOptions), options: gitDetachAfterOptions},
 
 		{group: "Session", label: "Idle threshold (min)", kind: settingNumber, key: skIdleThresholdMin, value: itoa(cfg.Session.IdleThresholdMinutes)},
 		{group: "Session", label: "Eviction TTL (min)", kind: settingNumber, key: skEvictionTTLMin, value: itoa(cfg.Session.EvictionTTLMinutes)},

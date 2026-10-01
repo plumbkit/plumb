@@ -14,12 +14,13 @@ import (
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
-// repinnedFrom is the rendered re-pin line (repinAnnouncement), or "".
-func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinnedFrom string, linked bool, stampNote string) {
+// ws is the root the CALLER resolves against, which after a scope:
+// "connection" re-pin by an agent holding its own pin is not the connection's
+// new root (issue #517). repinLine is the rendered re-pin block
+// (repinAnnouncement), or "".
+func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inheritedName, repinLine string, linked bool, stampNote string) {
 	fmt.Fprintf(sb, "# Workspace: %s\n\n", ws)
-	if repinnedFrom != "" {
-		sb.WriteString(repinnedFrom)
-	}
+	sb.WriteString(repinLine)
 	if lang != "" {
 		fmt.Fprintf(sb, "Language: %s\n", lang)
 	}
@@ -31,8 +32,9 @@ func (t *SessionStart) writeSessionIdentity(sb *strings.Builder, ws, lang, inher
 			fmt.Fprintf(sb, "%s\n", note)
 		}
 	}
-	if branch := gitBranch(ws); branch != "" {
-		fmt.Fprintf(sb, "Branch:   %s\n", branch)
+	sb.WriteString(t.lspGoWorkNote(ws))
+	if head := gitHeadLabel(ws); head != "" {
+		fmt.Fprintf(sb, "Branch:   %s\n", head)
 	}
 	refuse := t.refuseFn != nil && t.refuseFn()
 	if skip, _ := fsguard.RefuseWalk(ws, refuse); !skip {
@@ -73,7 +75,7 @@ func (t *SessionStart) contestedPinNote() string {
 	}
 	return "NOTE: this connection's workspace pin has been force-taken between projects more than once — several agents are " +
 		"multiplexing one `plumb serve` without declaring an identity, so plumb cannot keep their pins, read-tracking or " +
-		"undo state apart. Pass session_start.session_id on every call, or run one `plumb serve` per agent. Confirm the " +
+		"undo state apart. To fix it, " + PerCallIdentityRemedy + ". Confirm the " +
 		"workspace above is yours before a relative-path write.\n"
 }
 
@@ -134,22 +136,25 @@ func uncoveredPrimaryLanguageNote(lang string) string {
 // with no language server and no topology index, where `find_files` and
 // `search_in_files` are the only discovery left, and where Claude Desktop in
 // particular has no native search to fall back on.
-func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, hasErrors bool, lang, lspKey string) {
+func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, ws string, hasErrors bool, lang, lspKey string) {
 	sb.WriteString("## Recommended first step\n\n")
 	switch {
 	case hasErrors:
 		sb.WriteString("Active errors detected — start with `diagnostics` to review them.\n\n")
-	case t.writeLSPWarming(sb):
+	case t.writeLSPWarming(sb, ws):
 		// warming advisory already written
-	case t.lspAttached():
-		// Warming was checked first, so attached here means the handshake is
+	case t.lspServerStarted(ws):
+		// Warming was checked first, so started here means the handshake is
 		// complete — "ready" is a guarantee, not a hope. A non-default diagnostics
 		// mode (anything but push) is noted so the agent knows what was negotiated.
-		if mode := t.lspDiagMode(); mode != "" && mode != "push" {
+		// Both are asked of the server serving ws, the caller's own (#546).
+		if mode := t.lspDiagMode(ws); mode != "" && mode != "push" {
 			fmt.Fprintf(sb, "LSP is ready (diagnostics: %s) — use `workspace_symbols` to survey the codebase.\n\n", mode)
 		} else {
 			sb.WriteString("LSP is ready — use `workspace_symbols` to survey the codebase.\n\n")
 		}
+	case t.writeLSPNotStarted(sb, ws):
+		// not-started advisory already written
 	case t.writeLSPRouted(sb):
 		// routed advisory already written
 	case t.topologyActive():
@@ -220,13 +225,13 @@ func (t *SessionStart) writeLSPRouted(sb *strings.Builder) bool {
 	return true
 }
 
-// writeLSPWarming writes a warm-up advisory when the primary language server is
-// attached but its handshake has not finished, and reports whether it did. A
+// writeLSPWarming writes a warm-up advisory when the language server serving ws
+// is attached but its handshake has not finished, and reports whether it did. A
 // cold server (rust-analyzer running cargo metadata, a large gopls module) can
 // take minutes; meanwhile the tree-sitter index already answers, so the agent is
 // steered there rather than into a semantic tool that would block on the warm-up.
-func (t *SessionStart) writeLSPWarming(sb *strings.Builder) bool {
-	warming, elapsed := t.lspWarming()
+func (t *SessionStart) writeLSPWarming(sb *strings.Builder, ws string) bool {
+	warming, elapsed := t.lspWarming(ws)
 	if !warming {
 		return false
 	}
@@ -325,9 +330,9 @@ func writeSessionSubmodules(sb *strings.Builder, ws string) {
 // so an agent learns up front whether it can commit through the git tool —
 // rather than discovering it via a rejected call or, worse, trusting a stale
 // memory and shelling out. Nil-safe (skipped when unwired) and only emitted
-// inside a git repository (gitBranch is the cheap repo-presence signal).
+// inside a git repository (gitHeadLabel is the cheap repo-presence signal).
 func (t *SessionStart) writeSessionGitPolicy(sb *strings.Builder, ws string) {
-	if t.gitPolicyFn == nil || gitBranch(ws) == "" {
+	if t.gitPolicyFn == nil || gitHeadLabel(ws) == "" {
 		return
 	}
 	sb.WriteString("## Git (via the `git` tool — live policy)\n\n")
