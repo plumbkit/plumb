@@ -32,16 +32,29 @@ type globalConfigWatcher struct {
 	dir      string
 	base     string
 	debounce time.Duration
+	// newWatcher builds each OS watcher: fsnotify.NewWatcher, or a test's
+	// wrapper that captures each watcher it builds.
+	newWatcher func() (*fsnotify.Watcher, error)
+	// recreateInterval is watcherRecreateInterval; tests widen it so "lost
+	// again straight away" does not depend on scheduling.
+	recreateInterval time.Duration
+	// testErrs is a test seam: an error sent on it reaches Run exactly as if
+	// the OS watcher had reported it. Nil in production (a nil channel never
+	// fires in a select).
+	testErrs chan error
 }
 
 // newGlobalConfigWatcher builds a watcher for the resolved global config path.
 func newGlobalConfigWatcher(store *config.Store) *globalConfigWatcher {
 	path := config.GlobalConfigPath()
 	return &globalConfigWatcher{
-		store:    store,
-		dir:      filepath.Dir(path),
-		base:     filepath.Base(path),
-		debounce: 250 * time.Millisecond,
+		store:      store,
+		dir:        filepath.Dir(path),
+		base:       filepath.Base(path),
+		debounce:   250 * time.Millisecond,
+		newWatcher: fsnotify.NewWatcher,
+
+		recreateInterval: watcherRecreateInterval,
 	}
 }
 
@@ -56,20 +69,19 @@ func shouldReload(eventName, base string, op fsnotify.Op) bool {
 
 // Run watches the config directory until ctx is cancelled. A watcher that
 // cannot be created or attached is logged and degraded to a no-op (the daemon
-// still runs; the control-socket reload-config path remains available).
+// still runs; the control-socket reload-config path remains available). A
+// watcher that loses its own descriptor at runtime is recreated in place (see
+// recreateLost). Run returns only after its OS watcher is closed.
 func (w *globalConfigWatcher) Run(ctx context.Context) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("creating config watcher: %w", err)
-	}
-	defer watcher.Close()
-
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return fmt.Errorf("creating config dir for watch: %w", err)
 	}
-	if err := watcher.Add(w.dir); err != nil {
-		return fmt.Errorf("watching config dir %s: %w", w.dir, err)
+	watcher, err := w.open()
+	if err != nil {
+		return err
 	}
+	// A closure, not a plain defer: recreateLost swaps the watcher.
+	defer func() { closeFSWatcher(watcher) }()
 	slog.Info("daemon: watching global config for changes", "dir", w.dir, "file", w.base)
 
 	timer := time.NewTimer(w.debounce)
@@ -78,6 +90,7 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 	}
 	defer timer.Stop()
 
+	var recreatedAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -91,11 +104,79 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 			if !ok {
 				return nil
 			}
-			slog.Warn("daemon: config watcher error", "err", err)
+			if watcher, err = w.onError(watcher, err, &recreatedAt, timer); err != nil {
+				return err
+			}
+		case err := <-w.testErrs:
+			if watcher, err = w.onError(watcher, err, &recreatedAt, timer); err != nil {
+				return err
+			}
 		case <-timer.C:
 			w.reload()
 		}
 	}
+}
+
+// onError handles one watcher error and returns the watcher to carry on
+// with. A lost watcher is recreated (recreateLost) and a reload scheduled,
+// because the file may have changed while it was blind; a non-nil error
+// means recreating failed or was refused, and ends Run. Any other error is
+// only logged, as it always was.
+func (w *globalConfigWatcher) onError(watcher *fsnotify.Watcher, err error, recreatedAt *time.Time, timer *time.Timer) (*fsnotify.Watcher, error) {
+	if !fsWatcherLost(err) {
+		slog.Warn("daemon: config watcher error", "err", err)
+		return watcher, nil
+	}
+	next, err := w.recreateLost(watcher, err, *recreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	*recreatedAt = time.Now()
+	rearmProjectTimer(timer, w.debounce)
+	return next, nil
+}
+
+// open creates the OS watcher on the config directory. An attach that fails
+// because a descriptor was closed underneath it (fsWatcherLost) says nothing
+// about the directory, so it gets one immediate second attempt.
+func (w *globalConfigWatcher) open() (*fsnotify.Watcher, error) {
+	watcher, err := w.openOnce()
+	if fsWatcherLost(err) {
+		watcher, err = w.openOnce()
+	}
+	return watcher, err
+}
+
+func (w *globalConfigWatcher) openOnce() (*fsnotify.Watcher, error) {
+	watcher, err := w.newWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("creating config watcher: %w", err)
+	}
+	if err := watcher.Add(w.dir); err != nil {
+		closeFSWatcher(watcher)
+		return nil, fmt.Errorf("watching config dir %s: %w", w.dir, err)
+	}
+	return watcher, nil
+}
+
+// recreateLost replaces a watcher that lost its own descriptor, which would
+// otherwise never deliver another event while its reader spins on the same
+// error. The old watcher is always closed first — before the replacement
+// opens, so the replacement cannot be handed the number the old reader closes
+// on its way out. A watcher lost again within recreateInterval of the
+// last recreate is not a one-off, so that returns an error instead: the
+// global hot reload stops, as it does when the watcher cannot start.
+func (w *globalConfigWatcher) recreateLost(old *fsnotify.Watcher, cause error, last time.Time) (*fsnotify.Watcher, error) {
+	closeFSWatcher(old)
+	if !last.IsZero() && time.Since(last) < w.recreateInterval {
+		return nil, fmt.Errorf("config watcher lost again straight after a recreate: %w", cause)
+	}
+	next, err := w.open()
+	if err != nil {
+		return nil, fmt.Errorf("recreating lost config watcher: %w", err)
+	}
+	slog.Warn("daemon: config watcher lost its OS handle — recreated", "err", cause)
+	return next, nil
 }
 
 // onEvent re-arms the debounce timer when an event refers to the config file.
