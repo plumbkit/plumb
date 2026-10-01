@@ -1,16 +1,12 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
-	"net"
+	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -74,9 +70,19 @@ func claudeIdentity(sessionID, agentID string) string {
 }
 
 // claudePreToolUseOutput builds the hook's stdout document for one PreToolUse
-// event, or reports false when the call must be left untouched. It is pure:
-// the environment and the daemon check are injected so every branch is
-// testable without a daemon.
+// event, or reports false when the call must be left untouched. It is
+// claudePreToolUseDecision without the reason, for callers that only need to
+// know whether a stamp was made.
+func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daemon func() identityProbeRecord) (map[string]any, bool) {
+	out, _ := claudePreToolUseDecision(input, env, daemon)
+	return out, out != nil
+}
+
+// claudePreToolUseDecision is the pure core of the PreToolUse hook: the
+// environment and the daemon check are injected so every branch is testable
+// without a daemon. It returns the stdout document, or nil plus the reason the
+// call is left unstamped. An empty reason with a nil document is a call that
+// was never the hook's business (a foreign tool), which has nothing to report.
 //
 // The matcher is not trusted: users edit settings.json, and a hook that
 // stamped a non-plumb tool would hand a foreign server an argument it never
@@ -84,24 +90,24 @@ func claudeIdentity(sessionID, agentID string) string {
 // derived identity, so a subagent never needs to remember one and a
 // model-typed value ("subagent-7") cannot become a phantom third identity that
 // clobbers the connection's linkage.
-func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daemon func() identityProbeRecord) (map[string]any, bool) {
-	if strings.EqualFold(strings.TrimSpace(env(claudeIdentityKillSwitch)), "off") {
-		return nil, false
-	}
+func claudePreToolUseDecision(input claudeHookInput, env func(string) string, daemon func() identityProbeRecord) (map[string]any, string) {
 	if !strings.HasPrefix(input.ToolName, claudeIdentityPrefix) {
-		return nil, false
+		return nil, ""
+	}
+	if strings.EqualFold(strings.TrimSpace(env(claudeIdentityKillSwitch)), "off") {
+		return nil, claudeIdentityKillSwitch + "=off"
 	}
 	id := claudeIdentity(input.SessionID, input.AgentID)
 	if id == "" {
-		return nil, false
+		return nil, "the hook input carries no session_id"
 	}
 	args, ok := decodeHookToolInput(input.ToolInput)
 	if !ok {
-		return nil, false
+		return nil, "tool_input is not a JSON object"
 	}
-	key := identityStampKey(daemon)
+	key, why := identityStampDecision(daemon)
 	if key == "" {
-		return nil, false
+		return nil, why
 	}
 	// The hook owns the identity: drop whatever the model typed under EITHER
 	// key before stamping one. The daemon prefers the reverse-DNS key, so a
@@ -118,7 +124,31 @@ func claudePreToolUseOutput(input claudeHookInput, env func(string) string, daem
 			"hookEventName": "PreToolUse",
 			"updatedInput":  orderedRawObject(args),
 		},
-	}, true
+	}, ""
+}
+
+// runClaudePreToolUse is the PreToolUse command body: one JSON document on
+// stdout, or nothing at all, and always a clean exit — only exit 2 blocks a
+// call, and an unstamped call is the client's own behaviour, not a failure.
+//
+// A call left unstamped leaves one line on stderr naming the reason, the tool
+// and its tool_use_id. Claude Code shows a successful hook's stderr only in its
+// debug output, so this costs a normal session nothing, and it is the one place
+// a missing stamp can be told apart afterwards: a hook that ran and found no
+// stamp to give says so here, while a call with no line was one Claude Code
+// never ran the hook for (a tool it loaded late through ToolSearch, say).
+func runClaudePreToolUse(input claudeHookInput, env func(string) string, daemon func() identityProbeRecord, stdout, stderr io.Writer) {
+	out, why := claudePreToolUseDecision(input, env, daemon)
+	if out != nil {
+		_ = json.NewEncoder(stdout).Encode(out)
+		return
+	}
+	if why != "" {
+		// %q on the ids and a collapse of the reason keep this one line however
+		// odd the input or the error text is.
+		fmt.Fprintf(stderr, "plumb identity hook: left the call unstamped: tool_name=%q tool_use_id=%q reason=%s\n",
+			input.ToolName, input.ToolUseID, strings.Join(strings.Fields(why), " "))
+	}
 }
 
 // decodeHookToolInput parses tool_input into raw values so every original key
@@ -182,18 +212,47 @@ func mustJSONString(s string) []byte {
 // predates the argument channel rejects every stamped call as an unknown
 // parameter, which would turn an upgrade into a total plumb outage until the
 // restart. So the stamp is gated on what the running daemon reports over the
-// control socket — its version, and the identity keys it lifts — cached for a
-// minute: one probe (two dials) per minute per machine, not one per tool call.
+// control socket — its version, and the identity keys it lifts — cached per
+// daemon instance: one probe per ten minutes per machine, not one per tool
+// call, and one dial of it against a current daemon.
 
 const (
 	// identityChannelMinVersion is the first plumb whose daemon lifts the
 	// argument-carried identity out of tools/call arguments.
 	identityChannelMinVersion = "0.19.1"
-	identityProbeTTL          = time.Minute
-	identityProbeTimeout      = 300 * time.Millisecond
+
+	// identityProbeTTL is how long a cached answer is served without asking the
+	// daemon again. The cache is already keyed on the daemon instance (see
+	// daemonInstanceMarker), so a daemon that is restarted or swapped is a miss
+	// at once whatever the age; the TTL only bounds how long a record outlives a
+	// change the marker somehow could not see. It was a minute, which meant the
+	// first call after any pause in a session paid a cold probe, and a cold probe
+	// under load is exactly where the hook used to fail open. Ten minutes keeps
+	// the cache warm across an agent's ordinary think-time and review pauses
+	// while a missed change still heals inside one sitting.
+	identityProbeTTL = 10 * time.Minute
+
+	// The probe's time limits. The hook's own timeout is 5 s (claudeHookEntries),
+	// and a hook killed by it leaves the call unstamped and gets no chance to
+	// fall back to the cache, so the probe has to finish well inside it:
+	//
+	//   - identityProbeDialTimeout and identityProbeReplyTimeout are the two
+	//     phases of one ask, a second each. They were 300 ms each, which a
+	//     machine at full CPU (the daemon's accept loop and this process both
+	//     starved of a time slice) misses often: 11 of 200 parallel hooks got no
+	//     stamp in the measurement behind issue #556. A second is long enough
+	//     for a starved but alive daemon and short enough that one wedged ask
+	//     cannot hold a tool call.
+	//   - identityProbeBudget caps the whole probe at three seconds, however many
+	//     asks it makes, leaving at least a second and a half of the five for
+	//     process start-up, the cache read and write, and the output.
+	identityProbeDialTimeout  = time.Second
+	identityProbeReplyTimeout = time.Second
+	identityProbeBudget       = 3 * time.Second
+
 	// identityProbeCacheFile is new with the declared-key probe: a hook binary
 	// from before it writes records with no declared_key to the old name, and
-	// sharing that file would have the new hook read them as "no" for a minute.
+	// sharing that file would have the new hook read them as "no" for the TTL.
 	identityProbeCacheFile = "daemon-identity-keys.json"
 )
 
@@ -215,8 +274,12 @@ type identityProbeRecord struct {
 	CheckedAt      time.Time `json:"checked_at"`
 	// uncertain marks an answer whose identity-keys probe failed on I/O (not
 	// a real "no"): it is used for this call but not cached, so the next call
-	// asks again instead of stripping stamps for a minute.
+	// asks again instead of stripping stamps for the whole TTL.
 	uncertain bool
+	// probeFailure is why daemonIdentity could produce no answer at all — the
+	// probe's error, when no cached record could stand in — kept so the hook's
+	// breadcrumb can say what went wrong. Never written to the cache.
+	probeFailure string
 }
 
 // claudeIdentityDaemon is the production gate: what the running daemon
@@ -232,25 +295,53 @@ func claudeIdentityDaemon() identityProbeRecord {
 // says it lifts that key gets it: an older one rejects it as an unknown
 // parameter.
 func identityStampKey(daemon func() identityProbeRecord) string {
+	key, _ := identityStampDecision(daemon)
+	return key
+}
+
+// identityStampDecision is identityStampKey plus, when the key is "", the
+// reason: the hook's breadcrumb reports it.
+func identityStampDecision(daemon func() identityProbeRecord) (key, why string) {
 	if daemon == nil {
-		return ""
+		return "", "no daemon check is wired in"
 	}
 	rec := daemon()
 	if !daemonVersionAcceptsStamp(rec.DaemonVersion) {
-		return ""
+		if strings.TrimSpace(rec.DaemonVersion) == "" {
+			why = "the daemon's version is unknown"
+			if rec.probeFailure != "" {
+				why += ": " + rec.probeFailure + ", and no cached answer belongs to this daemon instance"
+			}
+			return "", why
+		}
+		return "", fmt.Sprintf("the daemon is %s, which predates the identity channel (needs %s)", rec.DaemonVersion, identityChannelMinVersion)
 	}
 	if rec.DeclaredKey {
-		return mcp.ArgLogicalAgentDeclaredKey
+		return mcp.ArgLogicalAgentDeclaredKey, ""
 	}
-	return mcp.ArgLogicalAgentKey
+	return mcp.ArgLogicalAgentKey, ""
 }
 
 // daemonIdentity returns what the daemon reports — its version and whether it
 // lifts the declared key — from the cache when it is fresh AND was written for
-// the same daemon instance, otherwise from probe, refreshing the cache. Every
-// failure (no daemon, a daemon too old to answer, an unreadable cache) is the
-// zero record, which no threshold accepts: an unstamped call is what the
-// client would have sent anyway.
+// the same daemon instance, otherwise from probe, refreshing the cache.
+//
+// A probe that fails does not discard what is already known. The cache is
+// keyed on the instance, so a record written for THIS instance describes this
+// very process, whose version and identity keys cannot have changed since; it
+// is served however old it is, the way a stale DNS answer is when the resolver
+// is down. The probe fails exactly when the daemon is busiest — a saturated
+// machine starves its accept loop, and on macOS a full listen queue answers
+// ECONNREFUSED, which reads as "no daemon" — and answering "unknown" there
+// would leave a call unstamped on a connection that refuses unstamped writes.
+// A record for a DIFFERENT instance is never served: that is a swapped daemon,
+// possibly an older build that rejects the stamp, and the one thing the cache
+// must not do is vouch for a process it did not ask. An answer the probe could
+// only half give (uncertain) yields to such a record for the same reason.
+//
+// With no cache to stand in, every failure (no daemon, a daemon too old to
+// answer, an unreadable cache) is a record with no version, which no threshold
+// accepts: an unstamped call is what the client would have sent anyway.
 //
 // instance is the daemonInstanceMarker the caller read before calling, and it
 // must be read before the probe: the probe then answers for that instance or
@@ -259,18 +350,27 @@ func identityStampKey(daemon func() identityProbeRecord) string {
 // hit. An empty instance (the marker was unreadable) never hits and is never
 // written: without it the cache cannot tell one daemon from the next.
 func daemonIdentity(probe func() (identityProbeRecord, error), instance, cachePath string, now time.Time) identityProbeRecord {
-	if rec, ok := readIdentityProbe(cachePath); ok && instance != "" && rec.DaemonInstance == instance &&
-		now.Sub(rec.CheckedAt) < identityProbeTTL && now.After(rec.CheckedAt) {
-		return rec
+	cached, haveCache := readIdentityProbe(cachePath)
+	sameInstance := haveCache && instance != "" && cached.DaemonInstance == instance
+	if sameInstance && now.Sub(cached.CheckedAt) < identityProbeTTL && now.After(cached.CheckedAt) {
+		return cached
 	}
 	if probe == nil {
-		return identityProbeRecord{}
+		return identityProbeRecord{probeFailure: "no daemon probe is wired in"}
 	}
 	rec, err := probe()
-	if err != nil {
-		return identityProbeRecord{}
-	}
-	if rec.uncertain || instance == "" {
+	switch {
+	case err != nil:
+		if sameInstance {
+			return cached
+		}
+		return identityProbeRecord{probeFailure: err.Error()}
+	case rec.uncertain:
+		if sameInstance {
+			return cached
+		}
+		return rec
+	case instance == "":
 		return rec
 	}
 	rec.CheckedAt = now
@@ -355,110 +455,3 @@ func writeIdentityProbe(path string, rec identityProbeRecord) {
 	}
 	_ = fsync.AtomicWrite(path, data, fsync.Options{Label: "hooks"})
 }
-
-// probeDaemonVersion asks the running daemon its version over the control
-// socket (`version`, added with the channel — an older daemon answers with an
-// unknown-command error, which reads as "too old"). Bounded by a dial and a
-// read deadline so a wedged daemon cannot hold a tool call for the hook's
-// whole timeout.
-//
-// The failure is CLASSIFIED rather than flattened, because the two kinds have
-// opposite remedies and a third has neither. No socket (or one refusing
-// connections) is a daemon that is not running: it starts on the next `plumb
-// serve` and stamping resumes by itself. An answer that is not a version is a
-// daemon that predates the channel: it needs `plumb restart`. Anything else —
-// a permission error on the socket, a dial timeout against a wedged listener,
-// a short read — observed no version at all, and saying either of the first
-// two would be a guess dressed as a fact.
-func probeDaemonVersion() (string, error) {
-	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
-	if err != nil {
-		return "", classifyDialError(err)
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
-	if _, err := conn.Write([]byte("version\n")); err != nil {
-		return "", fmt.Errorf("asking the daemon its version: %w", err)
-	}
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("reading the daemon's version reply: %w", err)
-	}
-	return parseDaemonVersionReply(line)
-}
-
-// probeDaemonIdentity asks the daemon its version and, separately, which
-// identity argument keys it lifts. A daemon that predates `identity-keys`
-// answers "unknown command", which reads as "not the declared key" — the safe
-// answer, since such a daemon would reject it.
-func probeDaemonIdentity() (identityProbeRecord, error) {
-	version, err := probeDaemonVersion()
-	if err != nil {
-		return identityProbeRecord{}, err
-	}
-	declared, err := probeDaemonDeclaredKey()
-	return identityProbeRecord{DaemonVersion: version, DeclaredKey: declared, uncertain: err != nil}, nil
-}
-
-// probeDaemonDeclaredKey reports whether the daemon's `identity-keys` answer
-// lists mcp.ArgLogicalAgentDeclaredKey. A reply without it — including an
-// older daemon's "unknown command" — is a real "no". An I/O failure is an
-// error: the caller treats it as "no" for this call only (the safe key) and
-// does not cache it.
-func probeDaemonDeclaredKey() (bool, error) {
-	conn, err := net.DialTimeout("unix", daemonCtrlSocketPath(), identityProbeTimeout)
-	if err != nil {
-		return false, err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(identityProbeTimeout))
-	if _, err := conn.Write([]byte(ctrlIdentityKeysCommand + "\n")); err != nil {
-		return false, err
-	}
-	line, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil {
-		return false, err
-	}
-	return identityKeysReplyHasDeclared(line), nil
-}
-
-// identityKeysReplyHasDeclared parses `ok <key> <key>...`.
-func identityKeysReplyHasDeclared(line string) bool {
-	rest, ok := strings.CutPrefix(strings.TrimSpace(line), "ok ")
-	if !ok {
-		return false
-	}
-	return slices.Contains(strings.Fields(rest), mcp.ArgLogicalAgentDeclaredKey)
-}
-
-// classifyDialError separates "there is no daemon" from "there is something
-// there and plumb could not talk to it". Only a missing socket file and a
-// refused connection mean the daemon is down; a permission error, a dial
-// timeout against a wedged listener and anything else observed no such thing,
-// and the caller must not be told to wait for a start that already happened.
-func classifyDialError(err error) error {
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
-		return errDaemonNotRunning
-	}
-	return fmt.Errorf("dialling the daemon control socket: %w", err)
-}
-
-// parseDaemonVersionReply accepts the `version` command's `ok <version>` line
-// and treats anything else — an `error: unknown command` from an older daemon
-// included — as no answer.
-func parseDaemonVersionReply(line string) (string, error) {
-	line = strings.TrimSpace(line)
-	if v, ok := strings.CutPrefix(line, "ok "); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v), nil
-	}
-	return "", errDaemonVersionUnknown
-}
-
-// The two ways a probe fails are told apart because their remedies differ:
-// a daemon that is not running starts on the next `plumb serve` and stamping
-// resumes by itself, while one that answers but predates the channel needs
-// `plumb restart`.
-var (
-	errDaemonNotRunning     = errors.New("no daemon is listening on the control socket")
-	errDaemonVersionUnknown = errors.New("the daemon did not report a version, so it predates the identity channel")
-)
