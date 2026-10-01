@@ -182,11 +182,22 @@
   declared, an unidentified call still resolves against the connection's
   pin, as before.
 
-- **`session_start` no longer claims it re-pinned the connection.** It
-  printed "Re-pinned this connection" even when only the calling agent's own
-  pin moved; it now prints `Re-pinned: <from> → <to>`. The no-identity
-  notices, `plumb doctor`'s shared-connection fix and the client instruction
-  templates now describe the current refusal rule.
+- **`session_start` says which pin a re-pin moved, and where your next
+  relative path goes.** It printed "Re-pinned this connection" even when only
+  the calling agent's own pin moved. It also never said when an anonymous
+  re-pin on a shared connection moved the other agents' workspaces with it. With
+  `scope: "connection"`, an agent holding its own pin was shown its own root as
+  "from", and the header named the connection's new root although the agent's
+  relative paths still resolved against its own. The daemon now reports which
+  pin it moved, that pin's previous root and how many other agents followed it.
+  Both the full and the brief packet print "Re-pinned your pin" or "Re-pinned
+  this connection's pin (N other agents follow it)", plus a line naming what the
+  caller's next relative-path call resolves against. The `# Workspace:` header
+  names the caller's own root. Two callers racing to the same root no longer
+  both report moving the pin. A connection-scoped move now also clears the
+  caller's own refused-declaration marker. The no-identity notices,
+  `plumb doctor`'s shared-connection fix and the client instruction templates
+  now describe the current refusal rule. Closes #517.
 
 - **Agent identity now reaches plumb through Claude desktop's connector, and a
   worktree edit no longer lands in another checkout.** Claude desktop runs one

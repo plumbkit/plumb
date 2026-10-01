@@ -71,7 +71,8 @@ func TestRepinRestore_SameRootStillAttaches(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	root, err := s.repinWorkspaceFrom(context.Background(), sub, "", sessionstate.PinSourceSessionStart, pinTriggerRestore, false)
+	rootRep, err := s.repinWorkspaceFrom(context.Background(), sub, "", sessionstate.PinSourceSessionStart, pinTriggerRestore, false)
+	root := rootRep.root
 	if err != nil {
 		t.Fatalf("repinWorkspaceFrom: %v", err)
 	}
@@ -95,7 +96,8 @@ func TestRepinLive_StillResolvesSubdirToRoot(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxyX")
 	defer s.close()
-	root, err := s.repinWorkspaceFrom(context.Background(), sub, "", sessionstate.PinSourceSessionStart, pinTriggerLive, false)
+	rootRep, err := s.repinWorkspaceFrom(context.Background(), sub, "", sessionstate.PinSourceSessionStart, pinTriggerLive, false)
+	root := rootRep.root
 	if err != nil {
 		t.Fatalf("a live re-pin of a markerless subdirectory must still resolve to its enclosing root: %v", err)
 	}
