@@ -22,8 +22,19 @@ func TestGlobalConfigWatcher_ReloadsOnFileChange(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go func() { _ = newGlobalConfigWatcher(store).Run(ctx) }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = newGlobalConfigWatcher(store).Run(ctx)
+	}()
+	// Wait for Run to close its watcher before the temp dir it watches is
+	// removed: deleting a watched tree while fsnotify's kqueue Close runs can
+	// close a descriptor twice and break whatever reuses the number (see
+	// closeFSWatcher). Deferred, so it runs before the t.TempDir clean-up.
+	defer func() {
+		cancel()
+		<-done
+	}()
 	time.Sleep(150 * time.Millisecond) // let the directory watch attach
 
 	if err := config.Save(func(c *config.Config) { c.Edits.Strict = true }); err != nil {
