@@ -399,7 +399,7 @@ func TestGit_ADeviceGoWorkDoesNotStallTheDaemon(t *testing.T) {
 
 // TestGit_EveryHookRunningVerbGetsTheAutomaticGoWork walks the verbs that run a
 // repository hook — commit, rebase, cherry-pick, merge, push — through the tool
-// in the failing shape and reads what each hook saw. execGitCmd is the single
+// in the failing shape and reads what each hook saw. startGitCmd is the single
 // seam all of them share; this is the evidence that none of them reaches git
 // around it. The merge is --no-ff so that it makes a commit and so runs
 // pre-merge-commit (a `pull` that merges is a network-tier verb and takes the

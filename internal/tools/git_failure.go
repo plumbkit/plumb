@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -87,6 +88,27 @@ func gitCommandError(repoRoot, sub string, argv []string, runErr error, stdout, 
 	return toolerror.New(toolerror.KindGitCommandFailed, errors.New(body),
 		gitCommandRemediation(stdout, stderr, goWorkOff),
 		gitFailureDetails(sub, runErr, truncated)...)
+}
+
+// failure renders a child's run error.
+//
+// A child plumb itself killed must not be reported as a refusal by git.
+// execCtx is decoupled from ctx (context.WithoutCancel) for exactly the
+// mutating tiers, so a DeadlineExceeded here can ONLY be the bound
+// beginSerialisedGit applied — never the caller's deadline, and never a daemon
+// shutdown. Without this branch a SIGKILLed child (ExitCode() == -1) rendered as
+// `git commit: exit code -1` under a remediation stating that no plumb setting
+// changes the outcome, which inverts the truth: it was plumb's bound, and [git]
+// write_timeout is the setting.
+//
+// The warning is attached here too, not just on the success path: a failure is
+// exactly when a peer's claim ("rebasing ops main") is most likely to be the
+// explanation, and the query cost was already paid.
+func (r *gitChildRun) failure(err error) error {
+	if r.mutating() && errors.Is(r.execCtx.Err(), context.DeadlineExceeded) {
+		return gitWriteTimeoutError(r.repoRoot, r.sub, r.argv, r.child.writeTimeout(), r.stdout.String(), r.stderr.String(), r.warning)
+	}
+	return gitCommandError(r.repoRoot, r.sub, r.argv, err, r.stdout.String(), r.stderr.String(), r.warning, r.goWorkOff)
 }
 
 // goWorkOffNote tells the reader of a failed git child that plumb ran it with

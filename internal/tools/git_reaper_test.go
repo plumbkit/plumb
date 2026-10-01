@@ -124,7 +124,7 @@ func TestBeginSerialisedGit_RefusedWhileDraining(t *testing.T) {
 	gitWriteDraining.Store(true)
 	t.Cleanup(func() { gitWriteDraining.Store(false) })
 
-	_, cleanup, err := beginSerialisedGit(context.Background(), t.TempDir(), "commit", tierWrite, testLockWait)
+	_, cleanup, err := beginSerialisedGit(context.Background(), t.TempDir(), "commit", tierWrite, testLockWait, testLockWait)
 	if err == nil {
 		if cleanup != nil {
 			cleanup()

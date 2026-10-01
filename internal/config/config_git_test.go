@@ -161,3 +161,27 @@ func TestLoadProject_GitEnvProjectValueWinsOverGlobal(t *testing.T) {
 		t.Errorf("composing wrote back into the caller's base config: %v", base.Git.Env)
 	}
 }
+
+// TestGitDetachAfter_DefaultEnvAndValidation pins [git] detach_after (#549):
+// the default sits below the 60s call timeout MCP clients commonly apply, the
+// environment overrides it, and a negative value is refused at load.
+func TestGitDetachAfter_DefaultEnvAndValidation(t *testing.T) {
+	if got := Defaults().Git.DetachAfter.Duration; got != 45*time.Second {
+		t.Errorf("default git.detach_after = %s, want 45s", got)
+	}
+
+	t.Setenv("PLUMB_GIT_DETACH_AFTER", "20s")
+	got, err := LoadProject(Defaults(), t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadProject with env: %v", err)
+	}
+	if got.Git.DetachAfter.Duration != 20*time.Second {
+		t.Errorf("env git.detach_after = %s, want 20s", got.Git.DetachAfter.Duration)
+	}
+
+	cfg := Defaults()
+	cfg.Git.DetachAfter = Duration{-time.Second}
+	if err := validate(cfg); err == nil || !strings.Contains(err.Error(), "git.detach_after") {
+		t.Errorf("a negative git.detach_after must be refused naming the key, got %v", err)
+	}
+}

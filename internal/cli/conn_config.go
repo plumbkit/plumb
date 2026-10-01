@@ -567,5 +567,6 @@ func gitPolicyFrom(c config.GitConfig) tools.GitPolicy {
 		CommitTrailer:     c.CommitTrailer,
 		Env:               c.Env,
 		WriteTimeout:      c.WriteTimeout.Duration,
+		DetachAfter:       c.DetachAfter.Duration,
 	}
 }
