@@ -39,8 +39,8 @@
 
 ### Fixed
 
-- **`make test`, `make test-race` and `make cover` no longer rely on `go
-  test`'s 10-minute default timeout.** The `internal/cli` package alone has
+- **`make test`, `make test-race`, `make cover` and `make integration-test`
+  no longer stop `go test` at 10 minutes.** The `internal/cli` package alone has
   come within a second of it on a loaded machine, so a slow CI runner could
   fail on time rather than on a test. They now take `GO_TEST_TIMEOUT`
   (default `20m`).
