@@ -25,3 +25,19 @@ func (s *connSession) mutateLive(fn func(v *sessionView)) (live bool) {
 	})
 	return live
 }
+
+// mutateIf is mutate gated on a predicate evaluated INSIDE the lane, against the
+// view the change would be made to, and reports whether fn ran. A check made
+// before the lane describes a view another change may since have replaced; this
+// one cannot be stale, because nothing else commits between it and fn. A nil ok
+// always runs fn. ok must not take the lane.
+func (s *connSession) mutateIf(ok func(v *sessionView) bool, fn func(v *sessionView)) (ran bool) {
+	s.mutate(func(v *sessionView) {
+		if ok != nil && !ok(v) {
+			return
+		}
+		ran = true
+		fn(v)
+	})
+	return ran
+}

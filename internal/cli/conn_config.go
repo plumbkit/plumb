@@ -33,6 +33,19 @@ import (
 // through applies the global config in full — not just [git], but every block
 // the previous project could have set.
 func (s *connSession) applyProjectConfig(workspace string) {
+	s.applyProjectConfigIf(workspace, nil)
+}
+
+// applyProjectConfigIf is applyProjectConfig for a caller that decided to apply
+// from an earlier read of the view. The config is loaded off the lane, as ever,
+// so that read can be stale by the time the swap commits: a re-pin that settles
+// in between has applied ITS root, and this apply would put the old project's
+// git tiers, edits, collab and path policy back on a connection now pinned to
+// the new one, and point the project config watcher at the old root (#558).
+// stillTarget is therefore re-asked inside the lane; when it is false the apply
+// is skipped whole, side effects included. A nil stillTarget always applies
+// (attach, re-pin and reload apply the root they just moved to).
+func (s *connSession) applyProjectConfigIf(workspace string, stillTarget func(v *sessionView) bool) {
 	if workspace == "" {
 		return
 	}
@@ -76,11 +89,14 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	if info, statErr := os.Stat(configPath); statErr == nil {
 		cfgMtime = info.ModTime()
 	}
+	if s.beforeConfigCommit != nil {
+		s.beforeConfigCommit()
+	}
 	// One mutation: swap the four config blocks, seed the config mtime, and rebuild
 	// the boundary policy eagerly (configured roots may have changed). muMutate
 	// subsumes the former applyMu — the lane already serialises config apply across
 	// attach / the 30s poll / the global-config subscription.
-	s.mutate(func(v *sessionView) {
+	applied := s.mutateIf(stillTarget, func(v *sessionView) {
 		// Diff BEFORE the swap: a change in the collaboration capability switches
 		// is surfaced to the agent on its next tool result / session_start, so a
 		// newly granted (or revoked) mailbox / cross-project consent is never
@@ -110,6 +126,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		}
 		v.policy = s.buildPathPolicy(v)
 	})
+	if !applied {
+		return
+	}
 	// The [lsp.<lang>] block is resolved by the pool, not held in the view: it
 	// decides which language servers this workspace may run, which is a
 	// daemon-wide pool question rather than a per-session one. Dropping the pool's
@@ -119,23 +138,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// primary never resolved re-detects instead of waiting for its next attach.
 	s.invalidatePoolLanguages(workspace)
 	s.writeLimiter.SetLimit(projectCfg.Edits.RateLimitPerMinute)
-	if projectCfg.Edits.Strict != base.Edits.Strict ||
-		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
-		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
-		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
-		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
-		projectCfg.Git.AllowPush != base.Git.AllowPush ||
-		projectCfg.Git.CommitTrailer != base.Git.CommitTrailer {
-		s.log().Info("daemon: project config applied",
-			"workspace", workspace,
-			"strict", projectCfg.Edits.Strict,
-			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
-			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
-			"git.allow_writes", projectCfg.Git.AllowWrites,
-			"git.allow_destructive", projectCfg.Git.AllowDestructive,
-			"git.allow_push", projectCfg.Git.AllowPush,
-			"git.commit_trailer", projectCfg.Git.CommitTrailer)
-	}
+	s.logProjectConfigApplied(workspace, projectCfg, base)
 	// The workspace is now known (attach / re-pin / reload all funnel here), so
 	// link the per-(client, workspace) shared write budget. Idempotent.
 	s.bindWriteLimiterParent()
@@ -180,6 +183,29 @@ func (s *connSession) applyProjectConfig(workspace string) {
 	// client to re-list when the resolved profile changed. Runs after the mutate
 	// above has returned, so it holds no lock when it calls view()/mutate().
 	s.maybeNotifyToolProfileChange()
+}
+
+// logProjectConfigApplied leaves the apply breadcrumb, but only when the project
+// config moved something a user debugging "my project config does nothing" would
+// look for: edits, the home-root refusal or a git tier differing from the global.
+func (s *connSession) logProjectConfigApplied(workspace string, projectCfg, base config.Config) {
+	if projectCfg.Edits.Strict != base.Edits.Strict ||
+		projectCfg.Edits.RateLimitPerMinute != base.Edits.RateLimitPerMinute ||
+		projectCfg.Walk.RefuseHomeRoots != base.Walk.RefuseHomeRoots ||
+		projectCfg.Git.AllowWrites != base.Git.AllowWrites ||
+		projectCfg.Git.AllowDestructive != base.Git.AllowDestructive ||
+		projectCfg.Git.AllowPush != base.Git.AllowPush ||
+		projectCfg.Git.CommitTrailer != base.Git.CommitTrailer {
+		s.log().Info("daemon: project config applied",
+			"workspace", workspace,
+			"strict", projectCfg.Edits.Strict,
+			"rate_limit_per_minute", projectCfg.Edits.RateLimitPerMinute,
+			"refuse_home_roots", projectCfg.Walk.RefuseHomeRoots,
+			"git.allow_writes", projectCfg.Git.AllowWrites,
+			"git.allow_destructive", projectCfg.Git.AllowDestructive,
+			"git.allow_push", projectCfg.Git.AllowPush,
+			"git.commit_trailer", projectCfg.Git.CommitTrailer)
+	}
 }
 
 // logProjectPolicy leaves the attach-time breadcrumb for a workspace whose
