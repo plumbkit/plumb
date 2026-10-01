@@ -81,19 +81,25 @@
   cancels them: `--end-of-options` ends options as `--` does, a later
   `--no-list` or `--no-staged` cancels the earlier flag, and `-v` no longer
   counts as branch list mode, so `branch -fv side main` cannot force-move a
-  branch at the read tier. `switch -C`, `checkout -B`, `branch -f`, `branch -M`
-  and `tag -f` are destructive when the ref they name already exists, because
-  they move or replace it like `reset --keep`. Creating a new ref with them
-  stays a write, but only for a plain name given once: the option appears one
-  time, and the name is ASCII letters, digits and `. _ - /` with no `@`, `{`
-  or `..`, that `git check-ref-format` accepts and prints back unchanged, and
-  that does not exist yet. git expands `@{-1}`, `@{u}`, `@{push}` and
-  `<branch>@{upstream}` to a real local branch before it acts, and keeps the
+  branch at the read tier. `checkout -B`, `switch -C` and `tag -f` are
+  destructive when the ref they name already exists, because they move or
+  replace it like `reset --keep`, and a write when the name is new. Creating a
+  new ref with them stays a write, but only for a plain name given once: the
+  option appears one time, and the name is ASCII letters, digits and `. _ - /`
+  with no `@`, `{` or `..`, that `git check-ref-format` accepts and prints back
+  unchanged, and that does not exist yet. git expands `@{-1}`, `@{u}`, `@{push}`
+  and `<branch>@{upstream}` to a real local branch before it acts, and keeps the
   last of a repeated `-B`, so the call could reset a branch the existence check
   never looked at; those stay destructive, as does a call git cannot answer
-  for. `branch -M` is `--move --force` and used to be a write that overwrote
-  its target. Branch's upstream and description options are writes.
-  (#530)
+  for. Every forced `git branch` form (`-f`, `--force`, `-M`, `-C`, `-D`) is
+  destructive whether or not the branch exists: branch's option grammar defeated
+  each attempt to tell a creation from a reset (`--no-move` cancels the mode
+  that picks which argument is the name, `-C` inside a bundle such as `-qC`
+  slips past the global-flag denylist that refuses only a bare `-C`, and
+  `--recurse-submodules` resets the submodules' branch of the same name too).
+  `branch -M` is `--move --force` and `-C` is `--copy --force`, and both used to
+  be a write that overwrote their target. Branch's upstream and description
+  options are writes. (#530)
 - **Plumb's own git operations are no longer reported as a peer's edits.** After
   a `switch`, `merge`, `restore`, `stash pop` or similar through the `git` tool,
   the next `read_file` of a file plumb had written warned that "a peer or

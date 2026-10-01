@@ -939,16 +939,22 @@ them.
   exists (on a new one it is a write).
 - `restore --staged` (index only) is **write**; `restore --worktree` (or no
   flag) is **destructive**.
-- `branch`/`tag`: creating or renaming (`-m`) is **write**, as are branch's
-  upstream and description options; `--delete`/`-d`/`-D` is **destructive**, and
-  so is `-f`/`--force`, or `-M` (`--move --force`), when the named branch or tag
-  already exists (a new one is a write); list mode
-  (`--list`/`-a`/`-r`/`--contains`/…, or no arguments) is **read**, and a later
-  `--no-list` cancels it. `-v` alone does not list once a name is given.
+- `branch`: creating, renaming (`-m`) or copying (`--copy`) is **write**, as are
+  the upstream and description options. Every forced form is **destructive**
+  whether or not the branch exists: `-f`/`--force`, `-M` (`--move --force`),
+  `-C` (`--copy --force`, also inside a bundle such as `-qC`) and
+  `-D`/`-d`/`--delete`. List mode (`--list`/`-a`/`-r`/`--contains`/…, or no
+  arguments) is **read**, and a later `--no-list` cancels it. `-v` alone does
+  not list once a name is given.
+- `tag`: creating is **write**; `--delete`/`-d` is **destructive**, and so is
+  `-f`/`--force` when the tag already exists (on a new one it is a write); list
+  mode is **read**.
 - `--end-of-options` ends option parsing exactly as `--` does.
-- A `-C`/`-B`/`-f`/`-M` call is lowered to **write** only when the tool can
-  show it creates a ref. The option appears exactly once, however it is
-  spelled, because git keeps the last of a repeated `-B`. The name is plain:
+- A `checkout -B`, `switch -C` or `tag -f` call is lowered to **write** only
+  when the tool can show it creates a ref; `branch` is never lowered, because
+  its option grammar defeated every attempt to tell a creation from a reset. The
+  option appears exactly once, however it is spelled, because git keeps the last
+  of a repeated `-B`. The name is plain:
   ASCII letters, digits and `.` `_` `-` `/`, with no leading `-`, no `@` or `{`,
   no `..`, and not ending in `.lock` or `/`, because git expands `@{-1}`,
   `@{u}`, `@{push}` and `<branch>@{upstream}` to an existing branch. `git

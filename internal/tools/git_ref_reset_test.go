@@ -8,8 +8,11 @@ import (
 	"testing"
 )
 
-// git_ref_reset_test.go pins that resetting an EXISTING ref is destructive
-// while creating a new one with the same flags stays a write (#540 review).
+// git_ref_reset_test.go pins that `checkout -B`, `switch -C` and `tag -f` are
+// destructive when they reset an EXISTING ref and a write when they create a
+// new one, and that every forced `git branch` form is destructive whether or
+// not the name exists (#540 review: branch's option grammar defeated the
+// lowering in each of four rounds, so branch is not lowered at all).
 
 // stubRefs is a refProbe over a fixed set of existing refs. Its plainName
 // answers plain, so a row isolates the allowlist and the existence check: what
@@ -43,8 +46,9 @@ func TestRefineRefReset(t *testing.T) {
 		{"switch", []string{"--force-create=feat", "origin/main"}, known, tierWrite},
 		{"checkout", []string{"-B", "feat"}, known, tierWrite},
 		{"checkout", []string{"-B", "feat", "origin/main"}, known, tierWrite},
-		{"branch", []string{"-f", "feat"}, known, tierWrite},
-		{"branch", []string{"--force", "feat", "main"}, known, tierWrite},
+		// branch is never lowered: a forced form is destructive for a new name too.
+		{"branch", []string{"-f", "feat"}, known, tierDestructive},
+		{"branch", []string{"--force", "feat", "main"}, known, tierDestructive},
 		{"tag", []string{"-f", "v9"}, known, tierWrite},
 		{"tag", []string{"-f", "-m", "v1", "v9"}, known, tierWrite},
 		{"tag", []string{"--for", "v9"}, known, tierWrite},
@@ -109,7 +113,7 @@ func TestRefineRefReset(t *testing.T) {
 		// Controls: plain names, including the characters the allowlist admits.
 		{"checkout", []string{"-B", "feat/x-1_2.3", "main"}, known, tierWrite},
 		{"switch", []string{"--force-create", "Feature/ABC-123"}, known, tierWrite},
-		{"branch", []string{"-f", "a.b/c_d-e", "main"}, known, tierWrite},
+		{"branch", []string{"-f", "a.b/c_d-e", "main"}, known, tierDestructive},
 		{"tag", []string{"-f", "v1.2.3-rc.1"}, known, tierWrite},
 
 		// B2 (#540 round 3): git keeps the LAST -B, but the form read only the
@@ -139,25 +143,115 @@ func TestRefineRefReset(t *testing.T) {
 		// A "-B" that is another option's value is not a second reset flag.
 		{"checkout", []string{"-B", "newb", "--conflict", "-B", "main"}, known, tierWrite},
 
-		// N1 (#540 round 3): -M is --move --force, so it overwrites the target
-		// like -f does, and is lowered only for a new name, like -f.
+		// -M is --move --force, so it overwrites the target like -f does. A forced
+		// branch form is destructive whether or not the name exists (see
+		// TestRefineRefReset_BranchIsNeverLowered for the full set).
 		{"branch", []string{"-M", "main", "side"}, known, tierDestructive},
 		{"branch", []string{"-M", "side"}, known, tierDestructive},
 		{"branch", []string{"-M", "main", "@{-1}"}, known, tierDestructive},
-		{"branch", []string{"-M", "main", "feat"}, known, tierWrite},
-		{"branch", []string{"-M", "feat"}, known, tierWrite},
+		{"branch", []string{"-M", "main", "feat"}, known, tierDestructive},
+		{"branch", []string{"-M", "feat"}, known, tierDestructive},
 		{"branch", []string{"-f", "-m", "main", "side"}, known, tierDestructive},
-		{"branch", []string{"-f", "--move", "main", "feat"}, known, tierWrite},
+		{"branch", []string{"-f", "--move", "main", "feat"}, known, tierDestructive},
 		{"branch", []string{"-f", "--copy", "main", "side"}, known, tierDestructive},
-		{"branch", []string{"-f", "--copy", "main", "feat"}, known, tierWrite},
+		{"branch", []string{"-f", "--copy", "main", "feat"}, known, tierDestructive},
 		{"branch", []string{"-M", "main", "side", "extra"}, known, tierDestructive},
 		{"branch", []string{"-M", "-d", "feat"}, known, tierDestructive},
 		{"branch", []string{"-Mq", "main", "feat"}, known, tierDestructive},
+
+		// B1 (#540 round 4): a negation cancels the move/copy mode, so git resets
+		// the FIRST positional while the lowering probed the last (a start point).
+		{"branch", []string{"-f", "--move", "--no-move", "side", "tip"}, known, tierDestructive},
+		{"branch", []string{"-f", "--copy", "--no-copy", "side", "tip"}, known, tierDestructive},
+		{"branch", []string{"-f", "-m", "--no-move", "side", "tip"}, known, tierDestructive},
+		{"branch", []string{"-f", "-qm", "--no-mo", "side", "tip"}, known, tierDestructive},
+		// B2 (#540 round 4): -C is --copy --force, and git reads it inside a bundle
+		// where the global-flag denylist, which matches the bare token, does not.
+		{"branch", []string{"-C", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-qC", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-vC", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-Cq", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-iC", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-qC", "--", "main", "side"}, known, tierDestructive},
+		{"branch", []string{"-qC", "main", "feat"}, known, tierDestructive},
+		// N1 (#540 round 4): --recurse-submodules makes -f reset the submodules'
+		// branch of that name as well, which the superproject probe never asks about.
+		{"branch", []string{"-f", "--recurse-submodules", "newb", "main"}, known, tierDestructive},
 	}
 	for _, c := range cases {
 		got := refineRefReset(c.sub, c.args, classifyGit(c.sub, c.args), c.probe)
 		if got != c.want {
 			t.Errorf("%s %q: tier %s, want %s", c.sub, c.args, gitTierNames[got], gitTierNames[c.want])
+		}
+	}
+}
+
+// TestRefineRefReset_BranchIsNeverLowered pins the cut that ended #540's review
+// loop: every `git branch` form that classifyBranch rates destructive stays
+// destructive, whether or not the name exists and whatever the probe answers.
+// Four rounds each found a spelling that git's option grammar read as one mode
+// and the lowering read as another (round 4: `--no-move`, and `-C` in a
+// bundle), so branch is not lowered at all.
+func TestRefineRefReset_BranchIsNeverLowered(t *testing.T) {
+	// The most permissive probes: nothing exists and every name is plain, or
+	// the names exist already.
+	fresh := stubRefs(nil, true, nil)
+	known := stubRefs(map[string]bool{"refs/heads/main": true, "refs/heads/side": true}, true, nil)
+	for _, args := range [][]string{
+		{"-f", "newb"},
+		{"-f", "newb", "main"},
+		{"--force", "newb", "main"},
+		{"--for", "newb", "main"},
+		{"-M", "newb"},
+		{"-M", "main", "newb"},
+		{"--move", "--force", "main", "newb"},
+		{"-f", "--move", "main", "newb"},
+		{"--copy", "--force", "main", "newb"},
+		{"-f", "--copy", "main", "newb"},
+		{"-C", "main", "newb"},
+		{"-D", "newb"},
+		{"-d", "newb"},
+		{"--delete", "newb"},
+		// B1: git resets the first positional, the start point is the last.
+		{"-f", "--move", "--no-move", "side", "tip"},
+		{"-f", "--copy", "--no-copy", "side", "tip"},
+		{"-f", "-m", "--no-move", "side", "tip"},
+		{"-f", "-qm", "--no-mo", "side", "tip"},
+		{"-f", "--move", "--no-move", "newb", "main"},
+		// B2: -C inside a bundle, and after the end of options.
+		{"-qC", "main", "side"},
+		{"-vC", "main", "side"},
+		{"-Cq", "main", "side"},
+		{"-iC", "main", "side"},
+		{"-qC", "--", "main", "side"},
+		{"-qC", "main", "newb"},
+		// N1: the submodules' branch of that name is reset too.
+		{"-f", "--recurse-submodules", "newb", "main"},
+	} {
+		if got := classifyGit("branch", args); got != tierDestructive {
+			t.Errorf("classifyGit(branch %q) = %s, want destructive", args, gitTierNames[got])
+		}
+		for name, probe := range map[string]*refProbe{"fresh": fresh, "known": known, "no probe": nil} {
+			if got := refineRefReset("branch", args, tierDestructive, probe); got != tierDestructive {
+				t.Errorf("branch %q with a %s probe: tier %s, want destructive", args, name, gitTierNames[got])
+			}
+		}
+		if _, ref, ok := refResetForm("branch", args); ok {
+			t.Errorf("refResetForm(branch %q) = %q: branch has no lowering form", args, ref)
+		}
+	}
+	// Controls: a branch call that creates, renames or copies without forcing is
+	// a write, so the table above is about --force and not about every branch
+	// call that names something.
+	for _, args := range [][]string{
+		{"newb"},
+		{"newb", "main"},
+		{"-m", "main", "newb"},
+		{"--copy", "main", "newb"},
+		{"-qc", "main", "newb"}, // lower-case -c copies without forcing
+	} {
+		if got := classifyGit("branch", args); got != tierWrite {
+			t.Errorf("classifyGit(branch %q) = %s, want write", args, gitTierNames[got])
 		}
 	}
 }
@@ -173,8 +267,6 @@ func TestRefResetForm_NamesTheRefItWouldReset(t *testing.T) {
 		{"switch", []string{"--force-create", "feat", "main"}, "refs/heads/feat"},
 		{"switch", []string{"--force-create=feat"}, "refs/heads/feat"},
 		{"checkout", []string{"-B", "feat", "main"}, "refs/heads/feat"},
-		{"branch", []string{"-f", "feat", "main"}, "refs/heads/feat"},
-		{"branch", []string{"--track", "-f", "feat", "origin/x"}, "refs/heads/feat"},
 		{"tag", []string{"-f", "-m", "v1", "v9", "HEAD~1"}, "refs/tags/v9"},
 	} {
 		if _, ref, ok := refResetForm(c.sub, c.args); !ok || ref != c.ref {
@@ -186,6 +278,7 @@ func TestRefResetForm_NamesTheRefItWouldReset(t *testing.T) {
 // TestGit_ForceCreateTierFollowsTheRef is the end-to-end form: under the
 // default policy (writes on, destructive off), creating a branch or tag with a
 // reset flag works, and resetting an existing one is refused as destructive.
+// A forced `branch` is refused either way: it is never lowered.
 func TestGit_ForceCreateTierFollowsTheRef(t *testing.T) {
 	repo := mergeFixture(t)
 	runGitDirect(t, repo, "tag", "v1")
@@ -193,7 +286,6 @@ func TestGit_ForceCreateTierFollowsTheRef(t *testing.T) {
 	for _, args := range []map[string]any{
 		{"subcommand": "checkout", "args": []string{"-B", "fresh"}},
 		{"subcommand": "switch", "args": []string{"-C", "fresher"}},
-		{"subcommand": "branch", "args": []string{"-f", "newer", "main"}},
 		{"subcommand": "tag", "args": []string{"-f", "v2"}},
 	} {
 		if _, err := callGit(t, tool, args); err != nil {
@@ -204,6 +296,7 @@ func TestGit_ForceCreateTierFollowsTheRef(t *testing.T) {
 		{"subcommand": "checkout", "args": []string{"-B", "side", "main"}},
 		{"subcommand": "switch", "args": []string{"-C", "main", "side"}},
 		{"subcommand": "branch", "args": []string{"-f", "side", "main"}},
+		{"subcommand": "branch", "args": []string{"-f", "newer", "main"}}, // a new name: not lowered
 		{"subcommand": "tag", "args": []string{"-f", "v1", "side"}},
 	} {
 		_, err := callGit(t, tool, args)
@@ -305,10 +398,12 @@ func refSnapshot(t *testing.T, repo string) string {
 }
 
 // TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive is the end-to-end
-// form of the #540 round-3 review (B1, B2, N1): each call below resets or
-// overwrites an EXISTING branch whatever it spells, so under the default policy
-// (writes on, destructive off) it must be refused as destructive and leave
-// every ref where it was. Before the fix each one ran at the write tier.
+// form of the #540 round-3 and round-4 reviews (B1, B2, N1 of each): each call
+// below resets or overwrites a branch whatever it spells, so under the default
+// policy (writes on, destructive off) it must be refused as destructive and
+// leave every ref where it was. Before the fix each one ran at the write tier.
+// The forced `branch` rows at the end create or move a branch that need not
+// exist: branch is not lowered, so they are refused for a new name too.
 func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 	previous := [][]string{{"switch", "-q", "side"}, {"switch", "-q", "main"}} // @{-1} is side
 	detour := [][]string{{"switch", "-q", "side"}, {"switch", "-q", "-c", "third"}}
@@ -321,6 +416,7 @@ func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 	}
 	upstream := [][]string{{"config", "branch.main.remote", "."}, {"config", "branch.main.merge", "refs/heads/side"}}
 	push := append([][]string{{"config", "branch.main.pushRemote", "."}, {"config", "push.default", "upstream"}}, upstream...)
+	tip := [][]string{{"tag", "tip", "main"}} // a start point that is not a branch name
 	cases := []struct {
 		name  string
 		setup [][]string
@@ -345,6 +441,26 @@ func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 		// N1: -M is --move --force.
 		{"branch -M main side", nil, "branch", []string{"-M", "main", "side"}},
 		{"branch -M side (rename current over side)", nil, "branch", []string{"-M", "side"}},
+		// B1 (round 4): a negation cancels the move/copy mode, so git resets the
+		// first positional, `side`, to the start point `tip`.
+		{"branch -f --move --no-move side tip", tip, "branch", []string{"-f", "--move", "--no-move", "side", "tip"}},
+		{"branch -f --copy --no-copy side tip", tip, "branch", []string{"-f", "--copy", "--no-copy", "side", "tip"}},
+		{"branch -f -m --no-move side tip", tip, "branch", []string{"-f", "-m", "--no-move", "side", "tip"}},
+		{"branch -f -qm --no-mo side tip", tip, "branch", []string{"-f", "-qm", "--no-mo", "side", "tip"}},
+		// B2 (round 4): -C is --copy --force, and the denylist matches only the
+		// bare token, so a bundle reaches git as a forced copy over `side`.
+		{"branch -qC main side", nil, "branch", []string{"-qC", "main", "side"}},
+		{"branch -vC main side", nil, "branch", []string{"-vC", "main", "side"}},
+		{"branch -Cq main side", nil, "branch", []string{"-Cq", "main", "side"}},
+		{"branch -iC main side", nil, "branch", []string{"-iC", "main", "side"}},
+		{"branch -qC -- main side", nil, "branch", []string{"-qC", "--", "main", "side"}},
+		// N1 (round 4): with --recurse-submodules, -f resets the submodules' branch
+		// of the same name, which no probe of the superproject can see.
+		{"branch -f --recurse-submodules newb main", nil, "branch", []string{"-f", "--recurse-submodules", "newb", "main"}},
+		// A forced branch is destructive for a new name as well.
+		{"branch -f newb main", nil, "branch", []string{"-f", "newb", "main"}},
+		{"branch -M main renamed", nil, "branch", []string{"-M", "main", "renamed"}},
+		{"branch -f --move main renamed", nil, "branch", []string{"-f", "--move", "main", "renamed"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -365,8 +481,9 @@ func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 }
 
 // TestGit_ForceCreateOfANewPlainNameStillRuns is the control for the test above:
-// the same flags on a plain name that does not exist yet are routine creation
-// and run at the write tier, once given.
+// `checkout -B`, `switch -C` and `tag -f` on a plain name that does not exist
+// yet are routine creation and run at the write tier, once given, and so do the
+// unforced `branch` forms (create, rename, copy).
 func TestGit_ForceCreateOfANewPlainNameStillRuns(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -376,10 +493,10 @@ func TestGit_ForceCreateOfANewPlainNameStillRuns(t *testing.T) {
 		{"checkout -B newb main", "checkout", []string{"-B", "newb", "main"}},
 		{"switch -C newb", "switch", []string{"-C", "newb"}},
 		{"switch -C feat/x-1.2", "switch", []string{"-C", "feat/x-1.2"}},
-		{"branch -f newb main", "branch", []string{"-f", "newb", "main"}},
 		{"tag -f v9", "tag", []string{"-f", "v9"}},
-		{"branch -M renamed", "branch", []string{"-M", "renamed"}},
-		{"branch -M main renamed", "branch", []string{"-M", "main", "renamed"}},
+		{"branch newb main", "branch", []string{"newb", "main"}},
+		{"branch -m side renamed", "branch", []string{"-m", "side", "renamed"}},
+		{"branch --copy main copied", "branch", []string{"--copy", "main", "copied"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			repo := mergeFixture(t)

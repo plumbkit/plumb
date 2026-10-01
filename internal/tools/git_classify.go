@@ -229,16 +229,20 @@ var branchListMode = []gitOptName{
 }
 
 func classifyBranch(args []string) gitTier {
-	// -f/--force moves or replaces an existing branch, like `reset --keep`, and
-	// -M is the short form of --move --force: it overwrites its destination.
-	// (refineRefReset lowers either to a write when the branch is new.)
-	if branchGrammar.has(args, "dDfM", "delete", "force") {
+	// -f/--force moves or replaces an existing branch, like `reset --keep`; -M and
+	// -C are the short forms of --move --force and --copy --force, which overwrite
+	// their destination, and -D is --delete --force. Every one stays destructive
+	// whether or not the branch exists: unlike checkout -B, switch -C and tag -f,
+	// branch is not lowered to a write for a new name (git_ref_reset.go says why).
+	// The global-flag denylist refuses only a bare -C token, so the C here is what
+	// catches it inside a bundle (-qC, -Cq).
+	if branchGrammar.has(args, "dDfMC", "delete", "force") {
 		return tierDestructive
 	}
-	// -c/-C (branch copy) collide with git's -c/-C config-injection flags and are
-	// denied by the global-flag denylist before classification runs, so they are
-	// unreachable here; branch copy is reached via the long --copy form. The
-	// upstream and description options write the repository's config.
+	// Lower-case -c (copy without --force) is refused by the denylist as a bare
+	// token, and git itself refuses to copy over an existing branch, so only the
+	// long --copy and a bundle reach here, and both are writes. The upstream and
+	// description options write the repository's config.
 	if branchGrammar.has(args, "mu", "move", "copy", "set-upstream-to", "unset-upstream", "edit-description") {
 		return tierWrite
 	}

@@ -110,6 +110,18 @@ func TestClassifyGit_LoweringChecksFollowGit(t *testing.T) {
 		{"branch", []string{"-M", "new"}, tierDestructive},
 		{"branch", []string{"-m", "old", "new"}, tierWrite},
 		{"checkout", []string{"-b", "new", "-B", "other"}, tierDestructive},
+		// -C is --copy --force. The global-flag denylist refuses only the bare -C
+		// token, so a bundle (-qC, -Cq) is the form that reaches the classifier;
+		// lower-case -c copies without forcing, and git refuses an existing target.
+		{"branch", []string{"-C", "old", "new"}, tierDestructive},
+		{"branch", []string{"-qC", "old", "new"}, tierDestructive},
+		{"branch", []string{"-vC", "old", "new"}, tierDestructive},
+		{"branch", []string{"-Cq", "old", "new"}, tierDestructive},
+		{"branch", []string{"-iC", "old", "new"}, tierDestructive},
+		{"branch", []string{"-qC", "--", "old", "new"}, tierDestructive},
+		{"branch", []string{"--copy", "--force", "old", "new"}, tierDestructive},
+		{"branch", []string{"-qc", "old", "new"}, tierWrite},
+		{"branch", []string{"--copy", "old", "new"}, tierWrite},
 		// Branch options that write config are writes, not reads.
 		{"branch", []string{"--unset-upstream"}, tierWrite},
 		{"branch", []string{"-u", "origin/main"}, tierWrite},

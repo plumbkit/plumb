@@ -7,15 +7,14 @@ import (
 	"strings"
 )
 
-// git_ref_reset.go keeps routine branch creation at the write tier.
+// git_ref_reset.go keeps routine branch and tag creation at the write tier.
 //
-// `switch -C <name>`, `checkout -B <name>`, `branch -f <name>`, `branch -M
-// [<old>] <name>` and `tag -f <name>` RESET <name> when it already exists,
-// which discards its commits the way `reset --keep` does, so classifyGit puts
-// them in the destructive tier. When <name> does not exist yet they only
-// create it, which is everyday agent work (`checkout -B feature` to start a
-// branch). So once the repository is known, refineRefReset lowers the call to
-// the write tier, but only when it can show that the call creates a ref:
+// `switch -C <name>`, `checkout -B <name>` and `tag -f <name>` RESET <name> when
+// it already exists, which discards its commits the way `reset --keep` does, so
+// classifyGit puts them in the destructive tier. When <name> does not exist yet
+// they only create it, which is everyday agent work (`checkout -B feature` to
+// start a branch). So once the repository is known, refineRefReset lowers the
+// call to the write tier, but only when it can show that the call creates a ref:
 //
 //   - the reset option appears exactly once, however it is spelled. git keeps
 //     the LAST `-B`, so a call that names one ref first and another later
@@ -29,11 +28,22 @@ import (
 //   - the ref does not exist (refProbe.exists).
 //
 // Everything else stays destructive: a form this file cannot parse (a bundle
-// such as `branch -fv`), another destructive flag on the same call
+// such as `tag -fa`), another destructive flag on the same call
 // (`switch -C x --discard-changes`), a name that is not plain, or git not being
 // able to answer. This is an allowlist on purpose. Each way git can spell "that
 // existing branch" that this file did not think of would otherwise be a way to
 // reset it at the write tier.
+//
+// `git branch` is deliberately NOT lowered: every forced form (`-f`, `--force`,
+// `-M`, `-C`, `-D`) is destructive whether or not the name exists. Its option
+// grammar is the widest of the four, and each of four #540 review rounds found a
+// spelling that git read one way and the lowering another: `-M` as `--move
+// --force`, a `--no-move` that cancels the mode choosing which positional is the
+// name, `-C` inside a bundle the global-flag denylist does not match, and
+// `--recurse-submodules` resetting the submodules' branch of the same name too.
+// Creating a branch without forcing (`branch <name>`) is already a write, and
+// `checkout -B` and `switch -C` are lowered, so the cut costs only a forced
+// re-creation from `branch`.
 //
 // Accepted window: a peer that creates the ref between this check and the git
 // child would see it reset at the write tier. The check runs before the
@@ -57,8 +67,6 @@ func refResetForm(sub string, args []string) (neutral []string, ref string, ok b
 		neutral, ref, ok = switchResetForm(args)
 	case "checkout":
 		neutral, ref, ok = checkoutResetForm(args)
-	case "branch":
-		neutral, ref, ok = branchResetForm(args)
 	case "tag":
 		neutral, ref, ok = tagResetForm(args)
 	}
@@ -141,36 +149,10 @@ func checkoutResetForm(args []string) ([]string, string, bool) {
 	return append([]string{"-b"}, args[1:]...), branchRefPrefix + args[1], true
 }
 
-// branchResetForm handles `branch -f <name>` and `branch -M [<old>] <name>`.
-// `-M` is `--move --force`, so it is read as `-m` with the force taken off, and
-// a forced move or copy overwrites its LAST positional (the destination), where
-// a forced create names the ref in its first.
-func branchResetForm(args []string) ([]string, string, bool) {
-	at, ok := forceFlagAt(branchGrammar, args, "fM")
-	if !ok {
-		return nil, "", false
-	}
-	neutral := slices.Clone(args)
-	if args[at] == "-M" {
-		neutral[at] = "-m"
-	} else {
-		neutral = slices.Delete(neutral, at, at+1)
-	}
-	pos := branchGrammar.positionals(neutral)
-	if len(pos) == 0 || len(pos) > 2 {
-		return nil, "", false
-	}
-	name := pos[0]
-	if branchGrammar.has(neutral, "mcC", "move", "copy") {
-		name = pos[len(pos)-1]
-	}
-	return neutral, branchRefPrefix + name, true
-}
-
 // tagResetForm handles `tag -f <name>`: exactly one standalone -f/--force, and
 // the first positional argument as the name.
 func tagResetForm(args []string) ([]string, string, bool) {
-	at, ok := forceFlagAt(tagGrammar, args, "f")
+	at, ok := forceFlagAt(args)
 	if !ok {
 		return nil, "", false
 	}
@@ -182,18 +164,17 @@ func tagResetForm(args []string) ([]string, string, bool) {
 	return neutral, tagRefPrefix + pos[0], true
 }
 
-// forceFlagAt returns the index of the one standalone token that spells a
-// ref-moving option: --force (or an abbreviation of at least three letters) or
-// a short flag in shorts. It reports false for none, for several, and when
-// git's reading of args finds a different number — a bundle (`-fq`), a joined
-// value (`--force=x`), an abbreviation shorter than the token read accepts, or
-// a `-f` that is really the value of another option.
-func forceFlagAt(g gitOptionGrammar, args []string, shorts string) (int, bool) {
+// forceFlagAt returns the index of the one standalone token that spells tag's
+// ref-moving option: -f, or --force (or an abbreviation of at least three
+// letters). It reports false for none, for several, and when git's reading of
+// args finds a different number — a bundle (`-fa`), a joined value
+// (`--force=x`), an abbreviation shorter than the token read accepts, or a `-f`
+// that is really the value of another option.
+func forceFlagAt(args []string) (int, bool) {
 	at := -1
 	for i, a := range args {
 		long, isLong := strings.CutPrefix(a, "--")
-		short := len(a) == 2 && a[0] == '-' && strings.IndexByte(shorts, a[1]) >= 0
-		if !short && (!isLong || !isLongPrefix(long, "force", len("for"))) {
+		if a != "-f" && (!isLong || !isLongPrefix(long, "force", len("for"))) {
 			continue
 		}
 		if at >= 0 {
@@ -201,7 +182,7 @@ func forceFlagAt(g gitOptionGrammar, args []string, shorts string) (int, bool) {
 		}
 		at = i
 	}
-	return at, at >= 0 && g.count(args, shorts, "force") == 1
+	return at, at >= 0 && tagGrammar.count(args, "f", "force") == 1
 }
 
 // refProbe asks git about the refs of the repository a call targets. Its funcs
