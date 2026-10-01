@@ -277,8 +277,16 @@ func TestGit_QueuedWriteDoesNotOutliveItsCall(t *testing.T) {
 
 // TestGit_FastCommitIsNotDetached is the control: a hook inside the deadline
 // commits in the foreground with the ordinary result, and registers nothing.
+//
+// Its deadline is far wider than the 1s the slow tests use: a freshly written hook
+// can take most of a second on its first run (macOS scans a new executable before
+// it may start), and the control only asks that a commit inside its deadline is
+// not detached, not that the machine is quick.
 func TestGit_FastCommitIsNotDetached(t *testing.T) {
-	dir, root, _, tool := slowHookRepo(t, "exit 0\n")
+	dir, root, _, _ := slowHookRepo(t, "exit 0\n")
+	tool := NewGit(WriteDeps{}, func() GitPolicy {
+		return GitPolicy{AllowWrites: true, WriteTimeout: 60 * time.Second, DetachAfter: 30 * time.Second}
+	}).WithSession(func() string { return "sess-a" }, func() string { return "alpha" })
 	out, err := callGit(t, tool, map[string]any{"subcommand": "commit", "message": "fast hook commit", "repo": dir})
 	if err != nil {
 		t.Fatalf("commit: %v", err)
@@ -380,5 +388,66 @@ func TestGit_DetachedOpReRecordsOwnWritesWhenItFinishes(t *testing.T) {
 	backdate(t, path, time.Hour)
 	if !readWarns(t, tracker, path) {
 		t.Error("a peer edit after the detached rebase was not reported")
+	}
+}
+
+// TestGit_DetachedCommitKilledAtTheWriteTimeoutIsReportedAsPlumbs: the one way
+// plumb still ends a detached child is [git] write_timeout, which kills its
+// process group. That must reach the caller as plumb's own bound (the setting to
+// raise), not as git's "exit code -1", and must release the repository so the
+// next write is accepted. (That the group dies is TestExecGitCmd_KillsProcessGroupOnCancel's.)
+func TestGit_DetachedCommitKilledAtTheWriteTimeoutIsReportedAsPlumbs(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+	hook := "#!/bin/sh\nsleep 30\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o755); err != nil {
+		t.Fatalf("writing hook: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGit(WriteDeps{}, func() GitPolicy {
+		return GitPolicy{AllowWrites: true, WriteTimeout: 3 * time.Second, DetachAfter: testDetachAfter}
+	}).WithSession(func() string { return "sess-a" }, func() string { return "alpha" })
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{"f.txt"}, "repo": dir}); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	head0 := gitRevParse(t, dir, "HEAD")
+	root, err := findGitRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = waitGitBackground(ctx, root)
+		gitBackgroundOps.Delete(root)
+	})
+
+	commitDetached(t, tool, dir)
+	waitBackground(t, root)
+
+	out, err := callGit(t, tool, map[string]any{"subcommand": "log", "args": []string{"--oneline", "-1"}, "repo": dir})
+	if err != nil {
+		t.Fatalf("git log after the killed background commit: %v", err)
+	}
+	t.Logf("next call:\n%s", out)
+	for _, want := range []string{"FAILED", "plumb stopped waiting after 3s", "write_timeout"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the report must say plumb's bound ended it (%q), got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "exit code -1") || strings.Contains(out, "landed as") {
+		t.Errorf("a killed child must not read as git's own failure or as landed:\n%s", out)
+	}
+	if got := gitRevParse(t, dir, "HEAD"); got != head0 {
+		t.Errorf("HEAD moved to %s although the hook was killed before the commit", got)
+	}
+	// The repository is released: the next write is accepted.
+	if err := os.WriteFile(filepath.Join(dir, "g.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{"g.txt"}, "repo": dir}); err != nil {
+		t.Errorf("a write after the killed background commit must run: %v", err)
 	}
 }

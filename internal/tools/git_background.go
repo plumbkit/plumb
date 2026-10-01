@@ -276,11 +276,26 @@ func (r *gitChildRun) finishInBackground(op *gitBackgroundOp, done <-chan error)
 	err := <-done
 	r.afterExit()
 	if err != nil {
-		op.finish(true, r.failure(err).Error())
+		op.finish(true, backgroundFailureText(r.failure(err)))
 		return
 	}
 	r.guard.postExec(r.execCtx)
 	op.finish(false, gitBackgroundOutcome(r.execCtx, r.repoRoot, r.sub, r.output()))
+}
+
+// backgroundFailureText is a detached child's failure as the next call will
+// show it. A foreground failure carries its remediation in the result's
+// structured metadata; a stored report has no such channel, so for plumb's own
+// bound (the kill at [git] write_timeout) the reason is appended to the text —
+// it is the failure whose remedy, raising the setting after checking what git
+// finished, is not in the message. Every other failure is git's own and its
+// output already says why.
+func backgroundFailureText(err error) string {
+	msg := err.Error()
+	if te, ok := toolerror.Classify(err); ok && te.Kind == toolerror.KindClientTimeout && te.Remediation.Reason != "" {
+		msg += "\n" + te.Remediation.Reason
+	}
+	return msg
 }
 
 // gitHeadSummary returns "abc1234 (branch)" for repoRoot's HEAD, or "" on any
