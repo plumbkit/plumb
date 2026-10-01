@@ -4,6 +4,7 @@ package cli
 // and from where this connection's workspace pin was last set.
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -103,6 +104,55 @@ func (s *connSession) pinProvenance() tools.PinProvenance {
 	p := pinProvenanceOf(&v)
 	if p.Source != "" {
 		p.Contested = s.pinContested()
+	}
+	return p
+}
+
+// pinProvenanceFor is the provenance of the pin that RESOLVES a call made under
+// ctx: the calling agent's shard's when it has one, the connection's otherwise
+// (a connection nobody shares, or an unattributed call).
+//
+// On a shared connection the two differ whenever an agent re-pins its own shard,
+// and reading the connection's was telling that agent its pin was set long ago,
+// by someone else's session_start, from somewhere it never was (#529). A shard
+// that merely follows the connection holds a copy of the connection's, so asking
+// the shard is right for it too.
+//
+// Contested is the connection's displacement history, so it is filled in here the
+// way policyProvenance fills it in for a boundary refusal: the two surfaces of
+// one pin must not disagree about it.
+func (s *connSession) pinProvenanceFor(ctx context.Context) tools.PinProvenance {
+	sh := s.shardFor(ctx)
+	if sh == nil {
+		return s.pinProvenance()
+	}
+	sh.mu.RLock()
+	p := sh.prov
+	sh.mu.RUnlock()
+	if p.Source != "" {
+		p.Contested = s.pinContested()
+	}
+	return p
+}
+
+// restoredProvenance is the provenance of a pin a shard got back from its own
+// persisted row: the origin it was stored with, marked as replayed rather than set
+// by a live call, and stamped with the restore's time — what the connection's own
+// restored pin reports (recordPinProvenance with pinTriggerRestore). Nothing was
+// displaced, so no previous root and no force.
+func restoredProvenance(origin sessionstate.PinSource) tools.PinProvenance {
+	return tools.PinProvenance{Source: pinViaLabel(origin, pinTriggerRestore), At: time.Now()}
+}
+
+// confirmedProvenance is a shard's provenance after its agent explicitly names
+// the root the shard already holds. No root moves, so when it was set and what it
+// replaced stand and only the label is upgraded, exactly as attachOrRepinTo's
+// same-root promotion does for the connection's pin. A shard that had no time
+// (it was seeded from a pin with no recorded provenance) takes the confirmation's.
+func confirmedProvenance(p tools.PinProvenance, origin sessionstate.PinSource) tools.PinProvenance {
+	p.Source = pinViaLabel(origin, pinTriggerLive)
+	if p.At.IsZero() {
+		p.At = time.Now()
 	}
 	return p
 }

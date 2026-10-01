@@ -68,6 +68,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		// is not even a `plumb trust` to reach for.
 		projectGit = tools.ProjectGitStatus{Unreadable: true}
 	}
+	// The root this snapshot belongs to, so a git tier refusal names the path a
+	// `plumb trust` would have to be run for.
+	projectGit.Workspace = workspace
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -101,6 +104,7 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		v.execTrusted = execTrusted
 		v.projectCommands = projectCommands
 		v.projectGit = projectGit
+		v.configRoot = workspace
 		if !cfgMtime.IsZero() {
 			v.lastCfgMtime = cfgMtime
 		}
@@ -190,7 +194,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 	}
 	if st.Trusted {
 		s.log().Info("daemon: project capability config trusted and applied",
-			"workspace", workspace, "keys", st.Spec.Keys())
+			"workspace", workspace, "keys", st.Spec.Keys(), "inherited_from", st.InheritedFrom)
 		return
 	}
 	s.log().Warn("daemon: project capability config IGNORED (untrusted) — global values in force; run `plumb trust` to honour them",
@@ -201,7 +205,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 // session_start renders. Pure, so the capture at config apply is the only place
 // the answer is decided.
 func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
-	out := tools.ProjectGitStatus{Trusted: st.Trusted}
+	out := tools.ProjectGitStatus{Trusted: st.Trusted, InheritedFrom: st.InheritedFrom}
 	for _, e := range st.Spec {
 		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}
@@ -510,25 +514,39 @@ func (s *connSession) bindWriteLimiterParent() {
 	_, limit, _ := s.writeLimiter.Snapshot()
 	key := name + "/" + version + "\x00" + root
 
+	// The acquire runs inside the lane, together with publishing the key, and
+	// only while the connection is open (issue #514). close() reads
+	// boundBudgetKey under the lane and releases it, so an acquire made outside
+	// the lane — after close() had read the key, or after close() had run —
+	// held a budget reference nobody released. sharedBudgets.mu is a leaf lock
+	// and SetParent an atomic store, so neither can invert a lock order.
 	var prevKey string
-	s.mutate(func(v *sessionView) {
+	bound := s.mutateLive(func(v *sessionView) {
 		prevKey = v.boundBudgetKey
+		if prevKey == key {
+			return
+		}
+		// Acquire-before-release: pin the new budget before dropping the old so
+		// a re-pin back to a recently-left key never reclaims it mid-flight.
+		parent := s.budgets.acquire(key, limit)
 		v.boundBudgetKey = key
+		// Re-parent in the same critical section: two concurrent binds then
+		// leave the limiter pointing at the budget of whichever key was
+		// published last, never at one the other bind has since released.
+		s.writeLimiter.SetParent(parent)
 	})
-
+	if !bound {
+		return
+	}
 	// Same key (a reload or a repeat bind on the same workspace): refresh the cap
 	// without touching the refcount or re-parenting.
 	if prevKey == key {
 		s.budgets.setLimit(key, limit)
 		return
 	}
-	// Acquire-before-release: pin the new budget before dropping the old so a
-	// re-pin back to a recently-left key never reclaims it mid-flight.
-	parent := s.budgets.acquire(key, limit)
 	if prevKey != "" {
 		s.budgets.release(prevKey)
 	}
-	s.writeLimiter.SetParent(parent)
 }
 
 // gitPolicyFrom adapts the resolved [git] config into the tools package's

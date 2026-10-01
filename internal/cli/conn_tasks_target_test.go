@@ -76,7 +76,7 @@ func TestEmittedTestTargetIsAcceptedByRunTask(t *testing.T) {
 	}
 
 	tool := tools.NewTopologyAffected(func() *topology.Store { return s }).
-		WithTestScope(func() tools.TestScope { return scope })
+		WithTestScope(func(context.Context) tools.TestScope { return scope })
 	args, _ := json.Marshal(map[string]any{
 		"files": []string{filepath.Join(ws, "plumb/internal/demo/demo.go")},
 	})
@@ -314,7 +314,7 @@ func TestConnSessionTestScope(t *testing.T) {
 				v.acquiredLanguage = tc.lang
 				v.tasks = tc.tasks
 			})
-			if got := s.testScope(); got != tc.want {
+			if got := s.testScope(context.Background()); got != tc.want {
 				t.Errorf("testScope() = %+v, want %+v", got, tc.want)
 			}
 		})

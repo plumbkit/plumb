@@ -34,13 +34,14 @@ import (
 // run_command has no workspace argument, so before this an agent holding its
 // own shard ran the project's scripts against whichever project the connection
 // was pinned to — silent, because a worktree sits inside its parent checkout
-// and every path still resolved (PLAN-440 item 4).
+// and every path still resolved (PLAN-440 item 4). The allow-list, its policy
+// and the exec trust gating it are that agent's project's too (projectViewFor,
+// #522): a connection project's trusted entries do not run in another project.
 func (s *connSession) commandResolver(ctx context.Context, name, target string) (tools.ResolvedCommand, error) {
-	ws := s.workspaceFor(ctx)
+	v, ws := s.projectViewFor(ctx)
 	if ws == "" {
 		return tools.ResolvedCommand{}, errors.New("run_command: no workspace is attached")
 	}
-	v := s.view()
 	cmd, ok := config.FindCommand(v.commands, name)
 	if !ok {
 		avail := config.CommandNames(v.commands)
@@ -81,7 +82,7 @@ func (s *connSession) commandResolver(ctx context.Context, name, target string) 
 			AllowWrites:   cmd.AllowWrites,
 			DenyNetwork:   cmd.DenyNetwork,
 		},
-		RequireSandbox: s.effectiveRequireSandbox(),
+		RequireSandbox: s.effectiveRequireSandbox(v.commandPolicy.RequireSandbox),
 		Provenance:     provenance,
 	}, nil
 }
@@ -89,8 +90,10 @@ func (s *connSession) commandResolver(ctx context.Context, name, target string) 
 // effectiveRequireSandbox is the most-restrictive require_sandbox across the
 // global base and the project value: an untrusted project can only ADD safety
 // (raise require_sandbox), never lower it.
-func (s *connSession) effectiveRequireSandbox() bool {
-	return s.store.Current().CommandPolicy.RequireSandbox || s.view().commandPolicy.RequireSandbox
+// project is the value from the view the command itself was resolved from, so
+// the policy is the same project's.
+func (s *connSession) effectiveRequireSandbox(project bool) bool {
+	return s.store.Current().CommandPolicy.RequireSandbox || project
 }
 
 // (commandsFromProject removed.) Provenance now comes from the session view,

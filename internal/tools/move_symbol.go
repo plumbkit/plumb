@@ -269,7 +269,7 @@ func (t *MoveSymbol) applyMove(ctx, lspCtx context.Context, waited time.Duration
 			return
 		}
 		for _, p := range plans {
-			deps.recordWritten(ctx, p.path)
+			deps.recordWritten(ctx, p.path, p.written)
 			deps.recordUndo(ctx, p.path, string(p.before), string(p.after), p.existedBefore, "move_symbol")
 		}
 	}
@@ -540,6 +540,8 @@ type movePlan struct {
 	after         []byte
 	mode          os.FileMode
 	existedBefore bool
+	// written is the version the move published, set once the write lands.
+	written fileSnapshot
 }
 
 // applyMovePlans writes each plan in order and rolls every prior write back on a
@@ -550,13 +552,15 @@ type movePlan struct {
 // also directly unit-testable.
 func applyMovePlans(plans []movePlan, onApplied func()) ([]string, error) {
 	var written []movePlan
-	for _, p := range plans {
-		if _, err := safeWrite(p.path, p.after, p.mode); err != nil {
+	for i, p := range plans {
+		res, err := safeWrite(p.path, p.after, p.mode)
+		if err != nil {
 			if rbErr := rollbackMove(written); rbErr != nil {
 				return nil, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return nil, fmt.Errorf("writing %s: %w", p.path, err)
 		}
+		plans[i].written = res.written
 		written = append(written, p)
 	}
 	if onApplied != nil {
