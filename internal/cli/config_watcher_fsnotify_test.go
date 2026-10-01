@@ -3,7 +3,7 @@ package cli
 // config_watcher_fsnotify_test.go — the hardening around fsnotify's kqueue
 // descriptor race (config_watcher_fsnotify.go): a watcher that lost its own
 // descriptor is recreated instead of left dead, and closing waits until the
-// watcher is completely closed.
+// watcher's reader has stopped delivering.
 //
 // A real lost descriptor cannot be produced on demand — it needs another
 // goroutine's stray close to land in a microsecond window — so these tests
@@ -72,7 +72,8 @@ func TestProjectWatchManager_RecreatesLostWatcher(t *testing.T) {
 
 	m.testErrs <- lostWatcherErr()
 	second := nextWatcher(t, built)
-	// The replacement is opened only after the dead watcher is fully closed.
+	// The replacement is opened only after the dead watcher's reader has
+	// stopped delivering.
 	requireClosed(t, first, "the lost watcher must be closed before its replacement opens")
 	// The reconcile reload: the workspace may have changed while blind.
 	awaitDispatch(t, sig, root)
@@ -184,10 +185,10 @@ func TestProjectWatchManager_AttachRetriesLostDescriptor(t *testing.T) {
 // must now wait out every goroutine, released ones included. The dispatch is
 // held open so the old behaviour fails deterministically, not by timing luck.
 func TestProjectWatchManager_CloseWaitsForReleasedWatcher(t *testing.T) {
+	ws := t.TempDir() // before the manager, so the manager's clean-up runs first
 	entered := make(chan struct{}, 1)
 	unblock := make(chan struct{})
 	finishDispatch := sync.OnceFunc(func() { close(unblock) })
-	t.Cleanup(finishDispatch) // never strand the goroutine if the test fails early
 	m := newProjectConfigWatchManager(context.Background(), func(string) {
 		select {
 		case entered <- struct{}{}:
@@ -196,8 +197,15 @@ func TestProjectWatchManager_CloseWaitsForReleasedWatcher(t *testing.T) {
 		<-unblock
 	})
 	m.debounce = 50 * time.Millisecond
+	// This test holds a dispatch open for longer than the production grace and
+	// asserts on the wait itself, so it must not be cut short by the bound.
+	m.closeGrace = testCloseGrace
+	// Last registered runs first: release the held dispatch (never strand the
+	// goroutine if the test fails early), then close the manager, and only
+	// then does ws go.
+	t.Cleanup(m.close)
+	t.Cleanup(finishDispatch)
 	built := captureWatchers(m)
-	ws := t.TempDir()
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
 	watcher := nextWatcher(t, built)
@@ -229,9 +237,79 @@ func TestProjectWatchManager_CloseWaitsForReleasedWatcher(t *testing.T) {
 	requireClosed(t, watcher, "close returned before the released watcher was closed")
 }
 
+// TestProjectWatchManager_CloseIsBoundedWhenADispatchIsStuck: close waits for
+// every watch goroutine, but one inside dispatch can be queued on a session's
+// mutation lane behind slow work, and close runs on the orderly daemon
+// shutdown path, where every step must be bounded
+// (TestShutdownHardDeadlineExceedsInnerGraces). With a dispatch held open,
+// close must give up at its grace — not before it, not never — and say so in
+// the log; the abandoned goroutine must still finish once released. Must not
+// run in parallel: it captures slog.Default.
+func TestProjectWatchManager_CloseIsBoundedWhenADispatchIsStuck(t *testing.T) {
+	warns := captureShutdownWarns(t)
+	ws := t.TempDir() // before the manager, so the manager's clean-up runs first
+	entered := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	finishDispatch := sync.OnceFunc(func() { close(unblock) })
+	m := newProjectConfigWatchManager(context.Background(), func(string) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-unblock
+	})
+	m.debounce = 50 * time.Millisecond
+	const grace = 150 * time.Millisecond
+	m.closeGrace = grace
+	t.Cleanup(m.close)
+	t.Cleanup(finishDispatch) // runs first: unstick the goroutine so m.close can finish
+	writeProjectCfg(t, ws, "")
+	m.acquire(ws)
+
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no dispatch within 10s")
+	}
+
+	took := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		m.close()
+		took <- time.Since(start)
+	}()
+	select {
+	case d := <-took:
+		if d < grace {
+			t.Errorf("close returned after %s, before its %s grace: it did not wait for the stuck goroutine", d, grace)
+		}
+	case <-time.After(grace + 5*time.Second):
+		t.Fatal("close did not return within its grace while a watch goroutine was stuck in dispatch: the shutdown wait is unbounded")
+	}
+	if !warns.has("project config watchers") {
+		t.Errorf("an abandoned close must log a warn naming the step; steps=%v", warns.snapshot())
+	}
+
+	// Released, the abandoned goroutine still runs to completion.
+	finishDispatch()
+	drained := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the abandoned watch goroutine did not finish once its dispatch was released")
+	}
+}
+
 // TestCloseFSWatcher_WaitsForReader: once closeFSWatcher returns, the reader
-// goroutine is gone (Events closed), so no descriptor of the watcher can
-// still be mid-close. A nil watcher is a no-op.
+// goroutine has stopped delivering (Events closed), so it can no longer react
+// to a path deleted afterwards. Its final kqueue and close-pipe closes may still
+// trail by microseconds, which this does not and cannot assert. A nil watcher
+// is a no-op.
 func TestCloseFSWatcher_WaitsForReader(t *testing.T) {
 	closeFSWatcher(nil)
 	watcher, err := fsnotify.NewWatcher()
@@ -242,7 +320,7 @@ func TestCloseFSWatcher_WaitsForReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	closeFSWatcher(watcher)
-	requireClosed(t, watcher, "closeFSWatcher returned before the reader exited")
+	requireClosed(t, watcher, "closeFSWatcher returned before the reader stopped delivering")
 }
 
 // TestGlobalConfigWatcher_RecreatesLostWatcher: the global watcher lives for

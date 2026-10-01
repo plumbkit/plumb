@@ -42,6 +42,12 @@ import (
 // 2× the window rather than the 5× they used to.
 const testDebounce = 750 * time.Millisecond
 
+// testCloseGrace is the close grace the manager tests run with. Production's
+// projectWatchCloseGrace suits a daemon that is about to exit anyway; a test
+// wants close to wait out every watch goroutine, so a loaded machine cannot cut
+// the wait short and let a temp-dir clean-up race the watcher's close.
+const testCloseGrace = 30 * time.Second
+
 // testWatchManager builds a manager with a test debounce and a dispatch that
 // forwards to registry.reloadProject AND signals the returned channel once per
 // dispatch — the deterministic "watcher fired" signal the tests wait on.
@@ -57,6 +63,7 @@ func testWatchManager(t *testing.T, registry *connRegistry) (*projectConfigWatch
 		sig <- ws
 	})
 	m.debounce = testDebounce
+	m.closeGrace = testCloseGrace
 	t.Cleanup(m.close)
 	return m, sig
 }
@@ -104,8 +111,9 @@ func nextWatcher(t *testing.T, ch <-chan *fsnotify.Watcher) *fsnotify.Watcher {
 	}
 }
 
-// requireClosed fails unless watcher is already fully closed — its reader
-// gone, so Events is closed — without waiting for it.
+// requireClosed fails unless watcher is already closed and its reader has
+// stopped delivering, so Events is closed — without waiting for it. It cannot
+// see the reader's last two descriptor closes, which come just after.
 func requireClosed(t *testing.T, watcher *fsnotify.Watcher, why string) {
 	t.Helper()
 	select {

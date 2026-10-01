@@ -40,7 +40,7 @@
 ### Fixed
 
 - **A config watcher that loses its file descriptor recovers at once, and
-  closing one no longer races a delete.** (#560) fsnotify's kqueue backend
+  closing one waits for its reader.** (#560) fsnotify's kqueue backend
   (macOS) can close one descriptor twice: its `Close` and its reader both close a
   watch whose path was just deleted, and a file opened in between loses its
   descriptor. When that was a project config watcher, its reader spun on
@@ -48,9 +48,12 @@
   global config watcher, hot reload stopped. Both now recreate a watcher that
   reports EBADF and reload once, and give up to the old fallback only if the
   replacement is lost within a second. Closing a watcher now waits until its
-  reader has exited, and the daemon's project-watch shutdown waits for every
-  watcher, so a caller that then deletes the watched tree cannot race the close.
-  This was also the intermittent macOS failure of the `TestProjectWatchManager_*`
+  reader has stopped delivering, and the daemon's project-watch shutdown waits
+  for every watcher, for at most half a second, so a caller that then deletes
+  the watched tree no longer races the close. The reader's last two descriptor
+  closes can still trail that wait by microseconds, so this narrows the window
+  rather than closing it: only a fix in fsnotify removes the double close. This
+  was also the intermittent macOS failure of the `TestProjectWatchManager_*`
   tests, whose clean-up removed watched directories during the close.
 - **`make test`, `make test-race`, `make cover` and `make integration-test`
   no longer stop `go test` at 10 minutes.** The `internal/cli` package alone has

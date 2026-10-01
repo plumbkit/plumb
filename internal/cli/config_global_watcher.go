@@ -71,7 +71,8 @@ func shouldReload(eventName, base string, op fsnotify.Op) bool {
 // cannot be created or attached is logged and degraded to a no-op (the daemon
 // still runs; the control-socket reload-config path remains available). A
 // watcher that loses its own descriptor at runtime is recreated in place (see
-// recreateLost). Run returns only after its OS watcher is closed.
+// recreateLost). Run returns only after its OS watcher has been closed and
+// its reader has stopped delivering (closeFSWatcher).
 func (w *globalConfigWatcher) Run(ctx context.Context) error {
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return fmt.Errorf("creating config dir for watch: %w", err)
@@ -162,10 +163,12 @@ func (w *globalConfigWatcher) openOnce() (*fsnotify.Watcher, error) {
 // recreateLost replaces a watcher that lost its own descriptor, which would
 // otherwise never deliver another event while its reader spins on the same
 // error. The old watcher is always closed first — before the replacement
-// opens, so the replacement cannot be handed the number the old reader closes
-// on its way out. A watcher lost again within recreateInterval of the
-// last recreate is not a one-off, so that returns an error instead: the
-// global hot reload stops, as it does when the watcher cannot start.
+// opens — which shrinks the window in which the replacement could be handed
+// the number the old reader closes on its way out; it cannot close it, because
+// that reader's final closes can trail closeFSWatcher by microseconds. A
+// watcher lost again within recreateInterval of the last recreate is not a
+// one-off, so that returns an error instead: the global hot reload stops, as
+// it does when the watcher cannot start.
 func (w *globalConfigWatcher) recreateLost(old *fsnotify.Watcher, cause error, last time.Time) (*fsnotify.Watcher, error) {
 	closeFSWatcher(old)
 	if !last.IsZero() && time.Since(last) < w.recreateInterval {

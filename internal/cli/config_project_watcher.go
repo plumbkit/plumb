@@ -30,10 +30,11 @@ package cli
 //
 // Concurrency: all methods are safe for concurrent use. Each workspace runs
 // one goroutine for the watch's lifetime; the dispatch callback is invoked
-// from that goroutine and must not be called holding mu. close waits for every
-// goroutine — including ones a release cancelled — to finish closing its OS
-// watcher; release does not wait, because it can run on a watch goroutine's
-// own dispatch path (a reload that moves a session's pin).
+// from that goroutine and must not be called holding mu. close waits — for at
+// most projectWatchCloseGrace — for every goroutine, including ones a release
+// cancelled, to stop and close its OS watcher; release does not wait, because
+// it can run on a watch goroutine's own dispatch path (a reload that moves a
+// session's pin).
 
 import (
 	"context"
@@ -51,6 +52,17 @@ import (
 // projectConfigDebounce collapses the event burst a single save emits into
 // one dispatch. Same window as the global config watcher.
 const projectConfigDebounce = 250 * time.Millisecond
+
+// projectWatchCloseGrace bounds how long close waits for the watch goroutines
+// to finish. A healthy goroutine stops and closes its watcher within
+// microseconds of its cancel; the bound exists for one that cannot, because it
+// is inside dispatch (connRegistry.reloadProject), which can queue on a
+// session's mutation lane while that lane is held across slow work. close runs
+// on the orderly daemon shutdown path, which must stay under shutdownHardDeadline
+// (TestShutdownHardDeadlineExceedsInnerGraces sums this grace in), so a wedged
+// dispatch is abandoned and logged instead of holding the daemon until the
+// watchdog forces the exit. Tests that need the full wait raise closeGrace.
+const projectWatchCloseGrace = 500 * time.Millisecond
 
 // projectConfigWatch is one workspace's registration: the refcount of live
 // connections pinned to it, the cancel that stops its goroutine, and two
@@ -87,6 +99,10 @@ type projectConfigWatchManager struct {
 	// recreateInterval is watcherRecreateInterval; tests widen it so "lost
 	// again straight away" does not depend on scheduling.
 	recreateInterval time.Duration
+	// closeGrace is projectWatchCloseGrace: how long close waits for the watch
+	// goroutines before abandoning them. Tests set it to wait out, or to bound
+	// tightly, a goroutine they hold open.
+	closeGrace time.Duration
 	// testErrs is a test seam: an error sent on it reaches a run loop exactly
 	// as if its OS watcher had reported it. Nil in production, and a nil
 	// channel never fires in a select. (Tests must not send on fsnotify's own
@@ -115,6 +131,7 @@ func newProjectConfigWatchManager(ctx context.Context, dispatch func(workspace s
 		newWatcher: fsnotify.NewWatcher,
 
 		recreateInterval: watcherRecreateInterval,
+		closeGrace:       projectWatchCloseGrace,
 		watches:          make(map[string]*projectConfigWatch),
 	}
 }
@@ -191,11 +208,14 @@ func (m *projectConfigWatchManager) healthy(workspace string) bool {
 	return ok && !w.failed.Load()
 }
 
-// close stops every watcher and waits until each has closed its OS watcher,
-// so no descriptor of any watch is still open — or still being closed — when
-// it returns. Called on daemon shutdown; tests call it before removing the
-// directories they watched, because fsnotify's kqueue backend can close a
-// descriptor twice when Close races a delete inside the watched tree (see
+// close stops every watcher and waits until each watch goroutine has stopped
+// and closed its OS watcher (closeFSWatcher), but for no longer than
+// closeGrace: a goroutine stuck in dispatch is abandoned and logged, so the
+// orderly shutdown stays bounded. Called on daemon shutdown; tests call it
+// before removing the directories they watched, because fsnotify's kqueue
+// backend can close a descriptor twice when Close races a delete inside the
+// watched tree. The wait narrows that window rather than closing it: each
+// reader's final descriptor closes can trail it by microseconds (see
 // closeFSWatcher). Acquire is a no-op afterwards.
 func (m *projectConfigWatchManager) close() {
 	m.mu.Lock()
@@ -206,7 +226,12 @@ func (m *projectConfigWatchManager) close() {
 	}
 	m.stop()
 	m.mu.Unlock()
-	m.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+	waitWithTimeout(done, m.closeGrace, "project config watchers")
 }
 
 // refs reports the live-connection refcount on workspace's watcher (test seam).
@@ -227,8 +252,8 @@ func (m *projectConfigWatchManager) refs(workspace string) int {
 // and returns: the daemon keeps running and the per-session poll fallback
 // covers the workspace. Runtime errors are projectWatchLoop.onError's call.
 func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWatch, root string, ready chan struct{}) {
-	// Deferred first so it runs last: close waits on wg, and must not return
-	// before the OS watcher below is closed.
+	// Deferred first so it runs last: close waits on wg, so it also waits for
+	// the OS watcher below to be closed.
 	defer m.wg.Done()
 	// dead lets acquire distinguish a loop that EXITED (safe to retry) from
 	// one that merely saw a transient error and is still running.
@@ -325,7 +350,8 @@ func (l *projectWatchLoop) openOnce() error {
 	return nil
 }
 
-// close closes the current OS watcher, if any, and waits for its reader.
+// close closes the current OS watcher, if any, and waits for its reader to
+// stop delivering (see closeFSWatcher).
 func (l *projectWatchLoop) close() {
 	closeFSWatcher(l.watcher)
 	l.watcher = nil
@@ -380,6 +406,9 @@ func (l *projectWatchLoop) onError(w *projectConfigWatch, err error) bool {
 	// Close the dead watcher BEFORE opening its replacement: descriptors are
 	// allocated lowest-free-first, so a replacement opened first could be
 	// handed the very number the dead watcher's reader closes on its way out.
+	// Closing first only shrinks that window: the reader closes its kqueue and
+	// pipe just after Events, so they can still trail the close by microseconds
+	// (see closeFSWatcher).
 	l.close()
 	if rerr := l.open(); rerr != nil {
 		w.failed.Store(true)
