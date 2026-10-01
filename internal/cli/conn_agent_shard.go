@@ -68,11 +68,20 @@ type agentShard struct {
 	// memory), so a connection move must not drag it (#513).
 	parentSeeded bool
 
-	// rosterID is the session.Info registered for THIS agent, so the workspace
-	// it actually works in lists it (issue #472). Empty until the agent holds a
-	// root of its own; guarded by mu with the scalars above.
-	rosterID   string
-	rosterName string
+	// rosterID is the session.Info registered for THIS agent: the row the
+	// workspace it works in lists it by (issue #472) and, for every agent but the
+	// connection's owner, the identity peers address and its commits are signed
+	// with (#556). Empty until the agent first needs one; guarded by mu with the
+	// scalars above. rosterFolder is the Folder last written to the row, so a root
+	// that moved since is noticed without reading the row back.
+	rosterID     string
+	rosterName   string
+	rosterFolder string
+	// regMu serialises registering and retiring the row, which is disk I/O under
+	// the session-directory flock and so must never run under mu: held across the
+	// I/O, taking mu only for the brief reads and writes inside it (order: regMu,
+	// then mu).
+	regMu sync.Mutex
 
 	readTracker  *tools.ReadTracker
 	writeTracker *tools.WriteTracker
@@ -112,6 +121,14 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		// peer's project. Fail closed to the connection-level state instead.
 		return nil
 	}
+	return s.shardOf(id)
+}
+
+// shardOf returns the shard for id, creating it on first use seeded as shardFor's
+// doc describes. It is the creation half of shardFor, split out for the one caller
+// that needs a shard the routing rule did not ask for: the identity of a subagent
+// that is alone on its connection (conn_agent_identity.go callerFor).
+func (s *connSession) shardOf(id string) *agentShard {
 	s.shardsMu.Lock()
 	defer s.shardsMu.Unlock()
 	if sh, ok := s.shards[id]; ok {

@@ -45,7 +45,7 @@ func newStampedConn(t *testing.T) *stampedConn {
 	srv.Register(tools.NewSessionStart(s.workspaceFor, nil, nil, nil, func() string { return "" }, nil).
 		WithRepin(s.repinWorkspace).
 		WithDeclaredAgent(s.declaredAgentCtx).
-		WithExternalID(s.linkExternalID))
+		WithLinkage(s.linkExternalID))
 	srv.Register(tools.NewWriteFile(s.buildWriteDeps()))
 	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithWorkspace(s.workspaceFor))
 	srv.OnToolRefusal = s.refuseSharedStateChange

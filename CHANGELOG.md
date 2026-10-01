@@ -71,6 +71,156 @@
   exits rather than panics because the daemon's own `recover()` sites would
   swallow a panic and let the test pass. The check never runs outside
   `go test`. (#551)
+- **A slow git write no longer outlives its call and lands unreported.** When a
+  pre-commit hook outlasted the MCP client's call timeout, the client reported
+  `Request timed out` while the commit carried on in the daemon and landed
+  later; a retry then collided on `.git/index.lock` or committed the same change
+  twice. A write- or destructive-tier `git` call now stops waiting after the new
+  `[git] detach_after` (default `45s`, `PLUMB_GIT_DETACH_AFTER`, trust-gated),
+  counting any wait for the per-repository lock. The child is not killed: the
+  call returns "still running in the background" with its pid, start time and
+  HEAD at that moment. Until it finishes, further non-read calls on that repository
+  are refused with that explanation and reads still run with a note. After it
+  finishes, the next `git` call from each session reports `landed as <sha>` or
+  the failure with git's output. A value at or above `write_timeout` restores
+  the old wait-it-out behaviour. (#549)
+- **Every agent on a shared connection has its own session identity, mail and
+  commit signature.** (#556) A connection registers one session, and the tools
+  answered for it whoever asked: a subagent was told it was its parent, consumed
+  its parent's mail at `session_start` and at `check_messages`, read its parent's
+  threads, and signed its commits `Plumb-Session: <parent's name>`. The
+  connection's identity now belongs to the conversation it is linked to (the id
+  equal to the connection's external id) and to no other agent. Every other
+  stamped agent gets a session row of its own, registered when it first needs an
+  identity and kept on the root it works in; `session_start`'s `Session:` line, its
+  peer digest and its mailbox claim, `leave_note`, `check_messages`, the
+  `workspace_sessions` mail listing and the commit trailer all answer for the
+  caller. An agent with no identity of its own (an unstamped call on a shared
+  connection, or one whose row could not be written) gets none, and its commits
+  carry no trailer, instead of borrowing another agent's. A subagent alone on a
+  restarted connection while its parent is parked is still not the connection.
+  Predecessor session IDs a reconnect inherited reach the owner only, and the
+  owner is whichever conversation the connection is currently linked to.
+- **Only the conversation that resumed is told it resumed.** (#556) A subagent
+  that reached a restarted connection first reported "resumed" for an identity it
+  never had, and the conversation's own main thread then was not told. The
+  connection still takes its conversation's name back as soon as it is linked,
+  whichever agent's call that was, but what resuming means now waits for the owner
+  and is delivered to it once. Only the name comes back: a predecessor's threads
+  and mail bound to its session ID follow only a reconnect that presents the serve
+  proxy's credential, never a conversation id a model can type.
+- **The reconnect note no longer says a new identity was restored.** (#565) A
+  connection's first contact under a credential (`established`) read "Your session
+  identity was restored: you are still X", which told an agent that had never been
+  X that it kept an identity. It now says a new session started, names it, and
+  asks the agent to `session_start` with its `session_id`.
+- **`find_references` and `get_definition` resolve a plain Go method name.**
+  (#546) gopls reports a method as `(*WriteTracker).WroteMtime`, so
+  `symbol_name: "WroteMtime"` answered "No symbol named" from both tools, while
+  `read_symbol` found it through its tree-sitter fallback. The shared resolver
+  now matches a plain name against a Go method's own name, the way it already
+  matched a nested method, so every tool that takes a symbol name resolves it
+  alike. A symbol literally carrying the name still wins, so `Run` stays the
+  function `Run` beside a method `(*S).Run`, and `rename_symbol` and
+  `move_symbol` keep working on it. That rule is deliberate and has a cost: a
+  struct field or an interface method named `Run` carries the name too, so it
+  hides every `(*T).Run` from a plain `Run` lookup, and the method has to be
+  addressed by its receiver (`T.Run`, or `T/Run` for `move_symbol`). Only when
+  no symbol carries the name itself do methods compete, and then equally good
+  matches are never resolved to one silently: the read-only tools and the
+  hierarchies answer for each match, `rename_symbol` refuses with the
+  `Receiver.Method` names that single each one out, and `move_symbol` refuses
+  with the `Receiver/Method` name_path for each. `topology_impact` picks the
+  method its node names by line, so a name several receivers share (`Close`,
+  `String`) still gets its cross-file callers.
+- **`move_symbol` no longer moves the wrong method for a generic receiver, and a
+  name_path the tree-sitter fallback cannot place exactly is refused.** (#546)
+  For `func (s *S[T]) Run`, gopls names the method `(*S[T]).Run`, so the refusal
+  for a bare `Run` offered `S[T]/Run`; the topology index could not express that
+  receiver, found no parent called `S[T]`, and fell back to the first node named
+  `Run`, so the move reported success and moved another type's `Run`. Three
+  things were wrong and three are fixed. The tree-sitter fallback no longer
+  falls back to the first node of that name (a plain name is unchanged), and the
+  refusal says the fallback found nothing either when the language server had
+  failed to answer. A `Parent/Name` path now names a declaration whose direct
+  parent is `Parent`, and `P1/P2/Name` one whose parent is `P2`, whose parent is
+  `P1`: not a declaration that merely sits somewhere inside `Parent`, so
+  `Outer/run` is `Outer`'s own `run` and never that of a class nested in it, and
+  `Wrong/Inner/run` is refused although `Inner` exists. A declaration's parent
+  is the smallest named node whose span encloses it, or the node its extractor
+  ties it to by a containment edge, and a `Qualified` name that spells out the
+  whole chain (`(*S).Run`, `Foo::run`) is evidence too. An edge from a package
+  node is not: Go links every top-level declaration to its `package` and C# to a
+  file-scoped namespace, which names nothing a path addresses (`p/Run` is
+  refused), though a package whose span encloses a declaration, an Elixir
+  module, is a parent like any other. A path nothing matches
+  is refused; so is one several declarations match, with their lines listed:
+  overloads, a class nested in a class of the same name, a C++ or Objective-C
+  declaration beside its definition, a TypeScript class beside a same-named one
+  in a `namespace`. A TypeScript namespace is not a node, so no path through one
+  resolves. Rust methods sit in `impl` blocks, which are not nodes either, so
+  `Type/method` resolves through the extractor's link from an impl's method to
+  its type, for inherent and trait impls, when the file declares the type; an
+  impl for a type declared elsewhere, and one type name declared in two modules,
+  are refused. The Go extractor now records a generic receiver by its base type,
+  `(*S).Run`, instead of `(*_).Run`. And the name_paths a refusal offers are
+  resolved by the language server's own flat `(*S[T]).Run` symbol, not only by
+  the topology index, with the type parameters stripped (`S/Run`; `S[T]/Run`
+  resolves too); a path is offered only once the resolver a retry calls is seen
+  to return exactly that match. `*S/Run`, `(*S)/Run` and `S[T]/Run` name the same
+  method in both tiers, and a bracket that is never closed (`S[/Run`) is no
+  spelling of a type, so it is refused instead of being cut to `S`.
+- **`include_doc_comment` no longer reaches another symbol's doc comment.**
+  (#546) `replace_symbol_body`, `insert_before_symbol` and `move_symbol` (whose
+  `include_doc_comment` defaults to true) resolved the symbol once, then
+  resolved the `name_path` a second time through the tree-sitter index to find
+  its doc comment, and the two answers could differ. With `Outer/run`, where a
+  class `Inner` nested in `Outer` also has a `run` above `Outer`'s own, a healthy
+  language server named `Outer`'s `run` and the index named `Inner`'s, so the
+  edit began at `Inner`'s doc comment and deleted `Inner`'s `run`. The doc
+  comment is now looked up for the symbol the tool already resolved, from the
+  language server or the fallback: the tree-sitter node of its name whose span
+  starts on its first line (told apart by column, then by kind, when several do),
+  and the line-scan for the comment above it when no node matches exactly.
+- **The brief `session_start` keeps its `Git:` line on a detached HEAD.**
+  (#546) Both packets keyed the branch line and the git-policy section on a
+  branch name, so a detached HEAD, the standard setup for a review worktree,
+  dropped both. They now show `Branch: detached at <short sha>` and the policy.
+- **`session_start` describes the calling agent's own language server.** (#546)
+  The `Go LSP: runs with GOWORK=off` line, the warm-up advisory, the "LSP is
+  ready" line and the diagnostics mode read the connection's primary server, so
+  on a shared connection a subagent pinned to a worktree was not told its
+  server runs with `GOWORK=off`, and one on the main checkout was told it did.
+  They now describe the server serving the workspace `session_start` resolved
+  for the caller. A subagent's re-pin starts no server, so on its first
+  `session_start` the packet says the server has not started yet and names the
+  `go.work` it will start with `GOWORK=off` against, decided from disk.
+  `daemon_info` still reports the connection's own server.
+- **docs: when a `go.work` edit reaches the Go language server.** (#546) The
+  `GOWORK=off` decision is made once per server start, so a running server keeps
+  it until it starts again: `plumb restart`, or, for a workspace's primary
+  server, its idle teardown. The paragraph moved to its own `[lsp.<language>]`
+  subsection, so it no longer sits between the `[git] env` text and the note on
+  how project entries compose with global ones.
+- **`session_start` no longer tells you to install a hook you already have.**
+  When a call arrived without a per-call identity, its notice only said
+  "`plumb hooks install claude-code` stamps every call". With the hook
+  installed, the usual cause is a daemon too old to accept the key Claude
+  desktop's connector passes through, so the advice sent people round in a
+  circle. The notice now adds that, if the hook is installed, `plumb hooks`
+  checks it and the daemon: it reports a missing or stale hook, and a daemon
+  that cannot take the stamp.
+
+- **The `git` tool no longer opens an editor.** plumb runs git with no
+  terminal, so `rebase --continue`, `rebase -i`, `cherry-pick -e` and
+  `revert --edit` launched `core.editor` and failed with `cannot exec
+  '<editor>'`, or waited on it until the write timeout while holding the
+  repository's git lock. Every git child the tool runs now gets
+  `GIT_EDITOR=true` and `GIT_SEQUENCE_EDITOR=true`, which accept the message
+  or todo list git prepared as written, and `GIT_TERMINAL_PROMPT=0`, so an
+  HTTPS credential prompt fails instead of waiting. These replace a value the
+  daemon inherited, which is usually your interactive editor; a value set
+  under `[git] env` is still used as is. (#544)
 - **The Claude Code identity hook stamps from its cached answer when the daemon
   probe fails, and fails less often.** (#556) The hook gates every stamp on a
   probe of the daemon's control socket, and any probe failure was an answer of

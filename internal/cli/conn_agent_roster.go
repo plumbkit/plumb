@@ -1,29 +1,42 @@
 package cli
 
-// conn_agent_roster.go — the session row a logical agent gets once it holds a
-// root of its own (issue #472).
+// conn_agent_roster.go — the session row a logical agent holds of its own
+// (issues #472 and #556).
 //
 // A connection registers exactly one session.Info, whose Folder is the
 // CONNECTION's pin, and workspace_sessions builds its roster by matching
-// Folder == workspace. So an agent that re-pins its shard is invisible in the
-// workspace it is actually working in, and present in one it never touched —
-// observed on disk as folder=…/yayl with external_id=…pauta. That roster is how
-// an agent discovers who else is live before touching a file, so the cost is a
-// peer-awareness hint nobody receives and a name nobody can address.
+// Folder == workspace. Two things follow for an agent multiplexed over it:
 //
-// SCOPE, deliberately narrower than "a child Info per logical agent": a row is
-// registered only while the agent's root DIFFERS from its connection's. An
-// agent sharing its connection's root is already listed in the right workspace
-// through the connection's own row, so registering a second one there would add
-// name pressure and a duplicate roster entry to fix nothing. Making every agent
-// individually addressable — the half that closes mail routing and the git
-// trailer — is the follow-on, and it needs the roster dedupe and the
-// name-collision work that #472's "worth scoping before building" is about.
+//   - one that re-pins its shard is invisible in the workspace it is actually
+//     working in, and present in one it never touched (#472); and
+//   - one that did not has no address of its own at all: it was told the
+//     connection's name, claimed the connection's mail, and signed its commits
+//     with the connection's name, so every subagent answered as its parent (#556).
 //
-// Locking: callers hold sh.mu (repinAgent does), matching persistPinForAgent,
-// which already performs I/O there. Never take shardsMu here — teardown walks
-// shards under shardsMu and then reads each shard's mu, so the reverse order
-// would invert it.
+// So every agent but the connection's OWNER holds a row of its own, registered
+// when it first needs an identity (ensureAgentRow) and kept on the root it works
+// in. Its row's name and ID are what peers address, what its mail is claimed
+// under, and what its commits are signed with. The owner — the conversation the
+// connection is linked to — IS the connection, and holds a row only while it works
+// in a workspace the connection is not pinned to (see syncAgentRoster), where that
+// row is what the roster lists and so what peers address. Who the owner is, and
+// which identity it answers to, lives in conn_agent_identity.go.
+//
+// A row deliberately carries NO ExternalID. That field is the CONVERSATION
+// linkage, and both `plumb mail --external-id` (mail.go) and session.FindEnded
+// match on it without filtering child rows — so a child carrying its parent's
+// linkage makes the idle-agent wake hook ambiguous and lets a reconnecting
+// conversation adopt the CHILD's generated name instead of its own. The agent is
+// addressable by its NAME, which is what the roster prints and what leave_note
+// takes, so the linkage buys nothing here and costs both.
+//
+// Locking: registering and retiring a row is disk I/O under the session
+// directory's flock, so it never runs under sh.mu (a peer's ordinary call reaches
+// boundaryPolicy, which walks the shards and blocks on that lock, and every other
+// agent then waits behind one agent's disk). sh.regMu serialises it instead, and
+// takes sh.mu only for the brief reads and writes inside. Never take shardsMu
+// here — teardown walks shards under shardsMu and then reads each shard's mu, so
+// the reverse order would invert it.
 
 import (
 	"context"
@@ -32,47 +45,75 @@ import (
 	"github.com/plumbkit/plumb/internal/session"
 )
 
-// syncAgentRoster brings this agent's own session row into line with the root
-// it now holds: registered when the agent has moved off its connection's pin,
-// moved with it on a later re-pin, and retired when the agent comes back. Every
-// failure is logged and swallowed — the roster is an observability surface, and
-// a session file that cannot be written must not fail the re-pin that was the
-// caller's actual request.
+// syncAgentRoster brings this agent's own session row into line with the root it
+// now holds. Every failure is logged and swallowed — the roster is an
+// observability surface, and a session file that cannot be written must not fail
+// the re-pin that was the caller's actual request.
 //
-// Takes sh.mu itself — deliberately NOT called with it held. Registering a row
-// flocks the session directory, and holding a shard lock across that stalls
-// every agent on the connection behind one agent's disk I/O (see the defer in
-// repinAgent).
+// A non-owner's row is its identity, so it is registered if it has none and moved
+// with the agent otherwise, wherever the agent sits — including the connection's
+// root. The owner's row exists to list it in the workspace it works in: it is
+// registered while the owner has moved off its connection's pin, and retired when
+// it comes back, because the connection's own row already lists it there. Compared
+// the way workspace_sessions compares them, so "the roster would already list me
+// here" is decided by the same rule the roster uses.
+//
+// Takes the shard's locks itself — deliberately NOT called with sh.mu held.
 func (s *connSession) syncAgentRoster(sh *agentShard, root, language string) {
-	if sh == nil || root == "" {
+	if sh == nil || root == "" || sh.id == "" {
 		return
 	}
-	sh.mu.Lock()
-	defer sh.mu.Unlock()
-	if sh.id == "" {
-		return
-	}
-	// The connection's own row already covers an agent sitting on its pin.
-	// Compared the way workspace_sessions compares them, so "the roster would
-	// already list me here" is decided by the same rule the roster uses.
-	if filepath.Clean(root) == filepath.Clean(s.workspace()) {
+	if s.ownsConnectionID(sh.id) && filepath.Clean(root) == filepath.Clean(s.workspace()) {
+		sh.regMu.Lock()
+		defer sh.regMu.Unlock()
+		sh.mu.Lock()
+		defer sh.mu.Unlock()
 		s.retireAgentRoster(sh)
 		return
 	}
-	if sh.rosterID != "" {
-		session.Patch(sh.rosterID, func(info *session.Info) {
+	s.registerAgentRow(sh, root, language)
+}
+
+// ensureAgentRow gives a non-owner agent the identity it was not born with: a
+// session row of its own, on the root it works in. A no-op once it has one, and
+// when the connection is closing (a row registered after teardown would outlive
+// every connection that could retire it).
+//
+// Lazy on purpose. A row is a live roster entry and a name drawn from a finite
+// pool, and a connection can see many short-lived subagents; only one that
+// actually uses its identity — session_start, mail, a commit trailer — needs it.
+func (s *connSession) ensureAgentRow(sh *agentShard) {
+	sh.mu.RLock()
+	have, root, language := sh.rosterID != "", sh.root, sh.language
+	sh.mu.RUnlock()
+	if have {
+		return
+	}
+	s.registerAgentRow(sh, root, language)
+}
+
+// registerAgentRow registers the agent's row on root, or moves the row it already
+// has there. Idempotent and safe to race: sh.regMu makes exactly one caller
+// register.
+func (s *connSession) registerAgentRow(sh *agentShard, root, language string) {
+	sh.regMu.Lock()
+	defer sh.regMu.Unlock()
+	sh.mu.RLock()
+	id := sh.rosterID
+	sh.mu.RUnlock()
+	if id != "" {
+		session.Patch(id, func(info *session.Info) {
 			info.Folder = root
 			info.Language = language
 		})
+		sh.mu.Lock()
+		sh.rosterFolder = root
+		sh.mu.Unlock()
 		return
 	}
-	// Deliberately NO ExternalID. That field is the CONVERSATION linkage, and
-	// both `plumb mail --external-id` (mail.go) and session.FindEnded match on
-	// it without filtering child rows — so a child carrying its parent's
-	// linkage makes the idle-agent wake hook ambiguous and lets a reconnecting
-	// conversation adopt the CHILD's generated name instead of its own. The
-	// agent is addressable by its NAME, which is what the roster prints and
-	// what leave_note takes, so the linkage buys nothing here and costs both.
+	if s.ctx != nil && s.ctx.Err() != nil {
+		return // the connection is closing: no teardown is left to retire this row
+	}
 	info, err := session.Register(session.Info{
 		ParentID: s.sessionID(),
 		Folder:   root,
@@ -82,16 +123,17 @@ func (s *connSession) syncAgentRoster(sh *agentShard, root, language string) {
 		s.log().Debug("daemon: registering the agent's roster row failed", "agent", sh.id, "root", root, "err", err)
 		return
 	}
-	sh.rosterID = info.ID
-	sh.rosterName = info.Name
+	sh.mu.Lock()
+	sh.rosterID, sh.rosterName, sh.rosterFolder = info.ID, info.Name, root
+	sh.mu.Unlock()
 	s.log().Info("daemon: logical agent registered in its own workspace roster",
 		"agent", sh.id, "root", root, "row", info.ID, "name", info.Name, "parent", s.sessionID())
 }
 
-// retireAgentRoster removes the agent's row, for an agent that has returned to
-// its connection's root. Idempotent.
+// retireAgentRoster removes the agent's row, for an owner that has returned to its
+// connection's root. Idempotent.
 //
-// Caller holds sh.mu.
+// Caller holds sh.regMu and sh.mu.
 func (s *connSession) retireAgentRoster(sh *agentShard) {
 	if sh == nil || sh.rosterID == "" {
 		return
@@ -99,6 +141,7 @@ func (s *connSession) retireAgentRoster(sh *agentShard) {
 	session.Unregister(sh.rosterID)
 	sh.rosterID = ""
 	sh.rosterName = ""
+	sh.rosterFolder = ""
 }
 
 // unregisterAgentRosters retires every agent row this connection registered, on
@@ -113,74 +156,24 @@ func (s *connSession) unregisterAgentRosters() {
 	}
 	s.shardsMu.Unlock()
 	for _, sh := range shards {
+		sh.regMu.Lock()
 		sh.mu.Lock()
 		s.retireAgentRoster(sh)
 		sh.mu.Unlock()
+		sh.regMu.Unlock()
 	}
 }
 
 // rosterIdentity answers workspace_sessions' per-call question: which workspace
 // the CALLING agent is in, and which row is its own.
 //
-// A caller with no row of its own returns "" for the id, which the tool reads as
-// "fall back to the connection's" — the correct answer rather than a missing
-// one, since an agent sitting on its connection's root IS represented by the
-// connection's row.
+// The row is the caller's identity (identityFor), and the tool treats the answer as
+// final: the owner's is the connection's row, a non-owner is given a row of its own
+// first so it never reads the connection's (some other agent's) as its own, and a
+// caller that is nobody — an unattributable call on a shared connection — answers
+// "" and is listed as no one.
 func (s *connSession) rosterIdentity(ctx context.Context) (workspace, selfID string) {
-	workspace = s.workspaceFor(ctx)
-	sh := s.shardFor(ctx)
-	if sh == nil {
-		return workspace, ""
-	}
-	sh.mu.RLock()
-	defer sh.mu.RUnlock()
-	return workspace, sh.rosterID
-}
-
-// sessionNameFor returns the session name for the calling agent in ctx. For a
-// logical agent holding its own roster row, this is that agent's own name;
-// otherwise it falls back to the connection's session name.
-func (s *connSession) sessionNameFor(ctx context.Context) string {
-	sh := s.shardFor(ctx)
-	if sh != nil {
-		sh.mu.RLock()
-		defer sh.mu.RUnlock()
-		if sh.rosterName != "" {
-			return sh.rosterName
-		}
-	}
-	return s.sessionName()
-}
-
-// sessionIDFor returns the session ID for the calling agent in ctx. For a
-// logical agent holding its own roster row, this is that agent's own row ID;
-// otherwise it falls back to the connection's session ID.
-func (s *connSession) sessionIDFor(ctx context.Context) string {
-	sh := s.shardFor(ctx)
-	if sh != nil {
-		sh.mu.RLock()
-		defer sh.mu.RUnlock()
-		if sh.rosterID != "" {
-			return sh.rosterID
-		}
-	}
-	return s.sessionID()
-}
-
-// addressableNameFor returns the addressable name for the calling agent in ctx.
-// For a logical agent holding its own roster row, this is that agent's roster
-// name (which is registered in the session directory); otherwise it falls back
-// to the connection's addressable name.
-func (s *connSession) addressableNameFor(ctx context.Context) string {
-	sh := s.shardFor(ctx)
-	if sh != nil {
-		sh.mu.RLock()
-		defer sh.mu.RUnlock()
-		if sh.rosterID != "" && sh.rosterName != "" {
-			return sh.rosterName
-		}
-	}
-	return s.addressableName()
+	return s.workspaceFor(ctx), s.identityFor(ctx, true).id
 }
 
 // touchAgentRoster keeps the calling agent's own row fresh. LastSeenAt comes
@@ -189,6 +182,10 @@ func (s *connSession) addressableNameFor(ctx context.Context) string {
 // is working — and hands any staleness-based reaping a timestamp that never
 // moves. The connection's own row is touched by onAfterTool; this is the other
 // half for an agent that has a row of its own.
+//
+// It also follows the agent's root. A shard that merely follows its connection
+// is moved by followConnectionShards and followParentShard, neither of which
+// touches the row, and a non-owner's row exists wherever the agent sits.
 func (s *connSession) touchAgentRoster(agentID string) {
 	if agentID == "" {
 		return
@@ -200,9 +197,13 @@ func (s *connSession) touchAgentRoster(agentID string) {
 		return
 	}
 	sh.mu.RLock()
-	id := sh.rosterID
+	id, root, language, synced := sh.rosterID, sh.root, sh.language, sh.rosterFolder
 	sh.mu.RUnlock()
-	if id != "" {
-		session.Touch(id)
+	if id == "" {
+		return
+	}
+	session.Touch(id)
+	if root != "" && root != synced {
+		s.syncAgentRoster(sh, root, language)
 	}
 }

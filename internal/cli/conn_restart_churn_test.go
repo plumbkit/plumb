@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -55,7 +56,7 @@ func TestServeRestart_LeavesExactlyOneClaim(t *testing.T) {
 
 	// Generation 1: a serve under proxy-1 links the conversation and takes a name.
 	first := newPersistSession(t, store, ss, "proxy-1")
-	first.linkExternalID(conv)
+	first.linkExternalID(context.Background(), conv)
 	if _, err := first.renameSession("gentle-mink"); err != nil {
 		t.Fatalf("first generation rename: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestServeRestart_LeavesExactlyOneClaim(t *testing.T) {
 	// Generation 2: the serve restarts. A fresh proxy secret means a NEW row.
 	second := newPersistSession(t, store, ss, "proxy-2")
 	t.Cleanup(second.close)
-	if got := second.linkExternalID(conv); got != "gentle-mink" {
+	if got := second.linkExternalID(context.Background(), conv).InheritedName; got != "gentle-mink" {
 		t.Fatalf("the restarted serve did not inherit its own name, got %q — the churn this test is "+
 			"about cannot happen, so it is testing nothing", got)
 	}
@@ -110,7 +111,7 @@ func TestServeRestart_PredecessorComesBackAsItself(t *testing.T) {
 	const conv = "conv-fork"
 
 	first := newPersistSession(t, store, ss, "proxy-1")
-	first.linkExternalID(conv)
+	first.linkExternalID(context.Background(), conv)
 	if _, err := first.renameSession("gentle-mink"); err != nil {
 		t.Fatalf("first generation rename: %v", err)
 	}
@@ -122,7 +123,7 @@ func TestServeRestart_PredecessorComesBackAsItself(t *testing.T) {
 	// is its superseded generation from that moment on.
 	second := newPersistSession(t, store, ss, "proxy-2")
 	t.Cleanup(second.close)
-	if got := second.linkExternalID(conv); got != "gentle-mink" {
+	if got := second.linkExternalID(context.Background(), conv).InheritedName; got != "gentle-mink" {
 		t.Fatalf("the newer serve did not inherit the name, got %q", got)
 	}
 
@@ -152,7 +153,7 @@ func TestServeRestart_LeavesAnotherConversationsClaimAlone(t *testing.T) {
 
 	s := newPersistSession(t, store, ss, "proxy-mine")
 	t.Cleanup(s.close)
-	s.linkExternalID("conv-mine")
+	s.linkExternalID(context.Background(), "conv-mine")
 	// The rename is refused — the stranger's row reserves the name — which is the
 	// pre-existing behaviour this change deliberately does not alter.
 	_, _ = s.renameSession("gentle-mink")

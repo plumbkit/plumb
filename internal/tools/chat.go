@@ -68,10 +68,12 @@ type Inbox struct {
 	// claims unbound messages only, which is every message written before the
 	// binding existed and every one addressed to a peer that was not connected.
 	SelfID string
-	// InheritedIDs are predecessor session IDs this session provably continues,
-	// granted only by the proxy-authenticated reconnect path. They let mail bound
-	// to a session a daemon restart ended still reach the agent it was written
-	// for. Empty for a session that did not come back that way.
+	// InheritedIDs are predecessor session IDs this session provably continues:
+	// granted by the proxy-authenticated reconnect path, or to the main thread of a
+	// conversation that resumed by its external id. They let mail bound to a session
+	// a restart ended still reach the agent it was written for, and are the
+	// conversation owner's alone: another agent sharing the connection gets none.
+	// Empty for a session that did not come back that way.
 	InheritedIDs []string
 	// Root is this session's pinned workspace. A cross-project message names the
 	// workspace allowed to claim it, and this is what that is checked against —

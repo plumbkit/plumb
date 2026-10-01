@@ -169,10 +169,13 @@ type CollabDeps struct {
 	// ResolvePeer reports the LIVE session answering to a name. May be nil, in
 	// which case every message is treated as same-project and bound by name only.
 	ResolvePeer func(name string) (PeerSession, bool)
-	// InheritedSessionIDs returns predecessor session IDs this session provably
+	// InheritedSessionIDs returns the predecessor session IDs the CALLER provably
 	// continues, so it can still read mail bound to the session a daemon restart
-	// ended. May be nil.
-	InheritedSessionIDs func() []string
+	// ended. Per call, because a predecessor's mail and threads belong to one
+	// agent — the conversation's own main thread — and a subagent or another
+	// conversation multiplexed over the same connection must get nothing (#556).
+	// May be nil.
+	InheritedSessionIDs func(ctx context.Context) []string
 	// TargetAllowsCrossProject reports whether the project pinned at workspace
 	// has opted in to [collab] cross_project — the RECIPIENT's consent, resolved
 	// from just its path, no live connection to that project required. nil is
@@ -197,11 +200,15 @@ func (d CollabDeps) workspace(ctx ...context.Context) string {
 	return ""
 }
 
+// sessionName is the caller's own name. When the per-call resolver is wired its
+// answer is final, an empty one included: an agent with no name of its own (an
+// unattributable caller on a shared connection, or one whose roster row could
+// not be written) must not be handed the CONNECTION's, which is some other
+// agent's — that fallback is how a subagent came to author, address and read as
+// its parent (#556).
 func (d CollabDeps) sessionName(ctx ...context.Context) string {
 	if len(ctx) > 0 && ctx[0] != nil && d.SessionNameFor != nil {
-		if name := d.SessionNameFor(ctx[0]); name != "" {
-			return name
-		}
+		return d.SessionNameFor(ctx[0])
 	}
 	if d.SessionName != nil {
 		return d.SessionName()
@@ -209,16 +216,26 @@ func (d CollabDeps) sessionName(ctx ...context.Context) string {
 	return ""
 }
 
+// sessionID is the caller's own session ID, with the same no-fallback rule as
+// sessionName: a note authored or claimed under another agent's ID is the other
+// agent's note.
 func (d CollabDeps) sessionID(ctx ...context.Context) string {
 	if len(ctx) > 0 && ctx[0] != nil && d.SessionIDFor != nil {
-		if id := d.SessionIDFor(ctx[0]); id != "" {
-			return id
-		}
+		return d.SessionIDFor(ctx[0])
 	}
 	if d.SessionID != nil {
 		return d.SessionID()
 	}
 	return ""
+}
+
+// inheritedIDs is the predecessor identities the caller in ctx provably
+// continues, nil when it has none or the resolver is unwired.
+func (d CollabDeps) inheritedIDs(ctx context.Context) []string {
+	if d.InheritedSessionIDs == nil {
+		return nil
+	}
+	return d.InheritedSessionIDs(ctx)
 }
 
 func (d CollabDeps) store(ctx ...context.Context) *collab.Store {

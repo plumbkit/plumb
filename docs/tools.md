@@ -1055,7 +1055,9 @@ prepared and `rebase -i` runs its todo list unchanged. A value under
 
 **Attribution:** with `[git] commit_trailer = true` (default off) every
 plumb-mediated commit is stamped with a `Plumb-Session: <session-name>`
-trailer; regardless of that knob, `workspace_sessions` always lists recent
+trailer naming the agent that made the call (on a connection shared by several
+agents, each has its own session name, and an agent with none is stamped with
+nothing rather than with another agent's); regardless of that knob, `workspace_sessions` always lists recent
 commits per session (short SHA, subject, repository) from its recent-writes
 feed. See [Configuration → `[git]`](configuration.md#git--tiered-git-tool-gating).
 
