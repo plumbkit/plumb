@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/render"
@@ -29,7 +30,8 @@ relative to the copy compiled into this binary. Read-only.
 ` + "`plumb skills sync [client]`" + ` installs or refreshes the skills: every
 registered skill-capable client, or just the named one. A client whose config
 does not register plumb is skipped — sync never writes skill files for a client
-that does not use plumb.`,
+that does not use plumb. To replace an edited skill with the shipped copy, run
+plumb skills sync --force <client>; it saves the edited file as a .bak first.`,
 	Args: cobra.NoArgs,
 	RunE: runSkillsStatus,
 }
@@ -48,18 +50,38 @@ shipped hash) are cleaned up automatically; any others are left for manual
 review. Naming a client that does not register plumb is an error — run ` +
 		"`plumb setup <client>`" + ` first.
 
+` + "`--force`" + ` replaces an edited skill with the shipped copy instead of
+proposing it: the edited SKILL.md is first saved beside it as
+SKILL.md.<timestamp>.bak, the skill's ".plumb-new" file is removed, and the row
+reports "replaced" with the backup's path. A skill that needs no replacing is
+handled as usual.
+
 ` + "`--check`" + ` reports every action sync would take — including which
-backups would be cleaned up — without writing anything.`,
+backups would be cleaned up — without writing anything; with ` + "`--force`" + `
+it previews the replacements.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dryRun, _ := cmd.Flags().GetBool("check")
-		return runSkillsSync(dryRun, args)
+		forceConflicts, _ := cmd.Flags().GetBool("force")
+		return runSkillsSync(dryRun, args, forceConflicts)
 	},
 }
 
 func init() {
 	skillsSyncCmd.Flags().Bool("check", false, "List drift without writing")
+	skillsSyncCmd.Flags().Bool("force", false, "Replace edited skills with the shipped copy, saving the edited file as a .bak first")
 	skillsCmd.AddCommand(skillsSyncCmd)
+}
+
+// tableWidth is the width a grouped table should fit: the terminal's, or 0 —
+// natural column widths, no wrapping — when f is not a terminal, so piped and
+// redirected output keeps one row per line for grep and awk.
+func tableWidth(f *os.File) int {
+	width, _, err := term.GetSize(f.Fd())
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
 }
 
 // runSkillsStatus renders the per-client, per-skill freshness table. A
@@ -70,7 +92,7 @@ func init() {
 // cell (the widest cell in the table, which stretched every dotted rule).
 func runSkillsStatus(_ *cobra.Command, _ []string) error {
 	tui.RebuildStyles()
-	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir").MaxWidth(tableWidth(os.Stdout))
 	for _, c := range skillCapableClients() {
 		t.NextGroup()
 		dir, err := c.skillsDirFn()
@@ -106,7 +128,8 @@ func runSkillsStatus(_ *cobra.Command, _ []string) error {
 // Per-skill errors are rows with an error status, not fatal (see
 // syncClientGroup) — a sync that partially failed still leaves every other
 // skill correct.
-func runSkillsSync(dryRun bool, args []string) error {
+func runSkillsSync(dryRun bool, args []string, forceOverride ...bool) error {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
 	tui.RebuildStyles()
 	capable := skillCapableClients()
 	var targets []setupTarget
@@ -136,10 +159,10 @@ func runSkillsSync(dryRun bool, args []string) error {
 		fmt.Println()
 	}
 
-	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir")
+	t := render.NewGroupedTable(tui.SepStyle, tui.HintStyle, "Client", "Skill", "Status", "Skills dir").MaxWidth(tableWidth(os.Stdout))
 	var summaries []string
 	for _, target := range targets {
-		syncClientGroup(t, &summaries, target, dryRun)
+		syncClientGroup(t, &summaries, target, dryRun, forceConflicts)
 	}
 	fmt.Println(t.Render())
 	if len(summaries) > 0 {
@@ -169,8 +192,9 @@ func runSkillsSync(dryRun bool, args []string) error {
 // cleanup is appended to the client's summary line rather than given its own
 // row: it is not a per-skill outcome, and a table row with no matching skill
 // name would look like a bug.
-func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget, dryRun bool) {
-	dir, results, cleanup := installSkillsFor(target, dryRun)
+func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTarget, dryRun bool, forceOverride ...bool) {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
+	dir, results, cleanup := installSkillsFor(target, dryRun, forceConflicts)
 	var tally skillSyncTally
 	t.NextGroup()
 	for i, r := range results {
@@ -192,13 +216,16 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 				status = "missing"
 			}
 			tally.installed++
+		case strings.HasPrefix(r.action, skillActionReplaced):
+			status, shown = replacedRow(r.action, dryRun)
+			tally.replaced++
 		case strings.HasPrefix(r.action, skillActionConflict):
 			status = skillActionConflict
 			word := "proposal updated"
 			if strings.HasSuffix(r.action, conflictUnchangedSuffix) {
 				word = "proposal unchanged"
 			}
-			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + " (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)"
+			shown = render.ContractPath(filepath.Join(dir, r.name+".plumb-new")) + "\n (differs from the shipped version — user-edited or predates the manifest — " + word + ", review and merge)\n Run plumb skills sync --force " + target.use + " to replace it (edited file saved as .bak)."
 			tally.conflict++
 		default:
 			if dryRun {
@@ -209,6 +236,15 @@ func syncClientGroup(t *render.GroupedTable, summaries *[]string, target setupTa
 		t.Row(name, r.name, statusStyle(status).Render(status), shown)
 	}
 	*summaries = append(*summaries, skillSyncSummaryLine(target.name, tally, cleanup, dryRun))
+}
+
+// replacedRow is the status and detail cells for a forced replacement: where
+// the backup went, or under --check that one would be saved.
+func replacedRow(action string, dryRun bool) (status, shown string) {
+	if dryRun {
+		return "would replace", "edited SKILL.md would be saved as a .bak first"
+	}
+	return skillActionReplaced, "backup: " + render.ContractPath(replacedBackup(action))
 }
 
 // findSkillCapable resolves a sync argument against the capable set by command
@@ -233,7 +269,7 @@ func skillCapableNames(capable []setupTarget) string {
 // skillSyncTally is one client's sync outcome, aggregated for the summary
 // line runSkillsSync prints per client.
 type skillSyncTally struct {
-	installed, updated, current, failed, conflict int
+	installed, updated, replaced, current, failed, conflict int
 }
 
 // skillSyncSummaryLine renders one client's sync outcome as a single line,
@@ -242,12 +278,12 @@ type skillSyncTally struct {
 // indistinguishable from a broken one, so "no output" may only ever mean the
 // command did not run — never that it no-opped.
 func skillSyncSummaryLine(client string, t skillSyncTally, cleanup skillCleanupReport, dryRun bool) string {
-	total := t.installed + t.updated + t.current + t.failed + t.conflict
+	total := t.installed + t.updated + t.replaced + t.current + t.failed + t.conflict
 	line := client + ": nothing to sync"
 	switch {
 	case total == 0:
 		// line already set.
-	case t.installed == 0 && t.updated == 0 && t.failed == 0 && t.conflict == 0:
+	case t.installed == 0 && t.updated == 0 && t.replaced == 0 && t.failed == 0 && t.conflict == 0:
 		line = fmt.Sprintf("%s: %d %s current", client, t.current, textfmt.Plural(t.current, "skill", "skills"))
 	default:
 		parts := skillSyncParts(t, dryRun)
@@ -264,12 +300,15 @@ func skillSyncParts(t skillSyncTally, dryRun bool) []string {
 }
 
 func skillSyncPartsDryRun(t skillSyncTally) []string {
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	if t.installed > 0 {
 		parts = append(parts, fmt.Sprintf("would install %d", t.installed))
 	}
 	if t.updated > 0 {
 		parts = append(parts, fmt.Sprintf("would update %d", t.updated))
+	}
+	if t.replaced > 0 {
+		parts = append(parts, fmt.Sprintf("would replace %d", t.replaced))
 	}
 	if t.current > 0 {
 		parts = append(parts, fmt.Sprintf("%d current", t.current))
@@ -290,11 +329,12 @@ func skillSyncPartsReal(t skillSyncTally) []string {
 	}{
 		{t.installed, "installed"},
 		{t.updated, "updated"},
+		{t.replaced, "replaced"},
 		{t.current, "current"},
 		{t.conflict, "needs review"},
 		{t.failed, "failed"},
 	}
-	parts := make([]string, 0, 5)
+	parts := make([]string, 0, 6)
 	for _, p := range items {
 		if p.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.word))

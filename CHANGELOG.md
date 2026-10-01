@@ -54,9 +54,20 @@
   them. The filter reaches the command as one argument with no shell, allows
   `|`, regexp characters and spaces, and may not start with `-`. A filter on a
   command with no `{run}` is refused; a `verbose` it cannot place is noted.
+- **`plumb skills sync --force` replaces edited skills with a backup.** A skill
+  you have edited is normally left alone and the shipped copy written beside it
+  as `<name>.plumb-new`. `--force` instead saves the edited `SKILL.md` as
+  `SKILL.md.<timestamp>.bak`, installs the shipped copy and removes the stale
+  `.plumb-new`; the row reports `replaced` with the backup's path. `--check
+  --force` previews the replacements without writing.
 
 ### Fixed
 
+- **Skill status tables keep wrapped details in their column.** `plumb skills`
+  and `plumb skills sync` now fit their grouped tables to the terminal width.
+  Conflict paths stay on their own line, followed by the provenance and review
+  note beneath them in the same column. Piped or redirected output keeps its
+  natural column widths, with nothing wrapped to fit.
 - **A subagent's own name and session ID now survive a daemon restart.** (#526)
   The identity #573 gave each agent on a shared connection lived only in the
   session directory, so a restart stranded the mail bound to it, let its name go

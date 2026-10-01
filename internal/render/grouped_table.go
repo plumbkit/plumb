@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // GroupedTable is a hand-rendered table whose rows are partitioned into groups
@@ -15,8 +16,16 @@ type GroupedTable struct {
 	borderStyle lipgloss.Style
 	headerStyle lipgloss.Style
 	headers     []string
+	maxWidth    int
 	// groups[g][r] is row r of group g — itself one cell per column.
 	groups [][][]string
+}
+
+// MaxWidth limits the rendered table to width columns. Cells that do not fit
+// wrap within their column; a non-positive width keeps natural column widths.
+func (t *GroupedTable) MaxWidth(width int) *GroupedTable {
+	t.maxWidth = width
+	return t
 }
 
 // NewGroupedTable returns a table with the given header cells, rendered with
@@ -61,6 +70,7 @@ func (t *GroupedTable) Render() string {
 			}
 		}
 	}
+	fitColumnWidths(widths, t.headers, t.maxWidth)
 
 	ruleWidth := 2 * (cols - 1)
 	for _, w := range widths {
@@ -96,25 +106,82 @@ func (t *GroupedTable) Render() string {
 	return b.String()
 }
 
+// fitColumnWidths gives long cells the remaining space after preserving header
+// widths. The final detail column keeps up to 16 columns when space permits.
+func fitColumnWidths(widths []int, headers []string, maxWidth int) {
+	if maxWidth <= 0 || len(widths) == 0 {
+		return
+	}
+	available := maxWidth - 2*(len(widths)-1)
+	minimums := make([]int, len(widths))
+	for i, h := range headers {
+		minimums[i] = min(widths[i], max(1, lipgloss.Width(h)))
+	}
+	last := len(widths) - 1
+	minimums[last] = min(widths[last], max(minimums[last], 16))
+	shrinkColumns(widths, minimums, available)
+	// At very narrow widths even the headers must wrap.
+	for i := range minimums {
+		minimums[i] = 1
+	}
+	shrinkColumns(widths, minimums, available)
+}
+
+func shrinkColumns(widths, minimums []int, available int) {
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+	for total > available {
+		widest, room := -1, 0
+		for i, w := range widths {
+			if w-minimums[i] > room {
+				widest, room = i, w-minimums[i]
+			}
+		}
+		if widest < 0 {
+			return
+		}
+		cut := min(room, total-available)
+		widths[widest] -= cut
+		total -= cut
+	}
+}
+
 // joinRow lays out one row: every cell styled with style, a two-space gap
 // between columns, each column padded to its width except the last (no
 // trailing spaces). Cells beyond the column count are dropped and missing
 // cells render empty, so a malformed Row degrades instead of panicking.
 func joinRow(cells []string, widths []int, style lipgloss.Style) string {
-	var b strings.Builder
-	for i := range widths {
-		if i > 0 {
-			b.WriteString("  ")
-		}
-		cell := ""
+	lines := make([][]string, len(widths))
+	height := 1
+	for i, width := range widths {
 		if i < len(cells) {
-			cell = cells[i]
+			lines[i] = strings.Split(ansi.Wrap(cells[i], width, ""), "\n")
+		} else {
+			lines[i] = []string{""}
 		}
-		cell = style.Render(cell)
-		if i < len(widths)-1 {
-			cell = PadRight(cell, widths[i])
+		height = max(height, len(lines[i]))
+	}
+	var b strings.Builder
+	for line := range height {
+		if line > 0 {
+			b.WriteByte('\n')
 		}
-		b.WriteString(cell)
+		for i := range widths {
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			cell := ""
+			if line < len(lines[i]) {
+				cell = lines[i][line]
+			}
+			cell = style.Render(cell)
+			if i < len(widths)-1 {
+				cell = PadRight(cell, widths[i])
+			}
+			b.WriteString(cell)
+		}
 	}
 	return b.String()
 }

@@ -116,10 +116,11 @@ type skillResult struct {
 // dryRun computes and reports every action — including the cleanup pass —
 // without writing SKILL.md, the manifest, a ".plumb-new" conflict file, or
 // deleting a backup; it is `plumb skills sync --check`'s whole implementation.
-// A skill whose SKILL.md is in conflict (see installSkill) has its reference
-// notes left untouched too, rather than rewriting material next to a file the
-// user is meant to review.
-func installSkillsFor(t setupTarget, dryRun bool) (dir string, results []skillResult, cleanup skillCleanupReport) {
+// force replaces a conflicting SKILL.md with the shipped copy after backing up
+// the edited file. Without force, a conflicted skill's reference notes stay
+// untouched too, rather than rewriting material beside a file for review.
+func installSkillsFor(t setupTarget, dryRun bool, forceOverride ...bool) (dir string, results []skillResult, cleanup skillCleanupReport) {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
 	if t.skillsDirFn == nil {
 		return "", nil, skillCleanupReport{}
 	}
@@ -135,7 +136,7 @@ func installSkillsFor(t setupTarget, dryRun bool) (dir string, results []skillRe
 	before := cloneSkillManifest(manifest)
 
 	for _, skill := range embeddedSkills() {
-		action, err := installSkill(dir, skill.Name, skill.Content, manifest, dryRun)
+		action, err := installSkill(dir, skill.Name, skill.Content, manifest, dryRun, forceConflicts)
 		if err == nil && !strings.HasPrefix(action, skillActionConflict) {
 			action, err = installSkillReferences(dir, skill, action, dryRun)
 		}
@@ -229,11 +230,24 @@ func installSkillReferences(skillsDir string, skill embeddedSkill, action string
 // rather than last-write-wins is what stops a run that rewrote a reference from
 // reporting "unchanged" because SKILL.md happened to be current.
 func strongerSkillAction(a, b string) string {
-	rank := map[string]int{"unchanged": 0, "installed": 1, "updated": 2}
-	if rank[b] > rank[a] {
+	if skillActionRank(b) > skillActionRank(a) {
 		return b
 	}
 	return a
+}
+
+// skillActionRank orders the per-file outcomes; a forced replacement outranks
+// "updated" so a reference rewrite beside it cannot hide the backup it made.
+func skillActionRank(action string) int {
+	switch {
+	case strings.HasPrefix(action, skillActionReplaced):
+		return 3
+	case action == "updated":
+		return 2
+	case action == "installed":
+		return 1
+	}
+	return 0
 }
 
 // skillActionConflict marks a skill whose on-disk SKILL.md cannot be proven
@@ -254,21 +268,38 @@ const (
 	conflictUnchangedSuffix = " (proposal unchanged)"
 )
 
+// skillActionReplaced marks a conflicting skill that --force overwrote after
+// saving the edited file. The action string carries the backup's path (see
+// replacedAction); a dry run reports it bare, since nothing is saved.
+const skillActionReplaced = "replaced"
+
+const replacedBackupPrefix = skillActionReplaced + " (backup: "
+
+// replacedAction is the action a forced replacement reports.
+func replacedAction(backup string) string { return replacedBackupPrefix + backup + ")" }
+
+// replacedBackup extracts the backup path from a replacedAction string.
+func replacedBackup(action string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(action, replacedBackupPrefix), ")")
+}
+
 // installSkill writes content to <skillsDir>/<name>/SKILL.md, creating the
-// directory if needed. Returns "installed", "updated", "unchanged", or
-// skillActionConflict.
+// directory if needed. Returns "installed", "updated", "unchanged",
+// skillActionConflict, or (with force) skillActionReplaced.
 //
 // manifest is the sync's hash ledger (see skillManifest): it is how
 // installSkill tells "plumb's own content changed between versions" (a
 // legitimate update — replaced in place, no backup) from "the file matches
 // neither what plumb shipped last time nor what it is shipping now" (the
-// user edited it — see skillActionConflict). manifest is updated in memory
-// for the caller to persist; this function never writes it to disk.
+// user edited it — see skillActionConflict). With force, a conflicting
+// installed file is backed up and replaced by the shipped copy. manifest is
+// updated in memory for the caller to persist; this function never writes it.
 //
 // dryRun computes and reports the action without writing SKILL.md, the
 // manifest, or a ".plumb-new" file — `plumb skills sync --check`'s per-skill
 // leg.
-func installSkill(skillsDir, name, content string, manifest *skillManifest, dryRun bool) (string, error) {
+func installSkill(skillsDir, name, content string, manifest *skillManifest, dryRun bool, forceOverride ...bool) (string, error) {
+	forceConflicts := len(forceOverride) > 0 && forceOverride[0]
 	dir := filepath.Join(skillsDir, name)
 	dst := filepath.Join(dir, "SKILL.md")
 	stamped := stampSkillContent(content)
@@ -303,12 +334,40 @@ func installSkill(skillsDir, name, content string, manifest *skillManifest, dryR
 		if oldHash, known := lastShippedHash(manifest, name); known && diskHash == oldHash {
 			return write("updated")
 		}
+		if forceConflicts {
+			return replaceForcedSkill(skillsDir, name, dryRun, write)
+		}
 		return writeConflictProposal(skillsDir, name, stamped, dryRun)
 	case os.IsNotExist(readErr):
 		return write("installed")
 	default:
 		return "", fmt.Errorf("reading %s: %w", dst, readErr)
 	}
+}
+
+// replaceForcedSkill preserves the current user-edited file before replacing
+// it with the shipped skill, then removes the skill's now-stale ".plumb-new"
+// proposal. It returns replacedAction(backup) so the row says where the backup
+// went; a dry run writes and removes nothing and returns skillActionReplaced.
+func replaceForcedSkill(skillsDir, name string, dryRun bool, write func(string) (string, error)) (string, error) {
+	var backup string
+	if !dryRun {
+		var err error
+		if backup, err = backupFileTo(filepath.Join(skillsDir, name, "SKILL.md")); err != nil {
+			return "", fmt.Errorf("backing up edited skill: %w", err)
+		}
+	}
+	// write records the new hash in the manifest and, unless dryRun, installs.
+	if _, err := write(skillActionReplaced); err != nil {
+		return "", err
+	}
+	if dryRun {
+		return skillActionReplaced, nil
+	}
+	if err := os.Remove(filepath.Join(skillsDir, name+".plumb-new")); err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("removing stale proposal after replacing %s (backup: %s): %w", name, backup, err)
+	}
+	return replacedAction(backup), nil
 }
 
 // writeConflictProposal reports name as a conflict and, unless dryRun,
