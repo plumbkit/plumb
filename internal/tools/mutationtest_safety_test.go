@@ -342,11 +342,11 @@ func TestMutationTest_RefusesWithoutACompileGate(t *testing.T) {
 }
 
 // TestMutationTest_RefusesConcurrentRun drives two real runs at once rather
-// than holding mutationRunLock from the test. Holding it here would make the
-// guard's REMOVAL surface as "unlock of unlocked mutex" — a process-level
-// fatal, not an assertion — which fails for the right reason by accident and
-// says nothing about what broke. Two genuine callers make the removal show up
-// as what it is: two runs proceeding where one had to be refused.
+// than holding the mutationRun slot from the test. Holding it by hand would
+// couple the test to the slot's internals, and a removed guard could then fail
+// for the wrong reason — saying nothing about what broke. Two genuine callers
+// make the removal show up as what it is: two runs proceeding where one had to
+// be refused.
 func TestMutationTest_RefusesConcurrentRun(t *testing.T) {
 	env := newMutationEnv(t, "answer = 42\n")
 	// Hold the first run inside its test step long enough for the second to overlap.

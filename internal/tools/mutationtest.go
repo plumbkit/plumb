@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -29,24 +28,10 @@ import (
 // compile a _test.go suffix as a test file.
 //
 // Concurrency: Execute is safe for concurrent use. Each run holds the shared
-// mutationRunLock (one mutation run per daemon) and, per mutant, the per-path
-// lock every write tool uses, so no other plumb write can interleave with the
-// mutate → verify → restore cycle.
-
-// mutationRunLock serialises mutation runs across the whole daemon process.
-//
-// PROCESS-GLOBAL BY DESIGN, like pathLocks in file_write_helpers.go, and for
-// the same reason: the state being protected is the machine, not a session.
-// Tool instances are per-connection, so a field on MutationTest would let two
-// agents mutate the same working tree at once and read each other's breakage as
-// their own result — a mutant reported `survived` only because a peer's mutant
-// was the thing failing the suite. A mutation run also monopolises the build
-// and test toolchain (compiler cache, test binaries, ports), so serialising
-// daemon-wide is correct rather than merely convenient.
-//
-// TryLock, not Lock: queueing behind a suite that may run for minutes is worse
-// than an immediate, explicit refusal the agent can act on.
-var mutationRunLock sync.Mutex
+// mutationRun slot (one mutation run per daemon; mutationtest_slot.go) and, per
+// mutant, the per-path lock every write tool uses, so no other plumb write can
+// interleave with the mutate → verify → restore cycle. sessNameFor/sessIDFor
+// are set once at registration and only read afterwards.
 
 // MutationOutcome classifies one mutant's run. The three values are exhaustive
 // and deliberately few; the WHY of an invalid result lives in its reason.
@@ -94,6 +79,10 @@ const (
 type MutationTest struct {
 	deps    WriteDeps
 	resolve TaskResolverFn
+	// sessNameFor / sessIDFor name the calling session for the slot's holder
+	// record (WithSession); nil leaves a refusal naming only the workspace.
+	sessNameFor func(ctx context.Context) string
+	sessIDFor   func(ctx context.Context) string
 }
 
 // NewMutationTest constructs the tool. resolve is the same stored-task resolver
@@ -196,11 +185,14 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err != nil {
 		return "", err
 	}
-	if !mutationRunLock.TryLock() {
-		return "", errors.New("mutation_test: another mutation run is already in progress on this daemon — " +
-			"concurrent runs would read each other's breakage as their own result. Wait for it to finish and retry")
+	if holder, ok := mutationRun.tryAcquire(t.holder(ctx, len(args.Mutants))); !ok {
+		return "", holder.busyError(time.Now())
 	}
-	defer mutationRunLock.Unlock()
+	defer mutationRun.release()
+	// Deferred after release, so it runs FIRST: the watcher is stopped before
+	// the slot is handed on.
+	ctx, cancel := cancelOnDisconnect(ctx)
+	defer cancel()
 
 	targets, warnings, err := t.preflight(ctx, args.Mutants)
 	if err != nil {
@@ -226,7 +218,7 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if restoreErr != nil {
 		return "", fmt.Errorf("%w\n\nresults before the failure:\n%s", restoreErr, report)
 	}
-	return report, nil
+	return report + skippedNote(len(results), len(targets)), nil
 }
 
 // resolvePlan resolves both stored commands up front. The compile command is
@@ -296,10 +288,12 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 // It returns the plan with goWorkOff recorded from what the commands actually ran
 // with, for the report header.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) (mutationPlan, error) {
+	mutationRun.atStep(stepCompile)
 	compile := t.runStep(ctx, plan.compile, plan.timeout)
 	if compile.failed() {
 		return plan, t.baselineError(ctx, plan, plan.compile, compile, roleCompile)
 	}
+	mutationRun.atStep(stepTest)
 	test := t.runStep(ctx, plan.test, plan.timeout)
 	if test.failed() {
 		return plan, t.baselineError(ctx, plan, plan.test, test, roleTest)

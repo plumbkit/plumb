@@ -169,7 +169,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithProjectPolicy(s.projectGitStatus))
 	srv.Register(tools.NewGitInit(wd))
 	srv.Register(tools.NewTasks(wd, s.taskResolver))
-	srv.Register(tools.NewMutationTest(wd, s.taskResolver))
+	srv.Register(tools.NewMutationTest(wd, s.taskResolver).WithSession(s.sessionNameFor, s.sessionIDFor))
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
