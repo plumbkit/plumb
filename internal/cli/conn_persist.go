@@ -54,9 +54,9 @@ func (s *connSession) onProxySession(id string) {
 	// durable state locks out every client that cannot stamp a per-call
 	// identity, which is the client this whole card is about.
 	//
-	// What IS wired is the routing half of the same evidence: an identified agent
-	// that held a pin on a connection that was shared reaches its own shard from
-	// its first call, rather than from whenever a peer re-declares (#523).
+	// What IS wired is the routing half of the same evidence: any stamped agent on
+	// a connection that was shared reaches its own shard from its first call,
+	// rather than from whenever a peer re-declares (#523).
 	s.noteConnectionWasShared(id)
 }
 

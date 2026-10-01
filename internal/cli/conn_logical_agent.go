@@ -52,7 +52,7 @@ type logicalAgentState struct {
 	// restart); see refreshDue.
 	declared map[string]time.Time
 	// priorShared records durable evidence that this connection was shared before
-	// it re-attached (see markPriorShared). It decides ROUTING only: it never
+	// it re-attached (see noteConnectionWasShared). It decides ROUTING only: it never
 	// enters seen, so it cannot arm the anonymous-write gate.
 	priorShared atomic.Bool
 }

@@ -424,16 +424,16 @@
   there is and ran on the connection's pin and read tracker. Its relative writes
   landed in the parent's checkout, the parent's reloaded reads satisfied its
   strict-mode checks, and its own reads were saved where its shard never looked
-  again. Any stamped agent on a connection recorded as shared (two agents
-  declared within the last six hours) now gets its own shard from its first call,
+  again. Any stamped agent on a connection recorded as shared (two agent
+  identities seen within the last six hours) now gets its own shard from its first call,
   whether or not it holds a pin of its own. Most subagents hold none: they are
   anchored to their parent's chosen root or simply follow the connection, so they
   get that root (the parent's persisted pin, when the parent is not yet back) and
   a read tracker of their own, not the connection's, which holds the parent's
   reads. This changes where its calls are routed and nothing that refuses a call:
   an unstamped write is admitted exactly as before. A lone agent is unaffected,
-  because a lone agent's `session_start` leaves a row of its own and its re-pins
-  must keep moving the connection. The evidence that the connection was shared is
+  because a connection that only ever saw one identity carries no evidence of
+  being shared, and that agent's re-pins must keep moving the connection. The evidence that the connection was shared is
   refreshed only by each agent's own calls, so a parent idle for more than six
   hours while one subagent works drops out of it, and if the daemon restarts then
   that subagent stays on the connection's pin and read tracker, as before.
