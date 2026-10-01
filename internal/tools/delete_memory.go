@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/memory"
 )
 
@@ -13,6 +15,8 @@ type deleteMemoryTool struct {
 	ws      WorkspaceFn
 	guard   BoundaryGuard
 	indexFn func() *memory.Index
+	histFn  func(context.Context, history.Change)
+	histOn  func() bool
 }
 
 func NewDeleteMemory(ws WorkspaceFn) *deleteMemoryTool { return &deleteMemoryTool{ws: ws} }
@@ -26,6 +30,23 @@ func (t *deleteMemoryTool) WithBoundary(guard BoundaryGuard) *deleteMemoryTool {
 func (t *deleteMemoryTool) WithIndex(fn func() *memory.Index) *deleteMemoryTool {
 	t.indexFn = fn
 	return t
+}
+
+func (t *deleteMemoryTool) WithHistory(fn func(context.Context, history.Change), on func() bool) *deleteMemoryTool {
+	t.histFn = fn
+	t.histOn = on
+	return t
+}
+
+func (t *deleteMemoryTool) historyOn() bool {
+	return t.histFn != nil && (t.histOn == nil || t.histOn())
+}
+
+func (t *deleteMemoryTool) recordHistory(ctx context.Context, c history.Change) {
+	if t.historyOn() {
+		c.At, c.Kind = time.Now(), history.KindFile
+		t.histFn(ctx, c)
+	}
 }
 
 func (*deleteMemoryTool) Name() string { return "delete_memory" }
@@ -66,8 +87,18 @@ func (t *deleteMemoryTool) Execute(ctx context.Context, args json.RawMessage) (s
 	if err := t.guard.check(ctx, ws); err != nil {
 		return "", fmt.Errorf("delete_memory: %w", err)
 	}
+	path, _ := memory.Path(ws, a.Name)
+	before := history.Side{}
+	if t.historyOn() {
+		if s, err := history.SideFromFile(path); err == nil {
+			before = s
+		}
+	}
 	if err := memory.DeleteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name); err != nil {
 		return "", err
+	}
+	if t.historyOn() {
+		t.recordHistory(ctx, history.Change{Op: history.OpDelete, Tool: "delete_memory", Path: path, Before: before})
 	}
 	return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws), nil
 }

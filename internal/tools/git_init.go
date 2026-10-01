@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/history"
 )
 
 var gitInitSchema = json.RawMessage(`{
@@ -120,13 +122,13 @@ func (t *GitInit) run(ctx context.Context, a gitInitArgs) (string, error) {
 	if !a.InitPlumb {
 		return "initialised git repository at " + a.Path, nil
 	}
-	if err := createPlumbMarker(a.Path); err != nil {
+	if err := createPlumbMarker(a.Path, t.deps.historySink(ctx)); err != nil {
 		return "", fmt.Errorf("git_init: %w", err)
 	}
 	return "initialised git repository and .plumb/ workspace at " + a.Path, nil
 }
 
-func createPlumbMarker(root string) error {
+func createPlumbMarker(root string, sink historySink) error {
 	plumbDir := filepath.Join(root, ".plumb")
 	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
 		return fmt.Errorf("creating .plumb/: %w", err)
@@ -135,5 +137,14 @@ func createPlumbMarker(root string) error {
 	if _, err := os.Stat(contextPath); err == nil {
 		return nil // already exists — do not overwrite
 	}
-	return os.WriteFile(contextPath, []byte(plumbContextTemplate), 0o644) //nolint:gosec // G306: context.md is a user-edited project file; 0644 is intentional
+	if err := os.WriteFile(contextPath, []byte(plumbContextTemplate), 0o644); err != nil { //nolint:gosec // G306: context.md is a user-edited project file; 0644 is intentional
+		return err
+	}
+	sink.recordHistory(history.Change{
+		Op:    history.OpCreate,
+		Tool:  "git_init",
+		Path:  contextPath,
+		After: history.SideFromBytes([]byte(plumbContextTemplate)),
+	})
+	return nil
 }
