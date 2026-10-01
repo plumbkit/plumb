@@ -178,7 +178,7 @@ func TestPinnedPolicyGuard_FailsClosedWhenARootPolicyWasRefused(t *testing.T) {
 	// A second, perfectly valid shard on the same connection: the union must not
 	// let the refused root back in through it either.
 	agentRoot := freshTempDir(t)
-	agentPolicy := s.buildAgentPolicy(agentRoot, "none")
+	agentPolicy := s.buildAgentPolicy(agentRoot, "none", tools.PinProvenance{})
 
 	s.mutate(func(v *sessionView) {
 		v.acquiredRoot = pinned

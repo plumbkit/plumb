@@ -103,6 +103,10 @@ func (s *connSession) repinWorkspace(ctx context.Context, folder, langOverride s
 	if err != nil {
 		return tools.RepinReport{}, err
 	}
+	// Which pin moved is decided here and nowhere the result's _meta can see it
+	// afterwards, so say it now: toolResultMeta must tell the serve proxy whether
+	// this call moved the CONNECTION's pin, which is the only one it replays (#527).
+	mcp.NoteResultMeta(ctx, mcp.MetaPinScopeKey, string(out.scope))
 	return s.repinReport(ctx, out), nil
 }
 
