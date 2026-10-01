@@ -181,7 +181,9 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 	const skipNote = "LSP skipped: the workspace root is the home directory"
 
 	tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
-		WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (string, error) { return ws, nil }).
+		WithRepin(func(_ context.Context, ws, _ string, _, _ bool) (RepinReport, error) {
+			return RepinReport{Root: ws, Scope: PinScopeConnection, From: attached, Effective: ws}, nil
+		}).
 		WithExternalID(func(string) string { return "resumed-session" }).
 		WithLSPSkipNote(func() string { return skipNote })
 
@@ -195,7 +197,7 @@ func TestSessionStartBrief_CarriesIdentitySignals(t *testing.T) {
 	if !strings.Contains(out, briefOrientationFooter) {
 		t.Fatalf("expected this call to auto-brief, got:\n%s", out)
 	}
-	if want := "Re-pinned: " + attached + " → " + target; !strings.Contains(out, want) {
+	if want := "Re-pinned this connection's pin: " + attached + " → " + target; !strings.Contains(out, want) {
 		t.Errorf("brief must carry the re-pin announcement %q, got:\n%s", want, out)
 	}
 	if !strings.Contains(out, "Session:  resumed-session (resumed)") {
@@ -273,13 +275,51 @@ func TestSessionStartBrief_JoinNamesCap(t *testing.T) {
 	}
 }
 
-// TestRepinAnnouncement: the line names no pin, because which one moved is the
-// daemon's decision; it only reports the move itself.
+// TestRepinAnnouncement pins the rendered block for every pin the daemon can
+// report moving (issue #517): the caller's own, or the connection's with its
+// follower count, plus the line naming what the caller's next relative path
+// resolves against — its own pin when that is not the connection's new root.
 func TestRepinAnnouncement(t *testing.T) {
-	if got := repinAnnouncement("", "/b"); got != "" {
-		t.Errorf("nothing moved, got %q", got)
+	cases := []struct {
+		name string
+		rep  RepinReport
+		want string
+	}{
+		{"first pin, nothing moved", RepinReport{Root: "/b", Scope: PinScopeConnection}, ""},
+		{"same root, nothing moved", RepinReport{Root: "/b", Scope: PinScopeAgent, From: "/b"}, ""},
+		{
+			"agent pin",
+			RepinReport{Root: "/b", Scope: PinScopeAgent, From: "/a", Effective: "/b"},
+			"Re-pinned your pin: /a → /b\nNext relative-path call resolves against: /b\n\n",
+		},
+		{
+			"connection pin, single agent",
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a", Effective: "/b"},
+			"Re-pinned this connection's pin: /a → /b (no other agent follows it)\nNext relative-path call resolves against: /b\n\n",
+		},
+		{
+			"connection pin, one follower",
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a", Followers: 1, Effective: "/b"},
+			"Re-pinned this connection's pin: /a → /b (1 other agent follows it)\nNext relative-path call resolves against: /b\n\n",
+		},
+		{
+			"connection pin moved by an agent holding its own",
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a", Followers: 2, Effective: "/own"},
+			"Re-pinned this connection's pin: /a → /b (2 other agents follow it)\nNext relative-path call resolves against: /own (your own pin, not the connection's)\n\n",
+		},
+		{
+			// A caller that resolves to nothing must be told so, not shown the
+			// connection's root its relative paths will not reach.
+			"caller resolves to nothing",
+			RepinReport{Root: "/b", Scope: PinScopeConnection, From: "/a"},
+			"Re-pinned this connection's pin: /a → /b (no other agent follows it)\nNext relative-path call resolves against: nothing — your workspace declaration is still unresolved, so pass absolute paths\n\n",
+		},
 	}
-	if got := repinAnnouncement("/a", "/b"); got != "Re-pinned: /a → /b\n\n" {
-		t.Errorf("got %q", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := repinAnnouncement(tc.rep); got != tc.want {
+				t.Errorf("got  %q\nwant %q", got, tc.want)
+			}
+		})
 	}
 }

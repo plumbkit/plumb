@@ -55,7 +55,7 @@ func agentProjectSession(t *testing.T, agentRoot func(connRoot string) string) (
 	s.recordLogicalAgentCall("subagent")
 	ctx := mcp.WithLogicalAgent(context.Background(), "subagent")
 	root := agentRoot(a)
-	if _, err := s.repinAgent(ctx, root, "go", sessionstate.PinSourceSessionStart, true); err != nil {
+	if _, _, err := s.repinAgent(ctx, root, "go", sessionstate.PinSourceSessionStart, true); err != nil {
 		t.Fatalf("pinning the subagent to %s: %v", root, err)
 	}
 	if got := s.workspaceFor(ctx); filepath.Clean(got) != filepath.Clean(root) {

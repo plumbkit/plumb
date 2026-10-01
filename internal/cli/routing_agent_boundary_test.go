@@ -66,7 +66,7 @@ func TestBoundaryGuards_AgentScopedGuardUsesTheAgentsPinNotTheConnections(t *tes
 	// Commit one identity so the connection is shared and the agent gets a shard.
 	s.recordLogicalAgentAttach("coordinator")
 	agentCtx := mcp.WithLogicalAgent(ctx, "agent-A")
-	if _, refused := s.repinAgent(agentCtx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil {
+	if _, _, refused := s.repinAgent(agentCtx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil {
 		t.Fatalf("per-agent re-pin refused: %v", refused)
 	}
 
@@ -94,7 +94,7 @@ func pinSharedConnection(t *testing.T, s *connSession, connRoot, agentRoot strin
 	// Commit one identity so the connection is shared and the agent gets a shard.
 	s.recordLogicalAgentAttach("coordinator")
 	agentCtx := mcp.WithLogicalAgent(ctx, "agent-A")
-	if _, refused := s.repinAgent(agentCtx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil {
+	if _, _, refused := s.repinAgent(agentCtx, agentRoot, "", sessionstate.PinSourceSessionStart, true); refused != nil {
 		t.Fatalf("per-agent re-pin refused: %v", refused)
 	}
 	return agentCtx

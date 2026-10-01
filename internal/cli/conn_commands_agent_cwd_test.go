@@ -39,7 +39,7 @@ func TestRunCommandResolvesTheCallingAgentsRoot(t *testing.T) {
 	s.recordLogicalAgentCall("coordinator")
 	s.recordLogicalAgentCall("subagent")
 	ctx := mcp.WithLogicalAgent(context.Background(), "subagent")
-	if _, err := s.repinAgent(ctx, worktree, "", sessionstate.PinSourceSessionStart, false); err != nil {
+	if _, _, err := s.repinAgent(ctx, worktree, "", sessionstate.PinSourceSessionStart, false); err != nil {
 		t.Fatalf("pinning the subagent to its worktree: %v", err)
 	}
 	if got := s.workspaceFor(ctx); filepath.Clean(got) != filepath.Clean(worktree) {
