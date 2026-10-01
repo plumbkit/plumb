@@ -5,8 +5,11 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,42 +28,77 @@ import (
 // clauses are false here, and in the expensive direction: the reader goes
 // looking for a defect in a change that has none.
 //
-// Bounded with runBounded so a regression that restores the old unbounded or
-// mis-sized behaviour fails in seconds rather than hanging CI.
+// It asserts what plumb does, not how fast: the bound is reported as plumb's,
+// git's whole process group is stopped, and the repository is left as it was —
+// no lock, no moved ref, the staged change still staged. The only time it reads
+// is that the call took AT LEAST the bound, which load cannot falsify. It once
+// bounded the wait at 1.5s and needed git to reach the hook inside it, which a
+// loaded machine does not do (#575).
+//
+// The hook signals once it is running, and the bound is doubled until it has.
+// That, rather than a bound large enough to be safe on any machine, is what keeps
+// the half of the assertion that quotes the hook's output deterministic: the
+// bound has to expire after the hook started for there to be output to quote.
 func TestGit_WriteTimeoutIsReportedAsPlumbs(t *testing.T) {
 	requireGit(t)
 	dir := initTestRepo(t)
-	// A hook that simply outlives the bound — the multi-agent case in miniature,
-	// where the hook is waiting on a peer's golangci-lint rather than sleeping.
-	hook := "#!/bin/sh\necho 'pre-commit: waiting on the shared lint cache'\nsleep 30\n"
-	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o755); err != nil {
+	head0 := gitRevParse(t, dir, "HEAD")
+
+	// The hook is the multi-agent case in miniature, where it is waiting on a
+	// peer's golangci-lint rather than sleeping. It prints, starts a sleeper, and
+	// only then publishes both pids — atomically, by rename, from outside the
+	// repository — so a pid file that exists proves the output was already
+	// written, and gives the test the processes to look for afterwards.
+	pids := filepath.Join(t.TempDir(), "hook.pids")
+	hook := "#!/bin/sh\n" +
+		"echo 'pre-commit: waiting on the shared lint cache'\n" +
+		"sleep 60 &\n" +
+		"echo \"$$ $!\" > " + shellQuote(pids+".tmp") + " && mv " + shellQuote(pids+".tmp") + " " + shellQuote(pids) + "\n" +
+		"wait\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte(hook), 0o755); err != nil { //nolint:gosec // G306: a hook must be executable
 		t.Fatalf("writing hook: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
 		t.Fatalf("writing file: %v", err)
 	}
 
-	// 1.5s, not something smaller: git takes roughly a second to reach the hook
-	// at all, and a bound that expires first would still prove the attribution
-	// while quietly dropping the hook-output half of the assertion below.
-	tool := NewGit(WriteDeps{}, func() GitPolicy {
-		return GitPolicy{AllowWrites: true, WriteTimeout: 1500 * time.Millisecond}
-	})
+	bound := 1500 * time.Millisecond
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true, WriteTimeout: bound} })
 	if _, err := callGit(t, tool, map[string]any{"subcommand": "add", "files": []string{"f.txt"}, "repo": dir}); err != nil {
 		t.Fatalf("git add: %v", err)
 	}
 
-	var err error
-	runBounded(t, 25*time.Second, "git commit past the write_timeout", func() {
-		raw, _ := json.Marshal(map[string]any{"subcommand": "commit", "message": "slow hook", "repo": dir})
-		_, err = tool.Execute(context.Background(), raw)
-	})
+	const attempts = 5 // 1.5s doubling to 24s
+	var (
+		err     error
+		elapsed time.Duration
+		hookPID []int
+	)
+	for attempt := 1; ; attempt++ {
+		_ = os.Remove(pids)
+		begin := time.Now()
+		runBounded(t, bound+25*time.Second, "git commit past the write_timeout", func() {
+			raw, _ := json.Marshal(map[string]any{"subcommand": "commit", "message": "slow hook", "repo": dir})
+			_, err = tool.Execute(context.Background(), raw)
+		})
+		elapsed = time.Since(begin)
+		if hookPID = readHookPIDs(pids); hookPID != nil {
+			break
+		}
+		// The bound expired before git reached the hook, which says something about
+		// the machine and nothing about plumb. Wait longer; never assert on it.
+		if attempt == attempts {
+			t.Fatalf("git never reached the pre-commit hook within %s: the machine is too slow to run this test", bound)
+		}
+		t.Logf("attempt %d: the hook had not started within %s; doubling the bound", attempt, bound)
+		bound *= 2
+	}
 
 	if err == nil {
 		t.Fatal("want an error naming plumb's own bound")
 	}
 	msg := err.Error()
-	for _, want := range []string{"plumb stopped waiting", "1.5s", "waiting on the shared lint cache"} {
+	for _, want := range []string{"plumb stopped waiting after " + bound.String(), "waiting on the shared lint cache"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the error must name plumb, the bound, and the hook's output; want %q in %q", want, msg)
 		}
@@ -72,6 +110,84 @@ func TestGit_WriteTimeoutIsReportedAsPlumbs(t *testing.T) {
 	if reason := mustClassify(t, err).Remediation.Reason; !strings.Contains(reason, "write_timeout") {
 		t.Errorf("the remediation must name the setting that moves the bound, got %q", reason)
 	}
+	// A floor, not a ceiling: the call cannot report plumb's bound before the bound.
+	if elapsed < bound {
+		t.Errorf("the call returned after %s, before the %s bound it reports", elapsed, bound)
+	}
+
+	// Git is stopped: the hook and what it started, not just git itself.
+	for _, pid := range hookPID {
+		waitProcessStopped(t, pid)
+	}
+
+	// The repository is as it was: nothing half-written.
+	if got := gitRevParse(t, dir, "HEAD"); got != head0 {
+		t.Errorf("HEAD moved to %s although the hook was killed before the commit", got)
+	}
+	if got := gwGit(t, dir, "diff", "--cached", "--name-only"); got != "f.txt" {
+		t.Errorf("the staged change must survive the killed commit untouched, got %q", got)
+	}
+	if locks := lockFilesUnder(t, filepath.Join(dir, ".git")); len(locks) != 0 {
+		t.Errorf("a killed commit left lock files behind: %v", locks)
+	}
+}
+
+// readHookPIDs returns the pids the hook published, or nil while it has not.
+func readHookPIDs(path string) []int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(data)) {
+		if pid, err := strconv.Atoi(f); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// waitProcessStopped fails unless pid has gone. Death after SIGKILL is
+// asynchronous, so it polls, with far more slack than a prompt kill needs: a
+// process that is still alive at the end is a failure on any machine, and one
+// that is merely slow to go is not. The deadline must stay well short of how long
+// the hook would live unkilled (60s), or a plumb that never killed it would pass by
+// waiting for it to finish. A zombie is a stopped process whose parent
+// has not collected it yet, so it counts as gone.
+func waitProcessStopped(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		out, _ := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		if stat := strings.TrimSpace(string(out)); stat == "" || strings.HasPrefix(stat, "Z") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Errorf("process %d is still running: plumb reported its bound but did not stop git's process group", pid)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// lockFilesUnder lists every *.lock file below dir: an index.lock, a HEAD.lock, a
+// ref's lock — whatever a git killed mid-write could strand.
+func lockFilesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var locks []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".lock") {
+			locks = append(locks, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return locks
 }
 
 // TestGit_CommitWithinTheBoundStillSucceeds is the control. Everything above
