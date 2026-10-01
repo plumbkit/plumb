@@ -28,6 +28,7 @@ var migrationSteps = map[int]func(*sql.Tx) error{
 	6: migrateV6,
 	7: migrateV7,
 	8: migrateV8,
+	9: migrateV9,
 }
 
 // runMigrationStep applies one step and advances user_version to that step's
@@ -268,5 +269,28 @@ func migrateV8(tx *sql.Tx) error {
 		return fmt.Errorf("sessionstate: migrate v8 (logical_agent): %w", err)
 	}
 
+	return nil
+}
+
+// migrateV9 adds the durable record of which conversations DECLARED themselves
+// on a connection through session_start (issue #513).
+//
+// logical_agent cannot answer that question, and not for want of a column: it
+// records every identity OBSERVED on the connection, per-call stamps included,
+// so an id a model invented and used on an admitted read is in it too.
+// Restoring declarations from it after a daemon restart would re-admit exactly
+// the undeclared identity the gate exists to refuse. Keyed on the linkage (the
+// conversation half of the id), because that is what a declaration vouches for:
+// a hook-stamped subagent `<conversation>/<agent>` rides its parent's.
+func migrateV9(tx *sql.Tx) error {
+	const addDeclared = `CREATE TABLE IF NOT EXISTS declared_linkage (
+    proxy_session_id TEXT    NOT NULL,
+    linkage          TEXT    NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (proxy_session_id, linkage)
+) WITHOUT ROWID`
+	if _, err := tx.Exec(addDeclared); err != nil {
+		return fmt.Errorf("sessionstate: migrate v9 (declared_linkage): %w", err)
+	}
 	return nil
 }

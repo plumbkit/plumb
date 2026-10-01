@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	    durable identity record carries its own authorised external linkage (so
 //	    recovery no longer depends on a prunable ended-session JSON file) and a
 //	    revision that orders name updates (PLAN-426)
-const SchemaVersion = 8
+//	8 — logical_agent: every identity observed on a connection (PLAN-440)
+//	9 — declared_linkage: the conversations that declared themselves through
+//	    session_start, so a restart does not refuse them as undeclared (#513)
+const SchemaVersion = 9
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
@@ -416,22 +419,27 @@ func (s *Store) Prune(olderThan time.Time, live ...string) error {
 	if _, err := s.db.Exec(`DELETE FROM logical_agent WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
 		return fmt.Errorf("sessionstate: prune logical agents: %w", err)
 	}
+	if _, err := s.db.Exec(`DELETE FROM declared_linkage WHERE updated_at < ?`+keep, args...); err != nil { //nolint:gosec // G202: keep is a placeholder-only fragment, IDs are bound args
+		return fmt.Errorf("sessionstate: prune declared linkages: %w", err)
+	}
 	// session_names is intentionally absent — see the doc comment. Do not add a
 	// DELETE here without an explicit retirement signal to gate it on.
 	return nil
 }
 
 // BackdateSession ages every EXPENDABLE row under a proxy session — its reads,
-// its pins and its logical-agent declarations — for tests that need state older
-// than the TTL without sleeping. The identity record is left alone, as Prune
-// leaves it.
+// its pins, the logical agents it observed and the conversations that declared
+// themselves on it — for tests that need state older than the TTL without
+// sleeping. The identity record is left alone, as Prune leaves it. The list
+// must name every table Prune sweeps, or a test of the sweep cannot age, and so
+// cannot cover, the table it leaves out.
 func (s *Store) BackdateSession(proxySessionID string, to time.Time) error {
 	if s == nil || proxySessionID == "" {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, tbl := range []string{"read_tracking", "pinned_workspace", "logical_agent"} {
+	for _, tbl := range []string{"read_tracking", "pinned_workspace", "logical_agent", "declared_linkage"} {
 		if _, err := s.db.Exec(`UPDATE `+tbl+` SET updated_at=? WHERE proxy_session_id=?`, to.UnixMilli(), proxySessionID); err != nil { //nolint:gosec // G202: tbl is a constant from the list above
 			return fmt.Errorf("sessionstate: backdate %s: %w", tbl, err)
 		}

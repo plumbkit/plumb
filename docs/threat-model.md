@@ -241,7 +241,16 @@ shares one pin unless each call carries a logical-agent identity — per-call
 Code's PreToolUse hook). `session_start.session_id` identifies only that call.
 A client that sends none still shares one pin, and its anonymous
 state-changing calls are refused once two identities have been seen — see
-[Known gaps](#known-gaps).
+[Known gaps](#known-gaps). A per-call identity whose conversation never
+declared itself through `session_start` on the connection is refused the same
+way rather than given a fresh shard of the connection's root (#513), unless
+every identity on the connection belongs to one conversation. Declarations
+persist under the proxy session and survive a daemon restart that the serve
+reconnects across. The idle reaper reclaims one only when it finds the serve
+disconnected and the declaration older than `persist_state_ttl_minutes`;
+state-changing calls refresh it at most once per min(TTL/4, 1 h). With
+`persist_state` off, or after such a reclaim, the agent is refused once and must
+call `session_start` again.
 
 ### A2 — Path escape via alias or traversal
 

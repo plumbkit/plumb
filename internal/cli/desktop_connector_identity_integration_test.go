@@ -52,6 +52,9 @@ func newDesktopConn(t *testing.T, stampKey string) *desktopConn {
 	srv.Register(tools.NewWriteFile(s.buildWriteDeps()))
 	srv.Register(tools.NewReadFile(s.readTracker).WithReadsFor(s.readTrackerFor).WithWorkspace(s.workspaceFor))
 	srv.OnToolRefusal = s.refuseSharedStateChange
+	// As registerHooks wires it: a successful session_start declares the
+	// per-call identity it ran under (issue #513).
+	srv.OnAfterTool = s.afterToolFromCtx
 	srv.OnBeforeTool = func(ctx context.Context, name string, args json.RawMessage, agent string) {
 		s.recordLogicalAgentCall(agent)
 		s.onBeforeTool(ctx, name, args)
@@ -211,4 +214,123 @@ func TestDesktopConnector(t *testing.T) {
 			}
 		}
 	})
+
+	// Issue #513. The stamp survives the host, but it names an identity no
+	// session_start on this connection declared — a model typing plumb_agent
+	// where the hook does not run. It used to be admitted onto a fresh shard
+	// seeded from the connection's root and land in the main checkout. It is
+	// refused, lands nowhere, and leaves no identity behind.
+	t.Run("InventedIdentityIsRefusedNotMisrouted", func(t *testing.T) {
+		c := newDesktopConn(t, mcp.ArgLogicalAgentDeclaredKey)
+		mainCheckout, worktree, text, isErr := incident(t, c)
+		if isErr {
+			t.Fatalf("precondition: the declared agent's write was refused: %s", text)
+		}
+		observed := c.s.logicalAgents.count()
+
+		text, isErr = c.call(t, "my-session", "write_file", map[string]any{"file_path": "INVENTED.md", "content": "who\n"})
+		if !isErr {
+			t.Fatalf("a write under an undeclared identity was admitted: %s", text)
+		}
+		if !strings.Contains(text, "session_start") {
+			t.Errorf("the refusal does not name session_start as the remedy: %s", text)
+		}
+		for _, dir := range []string{mainCheckout, worktree} {
+			if _, err := os.Stat(filepath.Join(dir, "INVENTED.md")); err == nil {
+				t.Errorf("the refused write landed in %s", dir)
+			}
+		}
+		if got := c.s.logicalAgents.count(); got != observed {
+			t.Errorf("the refused call registered an identity: %d observed, want %d", got, observed)
+		}
+
+		// Controls. The declared agent still writes into its own worktree —
+		// the same relative write through the same host, so the refusal above
+		// is about the identity, not the call.
+		if text, isErr := c.call(t, "conv-y", "write_file", map[string]any{"file_path": "Y2.md", "content": "y\n"}); isErr {
+			t.Fatalf("declared agent's write refused: %s", text)
+		}
+		if _, err := os.Stat(filepath.Join(worktree, "Y2.md")); err != nil {
+			t.Fatalf("the declared agent's write did not land in its worktree: %v", err)
+		}
+		// A hook-stamped subagent of a declared conversation is admitted
+		// without ever calling session_start itself, and works where its
+		// conversation chose to: conv-y re-pinned itself to the worktree, so
+		// its subagent's relative write lands there, not in conv-x's checkout.
+		if text, isErr := c.call(t, "conv-y/sub", "write_file", map[string]any{"file_path": "SUB.md", "content": "sub\n"}); isErr {
+			t.Fatalf("a subagent of a declared conversation was refused: %s", text)
+		}
+		if _, err := os.Stat(filepath.Join(worktree, "SUB.md")); err != nil {
+			t.Fatalf("the subagent's write did not land in its conversation's worktree: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(mainCheckout, "SUB.md")); err == nil {
+			t.Fatal("the subagent's write landed in the other agent's checkout")
+		}
+		// The same root answers every implicit resolver, git's default
+		// repository included (the git tool resolves through workspaceFor).
+		if got := c.s.workspaceFor(mcp.WithLogicalAgent(context.Background(), "conv-y/sub")); got != worktree {
+			t.Errorf("the subagent's workspace (git's default repository) is %q, want %q", got, worktree)
+		}
+		// The count above is not vacuous: an admitted new identity IS recorded.
+		if got := c.s.logicalAgents.count(); got != observed+1 {
+			t.Errorf("an admitted subagent was not recorded: %d observed, want %d", got, observed+1)
+		}
+
+		// The remedy is reachable: session_start under the identity declares it.
+		if text, isErr := c.call(t, "my-session", "session_start", map[string]any{"session_id": "my-session"}); isErr {
+			t.Fatalf("session_start, the named remedy, was refused: %s", text)
+		}
+		if text, isErr := c.call(t, "my-session", "write_file", map[string]any{"file_path": "INVENTED.md", "content": "who\n"}); isErr {
+			t.Fatalf("a write after declaring through session_start was refused: %s", text)
+		}
+	})
+
+	// A client that stamps every call and calls session_start WITHOUT a
+	// session_id — the _meta-only channel sharedIdentityRemedy sanctions. The
+	// declaration comes from the after-tool hook, not the session_id linker.
+	t.Run("MetaOnlySessionStartDeclares", func(t *testing.T) {
+		c := newDesktopConn(t, mcp.ArgLogicalAgentDeclaredKey)
+		mainCheckout, _, text, isErr := incident(t, c)
+		if isErr {
+			t.Fatalf("precondition: the declared agent's write was refused: %s", text)
+		}
+		write := `{"file_path":"META.md","content":"meta\n"}`
+		if text, isErr := c.callMeta(t, "meta-only", "write_file", write); !isErr {
+			t.Fatalf("an undeclared _meta identity's write was admitted: %s", text)
+		}
+		if text, isErr := c.callMeta(t, "meta-only", "session_start", `{}`); isErr {
+			t.Fatalf("session_start without a session_id failed: %s", text)
+		}
+		if text, isErr := c.callMeta(t, "meta-only", "write_file", write); isErr {
+			t.Fatalf("a write after a _meta-only session_start was refused: %s", text)
+		}
+		if _, err := os.Stat(filepath.Join(mainCheckout, "META.md")); err != nil {
+			t.Fatalf("the admitted write did not land in the root session_start reported: %v", err)
+		}
+	})
+}
+
+// callMeta serves a call whose identity rides _meta[dev.plumbkit/logical-agent]
+// rather than an argument, with argsJSON passed through verbatim.
+func (c *desktopConn) callMeta(t *testing.T, agent, name, argsJSON string) (string, bool) {
+	t.Helper()
+	c.id++
+	out := c.serve(t, fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":%q,"arguments":%s,"_meta":{%q:%q}}}`,
+		c.id, name, argsJSON, mcp.MetaLogicalAgentKey, agent))
+	var resp struct {
+		Result struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(out, &resp); err != nil {
+		t.Fatalf("decode response %s: %v", out, err)
+	}
+	text := ""
+	if len(resp.Result.Content) > 0 {
+		text = resp.Result.Content[0].Text
+	}
+	return text, resp.Result.IsError
 }
