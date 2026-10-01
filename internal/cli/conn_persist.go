@@ -53,6 +53,11 @@ func (s *connSession) onProxySession(id string) {
 	// DISABLED — see seedLogicalAgentsFromState. Re-arming the ceiling from
 	// durable state locks out every client that cannot stamp a per-call
 	// identity, which is the client this whole card is about.
+	//
+	// What IS wired is the routing half of the same evidence: an identified agent
+	// that held a pin on a connection that was shared reaches its own shard from
+	// its first call, rather than from whenever a peer re-declares (#523).
+	s.noteConnectionWasShared(id)
 }
 
 // onSessionID records the plumb session ID the serve proxy replayed in the
@@ -550,7 +555,16 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 // Emitting the ID for a no-workspace call is only half the repair; the proxy
 // must also record it without disturbing a pin the call never mentioned. See
 // commitSessionStartPin.
-func (s *connSession) toolResultMeta(_ context.Context, name string, args json.RawMessage) map[string]any {
+//
+// The workspace names the CONNECTION's pin, which is the one the proxy replays,
+// so it is withheld from a call that moved only the caller's own shard: that call
+// says nothing about where the connection should come back, and replaying the
+// connection's root as though someone had chosen it made a roots-derived pin
+// sticky (#527). Which pin moved is the re-pin's decision, noted on the call's
+// ctx (repinWorkspace) rather than guessed here from the state it left, and it is
+// reported as MetaPinScopeKey either way. A call that noted nothing is treated as
+// the connection's, as every call was before the key existed.
+func (s *connSession) toolResultMeta(ctx context.Context, name string, args json.RawMessage) map[string]any {
 	if name != sessionStartTool {
 		return nil
 	}
@@ -558,8 +572,17 @@ func (s *connSession) toolResultMeta(_ context.Context, name string, args json.R
 	if id := s.sessionID(); id != "" {
 		meta[mcp.MetaSessionIDKey] = id
 	}
-	if ws := s.workspace(); ws != "" && workspaceArgPresent(args) {
-		meta[mcp.MetaResolvedWorkspaceKey] = ws
+	if workspaceArgPresent(args) {
+		// The scope is reported even when the connection has no root of its own:
+		// an agent that pinned its shard on an unattached connection must still
+		// tell the proxy so, or the proxy falls back to the raw argument.
+		scope, reported := mcp.ResultMetaNote(ctx, mcp.MetaPinScopeKey)
+		if reported {
+			meta[mcp.MetaPinScopeKey] = scope
+		}
+		if ws := s.workspace(); ws != "" && scope != mcp.PinScopeAgent {
+			meta[mcp.MetaResolvedWorkspaceKey] = ws
+		}
 	}
 	if len(meta) == 0 {
 		return nil

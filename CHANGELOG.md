@@ -331,6 +331,56 @@
   overrides a `GOWORK` you set: inherited, under `[lsp.go]` `env`, in a go env
   file, or in gopls's `env` setting. `session_start` shows a `Go LSP:` line
   naming the `go.work` when it applies (#521).
+- **The first agent to call after a daemon restart runs on its own restored pin
+  and read tracker.** (#523) On a connection shared by several agents, the
+  identities the daemon has seen start empty after a restart, so the first
+  stamped call, usually a subagent while its parent waits, read as the only agent
+  there is and ran on the connection's pin and read tracker. Its relative writes
+  landed in the parent's checkout, the parent's reloaded reads satisfied its
+  strict-mode checks, and its own reads were saved where its shard never looked
+  again. An agent that holds a pin of its own on a connection recorded as shared
+  (two agents declared within the last six hours) now gets its restored shard from
+  its first call. This changes where its calls are routed and nothing that
+  refuses a call: an unstamped write is admitted exactly as before. A lone agent
+  is unaffected, because a lone agent's `session_start` leaves the same row and
+  its re-pins must keep moving the connection.
+- **A shard that only followed the connection is no longer saved as its agent's
+  own pin.** (#527) Moving the connection's pin saved a per-agent row for each
+  shard it dragged along, and after a restart that row outranked the connection's
+  pin, so the agent was restored fixed at a place it was only ever taken to and
+  no later connection move reached it. Only an agent's own move or confirmation
+  writes its row now; a dragged shard's row is deleted. A restored shard counts as
+  having chosen its root, so a connection move no longer drags it off a workspace
+  its agent named when the two happened to coincide, as a live one never was. A
+  row an earlier release wrote for a shard that had only followed cannot be told
+  from a chosen one, so it is still honoured at the next restart; that agent
+  replaces it by pinning again.
+- **A `session_start` that moved only your own pin is not replayed as the
+  connection's.** (#527) The serve proxy records a `session_start` workspace and
+  replays it after a reconnect as a connection-level pin that outranks the
+  client's roots. The result named the connection's workspace whichever pin the
+  call moved, so an agent-scope call made a roots-derived connection pin sticky,
+  and roots changes stopped moving it. A result now carries
+  `dev.plumbkit/pin-scope` (`agent` or `connection`); for `agent` the workspace is
+  withheld and the proxy leaves its replay pin alone. The proxy half takes effect
+  when `plumb serve` restarts, which a daemon restart does not do.
+- **The first connection pin on a shared connection moves the caller's fresh
+  shard.** (#567) `session_start` reported the new workspace, but the caller's
+  shard, created at no workspace before the pin, was left there because only
+  shards sitting on the previous root were dragged and there was none. The next
+  relative-path call resolved against nothing. Shards that follow the connection
+  and sit at no workspace now move with its first pin; an agent that chose a
+  root of its own does not.
+- **`daemon_info` and workspace-boundary refusals describe the pin that resolved
+  the call.** (#529) On a shared connection both quoted the connection's pin
+  (`set 32m ago via session_start`) to an agent that had re-pinned its own shard
+  minutes earlier. They now quote the agent's own pin: its time, its origin, the
+  root it replaced, and `restored on reconnect` when it came back from a restart.
+  A shard that follows the connection reports the connection's.
+- **The reconnect note no longer promises a pin it cannot keep.** (#529) It said
+  the daemon restores an explicit `session_start` workspace, which holds for an
+  agent with a pin of its own and not for one that only followed the connection's.
+  It now says which is which.
 
 ## 0.20.3 (2026-09-30)
 

@@ -40,6 +40,14 @@ type agentShard struct {
 	// pinOrigin mirrors sessionView.pinOrigin so the per-agent sticky-pin guard
 	// (repinAgent) can apply the same session_start-vs-roots distinction.
 	pinOrigin sessionstate.PinSource
+	// prov is how, when and from where the pin this shard resolves against was
+	// set, so daemon_info and a boundary refusal describe THIS agent's pin rather
+	// than the connection's (#529). It is the provenance of the pin in force: the
+	// connection's, copied, while the shard follows it; the agent's own once it
+	// moves or confirms one; "restore:…" when it came back from its row. Contested
+	// is never stored — it is the connection's displacement history, filled in on
+	// read (pinProvenanceFor).
+	prov tools.PinProvenance
 	// selfPinned records that THIS agent successfully re-pinned its shard to a
 	// root of its own choosing (repinAgent, changed=true). A shard that has
 	// never done so is where the CONNECTION seeded it, and follows the
@@ -86,7 +94,12 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 	// agent declaring one the connection has not recorded yet is still a second
 	// agent, and must be routed to its own shard without that routing being
 	// written down. See sharedWith for why the commitment waits for success.
-	if !s.logicalAgents.sharedWith(id) {
+	//
+	// restoresShardFor is the other way in: after a restart the identities seen
+	// start empty, so the first stamped caller reads as the only agent, yet durable
+	// evidence says the connection was shared and the agent holds a pin of its own
+	// (#523). Routing only; nothing that gates a call consults it.
+	if !s.logicalAgents.sharedWith(id) && !s.restoresShardFor(id) {
 		return nil
 	}
 	if id == "" {
@@ -113,6 +126,7 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 		undoStore:    tools.NewUndoStore(),
 		writeLimiter: tools.NewRateLimiter(s.store.Current().Edits.RateLimitPerMinute, time.Minute),
 		pinOrigin:    v.pinOrigin,
+		prov:         pinProvenanceOf(&v),
 	}
 	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
 	// where the connection happens to sit (issue #513 review). Seeding it from
@@ -129,13 +143,15 @@ func (s *connSession) shardFor(ctx context.Context) *agentShard {
 			sh.root = resolved
 			sh.language = language
 			sh.pinOrigin = origin
+			sh.prov = restoredProvenance(origin)
 			// A persisted per-agent row is a root this agent DECLARED (only
-			// repinAgent's move path and confirmShardPin write one), so the
-			// declaration-refusal marker must not treat it as a seed.
+			// repinAgent's move path, confirmShardPin and attributeConnectionPin
+			// write one), so the declaration-refusal marker must not treat it as a
+			// seed, and a connection move must not drag it (followsConnectionLocked).
 			sh.restored = true
 		}
 	}
-	sh.policy = s.buildAgentPolicy(sh.root, sh.language)
+	sh.policy = s.buildAgentPolicy(sh.root, sh.language, sh.prov)
 	// The agent that WAS the connection until a peer turned it shared has its
 	// strict-mode reads in the connection tracker, persisted under the empty
 	// agent id where the per-agent rehydration below cannot see them. Seed its
@@ -169,13 +185,15 @@ func (s *connSession) repinShard(ctx context.Context) *agentShard {
 
 // buildAgentPolicy builds a PathPolicy for a (root, language) pair using the
 // connection's shared config blocks (extra roots, read roots, allow-dirs,
-// dep-roots, pin provenance). The sessionView is copied and its root/language
-// overridden, so buildPathPolicy's many config reads stay unchanged while the
-// two per-agent facts come from the shard.
-func (s *connSession) buildAgentPolicy(root, language string) *tools.PathPolicy {
+// dep-roots). The sessionView is copied and its root/language overridden, so
+// buildPathPolicy's many config reads stay unchanged while the per-agent facts
+// come from the shard — including the pin provenance a boundary refusal quotes,
+// which is the shard's own pin's and not the connection's (#529).
+func (s *connSession) buildAgentPolicy(root, language string, prov tools.PinProvenance) *tools.PathPolicy {
 	v := s.view()
 	v.acquiredRoot = root
 	v.acquiredLanguage = language
+	v.pinVia, v.pinAt, v.pinPrev, v.pinForced = prov.Source, prov.At, prov.Previous, prov.Forced
 	return s.buildPathPolicy(&v)
 }
 
@@ -407,7 +425,12 @@ func (s *connSession) repinAgent(ctx context.Context, root, language string, ori
 	sh.root = root
 	sh.language = language
 	sh.pinOrigin = origin
-	sh.policy = s.buildAgentPolicy(root, language)
+	// Not Forced, though force may have been passed: what a force overrides here is
+	// this agent's OWN earlier pin, and Forced is the claim that someone else's
+	// was displaced — it makes a refusal tell the caller another agent took its
+	// pin, which an agent that moved itself did not suffer.
+	sh.prov = tools.PinProvenance{Source: pinViaLabel(origin, pinTriggerLive), At: time.Now(), Previous: prev}
+	sh.policy = s.buildAgentPolicy(root, language, sh.prov)
 	// Read/write/undo state is workspace-relative, so only a MOVE invalidates
 	// it. A same-root language switch changes no file — and it is reachable
 	// without an override at all, since repinWorkspaceFrom passes Detect's
@@ -502,44 +525,4 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 	}
 	sh.readTracker.Hydrate(out)
 	s.log().Info("daemon: rehydrated per-agent read-tracking", "agent", sh.id, "root", root, "count", len(out))
-}
-
-// persistPinForAgent records the logical agent's pin under (proxy session,
-// agent), so a shared connection's per-agent workspace survives a daemon restart
-// (PLAN-286). Mirrors persistPin, scoped to the agent.
-func (s *connSession) persistPinForAgent(sh *agentShard, root, language string, origin sessionstate.PinSource) {
-	s.persistPinForAgentID(sh.id, root, language, origin)
-}
-
-// persistPinForAgentID is persistPinForAgent keyed on the id alone, for the
-// caller that has an identity but no shard yet: an agent whose explicit
-// session_start was routed to the CONNECTION because it is the only identity
-// the connection has seen. Attributing that pin is what lets the shard built
-// later — once a peer declares itself and the connection turns shared — restore
-// the workspace the agent actually chose.
-func (s *connSession) persistPinForAgentID(id, root, language string, origin sessionstate.PinSource) {
-	if id == "" || origin == sessionstate.PinSourceUnknown {
-		return
-	}
-	v := s.view()
-	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" || root == "" {
-		return
-	}
-	if err := s.sessionState.UpsertPinForAgent(v.proxySessionID, id, root, language, origin); err != nil {
-		s.log().Debug("daemon: persist agent pin failed", "err", err)
-	}
-}
-
-// loadPinForAgent returns the pin a logical agent persisted under (proxy session,
-// agent). ok=false when nothing is recorded or persistence is disabled.
-func (s *connSession) loadPinForAgent(id string) (root, language string, origin sessionstate.PinSource, ok bool) {
-	v := s.view()
-	if s.sessionState == nil || !v.session.PersistState || v.proxySessionID == "" {
-		return "", "", sessionstate.PinSourceUnknown, false
-	}
-	root, language, origin, ok, err := s.sessionState.LoadPinForAgent(v.proxySessionID, id)
-	if err != nil || !ok || root == "" {
-		return "", "", sessionstate.PinSourceUnknown, false
-	}
-	return root, language, origin, true
 }

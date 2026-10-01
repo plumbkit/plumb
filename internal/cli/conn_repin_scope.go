@@ -89,12 +89,12 @@ func (s *connSession) repinConnection(ctx context.Context, folder, langOverride 
 // the same predicate followConnectionShards drags by, so the two agree on WHICH
 // shards follow: a subagent on its conversation's chosen root was left there by
 // the move but told it now worked in the connection's new root (review of #535
-// merged with #533). They can still differ where the move has nothing to drag
-// from: on a connection's first pin a fresh shard stays at "" (#567).
+// merged with #533). They agree on a connection's first pin too: the shard that
+// follows sits at "" and is moved to the new root with the rest (#567), so what
+// is reported here is where workspaceFor then resolves.
 //
-// A shard that does not follow, or was restored from its own persisted pin
-// (dragged only off the connection's previous root, so its current root is the
-// truth either way), reports its own root.
+// A shard that does not follow (its agent chose its root, in this life or by a
+// persisted pin restored from an earlier one) reports its own root.
 //
 // Two more things the caller's next call does are done here too, so the
 // report names what workspaceFor will resolve. A refused declaration, the
@@ -124,7 +124,7 @@ func (s *connSession) connScopeCallerRoot(id string, out repinOutcome) string {
 	s.shardsMu.Unlock()
 	sh.mu.RLock()
 	defer sh.mu.RUnlock()
-	if followsConnectionLocked(sh, parentChose) && !sh.restored {
+	if followsConnectionLocked(sh, parentChose) {
 		return out.root
 	}
 	return sh.root
