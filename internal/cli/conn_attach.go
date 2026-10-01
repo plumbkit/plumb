@@ -76,7 +76,9 @@ func (s *connSession) attachWorkspacePinFrom(ctx context.Context, rootURI string
 		return
 	}
 
-	s.mutate(func(v *sessionView) {
+	// mutateLive: a close() that lands after Detect above must not be followed
+	// by an acquire nobody releases (issue #514).
+	s.mutateLive(func(v *sessionView) {
 		if v.acquiredRoot != "" {
 			return
 		}
@@ -133,7 +135,7 @@ func (s *connSession) attachSynthetic(_ context.Context, root string, origin ses
 		s.log().Warn("daemon: refusing to pin a wide synthetic workspace root", "root", root, "origin", string(origin), "reason", err)
 		return
 	}
-	s.mutate(func(v *sessionView) {
+	s.mutateLive(func(v *sessionView) { // starts a quality runner close() stops (issue #514)
 		if v.acquiredRoot != "" {
 			return
 		}
