@@ -57,6 +57,49 @@
 
 ### Fixed
 
+- **Every agent on a shared connection has its own session identity, mail and
+  commit signature.** (#556) A connection registers one session, and the tools
+  answered for it whoever asked: a subagent was told it was its parent, consumed
+  its parent's mail at `session_start` and at `check_messages`, read its parent's
+  threads, and signed its commits `Plumb-Session: <parent's name>`. The
+  connection's identity now belongs to the conversation it is linked to (the id
+  equal to the connection's external id) and to no other agent. Every other
+  stamped agent gets a session row of its own, registered when it first needs an
+  identity and kept on the root it works in; `session_start`'s `Session:` line, its
+  peer digest and its mailbox claim, `leave_note`, `check_messages`, the
+  `workspace_sessions` mail listing and the commit trailer all answer for the
+  caller. An agent with no identity of its own (an unstamped call on a shared
+  connection, or one whose row could not be written) gets none, and its commits
+  carry no trailer, instead of borrowing another agent's. A subagent alone on a
+  restarted connection while its parent is parked is still not the connection.
+- **A second conversation's `session_start` no longer takes over a shared
+  connection.** (#564) It replaced the connection's external-id linkage and renamed
+  the connection to the name that conversation had held, leaving the first without a
+  name, a mail address or a `plumb mail --external-id` lookup. The first
+  conversation to link a connection owns it: a different conversation's id links
+  nothing and renames nothing, and its caller is told so. An unstamped call links
+  only a connection nothing else is on, and a call stamped as one conversation
+  cannot link another's id. The id is still recorded as a declared identity, so the
+  connection still reads as shared and its calls are still admitted.
+- **Only the conversation that resumed is told it resumed, and it keeps its
+  threads.** (#556) A subagent that reached a restarted connection first reported
+  "resumed" for an identity it never had, and the conversation's own main thread
+  then was not told. What resuming means now waits for the owner and is delivered to
+  it once. A hook-stamped main thread that resumes by `session_id` also inherits its
+  predecessor's session ID, so a thread it started before the restart accepts its
+  reply and mail bound to the predecessor reaches it; a subagent, another
+  conversation and an unstamped caller never inherit.
+- **A proxy-authenticated reconnect inherits its predecessor's mail whether or not
+  it kept the name.** (#556) The grant waited on the rename, so a name a live peer
+  held stranded the mail bound to the predecessor's session ID for as long as the
+  overlap lasted. The proxy secret authenticates the record, and nothing the name
+  does changes whose record it is. Only the owner reads what is inherited.
+- **The reconnect note no longer says a new identity was restored.** (#565) A
+  connection's first contact under a credential (`established`) read "Your session
+  identity was restored: you are still X", which told an agent that had never been
+  X that it kept an identity. It now says a new session started, names it, and
+  asks the agent to `session_start` with its `session_id`.
+
 - **The Claude Code identity hook stamps from its cached answer when the daemon
   probe fails, and fails less often.** (#556) The hook gates every stamp on a
   probe of the daemon's control socket, and any probe failure was an answer of
