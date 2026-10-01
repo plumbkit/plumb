@@ -12,11 +12,13 @@ import (
 // test binary. Tests in this package reach the registry, directly or through
 // the code under test; without this they would take the user's real
 // .sessions.lock and read or write the real session files, contending with the
-// live daemon (#551). session.Dir panics in a test binary that resolves to the
-// live registry, so a missing override fails loudly rather than stalling.
+// live daemon (#551). session.Dir ends a test binary that resolves to the live
+// registry, so a missing override fails loudly rather than stalling.
 //
-// The directory is shared by every test in the binary. A test that needs an
-// empty registry of its own sets t.Setenv(session.DirEnv, t.TempDir()).
+// The directory is shared by every test in the binary, and PLUMB_SESSIONS_DIR
+// outranks XDG_DATA_HOME, so a test's own t.Setenv("XDG_DATA_HOME", ...) does not
+// give it a registry of its own. A test that needs an empty one sets
+// t.Setenv(session.DirEnv, t.TempDir()).
 func TestMain(m *testing.M) {
 	os.Exit(runWithIsolatedSessions(m))
 }

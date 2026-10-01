@@ -231,6 +231,10 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 // dir to a temp directory, so the daemon plumb serve spawns uses a fresh,
 // isolated socket / cache / config — leaving the developer's running daemon and
 // global config untouched.
+//
+// PLUMB_SESSIONS_DIR is dropped too: it outranks XDG_DATA_HOME for the session
+// registry, so a developer who exports it for their own daemon would otherwise
+// point this "isolated" one at the live registry and its flock (#551).
 func isolatedEnv(tmpHome string) []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+8)
@@ -241,7 +245,8 @@ func isolatedEnv(tmpHome string) []string {
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
-			strings.HasPrefix(e, "XDG_RUNTIME_DIR="):
+			strings.HasPrefix(e, "XDG_RUNTIME_DIR="),
+			strings.HasPrefix(e, "PLUMB_SESSIONS_DIR="):
 			continue
 		default:
 			out = append(out, e)
@@ -555,4 +560,28 @@ func extractMtime(t *testing.T, readOut string) string {
 	}
 	t.Fatal("extractMtime: no mtime found in read_file output:\n" + readOut)
 	return ""
+}
+
+// TestIsolatedEnv_DropsInheritedSessionsDirOverride pins that an exported
+// PLUMB_SESSIONS_DIR does not reach a child: it outranks the isolated
+// XDG_DATA_HOME, so keeping it would put the child's session registry, and its
+// flock, on the developer's live one (#551). The positive control is HOME, which
+// the same function does replace, so a function that returned nothing at all
+// cannot pass.
+func TestIsolatedEnv_DropsInheritedSessionsDirOverride(t *testing.T) {
+	t.Setenv("PLUMB_SESSIONS_DIR", filepath.Join(t.TempDir(), "live"))
+	tmpHome := t.TempDir()
+
+	home := false
+	for _, e := range isolatedEnv(tmpHome) {
+		if strings.HasPrefix(e, "PLUMB_SESSIONS_DIR=") {
+			t.Errorf("the live registry override leaked into the isolated env: %q", e)
+		}
+		if e == "HOME="+tmpHome {
+			home = true
+		}
+	}
+	if !home {
+		t.Error("isolatedEnv did not set the isolated HOME; the leak check above proves nothing")
+	}
 }

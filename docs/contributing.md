@@ -84,12 +84,17 @@ must not assume their temporary path lives outside the repository. Reproduce
 the CI shape with `GOTMPDIR=$PWD/.testcache go test ./...`.
 
 **Tests never touch the live session registry.** In a test binary,
-`session.Dir` panics if it resolves to the registry that the binary's start-up
-environment points at, which is the developer's own daemon's. Every package whose
-tests reach the registry, directly or through daemon, connection, hook, TUI or
-web code, has a `TestMain` (`session_isolation_main_test.go`) that sets
-`PLUMB_SESSIONS_DIR` to a temporary directory for the whole binary. A test that
-needs an empty registry of its own sets `t.Setenv(session.DirEnv, t.TempDir())`.
+`session.Dir` prints the reason and exits the process if it resolves to the
+registry that the binary's start-up environment points at, which is the
+developer's own daemon's. It exits rather than panics because the daemon's
+`recover()` sites would swallow a panic and let the test pass. Every package
+whose tests reach the registry, directly or through daemon, connection, hook, TUI
+or web code, has a `TestMain` (`session_isolation_main_test.go`) that sets
+`PLUMB_SESSIONS_DIR` to a temporary directory for the whole binary. That
+directory is shared, and `PLUMB_SESSIONS_DIR` outranks `XDG_DATA_HOME`, so a
+test's own `t.Setenv("XDG_DATA_HOME", ...)` does not give it a registry of its
+own there; a test that needs an empty one sets
+`t.Setenv(session.DirEnv, t.TempDir())`.
 
 **Coverage and vulnerability checks are deliberately separate from `verify`.**
 Coverage re-runs the whole suite instrumented and vulnerability scanning needs

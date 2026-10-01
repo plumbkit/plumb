@@ -33,6 +33,17 @@ func IsolationErrorForTest(dir string, testBinary bool, live []string) error {
 	return testIsolationError(dir, testBinary, live)
 }
 
+// SetRefuseLiveRegistryForTest replaces what the guard does when Dir resolves
+// the live registry, for the duration of the test. The default ends the whole
+// test binary, so without this a test could not see the guard fire in-process;
+// the default itself is covered by re-executing the test binary.
+func SetRefuseLiveRegistryForTest(t *testing.T, fn func(error)) {
+	t.Helper()
+	orig := refuseLiveRegistry
+	refuseLiveRegistry = fn
+	t.Cleanup(func() { refuseLiveRegistry = orig })
+}
+
 // EndedSessionGraceForTest is how long an ended session's file is kept.
 const EndedSessionGraceForTest = endedSessionGrace
 

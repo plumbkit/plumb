@@ -246,6 +246,10 @@ func mkTmpHome(t *testing.T) string {
 // manager recovery companions are scrubbed too, or plumb correctly interprets
 // the deliberate temp XDG roots as a hijack and restores the real directories.
 // All other environment (notably API keys) is inherited for the auth tier.
+//
+// PLUMB_SESSIONS_DIR is scrubbed as well: it outranks XDG_DATA_HOME for the
+// session registry, so one exported for the developer's own daemon would point
+// this "isolated" one at the live registry and its flock (#551).
 func isolatedEnv(tmpHome string, extra ...string) []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+9)
@@ -259,6 +263,7 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 			strings.HasPrefix(e, "XDG_RUNTIME_DIR="),
 			strings.HasPrefix(e, "TSM_ORIG_XDG_"),
 			strings.HasPrefix(e, "CODEX_HOME="),
+			strings.HasPrefix(e, "PLUMB_SESSIONS_DIR="),
 			strings.HasPrefix(e, "PLUMB_STRICT_EDITS="),
 			strings.HasPrefix(e, "PLUMB_TOOLS_PROFILE="):
 			continue
@@ -329,6 +334,24 @@ func TestIsolatedEnv_ScrubsCodexHome(t *testing.T) {
 	}
 	if seen != 1 {
 		t.Fatalf("CODEX_HOME entries = %d, want 1", seen)
+	}
+}
+
+func TestIsolatedEnv_DropsInheritedSessionsDirOverride(t *testing.T) {
+	t.Setenv("PLUMB_SESSIONS_DIR", filepath.Join(t.TempDir(), "live"))
+	tmpHome := t.TempDir()
+
+	home := false
+	for _, e := range isolatedEnv(tmpHome) {
+		if strings.HasPrefix(e, "PLUMB_SESSIONS_DIR=") {
+			t.Errorf("the live registry override leaked into the isolated env: %q", e)
+		}
+		if e == "HOME="+tmpHome {
+			home = true
+		}
+	}
+	if !home {
+		t.Error("isolatedEnv did not set the isolated HOME; the leak check above proves nothing")
 	}
 }
 

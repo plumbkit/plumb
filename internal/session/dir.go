@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -29,16 +30,32 @@ const DirEnv = "PLUMB_SESSIONS_DIR"
 // internal/paths (adrg/xdg). The error return is retained for API compatibility
 // with callers; resolution does not fail.
 //
-// Inside a `go test` binary Dir panics rather than return the registry the
-// user's own daemon uses (see testIsolationError). Every registry operation
-// resolves Dir before touching the filesystem, so the panic lands before the
-// flock is taken or a file is written.
+// Inside a `go test` binary Dir ends the process rather than return the registry
+// the user's own daemon uses (see testIsolationError and refuseLiveRegistry).
+// Every registry operation resolves Dir before touching the filesystem, so that
+// lands before the flock is taken or a file is written.
 func Dir() (string, error) {
 	dir := resolveDir()
 	if err := testIsolationError(dir, testBinary, liveDirs); err != nil {
-		panic(err)
+		refuseLiveRegistry(err)
+		panic(err) // backstop: a handler that returns must still not hand back the live dir
 	}
 	return dir, nil
+}
+
+// refuseLiveRegistry is how the guard ends a test binary that is about to use
+// the live registry: it names the offender on stderr and exits.
+//
+// It exits rather than only panicking because the daemon's own recover() sites
+// (the MCP dispatch, the per-connection goroutine) turn a panic into a logged
+// error. A test that reached the registry through one of them would then pass
+// with the guard having fired, which is the silent outcome the guard exists to
+// prevent. The registry stays untouched either way, since Dir has not returned;
+// what exiting adds is that the run fails. A variable only so a test can observe
+// the guard in-process (export_test.go); the default is what a test binary runs.
+var refuseLiveRegistry = func(err error) {
+	fmt.Fprintf(os.Stderr, "FATAL: %v\n%s", err, debug.Stack())
+	os.Exit(2)
 }
 
 // resolveDir is Dir without the test-binary guard.

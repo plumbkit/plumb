@@ -2,7 +2,9 @@ package session_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,13 +66,16 @@ func TestDir_IgnoresRelativeOverride(t *testing.T) {
 	}
 }
 
-// TestDir_PanicsOnLiveRegistryInTestBinary is the guard for #551: a test binary
+// TestDir_RefusesLiveRegistryInTestBinary is the guard for #551: a test binary
 // that resolves the registry to the one its start-up environment's daemon uses
-// must fail loudly instead of taking the real flock. Both ways in are covered —
+// must be refused instead of taking the real flock. Both ways in are covered —
 // a test that moved nothing (override cleared, XDG as at start-up) and an
 // override pointing straight at the live directory. Only Dir is called, so a
 // broken guard returns a path and fails the test without touching it.
-func TestDir_PanicsOnLiveRegistryInTestBinary(t *testing.T) {
+//
+// The default refusal ends the process, so this swaps it for a recorder; what
+// that default does is TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers.
+func TestDir_RefusesLiveRegistryInTestBinary(t *testing.T) {
 	live := session.LiveDirsForTest()
 	if len(live) == 0 {
 		t.Fatal("no live registry dirs recorded in a test binary; the guard is disarmed")
@@ -83,18 +88,23 @@ func TestDir_PanicsOnLiveRegistryInTestBinary(t *testing.T) {
 	for name, override := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(session.DirEnv, override)
+			var refused error
+			session.SetRefuseLiveRegistryForTest(t, func(err error) { refused = err })
 			got := func() (r any) {
 				defer func() { r = recover() }()
 				dir, _ := session.Dir()
-				t.Errorf("Dir() returned %q instead of panicking", dir)
+				t.Errorf("Dir() returned %q instead of refusing", dir)
 				return nil
 			}()
-			err, ok := got.(error)
-			if !ok {
-				t.Fatalf("panic value = %#v, want an error", got)
+			if refused == nil {
+				t.Fatal("the guard did not refuse the live registry")
 			}
-			if !strings.Contains(err.Error(), session.DirEnv) || !strings.Contains(err.Error(), live[0]) {
-				t.Errorf("panic message should name the live dir and %s: %v", session.DirEnv, err)
+			if !strings.Contains(refused.Error(), session.DirEnv) || !strings.Contains(refused.Error(), live[0]) {
+				t.Errorf("the refusal should name the live dir and %s: %v", session.DirEnv, refused)
+			}
+			// A refusal that returns must still not hand the live dir back.
+			if _, ok := got.(error); !ok {
+				t.Errorf("Dir() after a returning refusal = %#v, want a panic carrying the error", got)
 			}
 		})
 	}
@@ -107,10 +117,47 @@ func TestDir_PanicsOnLiveRegistryInTestBinary(t *testing.T) {
 	}
 }
 
+// TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers pins the guard's
+// default. The daemon's own recover() sites — the MCP dispatch and the
+// per-connection goroutine — turn a panic into a logged error, so a test that
+// reached the registry through one of them would pass with the guard having
+// fired. Verified with a mutant that only panics: the child below survives and
+// this fails.
+//
+// It re-executes this test binary as the child, which resolves the registry as
+// its start-up environment does (nothing moved) and calls Dir inside a recover.
+// Only Dir is called, so a broken guard returns a path and touches nothing.
+func TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers(t *testing.T) {
+	const childEnv = "PLUMB_SESSION_GUARD_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		func() {
+			defer func() { _ = recover() }()
+			_, _ = session.Dir()
+		}()
+		fmt.Println("CHILD-SURVIVED-THE-GUARD")
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestDir_LiveRegistryEndsTheBinaryEvenIfTheCallerRecovers$", "-test.count=1")
+	cmd.Env = append(os.Environ(), childEnv+"=1", session.DirEnv+"=")
+	out, err := cmd.CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("child err = %v, want it to exit non-zero; output:\n%s", err, out)
+	}
+	if strings.Contains(string(out), "CHILD-SURVIVED-THE-GUARD") {
+		t.Errorf("the child got past a recovered call to Dir; output:\n%s", out)
+	}
+	if !strings.Contains(string(out), session.DirEnv) {
+		t.Errorf("the refusal should name %s so the fix is clear; output:\n%s", session.DirEnv, out)
+	}
+}
+
 // TestIsolationError_NeverFiresOutsideTestBinaries pins the production branch:
 // with testBinary false the guard returns nil even for the live directory, so
 // it cannot fire in a real plumb process. liveDirs is also nil there, which
-// TestDir_PanicsOnLiveRegistryInTestBinary's non-empty check contrasts.
+// TestDir_RefusesLiveRegistryInTestBinary's non-empty check contrasts.
 func TestIsolationError_NeverFiresOutsideTestBinaries(t *testing.T) {
 	live := []string{"/home/u/.local/share/plumb/sessions"}
 	if err := session.IsolationErrorForTest(live[0], false, live); err != nil {

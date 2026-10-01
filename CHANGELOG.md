@@ -66,9 +66,12 @@
   until `-timeout`. The registry can now be moved on its own with
   `PLUMB_SESSIONS_DIR`, and each of those packages sets it to a temporary
   directory in `TestMain`. A test binary that still resolves the registry to its
-  start-up environment's location panics, so a new package that forgets fails
-  on CI instead of stalling a developer's daemon. The check never runs outside
-  `go test`. (#551)
+  start-up environment's location names the fix and exits, so a new package that
+  forgets fails on CI instead of stalling a developer's daemon. It exits rather
+  than panics because the daemon's own `recover()` sites would swallow a panic
+  and let the test pass. The check never runs outside `go test`. The smoke
+  harnesses drop an inherited `PLUMB_SESSIONS_DIR`, which would otherwise outrank
+  their isolated `XDG_DATA_HOME`. (#551)
 - **The Claude Code identity hook stamps from its cached answer when the daemon
   probe fails, and fails less often.** (#556) The hook gates every stamp on a
   probe of the daemon's control socket, and any probe failure was an answer of
