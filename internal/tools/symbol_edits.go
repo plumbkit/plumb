@@ -144,104 +144,6 @@ func isCommentLine(trimmed string) bool {
 	return false
 }
 
-// symbolFallbackReason says why the tree-sitter fallback answered instead of
-// the language server. The distinction reaches the agent: a server that is
-// ABSENT and one that simply did not answer inside its attempt budget call for
-// different responses (give up on the LSP vs. retry once it is warm), and both
-// hand back a line-granular range rather than a byte-precise one.
-type symbolFallbackReason int
-
-const (
-	fallbackNotUsed symbolFallbackReason = iota
-	fallbackLSPUnavailable
-	fallbackLSPTimedOut
-)
-
-// resolveSymbolOrFallback resolves namePath via the LSP document-symbol tree,
-// falling back to a fresh tree-sitter parse (topology) when the language server
-// errors. The reason reports which path produced the symbol, and why, so the
-// caller can annotate its output (the fallback range is line-granular, not
-// byte-precise). When the LSP fails and no fallback resolves the symbol, the
-// original LSP error is returned.
-//
-// It takes TWO contexts on purpose. lspCtx bounds the server attempt and is
-// spent once that attempt misses its budget; ctx is the caller's live context
-// and is what the fallback runs on. Handing the fallback lspCtx — which is what
-// every symbol-edit tool used to do — makes it inoperative rather than merely
-// late: topology's safeExtract refuses to start a parse on an expired context,
-// so the tool surfaces the very timeout the fallback exists to replace
-// (PLAN-390, PLAN-403). See withFallbackLSPDeadline.
-func resolveSymbolOrFallback(ctx, lspCtx context.Context, client lsp.Client, topo topologyStoreFn, uri, namePath string) (sym *protocol.DocumentSymbol, reason symbolFallbackReason, err error) {
-	sym, lspErr := resolveSymbol(lspCtx, client, uri, namePath)
-	if lspErr == nil {
-		return sym, fallbackNotUsed, nil
-	}
-	if IsWorkspaceBoundaryError(lspErr) {
-		return nil, fallbackNotUsed, lspErr
-	}
-	nodes, edges, ok := freshTopologyGraph(ctx, topo, uri)
-	if !ok {
-		return nil, fallbackNotUsed, lspErr
-	}
-	matches := topologyNodesByPath(nodes, edges, namePath)
-	if len(matches) > 1 {
-		return nil, fallbackNotUsed, topologyAmbiguityErr(lspErr, namePath, matches)
-	}
-	if len(matches) == 0 {
-		// Both trees were asked and neither has the path. When the server itself
-		// answered "not found" that is already the message; when it failed to
-		// answer, its error alone ("did not respond in time — retry shortly")
-		// would send the agent to retry a path that no retry can resolve.
-		var notFound *symbolNotFoundError
-		if errors.As(lspErr, &notFound) {
-			return nil, fallbackNotUsed, lspErr
-		}
-		return nil, fallbackNotUsed, fmt.Errorf("%w; the tree-sitter fallback finds no symbol %q in %s either",
-			lspErr, namePath, paths.URIToPath(uri))
-	}
-	ds := nodeToDocSymbol(*matches[0], fileLines(paths.URIToPath(uri)))
-	return &ds, lspFallbackReason(lspCtx), nil
-}
-
-// lspFallbackReason classifies a failed server attempt from the attempt context
-// itself, so the error text the LSP path returns stays untouched: an expired
-// lspCtx means the server was too slow, anything else means it could not answer
-// at all.
-func lspFallbackReason(lspCtx context.Context) symbolFallbackReason {
-	if errors.Is(lspCtx.Err(), context.DeadlineExceeded) {
-		return fallbackLSPTimedOut
-	}
-	return fallbackLSPUnavailable
-}
-
-// resolveSymbol fetches the DocumentSymbol tree for uri and locates namePath.
-func resolveSymbol(ctx context.Context, client lsp.Client, uri, namePath string) (*protocol.DocumentSymbol, error) {
-	syms, err := client.DocumentSymbols(ctx, protocol.DocumentSymbolParams{
-		TextDocument: protocol.TextDocumentIdentifier{URI: uri},
-	})
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, errors.New("language server did not respond in time (it may still be indexing the workspace — retry shortly)")
-		}
-		return nil, fmt.Errorf("documentSymbols: %w", err)
-	}
-	sym := findSymbolByPath(syms, namePath)
-	if sym == nil {
-		return nil, &symbolNotFoundError{namePath: namePath, path: paths.URIToPath(uri)}
-	}
-	return sym, nil
-}
-
-// symbolNotFoundError is the language server's answer that namePath is not in
-// the file, as opposed to its failure to answer. resolveSymbolOrFallback tells
-// the two apart: only a failed server leaves the fallback's own miss worth
-// saying aloud.
-type symbolNotFoundError struct{ namePath, path string }
-
-func (e *symbolNotFoundError) Error() string {
-	return fmt.Sprintf("symbol %q not found in %s", e.namePath, e.path)
-}
-
 // ─── insert_before_symbol ──────────────────────────────────────────────────
 
 type InsertBeforeSymbol struct {
@@ -346,7 +248,7 @@ func (t *InsertBeforeSymbol) Execute(ctx context.Context, args json.RawMessage) 
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert before", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
@@ -461,7 +363,7 @@ func (t *InsertAfterSymbol) Execute(ctx context.Context, args json.RawMessage) (
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "insert after", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
@@ -577,7 +479,7 @@ func (t *ReplaceSymbolBody) Execute(ctx context.Context, args json.RawMessage) (
 		dryRun = *a.DryRun
 	}
 	return applySingleEdit(ctx, t.client, t.cache, writeDepsPtr(t.hasDeps, &t.deps), a.URI, dryRun, resolveShowDiff(t.showDiff), "replace", t.Name(), a.DirtyOK, func(ctx context.Context) (protocol.TextEdit, *protocol.DocumentSymbol, string, error) {
-		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, a.URI, a.NamePath)
+		sym, reason, err := resolveSymbolOrFallback(ctx, lspCtx, t.client, t.topo, t.warmup, a.URI, a.NamePath)
 		if err != nil {
 			return protocol.TextEdit{}, nil, "", err
 		}
