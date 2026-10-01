@@ -344,3 +344,53 @@ func TestExecGitCmd_NilEnvGetsTheDefaults(t *testing.T) {
 		t.Errorf("a nil-Env git child resolved its editor to %q, want \"true\"", got)
 	}
 }
+
+// TestGit_MergeNeedsNoEditor: merge arrived on main (#530) after #544 was
+// written, and `git merge` opens the editor on a non-fast-forward merge when
+// GIT_MERGE_AUTOEDIT=yes is exported — a variable an automation harness or a
+// shell profile can leave in the daemon's environment. core.editor cannot run,
+// so before the fix this merge failed with "cannot exec" instead of recording
+// the two-parent commit with git's own message. `--no-edit` is the control:
+// it overrides GIT_MERGE_AUTOEDIT, so it passes with or without the fix.
+func TestGit_MergeNeedsNoEditor(t *testing.T) {
+	for _, args := range [][]string{{"side"}, {"--no-edit", "side"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			neutraliseEditorEnv(t)
+			repo := mergeFixture(t)
+			runGitDirect(t, repo, "config", "core.editor", missingEditor)
+			t.Setenv("GIT_MERGE_AUTOEDIT", "yes")
+
+			out, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "merge", "args": args})
+			if err != nil {
+				t.Fatalf("git merge %v through the tool tried to open an editor: %v\n%s", args, err, out)
+			}
+			if n := headParents(t, repo); n != 2 {
+				t.Errorf("HEAD has %d parents after the merge, want 2", n)
+			}
+			if got := gwGit(t, repo, "log", "-1", "--format=%s"); got != "Merge branch 'side'" {
+				t.Errorf("HEAD's subject = %q, want git's prepared merge message", got)
+			}
+		})
+	}
+}
+
+// TestGit_AnnotatedTagWithoutAMessageFailsLoudly pins what the docs promise for
+// a verb with no prepared message: `tag -a` without -m reaches the no-op editor
+// with an empty template, and git refuses to tag rather than record a blank
+// annotation. The caller sees git's own words and no tag exists afterwards.
+func TestGit_AnnotatedTagWithoutAMessageFailsLoudly(t *testing.T) {
+	neutraliseEditorEnv(t)
+	repo := mergeFixture(t)
+	runGitDirect(t, repo, "config", "core.editor", missingEditor)
+
+	out, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "tag", "args": []string{"-a", "v1"}})
+	if err == nil {
+		t.Fatalf("tag -a without a message succeeded:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "no tag message") {
+		t.Errorf("the failure should be git's own refusal, not an editor error; got: %v", err)
+	}
+	if tags := gwGit(t, repo, "tag", "--list"); tags != "" {
+		t.Errorf("a tag was created despite the refusal: %q", tags)
+	}
+}

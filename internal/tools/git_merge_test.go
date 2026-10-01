@@ -142,8 +142,9 @@ func TestGit_MergeStateFlagsAreDestructive(t *testing.T) {
 }
 
 // TestGit_MergeRefusesFlagsThatEscapeTheToolsContract: --no-verify skips the
-// hooks the tool promises always run, --edit / --continue need an editor the
-// tool cannot drive, and --file reads a message from an arbitrary path. Each is
+// hooks the tool promises always run, --edit / --continue would take git's
+// prepared message without the caller being able to change it (the tool's editor
+// is a no-op), and --file reads a message from an arbitrary path. Each is
 // refused before git runs, and --continue's refusal names the working route.
 // Abbreviations are refused too, because git accepts any unambiguous prefix of
 // a long option.
