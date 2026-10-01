@@ -39,6 +39,11 @@
 
 ### Fixed
 
+- **`make test`, `make test-race` and `make cover` no longer rely on `go
+  test`'s 10-minute default timeout.** The `internal/cli` package alone has
+  come within a second of it on a loaded machine, so a slow CI runner could
+  fail on time rather than on a test. They now take `GO_TEST_TIMEOUT`
+  (default `20m`).
 - **An agent pinned to its own project runs that project's tasks and
   commands.** On a `plumb serve` connection shared by several agents, an agent
   that pinned itself with `session_start` to project B while the connection
