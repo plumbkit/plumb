@@ -68,6 +68,9 @@ func (s *connSession) applyProjectConfig(workspace string) {
 		// is not even a `plumb trust` to reach for.
 		projectGit = tools.ProjectGitStatus{Unreadable: true}
 	}
+	// The root this snapshot belongs to, so a git tier refusal names the path a
+	// `plumb trust` would have to be run for.
+	projectGit.Workspace = workspace
 	configPath := filepath.Join(workspace, ".plumb", "config.toml")
 	var cfgMtime time.Time
 	if info, statErr := os.Stat(configPath); statErr == nil {
@@ -191,7 +194,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 	}
 	if st.Trusted {
 		s.log().Info("daemon: project capability config trusted and applied",
-			"workspace", workspace, "keys", st.Spec.Keys())
+			"workspace", workspace, "keys", st.Spec.Keys(), "inherited_from", st.InheritedFrom)
 		return
 	}
 	s.log().Warn("daemon: project capability config IGNORED (untrusted) — global values in force; run `plumb trust` to honour them",
@@ -202,7 +205,7 @@ func (s *connSession) logProjectPolicy(workspace string, st config.ProjectPolicy
 // session_start renders. Pure, so the capture at config apply is the only place
 // the answer is decided.
 func projectGitStatusOf(st config.ProjectPolicyStatus) tools.ProjectGitStatus {
-	out := tools.ProjectGitStatus{Trusted: st.Trusted}
+	out := tools.ProjectGitStatus{Trusted: st.Trusted, InheritedFrom: st.InheritedFrom}
 	for _, e := range st.Spec {
 		out.Keys = append(out.Keys, tools.ProjectGitKey{Key: e.Key, Value: e.Value})
 	}
