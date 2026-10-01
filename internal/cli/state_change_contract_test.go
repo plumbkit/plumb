@@ -125,5 +125,11 @@ func TestStateChangeGateCoversEveryMutatingTool(t *testing.T) {
 			t.Errorf("tool %q is recorded as guarded elsewhere but IS in the door gate; "+
 				"refusing it anonymously makes identity undeclarable on a shared connection", name)
 		}
+		if class == mutates {
+			if _, _, ok := tools.HistoryClass(name); !ok {
+				t.Errorf("state-changing tool %q has no history classification (tools.HistoryClass): "+
+					"record its file writes (recordHistory) or exempt it with a reason", name)
+			}
+		}
 	}
 }

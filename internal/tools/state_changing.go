@@ -77,3 +77,41 @@ var stateChangingToolNames = []string{
 func StateChangingToolNames() []string {
 	return append([]string(nil), stateChangingToolNames...)
 }
+
+// historyRecorded is every state-changing tool's answer to "do this tool's file
+// writes reach history.db?" — recorded (it calls recordHistory at each write) or
+// exempt with the reason. The cli parity test derives its universe from live
+// registration, so a new mutating tool fails until it is classified here (spec
+// §6.3 layer 1; the same discipline as the write gate above).
+var historyRecorded = map[string]string{
+	"write_file": "", "edit_file": "", "delete_file": "", "rename_file": "", "copy_file": "",
+	"transaction_apply": "", "find_replace": "", "undo_edit": "",
+	"rename_symbol": "", "replace_symbol_body": "", "insert_before_symbol": "",
+	"insert_after_symbol": "", "safe_delete_symbol": "", "move_symbol": "",
+	"git_init": "", "write_memory": "", "delete_memory": "", "agent_config": "",
+}
+
+// historyExempt names the state-changing tools whose effects are not recorded.
+var historyExempt = map[string]string{
+	"git":            "git keeps its own history; checkout/restore surface as unrecorded-change gaps",
+	"run_command":    "an external process; its file changes surface as unrecorded-change gaps",
+	"run_task":       "an external process (formatters, builds); changes surface as gaps",
+	"mutation_test":  "temporary mutants restored within the call (owner decision)",
+	"share_findings": "generated findings memory: plumb bookkeeping, out of scope (spec §2)",
+	"rename_session": "no file write (session registry)",
+	"share_intent":   "no file write (collab store)",
+	"leave_note":     "no file write (collab store)",
+	"check_messages": "no file write (collab store)",
+}
+
+// HistoryClass reports whether tool's writes are recorded, the exemption reason
+// when not, and ok=false when the tool is unclassified.
+func HistoryClass(tool string) (recorded bool, reason string, ok bool) {
+	if _, ok := historyRecorded[tool]; ok {
+		return true, "", true
+	}
+	if r, ok := historyExempt[tool]; ok {
+		return false, r, true
+	}
+	return false, "", false
+}
