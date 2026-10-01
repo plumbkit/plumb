@@ -88,49 +88,6 @@ func (s *connSession) onSessionID(id string) {
 		"replayed", id, "proven", proven, "using", s.sessionID())
 }
 
-// inheritSessionID accepts a predecessor's plumb session ID as a second mailbox
-// identity for this session, so messages BOUND to the session a daemon restart
-// ended still reach the agent they were written for. Without it, binding a
-// message to a session — which is what stops a name-reuser reading it — would
-// also strand every unread message across a restart, since the reconnected
-// connection registers under a fresh session ID.
-//
-// It is called from exactly one place, and that is the whole security argument.
-// The grant is authorised by the PROXY session ID: a 122-bit random value the
-// serve process generates for itself, replays only inside its own initialize
-// handshake, and which plumb never writes to a session file, a log line, or any
-// tool result. Presenting it is evidence of being the same serve process; being
-// called "alice" is not. Inheriting on the strength of a name would hand any
-// session its predecessor's mailbox for the cost of one rename_session, which is
-// precisely the hole the binding closed.
-//
-// Inheritance is the DEGRADED path: adoption (same record, same authorisation)
-// is primary, and on a successful restore the session reads its own mail under
-// its own ID, so no inherit grant is made at all. What remains here is the case
-// adoption was DECLINED — a live overlap, or an Adopt error — where the session
-// runs under a temporary ID and still needs its predecessor's mail.
-//
-// It is also gated on the rename having SUCCEEDED, so a session only inherits an
-// identity while actually holding the name that identity answered to.
-//
-// The chain is bounded at ONE predecessor, deliberately. A later legitimate
-// rename re-records this session's OWN ID under the proxy key, so the chain
-// never grows into an ever-widening set of identities one session may read.
-func (s *connSession) inheritSessionID(prevID string) {
-	if prevID == "" || prevID == s.sessionID() {
-		return
-	}
-	s.mutate(func(v *sessionView) { v.inheritedSessionIDs = []string{prevID} })
-	s.log().Debug("daemon: inherited predecessor mailbox identity", "predecessor", prevID)
-}
-
-// inheritedSessionIDs returns the predecessor identities this session may also
-// read mail for. Nil for every session that did not come back through the
-// authenticated persisted-state path, which is the overwhelming majority.
-func (s *connSession) inheritedSessionIDs() []string {
-	return s.view().inheritedSessionIDs
-}
-
 // persistIdentity commits this session's CURRENT identity — its name, its own
 // session ID, and its external linkage — to the durable record under the proxy
 // session ID, so the next reconnect can recover it.

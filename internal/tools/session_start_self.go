@@ -68,25 +68,40 @@ func (t *SessionStart) selfIdentityLine(resumedName string) string {
 		sb.WriteString(", id " + shortSessionID(id))
 	}
 	sb.WriteString(")")
-	if resumedName != "" {
-		sb.WriteString(" — resumed")
-		if resumedName != name {
-			// The inherited name did not stick (a live peer holds it). Saying so
-			// is the point: silently showing the name it actually has, with no
-			// hint that the requested one was refused, is how a caller concludes
-			// the session_id argument did nothing.
-			fmt.Fprintf(&sb, "; requested %s, which is in use", resumedName)
-		} else if t.resumedNewIdentity() {
-			// The resume-by-linkage path recovers the NAME but never the
-			// predecessor's internal session ID — only the proxy credential can
-			// do that. Saying so is the difference between an agent that knows
-			// its predecessor's bound mail and threads will not follow it and
-			// one that discovers it when a note goes missing.
-			sb.WriteString("; new internal identity — mail and threads bound to the predecessor ID are not inherited")
-		}
-	}
+	sb.WriteString(t.resumeSuffix(name, resumedName))
 	sb.WriteString("\n")
 	return sb.String()
+}
+
+// resumeSuffix says what resuming did for this caller, after the identity it
+// states: nothing for a caller that resumed nothing.
+//
+// Three outcomes are told apart, because an agent acts on the difference. The
+// predecessor's session ID followed it (threads and bound mail continue); only
+// the NAME followed it (they do not, and the agent will otherwise discover that
+// when a note goes missing); or the name it asked for was refused.
+func (t *SessionStart) resumeSuffix(name, resumedName string) string {
+	const threads = "the threads and mail bound to your predecessor session continue under this one"
+	if resumedName == "" {
+		if t.callLink.ThreadsInherited {
+			return " — " + threads
+		}
+		return ""
+	}
+	switch {
+	case resumedName != name:
+		// The inherited name did not stick (a live peer holds it). Saying so is the
+		// point: silently showing the name it actually has, with no hint that the
+		// requested one was refused, is how a caller concludes the session_id
+		// argument did nothing.
+		return fmt.Sprintf(" — resumed; requested %s, which is in use", resumedName)
+	case t.callLink.ThreadsInherited:
+		return " — resumed; " + threads
+	case t.resumedNewIdentity():
+		// The name came back and the predecessor's internal session ID did not.
+		return " — resumed; new internal identity — mail and threads bound to the predecessor ID are not inherited"
+	}
+	return " — resumed"
 }
 
 // selfIdentity returns the caller's own name and session ID, either possibly

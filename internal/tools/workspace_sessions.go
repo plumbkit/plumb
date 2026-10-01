@@ -58,10 +58,10 @@ type WorkspaceSessions struct {
 	agentIdentityFn func(ctx context.Context) (workspace, selfID string)
 	agentNameFn     func(ctx context.Context) string
 	collabStoreFor  func(workspace string) *collab.Store
-	inheritedIDs    func() []string
-	boundaryCheck   func(string) error // read boundary guard
-	topo            topologyStoreFn    // may be nil; live topology store for write annotation
-	peerAware       func() bool        // may be nil (treated as off); [collab] peer_awareness snapshot
+	inheritedFor    func(ctx context.Context) []string // may be nil; the predecessor identities the CALLER provably continues
+	boundaryCheck   func(string) error                 // read boundary guard
+	topo            topologyStoreFn                    // may be nil; live topology store for write annotation
+	peerAware       func() bool                        // may be nil (treated as off); [collab] peer_awareness snapshot
 	// Phase-2 cross-agent sharing (all nil-safe): collabStore opens the
 	// workspace's collab.db ONLY if it already exists (a listing never creates
 	// one); collabPolicy is the [collab] intents/mailbox snapshot; selfName is the
@@ -97,8 +97,11 @@ func (t *WorkspaceSessions) selfID() string {
 // continues. The listing must apply them for the same reason the claim does: a
 // session that inherited its predecessor's mailbox would otherwise be told it
 // has nothing waiting while the delivery paths hand it messages.
+//
+// Caller-blind: every caller of the connection gets the same answer. A
+// connection that can tell its callers apart wires WithInheritedSessionsFor.
 func (t *WorkspaceSessions) WithInheritedSessions(fn func() []string) *WorkspaceSessions {
-	t.inheritedIDs = fn
+	t.inheritedFor = func(context.Context) []string { return fn() }
 	return t
 }
 
@@ -221,8 +224,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 		limit = 50
 	}
 
-	workspace, callerID := t.resolveCaller(ctx)
-	callerName := t.resolveCallerName(ctx)
+	workspace, caller := t.resolveWSCaller(ctx)
 	if workspace == "" {
 		return "workspace not yet attached — call session_start first", nil
 	}
@@ -236,7 +238,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 	}
 
 	result := runWithTimeout(
-		func() string { return t.runSync(workspace, callerID, callerName, limit) },
+		func() string { return t.runSync(workspace, caller, limit) },
 		wsSessionsTimeout,
 		"workspace_sessions: timed out reading session or stats data",
 	)
@@ -248,7 +250,7 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 // wsSessionsTimeout. It holds no Go mutexes and acquires only one OS-level
 // resource at a time (the session-dir flock, then a fresh read-only DB
 // connection), so no deadlock is possible.
-func (t *WorkspaceSessions) runSync(workspace, callerID, callerName string, recentLimit int) string {
+func (t *WorkspaceSessions) runSync(workspace string, caller wsCaller, recentLimit int) string {
 	now := time.Now()
 
 	// ── 1. Active sessions for this workspace ──────────────────────────────
@@ -276,8 +278,8 @@ func (t *WorkspaceSessions) runSync(workspace, callerID, callerName string, rece
 	writes = feedRecentWrites(writes, recentLimit)
 
 	annotations := t.annotateWrites(workspace, writes)
-	base := formatWorkspaceSessions(workspace, callerID, peers, writes, annotations, now)
-	return base + t.collabBlock(workspace, callerID, callerName, now)
+	base := formatWorkspaceSessions(workspace, caller.id, peers, writes, annotations, now)
+	return base + t.collabBlock(workspace, caller, now)
 }
 
 // WithCollabObservability wires the daemon-level store accessor and this

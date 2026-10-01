@@ -129,8 +129,9 @@ func writeConversationVolumes(sb *strings.Builder, vols []collab.ConversationSum
 // author_id, so reading them across stores discloses nothing the caller did not
 // write.
 func (t *WorkspaceSessions) collabObservations(
-	ctx context.Context, store *collab.Store, workspace, callerID, callerName string, now time.Time,
+	ctx context.Context, store *collab.Store, workspace string, caller wsCaller, now time.Time,
 ) (sent []collab.Row, vols []collab.ConversationSummary) {
+	callerID := caller.id
 	if callerID != "" {
 		if rows, err := store.SentBy(ctx, callerID, now, collabSentCap); err == nil {
 			sent = rows
@@ -157,13 +158,9 @@ func (t *WorkspaceSessions) collabObservations(
 	// Scoped to the caller's own threads. An uninvolved session has no business
 	// enumerating exchanges between two other agents, and the id it would print is
 	// the thread's address, not decoration.
-	var inherited []string
-	if t.inheritedIDs != nil {
-		inherited = t.inheritedIDs()
-	}
 	self := collab.Claimant{
-		Name: callerName, ID: callerID,
-		InheritedIDs: inherited, Workspace: workspace,
+		Name: caller.name, ID: callerID,
+		InheritedIDs: caller.inherited, Workspace: workspace,
 	}
 	local, err := store.ConversationSummaries(ctx, self, now, collabVolumeCap)
 	if err != nil {
@@ -208,7 +205,7 @@ func (t *WorkspaceSessions) crossProjectOn() bool {
 // [collab] mailbox is on). Returns "" when the feature is off or collab.db does
 // not exist — a listing never creates one. Best-effort: a query error yields no
 // block rather than failing the tool.
-func (t *WorkspaceSessions) collabBlock(workspace, callerID, callerName string, now time.Time) string {
+func (t *WorkspaceSessions) collabBlock(workspace string, caller wsCaller, now time.Time) string {
 	if (t.collabStore == nil && t.collabStoreFor == nil) || t.collabPolicy == nil {
 		return ""
 	}
@@ -227,7 +224,7 @@ func (t *WorkspaceSessions) collabBlock(workspace, callerID, callerName string, 
 	if intentsOn {
 		intents, err := store.LiveIntents(ctx, now)
 		if err == nil {
-			writeCollabIntents(&sb, callerID, intents, now)
+			writeCollabIntents(&sb, caller.id, intents, now)
 		}
 	}
 	// callerID is checked as well as the name because this block PRINTS the
@@ -237,13 +234,9 @@ func (t *WorkspaceSessions) collabBlock(workspace, callerID, callerName string, 
 	// even though it consumes nothing. The caller wires addressableName, which is
 	// already empty in that case; this is the tool refusing to depend on its
 	// caller having done so.
-	if mailboxOn && callerName != "" && callerID != "" {
-		var inherited []string
-		if t.inheritedIDs != nil {
-			inherited = t.inheritedIDs()
-		}
+	if mailboxOn && caller.name != "" && caller.id != "" {
 		who := collab.Claimant{
-			Name: callerName, ID: callerID, InheritedIDs: inherited, Workspace: workspace,
+			Name: caller.name, ID: caller.id, InheritedIDs: caller.inherited, Workspace: workspace,
 		}
 		notes, err := store.PendingNotes(ctx, who, now)
 		if err == nil {
@@ -254,7 +247,7 @@ func (t *WorkspaceSessions) collabBlock(workspace, callerID, callerName string, 
 	// and a human scanning for a message addressed to them should not have to read
 	// past a volume table to find it.
 	if mailboxOn {
-		sent, vols := t.collabObservations(ctx, store, workspace, callerID, callerName, now)
+		sent, vols := t.collabObservations(ctx, store, workspace, caller, now)
 		writeCollabSent(&sb, sent, now)
 		writeConversationVolumes(&sb, vols, now)
 	}

@@ -62,6 +62,34 @@ func TestCommitTrailerToken(t *testing.T) {
 	}
 }
 
+// TestCommitTrailerToken_APerCallNameIsFinal is #556 symptom 5: a subagent's commit
+// carried its PARENT's name because an empty per-call answer fell through to the
+// connection's. An agent with no name of its own signs nothing; one with a name
+// signs with it; and only a tool with no per-call resolver at all uses the
+// connection's.
+func TestCommitTrailerToken_APerCallNameIsFinal(t *testing.T) {
+	connection := func() string { return "parent-name" }
+	perCall := func(name string) func(context.Context) string {
+		return func(context.Context) string { return name }
+	}
+	p := GitPolicy{CommitTrailer: true}
+
+	named := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s" }, connection).WithSessionNameFor(perCall("subagent-name"))
+	if got := named.commitTrailerToken(context.Background(), p, "commit"); got != "Plumb-Session: subagent-name" {
+		t.Errorf("a subagent with a name signed %q", got)
+	}
+
+	nameless := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s" }, connection).WithSessionNameFor(perCall(""))
+	if got := nameless.commitTrailerToken(context.Background(), p, "commit"); got != "" {
+		t.Errorf("an agent with no name of its own signed %q, which is its parent's", got)
+	}
+
+	blind := NewGit(WriteDeps{}, nil).WithSession(func() string { return "s" }, connection)
+	if got := blind.commitTrailerToken(context.Background(), p, "commit"); got != "Plumb-Session: parent-name" {
+		t.Errorf("a connection with no per-call resolver lost its own trailer: %q", got)
+	}
+}
+
 // TestCommitTrailerToken_RejectsNewlineOrColon is defence-in-depth coverage:
 // session.NormaliseName is the only thing keeping a stored session name free
 // of a newline or a second colon (either of which would smuggle extra

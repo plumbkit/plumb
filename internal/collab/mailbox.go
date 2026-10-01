@@ -46,12 +46,14 @@ type Claimant struct {
 	// serve proxy back. They are accepted exactly like ID, so mail bound to a
 	// session that a restart ended still reaches the agent it was written for.
 	//
-	// The word that matters is provably. An inherited ID is granted only by the
-	// persisted-state path, keyed on the proxy's own unguessable session ID,
-	// which the reconnecting proxy presents from its own memory. It is never
-	// granted for answering to a name: that would hand any session its
-	// predecessor's mailbox for the cost of a rename_session call, which is the
-	// hole addressee_id exists to close.
+	// The word that matters is provably. An inherited ID is granted by the
+	// persisted-state path, keyed on the proxy's own unguessable session ID, which
+	// the reconnecting proxy presents from its own memory, or to the hook-stamped
+	// main thread of a conversation that ended with the same external id; and only
+	// ever to the one agent that is that conversation. It is never granted for
+	// answering to a name: that would hand any session its predecessor's mailbox
+	// for the cost of a rename_session call, which is the hole addressee_id exists
+	// to close.
 	InheritedIDs []string
 	// Workspace is the caller's pinned root, which scopes cross-project mail: a
 	// row carrying a target_workspace is claimable only by a session pinned there.

@@ -119,8 +119,7 @@ func (s *connSession) restoreIdentity(proxyID string) {
 		return
 	}
 	s.mutate(func(v *sessionView) { v.persistedIdentity = rec })
-	adoption := s.adoptStoredID(rec)
-	named := s.restoreStoredName(rec, adoption)
+	adoption, named := s.applyRecord(rec)
 	// "Restored" means BOTH halves came back, and nothing weaker qualifies.
 	//
 	// The case worth spelling out is a legacy record (schema v3) that carries a
@@ -175,8 +174,7 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 		return false
 	}
 	s.mutate(func(v *sessionView) { v.persistedIdentity = rec })
-	adoption := s.adoptStoredID(rec)
-	named := s.restoreStoredName(rec, adoption)
+	adoption, named := s.applyRecord(rec)
 	if adoption == idResumed && named {
 		s.repairBlankLinkage(rec)
 		s.setRecovery(recoveryRestored)
@@ -259,6 +257,20 @@ func (s *connSession) retryBackoff(attempt int) time.Duration {
 	default:
 		return 45 * time.Second
 	}
+}
+
+// applyRecord applies the authenticated record: adopt the proven session ID,
+// restore the name. A connection that could not adopt the ID (a live overlap, or
+// an error) is granted it as a predecessor identity, so the mail and threads bound
+// to it still reach the agent they were written for. The record authorises that,
+// and the name has no say: it was once made only when the rename also succeeded,
+// so a name a live peer happened to hold stranded the mail the grant is for.
+func (s *connSession) applyRecord(rec sessionstate.Identity) (adoption idOutcome, named bool) {
+	adoption = s.adoptStoredID(rec)
+	if adoption == idRefused {
+		s.inheritSessionID(rec.SessionID)
+	}
+	return adoption, s.restoreStoredName(rec, adoption)
 }
 
 // idOutcome is what became of the internal session ID during a restoration.
@@ -364,11 +376,8 @@ func (s *connSession) adoptStoredID(rec sessionstate.Identity) idOutcome {
 //     stored value is unusable by construction rather than by circumstance.
 //   - Anything else: preserve and report.
 //
-// When the name is restored but the ID was not, the session inherits the
-// predecessor's mailbox identity so mail still reaches it. That grant is gated
-// on holding the name precisely because it is the degraded path: a session may
-// read a predecessor's mail only while it is actually answering to the address
-// that mail was sent to.
+// The predecessor-mail grant for a connection that could not adopt the ID is
+// made by applyRecord, before this, and is independent of the name.
 func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOutcome) bool {
 	if rec.Name == "" {
 		return false
@@ -390,9 +399,6 @@ func (s *connSession) restoreStoredName(rec sessionstate.Identity, adoption idOu
 		restoring:  adoption != idAbsent,
 	})
 	if err == nil {
-		if adoption == idRefused {
-			s.inheritSessionID(rec.SessionID)
-		}
 		return true
 	}
 	if errors.Is(err, session.ErrNameTaken) {

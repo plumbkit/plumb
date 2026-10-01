@@ -61,7 +61,7 @@ func TestLinkageOwnerInheritsConnectionReads(t *testing.T) {
 
 	// Single-agent phase: the parent links the conversation and reads as the
 	// connection.
-	s.linkExternalID("conv")
+	s.linkExternalID(context.Background(), "conv")
 	s.readTracker.Record(path, when, "sha-1")
 
 	// A subagent declares itself: the connection is now shared.
@@ -141,11 +141,11 @@ func TestSubagentLinkageKeepsTheConversation(t *testing.T) {
 		t.Fatal("session did not register; the linkage cannot be observed")
 	}
 
-	s.linkExternalID("conv-1")
+	s.linkExternalID(context.Background(), "conv-1")
 	if got := s.externalID(); got != "conv-1" {
 		t.Fatalf("externalID after the parent linked = %q, want conv-1", got)
 	}
-	s.linkExternalID("conv-1/agent-7")
+	s.linkExternalID(context.Background(), "conv-1/agent-7")
 	if got := s.externalID(); got != "conv-1" {
 		t.Fatalf("a subagent's attach rewrote the conversation linkage to %q", got)
 	}
@@ -155,7 +155,7 @@ func TestSubagentLinkageKeepsTheConversation(t *testing.T) {
 	// The subagent attaching FIRST links the same conversation.
 	fresh := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
 	t.Cleanup(fresh.close)
-	fresh.linkExternalID("conv-2/agent-1")
+	fresh.linkExternalID(context.Background(), "conv-2/agent-1")
 	if got := fresh.externalID(); got != "conv-2" {
 		t.Fatalf("externalID after a subagent-first attach = %q, want conv-2", got)
 	}
@@ -170,8 +170,8 @@ func TestExternalIDLinkerIsWired(t *testing.T) {
 		t.Fatalf("reading conn_register.go: %v", err)
 	}
 	body := registerAllToolsBody(string(src))
-	if !strings.Contains(body, "WithExternalID(s.linkExternalID)") {
-		t.Error("session_start is registered without WithExternalID(s.linkExternalID): a subagent's session_id would rewrite the conversation's linkage")
+	if !strings.Contains(body, "WithLinkage(s.linkExternalID)") {
+		t.Error("session_start is registered without WithLinkage(s.linkExternalID): a subagent's session_id would rewrite the conversation's linkage")
 	}
 }
 
@@ -195,13 +195,14 @@ func TestSubagentAttachDoesNotResumeTwice(t *testing.T) {
 	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, nil, newSharedBudgets())
 	t.Cleanup(s.close)
 
-	if got := s.linkExternalID("conv-r"); got != "old-owl" {
-		t.Fatalf("the parent's attach must inherit the predecessor's name, got %q", got)
+	res := s.linkExternalID(context.Background(), "conv-r")
+	if res.InheritedName != "old-owl" {
+		t.Fatalf("the parent's attach must inherit the predecessor's name, got %q", res.InheritedName)
 	}
-	if !s.view().resumedNewIdentity {
+	if !res.NewIdentity {
 		t.Fatal("the inheritance must be disclosed as a resumed identity")
 	}
-	if got := s.linkExternalID("conv-r/agent-1"); got != "" {
+	if got := s.linkExternalID(context.Background(), "conv-r/agent-1").InheritedName; got != "" {
 		t.Fatalf("a subagent attaching under an already-linked conversation must not resume again, got %q", got)
 	}
 	if got := s.externalID(); got != "conv-r" {
@@ -244,7 +245,7 @@ func TestLinkageOwnerSeededWhenTheLinkageArrivesLast(t *testing.T) {
 		t.Fatalf("precondition: linkage should still be empty at shard creation, got %q", got)
 	}
 	// … then link.
-	s.linkExternalID("conv")
+	s.linkExternalID(context.Background(), "conv")
 
 	if got := s.readTrackerFor(ctxConv).Mtime(path); !got.Equal(when) {
 		t.Fatalf("the linkage owner's shard was never seeded (mtime %v, want %v) — its shard predated the linkage", got, when)
@@ -334,7 +335,7 @@ func TestSeedOnLinkRespectsTheAgentsOwnRoot(t *testing.T) {
 	if sh.root != rootB {
 		t.Skipf("precondition: the shard restored %q, not the persisted %q — nothing to test", sh.root, rootB)
 	}
-	after.linkExternalID("conv")
+	after.linkExternalID(context.Background(), "conv")
 	if got := sh.readTracker.Mtime(path); !got.IsZero() {
 		t.Fatalf("seed-on-link gave a shard pinned to %s a read made under %s (mtime %v)", rootB, rootA, got)
 	}

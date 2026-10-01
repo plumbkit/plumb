@@ -274,10 +274,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	ttl := resolveNoteTTL(policy)
 	now := time.Now()
 	limit := policy.maxExchanges()
-	var inherited []string
-	if t.deps.InheritedSessionIDs != nil {
-		inherited = t.deps.InheritedSessionIDs()
-	}
+	inherited := t.deps.inheritedIDs(ctx)
 	in := collab.NoteInput{
 		AuthorSession: t.deps.sessionName(ctx),
 		AuthorID:      t.deps.sessionID(ctx),

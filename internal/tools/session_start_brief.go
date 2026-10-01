@@ -114,6 +114,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, l
 	// precisely when a degraded or unlinked state is likeliest, and the one
 	// place it will definitely look is here.
 	sb.WriteString(t.linkageNote(linked))
+	sb.WriteString(t.callLink.note())
 	sb.WriteString(stampNote)
 	if t.gitPolicyFn != nil && branch != "" {
 		fmt.Fprintf(&sb, "Git:      %s\n", briefGitPolicy(t.gitPolicyFn()))

@@ -103,7 +103,7 @@ type SessionStart struct {
 	pinProvFn      func() PinProvenance                                                                                    // may be nil; this connection's pin provenance, for the contested-connection note
 	lspLangsFn     func() []string                                                                                         // may be nil; the distinct child languages of a monorepo root (>1 ⇒ multi-language identity line)
 	lspRoutedFn    func() []string                                                                                         // may be nil; non-primary languages whose servers have actually served this session
-	externalIDFn   func(id string) string                                                                                  // may be nil; links session to external ID, returns inherited name
+	linkFn         func(ctx context.Context, id string) LinkResult                                                         // may be nil; links the session to the declared external ID on behalf of the CALLER and reports what that did (WithLinkage)
 	linkageStateFn func() LinkageState                                                                                     // may be nil; the connection's PERSISTED linkage + recovery outcome, for state-true linkage notes
 	resumedNewIDFn func() bool                                                                                             // may be nil; this call resumed a predecessor's NAME under a new internal session ID
 	stampChannelFn func(ctx context.Context) StampChannelState                                                             // may be nil; whether THIS call carried a per-call logical-agent identity, and whether the gate is already armed
@@ -118,6 +118,10 @@ type SessionStart struct {
 	purposeFn      func(purpose string)                                                                                    // may be nil; persists a validated session purpose tag
 	selfSessID     func() string                                                                                           // this session's ID, excluded from the peer digest and shown as the caller's own
 	selfName       func() string                                                                                           // may be nil; this session's own current name, shown as the caller's own
+	selfNameFor    func(ctx context.Context) string                                                                        // may be nil; the CALLER's own name, preferred over selfName (WithCallerIdentity)
+	selfIDFor      func(ctx context.Context) string                                                                        // may be nil; the CALLER's own session ID, preferred over selfSessID (WithCallerIdentity)
+	mailboxFor     func(ctx context.Context) (on bool, inbox Inbox)                                                        // may be nil; the CALLER's mailbox snapshot, preferred over mailboxFn (WithMailboxFor)
+	callLink       LinkResult                                                                                              // what linking this call's session_id did; set only on the per-call copy forCall returns
 	collabFn       func() (peerAwareness bool, hintBudgetBytes int)                                                        // may be nil; the resolved [collab] snapshot for the peer digest
 	mailboxFn      func() (on bool, inbox Inbox)                                                                           // may be nil; the mailbox delivery snapshot
 	xcodeHintFn    XcodeHintFn                                                                                             // may be nil; bare-Xcode BSP guidance
@@ -357,7 +361,17 @@ func (*SessionStart) Description() string {
 
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }
 
+// Execute answers for the caller in ctx: see forCall for why that is a copy of
+// the tool rather than state on it.
 func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	return t.forCall(ctx).execute(ctx, raw)
+}
+
+// execute is Execute's body, run on the per-call copy forCall returned, so t's
+// self accessors and mailbox answer for this call's caller. ctx is the PER-CALL
+// ctx: the stamped identity the call arrived with, and nothing the call itself
+// declared.
+func (t *SessionStart) execute(ctx context.Context, raw json.RawMessage) (string, error) {
 	// ATTRIBUTION before the workspace, LINKAGE after it — the split matters.
 	//
 	// A subagent multiplexed over a shared connection declares itself with
@@ -393,36 +407,25 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if _, err := resolveDetail(raw, false); err != nil {
 		return "", err
 	}
-	inheritedName, linked := t.resolveLinkage(raw)
-	lang, lspKey := detectLanguageInfo(ws)
-	// A forced/attached primary may have no root marker (e.g. swift pinned on an
-	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer
-	// the language actually attached to this session for the display and guidance.
-	if t.lspLangFn != nil {
-		if attached := t.lspLangFn(); attached != "" && attached != lspKey {
-			lang, lspKey = labelForLSPKey(attached), attached
-		}
-	}
-	// Multi-language monorepo root: show every detected language in the identity
-	// line (e.g. "Swift, Zig"), while lspKey stays the elected primary so the
-	// recommended-step guidance and lspAttached() logic are unchanged.
-	if t.lspLangsFn != nil {
-		if keys := t.lspLangsFn(); len(keys) > 1 {
-			lang = joinLanguageLabels(keys)
-		}
-	}
-	// autoBrief mirrors the exact signal WithExternalID already computes: a
-	// non-empty inheritedName means session.FindEnded matched this session_id
-	// against a session this daemon saw within the last 24h, and the rename
-	// succeeded — i.e. this call is (very likely) a resumed conversation
-	// re-orienting itself, not a first bootstrap. First contact (no session_id,
-	// or no match) always defaults to full.
+	link, linked := t.resolveLinkage(perCallCtx, raw)
+	// The identity block reads what linking did for THIS caller (callLink), on the
+	// copy this call owns.
+	t.callLink = link
+	inheritedName := link.InheritedName
+	lang, lspKey := t.sessionLanguage(ws)
+	// autoBrief mirrors the signal the linker already computes: a non-empty
+	// inheritedName means session.FindEnded matched this session_id against a
+	// session this daemon saw within the last 24h, and the rename succeeded — i.e.
+	// this call is (very likely) a resumed conversation re-orienting itself, not a
+	// first bootstrap. First contact (no session_id, or no match) always defaults
+	// to full. Only the conversation's owner is ever handed a name, so a subagent
+	// that merely reached the connection first still gets the full packet.
 	detail, err := resolveDetail(raw, linked && inheritedName != "")
 	if err != nil {
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(ctx)), nil
+		return t.executeBrief(ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(perCallCtx)), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
@@ -446,11 +449,37 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	t.writeSessionEpisodic(&sb, ws)
 	t.writeSessionPeers(&sb, ws)
 	t.writeSessionCollabPolicy(&sb, ws)
-	t.writeSessionMessages(&sb, ws, t.mailClaimable(ctx))
+	// The caller's own claim, so the per-call ctx and not the one that carries the
+	// session_id the call merely typed: an id nothing stamped is not an identity
+	// whose mail this call may take.
+	t.writeSessionMessages(&sb, ws, t.mailClaimable(perCallCtx))
 	t.writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)
 	return sb.String(), nil
+}
+
+// sessionLanguage resolves the language label and the elected LSP key the
+// identity block and the recommended-step guidance are rendered from.
+func (t *SessionStart) sessionLanguage(ws string) (lang, lspKey string) {
+	lang, lspKey = detectLanguageInfo(ws)
+	// A forced/attached primary may have no root marker (e.g. swift pinned on an
+	// Xcode app with no Package.swift), so marker detection returns nothing. Prefer
+	// the language actually attached to this session for the display and guidance.
+	if t.lspLangFn != nil {
+		if attached := t.lspLangFn(); attached != "" && attached != lspKey {
+			lang, lspKey = labelForLSPKey(attached), attached
+		}
+	}
+	// Multi-language monorepo root: show every detected language in the identity
+	// line (e.g. "Swift, Zig"), while lspKey stays the elected primary so the
+	// recommended-step guidance and lspAttached() logic are unchanged.
+	if t.lspLangsFn != nil {
+		if keys := t.lspLangsFn(); len(keys) > 1 {
+			lang = joinLanguageLabels(keys)
+		}
+	}
+	return lang, lspKey
 }
 
 // applyPurpose validates an optional `purpose` argument and, when valid and

@@ -210,7 +210,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithAgentIdentity(s.rosterIdentity).
 		WithAgentName(s.addressableNameFor).
 		WithCollabStoreFor(s.collabStoreIfExistsForWorkspace).
-		WithInheritedSessions(s.inheritedSessionIDs).
+		WithInheritedSessionsFor(s.inheritedSessionIDsFor).
 		WithTopology(topoFn).
 		WithPeerAwareness(func() bool { return s.collabConfig().PeerAwareness }).
 		WithCollab(
@@ -251,8 +251,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv), reason
 		}).
 		WithEpisodic(s.latestEpisodic).
-		WithSelfSession(s.sessionID).
-		WithSelfIdentity(s.sessionName).
+		WithCallerIdentity(s.sessionNameFor, s.sessionIDFor).
 		WithSurcharge(func() (int, int, int) {
 			r := clientcaps.ProfileSurcharge(srv.ToolSchemaBytes(), srv.ToolFilter)
 			return r.TotalBytes, r.Tokens, r.ToolCount
@@ -261,8 +260,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			c := s.collabConfig()
 			return c.PeerAwareness, c.HintBudgetBytes
 		}).
-		WithMailbox(func() (bool, tools.Inbox) {
-			return s.collabConfig().Mailbox, s.inbox()
+		WithMailboxFor(func(ctx context.Context) (bool, tools.Inbox) {
+			return s.collabConfig().Mailbox, s.inboxFor(ctx)
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPSkipNote(s.lspHomeSkipNote).
@@ -282,9 +281,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithLinkageState(func() tools.LinkageState {
 			return tools.LinkageState{ExternalID: s.externalID(), Recovery: string(s.recovery())}
 		}).
-		WithResumedNewIdentity(func() bool { return s.view().resumedNewIdentity }).
 		WithStampChannel(s.stampChannelState).
-		WithExternalID(s.linkExternalID))
+		WithLinkage(s.linkExternalID))
 	showDiffFn := func() bool { return s.editsConfig().ShowWriteDiff }
 	srv.Register(tools.NewRenameSymbol(s.sessionProxy, lspTimeout).WithLSPWarmup(warmupFn).WithBoundary(writeBoundary).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithStructuralFallback(wd).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
 	srv.Register(tools.NewInsertBeforeSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
