@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
@@ -117,7 +118,7 @@ func (t *TransactionApply) txPostWriteDiagnostics(ctx context.Context, a transac
 // removes it), never replayed: replaying would restore unconditionally and
 // undo exactly the change the verification chose to preserve.
 func (t *TransactionApply) txRollbackNewErrors(ctx context.Context, written []txPrepared, txl *txlog.Log, rep txDiagReport) error {
-	restored, skipped := rollbackVerified(written)
+	restored, skipped := rollbackVerified(written, t.deps.historySink(ctx))
 	txl.Commit()
 	t.txNotifyRestored(ctx, written, restored)
 
@@ -173,10 +174,9 @@ func (t *TransactionApply) txNotifyRestored(ctx context.Context, written []txPre
 // a bounded wait for a language server, so an external process has had real time
 // to write — and silently reverting someone else's change is the one outcome a
 // safety feature must not produce.
-//
 // restored maps each restored path to the version its restore published, so the
 // trackers record that rather than re-reading the path (issue #528).
-func rollbackVerified(written []txPrepared) (restored map[string]fileSnapshot, skipped []string) {
+func rollbackVerified(written []txPrepared, sink historySink) (restored map[string]fileSnapshot, skipped []string) {
 	restored = make(map[string]fileSnapshot, len(written))
 	for _, p := range written {
 		cur, err := os.ReadFile(p.path)
@@ -196,6 +196,15 @@ func rollbackVerified(written []txPrepared) (restored map[string]fileSnapshot, s
 			skipped = append(skipped, p.path)
 			continue
 		}
+		sink.recordHistory(history.Change{
+			Op:             history.OpRevert,
+			Tool:           "transaction_apply",
+			Path:           p.path,
+			Before:         history.SideFromBytes([]byte(p.after)),
+			After:          history.SideFromBytes([]byte(p.before)),
+			RevertsOwnCall: true,
+			Reason:         "tx_rollback",
+		})
 		restored[p.path] = res.written
 	}
 	return restored, skipped

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -80,12 +82,13 @@ func TestApplyWorkspaceEdit_MultipleFiles(t *testing.T) {
 			"file://" + b: {{Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 3}}, NewText: "BBB"}},
 		},
 	}
-	mod, err := applyWorkspaceEdit(we)
+	var f fakeHistory
+	mod, err := applyWorkspaceEdit(we, func(c history.Change) { f.record(context.Background(), c) }, "rename_symbol")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mod) != 2 {
-		t.Errorf("expected 2 modified files, got %d", len(mod))
+	if len(mod) != 2 || len(f.all()) != 2 {
+		t.Errorf("expected 2 modified files and 2 history changes, got %d files, %d changes", len(mod), len(f.all()))
 	}
 	if got, _ := os.ReadFile(a); string(got) != "AAA\n" {
 		t.Errorf("a.txt: %q", got)
@@ -121,7 +124,7 @@ func TestApplyWorkspaceEdit_ValidatesAllFilesBeforeWriting(t *testing.T) {
 	}
 	changes["file://"+broken] = []protocol.TextEdit{{Range: pastEOF, NewText: "ZZZ"}}
 
-	if _, err := applyWorkspaceEdit(&protocol.WorkspaceEdit{Changes: changes}); err == nil {
+	if _, err := applyWorkspaceEdit(&protocol.WorkspaceEdit{Changes: changes}, nil, ""); err == nil {
 		t.Fatal("expected the out-of-range edit to fail the whole apply")
 	}
 	for _, name := range valid {
@@ -199,7 +202,7 @@ func TestApplyWorkspaceEdit_RefusesTwoSpellingsOfOneFile(t *testing.T) {
 		}},
 	}}
 
-	modified, err := applyWorkspaceEdit(we)
+	modified, err := applyWorkspaceEdit(we, nil, "")
 	if err == nil {
 		t.Fatalf("expected a refusal; the apply reported success, modified=%v", modified)
 	}
@@ -278,7 +281,7 @@ func TestApplyWorkspaceEdit_RefusesOneSpellingInBothForms(t *testing.T) {
 		}},
 	}
 
-	modified, err := applyWorkspaceEdit(we)
+	modified, err := applyWorkspaceEdit(we, nil, "")
 	if err == nil {
 		got, _ := os.ReadFile(path)
 		t.Fatalf("one file carrying edits in both forms was applied, not refused: modified=%v, content=%q", modified, got)
@@ -351,7 +354,7 @@ func TestApplyWorkspaceEdit_CaseVariantSpellingsOfOneFile(t *testing.T) {
 		}},
 	}}
 
-	modified, err := applyWorkspaceEdit(we)
+	modified, err := applyWorkspaceEdit(we, nil, "")
 
 	if !folds {
 		// Two genuinely distinct files: refusing them would be the wrong answer.
@@ -516,7 +519,7 @@ func TestWorkspaceEditTargets_DoesNotAliasTheCallersEdits(t *testing.T) {
 			if err := os.WriteFile(path, []byte("1 bbb 3\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := applyWorkspaceEdit(tc.we); err != nil {
+			if _, err := applyWorkspaceEdit(tc.we, nil, ""); err != nil {
 				t.Fatalf("applyWorkspaceEdit: %v", err)
 			}
 			if got := tc.get(tc.we); !slices.Equal(before, got) {
@@ -656,7 +659,7 @@ func TestRollbackWorkspaceEdit_ReportsUnrestorableFiles(t *testing.T) {
 		{path: good, before: []byte("good\n"), after: []byte("GOOD\n"), mode: 0o644},
 		{path: stuck, before: []byte("stuck\n"), after: []byte("STUCK\n"), mode: 0o644},
 	}
-	err := rollbackWorkspaceEdit(plans, []string{good, stuck})
+	err := rollbackWorkspaceEdit(plans, []string{good, stuck}, nil)
 	if err == nil {
 		t.Fatal("expected the unrestorable file to be reported")
 	}
@@ -734,7 +737,7 @@ func TestApplyWorkspaceEdit_RollsBackOnMidWriteFailure(t *testing.T) {
 			"file://" + z: {{Range: line0, NewText: "ZZZ"}},
 		},
 	}
-	if _, err := applyWorkspaceEdit(we); err == nil {
+	if _, err := applyWorkspaceEdit(we, nil, ""); err == nil {
 		t.Fatal("expected the unwritable second target to fail the apply")
 	}
 	if got, _ := os.ReadFile(a); string(got) != "aaa\n" {

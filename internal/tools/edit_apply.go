@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -29,8 +30,8 @@ import (
 // We treat them as UTF-8 byte offsets, which is correct for ASCII source and
 // off-by-some for files containing wide characters in code positions. Most
 // refactoring happens on ASCII identifiers, so this is acceptable for now.
-func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
-	modified, _, err := applyWorkspaceEditDetailed(we, nil)
+func applyWorkspaceEdit(we *protocol.WorkspaceEdit, sink historySink, tool string) ([]string, error) {
+	modified, _, err := applyWorkspaceEditDetailed(we, nil, sink, tool)
 	return modified, err
 }
 
@@ -48,7 +49,7 @@ func applyWorkspaceEdit(we *protocol.WorkspaceEdit) ([]string, error) {
 // deterministic order means a broken "validate as you write" refactor fails the
 // same way on every run instead of one time in N, and a failure names the same
 // file every time.
-func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]workspaceEditPlan)) ([]string, []workspaceEditPlan, error) {
+func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]workspaceEditPlan), sink historySink, tool string) ([]string, []workspaceEditPlan, error) {
 	if we == nil {
 		return nil, nil, nil
 	}
@@ -83,12 +84,16 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	for i, p := range plans {
 		res, err := safeWrite(p.path, p.after, p.mode)
 		if err != nil {
-			if rbErr := rollbackWorkspaceEdit(plans, modified); rbErr != nil {
+			if rbErr := rollbackWorkspaceEdit(plans, modified, sink); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
 		}
 		plans[i].written = res.written
+		sink.recordHistory(history.Change{
+			Op: history.OpUpdate, Tool: tool, Path: p.path,
+			Before: history.SideFromBytes(p.before), After: history.SideFromBytes(p.after),
+		})
 		modified = append(modified, p.path)
 	}
 	if onApplied != nil {
@@ -264,7 +269,7 @@ func unlockAll(unlocks []func()) {
 	}
 }
 
-func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string) error {
+func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink) error {
 	byPath := make(map[string]workspaceEditPlan, len(plans))
 	for _, p := range plans {
 		byPath[p.path] = p
@@ -274,6 +279,12 @@ func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string) error {
 		p := byPath[modified[i]]
 		if _, err := safeWrite(p.path, p.before, p.mode); err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
+		} else {
+			sink.recordHistory(history.Change{
+				Op: history.OpRevert, Path: p.path, Tool: "rollback",
+				Before: history.SideFromBytes(p.after), After: history.SideFromBytes(p.before),
+				RevertsOwnCall: true, Reason: "edit_rollback",
+			})
 		}
 	}
 	if len(errs) > 0 {
