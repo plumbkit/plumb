@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -37,7 +38,9 @@ type TaskState struct {
 // WithTasks wires the resolved task/command state accessor. Injected rather than
 // read here so internal/tools keeps its config dependency at the boundary, the
 // same way gitPolicyFn and collabFn do. Nil-safe: unset ⇒ the section is omitted.
-func (t *SessionStart) WithTasks(fn func() TaskState) *SessionStart {
+// It takes the call's ctx because the state is the CALLING agent's project's,
+// which on a shared connection need not be the connection's (#522).
+func (t *SessionStart) WithTasks(fn func(context.Context) TaskState) *SessionStart {
 	t.tasksFn = fn
 	return t
 }
@@ -51,11 +54,11 @@ func (t *SessionStart) WithTasks(fn func() TaskState) *SessionStart {
 // single primary language — which is how an agent on a Zig+TypeScript workspace
 // ended up running pnpm, playwright and zig through raw shell for a whole
 // session. Nil-safe: skipped when unwired.
-func (t *SessionStart) writeSessionTasks(sb *strings.Builder, ws string) {
+func (t *SessionStart) writeSessionTasks(ctx context.Context, sb *strings.Builder, ws string) {
 	if t.tasksFn == nil || ws == "" {
 		return
 	}
-	st := t.tasksFn()
+	st := t.tasksFn(ctx)
 	if st.Language == "" && len(st.Commands) == 0 && len(st.Unreachable) == 0 && len(st.Runnable) == 0 {
 		return
 	}

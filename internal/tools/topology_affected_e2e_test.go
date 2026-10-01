@@ -422,7 +422,7 @@ func TestTopologyAffected_EveryChangedPackageIsNamed(t *testing.T) {
 	}
 
 	tool := tools.NewTopologyAffected(func() *topology.Store { return s }).
-		WithTestScope(func() tools.TestScope {
+		WithTestScope(func(context.Context) tools.TestScope {
 			return tools.TestScope{Language: "go", Style: tools.TargetGoPackage}
 		})
 	// No max_results: the shipped default is the behaviour under test.

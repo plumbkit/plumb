@@ -31,13 +31,13 @@ import (
 // Python tests in a TypeScript-primary repo had to abandon the tool and shell
 // out, losing the no-shell argv contract and the trust gate with it.
 // The working directory is the CALLING AGENT's root — see commandResolver for
-// why the connection's pin was the wrong answer (PLAN-440 item 4).
+// why the connection's pin was the wrong answer (PLAN-440 item 4) — and so is
+// the [tasks.<lang>] block it is read from (projectViewFor, #522).
 func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (tools.TaskCommand, error) {
-	ws := s.workspaceFor(ctx)
+	v, ws := s.projectViewFor(ctx)
 	if ws == "" {
 		return tools.TaskCommand{}, errors.New("run_task: no workspace is pinned for this session")
 	}
-	v := s.view()
 	lang, err := taskLanguage(v, req.Language)
 	if err != nil {
 		return tools.TaskCommand{}, err
@@ -75,7 +75,8 @@ func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (
 		}
 	}
 	return tools.TaskCommand{
-		Slot: slot, Steps: steps, Provenance: provenance, WorkingDir: workdir,
+		Slot: slot, Steps: steps, Provenance: provenance,
+		WorkingDir: workdir, WorkingDirSource: taskWorkingDirSource(ws, lang, tc.WorkingDir),
 		Language: lang, Configured: configuredSlots(tc, lang),
 		ConfigPath: config.ProjectConfigPath(ws),
 		Notes:      taskNotes(tc, lang, slot, sc),
@@ -191,8 +192,8 @@ func taskStepsOrRefusal(ws string, tc config.TasksConfig, lang, slot string, sc 
 // language, so in a monorepo the other detected languages' commands — including
 // the shipped defaults — cannot be run through run_task at all. That was
 // invisible, while the identity line happily listed every language.
-func (s *connSession) taskState() tools.TaskState {
-	v := s.view()
+func (s *connSession) taskState(ctx context.Context) tools.TaskState {
+	v, _ := s.projectViewFor(ctx)
 	lang := v.acquiredLanguage
 	if lang == "none" {
 		lang = ""
@@ -223,8 +224,8 @@ const targetAcceptanceProbe = "./..."
 //
 // The language rule lives HERE, not in internal/tools, because this is the only
 // layer that can see both the language and the configured command.
-func (s *connSession) testScope() tools.TestScope {
-	v := s.view()
+func (s *connSession) testScope(ctx context.Context) tools.TestScope {
+	v, _ := s.projectViewFor(ctx)
 	lang := v.acquiredLanguage
 	if lang == "" || lang == LanguageNone {
 		return tools.TestScope{}
