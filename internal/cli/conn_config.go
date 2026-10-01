@@ -249,10 +249,6 @@ func (s *connSession) editsConfig() config.EditsConfig {
 	return s.view().edits
 }
 
-func (s *connSession) historyConfig() config.HistoryConfig {
-	return s.view().history
-}
-
 // memoryConfig returns the current resolved [memory] config off the lock-free
 // snapshot (seeded at construction from global config, swapped per project on
 // every attach / re-pin / reload). Lets the hot read_file hint path read the

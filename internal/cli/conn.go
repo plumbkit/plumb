@@ -589,11 +589,6 @@ func (s *connSession) markBoundaryViolation(message string) {
 	})
 }
 
-// clientNameStr returns the MCP client name for the session.
-func (s *connSession) clientNameStr() string {
-	return s.view().clientName
-}
-
 // setClientRequest stores the latest MCP RequestFn for subsequent rootsFn calls.
 func (s *connSession) setClientRequest(req mcp.RequestFn) {
 	s.requestMu.Lock()

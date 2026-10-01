@@ -76,6 +76,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.findAllDaemonPIDs":           "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.handleHeapProfile":           "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.handleStacksProfile":         "daemon/CLI bookkeeping, not an agent file write",
+		"internal/cli.publishDaemonPID":            "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.recordWake":                  "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.runDaemon":                   "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.startDaemonProcess":          "daemon/CLI bookkeeping, not an agent file write",
@@ -87,7 +88,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.writeWakeStamp":              "daemon/CLI bookkeeping, not an agent file write",
 
 		// User-run CLI setup/init/skill management commands (not an agent's tool call).
-		"internal/cli.backupFile":             "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
+		"internal/cli.backupFileTo":           "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.backupSkillDir":         "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.cleanupSkillBackups":    "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.installSkill":           "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
@@ -95,6 +96,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.removeHooksAt":          "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.removeOwnedFile":        "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.removePlumbSkills":      "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
+		"internal/cli.replaceForcedSkill":     "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.runInit":                "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.saveSkillManifest":      "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",
 		"internal/cli.writeConflictProposal":  "daemon/CLI bookkeeping or explicit user-run setup, not an agent file write",

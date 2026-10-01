@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
@@ -87,4 +88,8 @@ func (s *connSession) txlogRecoverySink(_ string) txlog.RestoreSink {
 			Reason:         "crash_recovery",
 		})
 	}
+}
+
+func (s *connSession) historyConfig() config.HistoryConfig {
+	return s.view().history
 }

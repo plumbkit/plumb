@@ -486,4 +486,4 @@ func (t *MoveSymbol) formatMove(plans []movePlan, name, note, srcPath, dstPath s
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 	}
 	return sb.String()
-
+}

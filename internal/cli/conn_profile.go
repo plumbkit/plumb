@@ -148,3 +148,8 @@ func lookupClientProfile(profiles map[string]string, client string) string {
 	}
 	return best
 }
+
+// clientNameStr returns the MCP client name for the session.
+func (s *connSession) clientNameStr() string {
+	return s.view().clientName
+}
