@@ -1352,6 +1352,13 @@ The only agent-supplied input that reaches the argv is a shell-safe `{target}`
 for common languages (Go fully populated; a slot is left empty rather than guess
 an uninstalled tool). Output and runtime are bounded (100 KiB/200 lines, timeout).
 
+**Which project's block.** `run_task`, `mutation_test` and `run_command` read
+`[tasks.<lang>]` and `[[command]]` from the calling agent's own workspace. On a
+`plumb serve` connection that several agents share, an agent that pinned itself
+to another project (or a worktree) with `session_start` gets that project's
+commands, `working_dir`, `env` and `plumb trust` state, not the connection's,
+and its `agent_config` writes go to that project's `.plumb/config.toml`.
+
 ### `{target}` and its default
 
 A placeholder is a **whole argv element**, in one of two spellings:
@@ -1507,7 +1514,9 @@ and again **after symlink resolution** when it is resolved, so a `working_dir`
 naming a symlink out of the tree is refused rather than silently followed. A
 project-supplied `working_dir` is trust-gated exactly like a command, and it
 makes *every* slot for that language project-supplied — choosing where the
-shipped default runs is as much influence as choosing what it runs.
+shipped default runs is as much influence as choosing what it runs. A
+`working_dir` that does not exist is refused before the command starts, naming
+the directory and the setting it came from.
 
 **Trust gate.** A task command supplied by a *project* `.plumb/config.toml` is
 not run until the workspace is trusted with `plumb trust` (recorded per workspace

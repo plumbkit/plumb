@@ -72,6 +72,10 @@ type sessionView struct {
 	// identity line discloses what did not follow it (mail, threads).
 	resumedNewIdentity bool
 	lastCfgMtime       time.Time
+	// configRoot is the root applyProjectConfig last loaded the blocks above for
+	// ("" before any). A re-pin moves acquiredRoot before applying the new config,
+	// so projectViewFor keys on this, never on acquiredRoot (#522).
+	configRoot string
 	// projectWatchRoot: the canonical root this session holds a project-config
 	// watcher reference on (PLAN-414), acquired on every config apply, released
 	// on re-pin / close. fallbackWarned latches the one-time poll-fallback log

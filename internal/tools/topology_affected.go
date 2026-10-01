@@ -50,8 +50,8 @@ var topologyAffectedSchema = json.RawMessage(`{
 // Concurrency: Execute is safe for concurrent use.
 type TopologyAffected struct {
 	storeFn func() *topology.Store
-	ws      WorkspaceFn      // optional; enables the known-context memories join
-	scopeFn func() TestScope // optional; without it no test command is inferred
+	ws      WorkspaceFn                     // optional; enables the known-context memories join
+	scopeFn func(context.Context) TestScope // optional; without it no test command is inferred
 }
 
 // NewTopologyAffected returns a new TopologyAffected tool.
@@ -69,18 +69,19 @@ func (t *TopologyAffected) WithMemories(ws WorkspaceFn) *TopologyAffected {
 
 // WithTestScope wires the accessor for this workspace's test-command shape, so
 // the emitted target is one run_task will accept. Without it the tool names
-// directories and infers no command — never a Go one by default.
-func (t *TopologyAffected) WithTestScope(fn func() TestScope) *TopologyAffected {
+// directories and infers no command — never a Go one by default. It takes the
+// call's ctx because the answer is the CALLING agent's project's (#522).
+func (t *TopologyAffected) WithTestScope(fn func(context.Context) TestScope) *TopologyAffected {
 	t.scopeFn = fn
 	return t
 }
 
 // testScope reads the wired scope, or the zero value ("nothing is known").
-func (t *TopologyAffected) testScope() TestScope {
+func (t *TopologyAffected) testScope(ctx context.Context) TestScope {
 	if t.scopeFn == nil {
 		return TestScope{}
 	}
-	return t.scopeFn()
+	return t.scopeFn(ctx)
 }
 
 func (*TopologyAffected) Name() string                 { return "topology_affected" }
@@ -225,7 +226,7 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 	if runErr != nil {
 		return "", runErr
 	}
-	out := formatAffectedResult(result, a, t.testScope())
+	out := formatAffectedResult(result, a, t.testScope(ctx))
 	if t.ws != nil {
 		out += relatedMemoriesSection(t.ws(ctx), affectedRefs(a, result))
 	}

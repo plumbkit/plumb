@@ -67,6 +67,24 @@
   and docs/configuration.md now says so. The paragraph moved to its own
   `[lsp.<language>]` subsection, so it no longer sits between the `[git] env`
   text and the note on how project entries compose with global ones.
+- **An agent pinned to its own project runs that project's tasks and
+  commands.** On a `plumb serve` connection shared by several agents, an agent
+  that pinned itself with `session_start` to project B while the connection
+  stayed on project A ran `run_task` and `mutation_test` with A's
+  `[tasks.<lang>]` commands, `working_dir` and `env` against B's root, and
+  `run_command` with A's `[[command]]` list under A's trust. A's
+  `working_dir = "plumb"` sent the agent's build into `<B>/plumb`, which did not
+  exist. These tools, `topology_affected`'s test targets and `session_start`'s
+  task section now read B's config and B's `plumb trust` state, and
+  `agent_config` writes B's config rather than A's. An agent on the
+  connection's own project, and a connection with one agent, are unchanged. A
+  project's own `[[command]]` entries and task overrides in a worktree now need
+  `plumb trust` in that worktree, as they already did for a connection pinned
+  there. A working directory that does not exist is now refused before the
+  command starts, naming the directory and the `working_dir` setting that
+  produced it. Before, Go reported
+  `fork/exec <binary>: no such file or directory`, which blamed a binary that
+  exists. (#522)
 - **`mutation_test` names the run holding its slot, and frees the slot when
   that run's client goes.** (#545) A second run is still refused (one run per
   daemon keeps two agents from reading each other's mutant as their own result),
