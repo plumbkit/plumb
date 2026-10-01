@@ -338,3 +338,40 @@ func TestProjectGitStatus_NoProjectConfig(t *testing.T) {
 		t.Errorf("a workspace with no .plumb/config.toml must report nothing, got %+v", st)
 	}
 }
+
+// TestGitWiring_ProjectPolicy is the git tool's half of the wiring guard above:
+// its tier refusal names an untrusted project config (#530) only when the
+// registration hands it the session's snapshot. A dropped decorator leaves the
+// refusal plain and every internal/tools test — which injects its own stub —
+// green.
+func TestGitWiring_ProjectPolicy(t *testing.T) {
+	src, err := os.ReadFile("conn_register.go")
+	if err != nil {
+		t.Fatalf("reading conn_register.go: %v", err)
+	}
+	body := registerAllToolsBody(string(src))
+	start := strings.Index(body, "srv.Register(tools.NewGit(")
+	if start < 0 {
+		t.Fatal("the git tool is no longer registered in registerAllTools")
+	}
+	gitReg := body[start:]
+	if end := strings.Index(gitReg[len("srv.Register("):], "srv.Register("); end >= 0 {
+		gitReg = gitReg[:end+len("srv.Register(")]
+	}
+	if !strings.Contains(gitReg, "WithProjectPolicy(s.projectGitStatus)") {
+		t.Error("the git tool registration is missing WithProjectPolicy(s.projectGitStatus) — a tier refused because " +
+			"an untrusted project config asked for it no longer says so")
+	}
+}
+
+// TestProjectGitStatus_NamesItsWorkspace: the snapshot carries the root it was
+// taken for, which is the path the git tool's refusal tells the user to run
+// `plumb trust` for.
+func TestProjectGitStatus_NamesItsWorkspace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	writeProjectConfig(t, ws, "[git]\nallow_push = true\n")
+	if got := projectGitSession(t, ws).projectGitStatus().Workspace; got != ws {
+		t.Errorf("projectGitStatus().Workspace = %q, want the attached root %q", got, ws)
+	}
+}

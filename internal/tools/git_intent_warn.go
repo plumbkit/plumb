@@ -38,7 +38,7 @@ const (
 // other sessions — moving HEAD, rewriting refs, or discarding working-tree
 // content — the ops a peer's in-progress work (a rebase, a checkout, a reset)
 // can collide with. Every destructive-tier op qualifies; among write-tier ops
-// only the HEAD movers do (commit, switch, checkout -b/-B). Index-only writes
+// only the HEAD movers do (commit, switch, checkout -b/-B, merge). Index-only writes
 // (add, restore --staged, stash push) and purely additive ones (branch/tag
 // create, mv) are excluded: they cannot disturb a peer's in-flight repo
 // operation, so warning there would be noise. Read and network tiers never
@@ -47,7 +47,7 @@ func repoStateVerb(sub string, tier gitTier) bool {
 	if tier == tierDestructive {
 		return true
 	}
-	return tier == tierWrite && (sub == "commit" || sub == "switch" || sub == "checkout")
+	return tier == tierWrite && (sub == "commit" || sub == "switch" || sub == "checkout" || sub == "merge")
 }
 
 // peerIntentWarnFn returns the repo-intent check for this call, or nil — the

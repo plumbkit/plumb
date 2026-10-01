@@ -54,3 +54,79 @@ func TestPerAgentPinIsolation(t *testing.T) {
 		t.Fatalf("agent pin = %q/%q ok=%v err=%v, want /ws-a/zig", aRoot, aLang, aOK, err)
 	}
 }
+
+// TestDeclaredLinkageRoundTripAndPrune pins the v9 declared_linkage record
+// (issue #513): declarations are scoped by proxy session, blank values are
+// dropped, a re-declaration refreshes rather than duplicates, and Prune reclaims
+// an aged row unless its proxy session is live.
+func TestDeclaredLinkageRoundTripAndPrune(t *testing.T) {
+	s := newTestStore(t)
+	for _, l := range []string{"conv-a", "conv-b", "conv-a", ""} {
+		if err := s.RecordDeclaredLinkage("proxyX", l); err != nil {
+			t.Fatalf("RecordDeclaredLinkage %q: %v", l, err)
+		}
+	}
+	if err := s.RecordDeclaredLinkage("proxyY", "conv-other"); err != nil {
+		t.Fatalf("RecordDeclaredLinkage proxyY: %v", err)
+	}
+	got, err := s.DeclaredLinkagesFor("proxyX")
+	if err != nil {
+		t.Fatalf("DeclaredLinkagesFor: %v", err)
+	}
+	if len(got) != 2 || !containsAll(got, "conv-a", "conv-b") {
+		t.Fatalf("declared linkages = %v, want exactly conv-a and conv-b", got)
+	}
+
+	// proxyY is live, so only proxyX's rows are reclaimed.
+	if err := s.Prune(time.Now().Add(time.Hour), "proxyY"); err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+	if got, _ := s.DeclaredLinkagesFor("proxyX"); len(got) != 0 {
+		t.Errorf("aged declarations survived Prune: %v", got)
+	}
+	if got, _ := s.DeclaredLinkagesFor("proxyY"); len(got) != 1 {
+		t.Errorf("a live proxy's declaration was pruned: %v", got)
+	}
+}
+
+func containsAll(have []string, want ...string) bool {
+	set := map[string]bool{}
+	for _, h := range have {
+		set[h] = true
+	}
+	for _, w := range want {
+		if !set[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestTouchDeclaredLinkageRefreshesButNeverInserts: an admitted call keeps an
+// existing declaration young, but admission is not declaration, so a linkage
+// with no row never gains one.
+func TestTouchDeclaredLinkageRefreshesButNeverInserts(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.RecordDeclaredLinkage("proxyX", "conv-a"); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := s.BackdateLogicalAgents("proxyX", time.Now().Add(-48*time.Hour)); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	if err := s.TouchDeclaredLinkage("proxyX", "conv-a"); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	if err := s.TouchDeclaredLinkage("proxyX", "never-declared"); err != nil {
+		t.Fatalf("touch undeclared: %v", err)
+	}
+	if err := s.Prune(time.Now().Add(-24 * time.Hour)); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	got, err := s.DeclaredLinkagesFor("proxyX")
+	if err != nil {
+		t.Fatalf("DeclaredLinkagesFor: %v", err)
+	}
+	if len(got) != 1 || got[0] != "conv-a" {
+		t.Fatalf("after touch + prune = %v, want only the refreshed conv-a", got)
+	}
+}

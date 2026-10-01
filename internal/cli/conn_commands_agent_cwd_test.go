@@ -25,8 +25,12 @@ func TestRunCommandResolvesTheCallingAgentsRoot(t *testing.T) {
 	writeExecProject(t, parent, "[[command]]\nname = \"build\"\nexec = [\"go\", \"build\"]\n")
 	grantExecTrust(t, parent)
 
+	// A worktree carries its own checkout of the project config, and the agent's
+	// commands are read from THAT (#522), under its own trust.
 	worktree := filepath.Join(parent, "worktree")
 	mustGitDir(t, worktree)
+	writeExecProject(t, worktree, "[[command]]\nname = \"build\"\nexec = [\"go\", \"build\"]\n")
+	grantExecTrust(t, worktree)
 
 	s := execTrustSession(t, parent)
 
@@ -35,7 +39,7 @@ func TestRunCommandResolvesTheCallingAgentsRoot(t *testing.T) {
 	s.recordLogicalAgentCall("coordinator")
 	s.recordLogicalAgentCall("subagent")
 	ctx := mcp.WithLogicalAgent(context.Background(), "subagent")
-	if _, err := s.repinAgent(ctx, worktree, "", sessionstate.PinSourceSessionStart, false); err != nil {
+	if _, _, err := s.repinAgent(ctx, worktree, "", sessionstate.PinSourceSessionStart, false); err != nil {
 		t.Fatalf("pinning the subagent to its worktree: %v", err)
 	}
 	if got := s.workspaceFor(ctx); filepath.Clean(got) != filepath.Clean(worktree) {

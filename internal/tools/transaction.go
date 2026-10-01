@@ -126,13 +126,15 @@ type transactionApplyArgs struct {
 
 // txPrepared is the in-memory result of validating one operation: the
 // pre-edit content, the post-edit content, the file's pre-write mtime, and
-// the file mode for the eventual safeWrite.
+// the file mode for the eventual safeWrite. written is filled in by the write
+// phase: the version the transaction published (writeResult.written).
 type txPrepared struct {
 	path     string
 	before   string
 	after    string
 	preMtime time.Time
 	perm     os.FileMode
+	written  fileSnapshot
 }
 
 func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -448,12 +450,14 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 			slog.Warn("transaction_apply: txlog record failed — this write is not durable",
 				"path", p.path, "err", err)
 		}
-		if _, err := safeWrite(p.path, []byte(p.after), p.perm); err != nil {
+		res, err := safeWrite(p.path, []byte(p.after), p.perm)
+		if err != nil {
 			rollback(written)
 			txl.Rollback()
 			return nil, nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
 				p.path, err, len(written))
 		}
+		p.written = res.written
 		written = append(written, p)
 	}
 	// No extra directory fsync here: every write above went through safeWrite,
@@ -483,7 +487,7 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 			}
 		}
 		invalidateCache(t.deps.Cache, uri)
-		t.deps.recordWritten(ctx, p.path)
+		t.deps.recordWritten(ctx, p.path, p.written)
 	}
 	return failed
 }

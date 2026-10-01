@@ -111,12 +111,17 @@ func (s *connSession) checkBoundaryFor(ctx context.Context, path string, want to
 // this can never block the call that clears it.
 func (s *connSession) declarationRefusedErr(ctx context.Context) error {
 	id := mcp.LogicalAgentFromCtx(ctx)
-	p, ok := s.pendingDeclarationFor(id)
+	p, inherited, ok := s.pendingDeclarationForCall(ctx)
 	if !ok {
 		return nil
 	}
+	whose := "its session_start"
+	if inherited {
+		// A subagent inherits its conversation's refused declaration (#513).
+		whose = fmt.Sprintf("its conversation %q's session_start", linkageIDOf(id))
+	}
 	return toolerror.Wrap(
-		fmt.Errorf("refusing this call for logical agent %q: its session_start naming %s was refused, so the agent is still on %s — a workspace it never chose, and possibly another conversation's. A path-bearing call here would quietly operate on that project. Re-issue session_start with workspace + session_id + force: true (on a shared connection force moves only THIS agent's shard), then retry", id, p.requested, p.sittingOn),
+		fmt.Errorf("refusing this call for logical agent %q: %s naming %s was refused, so the agent is still on %s — a workspace it never chose, and possibly another conversation's. A path-bearing call here would quietly operate on that project. Re-issue session_start with workspace + session_id + force: true (on a shared connection force moves only THIS agent's shard), then retry", id, whose, p.requested, p.sittingOn),
 		toolerror.KindWorkspaceBoundary,
 		toolerror.ClassPassForce,
 		toolerror.WithTool("session_start"),

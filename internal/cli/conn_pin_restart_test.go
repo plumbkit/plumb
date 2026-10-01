@@ -1,7 +1,8 @@
 package cli
 
 // conn_pin_restart_test.go — the promise session_start's reconnect note makes:
-// "The daemon restores an explicit session_start workspace."
+// a workspace set with session_start comes back (the connection's own pin, here;
+// an agent's own pin on a shared connection is in conn_restored_first_caller_test.go).
 //
 // These exist because that promise was REPORTED broken and was not. A session
 // pinned to project A came back on project B across a daemon upgrade, and the
@@ -52,7 +53,8 @@ func TestPin_SurvivesDaemonRestartByteIdentical(t *testing.T) {
 	mustGitDir(t, root)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	pinned, err := before.repinWorkspace(context.Background(), root, "", false, false)
+	pinnedRep, err := before.repinWorkspace(context.Background(), root, "", false, false)
+	pinned := pinnedRep.Root
 	if err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
@@ -118,7 +120,8 @@ func TestPin_RestoreDoesNotResolveAfresh(t *testing.T) {
 	mustGitDir(t, child)
 
 	before := newPersistSession(t, store, ss, "proxyX")
-	pinned, err := before.repinWorkspace(context.Background(), child, "", false, false)
+	pinnedRep, err := before.repinWorkspace(context.Background(), child, "", false, false)
+	pinned := pinnedRep.Root
 	if err != nil {
 		t.Fatalf("repinWorkspace: %v", err)
 	}
