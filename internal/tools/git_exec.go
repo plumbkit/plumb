@@ -103,13 +103,13 @@ func gitReadArgv(argv []string) []string {
 // wired, it runs right after the guard's pre-execution check — a refused op
 // never warns — and its advisory block leads the successful response.
 //
-// child carries how the git child is RUN (git_child.go): its environment, built
-// from [git] env, and the [git] write_timeout bound. A nil Env means inherit
-// the daemon's environment, which is what an unconfigured knob resolves to and
-// what every git child got before it existed — except that execGitCmd may add
-// GOWORK=off, never over a GOWORK already set (git_gowork.go). This is the ONE git child plumb
-// spawns that runs the repository's hooks or can open an editor, so it is the
-// one whose environment is configurable; the auxiliary read queries around it
+// child carries how the git child is RUN (git_child.go): its environment — the
+// daemon's, plus the non-interactive defaults (GIT_EDITOR=true and friends,
+// gitNonInteractiveEnv), plus [git] env — and the [git] write_timeout bound.
+// execGitCmd may add GOWORK=off, never over a GOWORK already set
+// (git_gowork.go). This is the ONE git child plumb spawns that runs the
+// repository's hooks or can open an editor, so it is the one whose environment
+// is configurable; the auxiliary read queries around it
 // (ls-files, log -1, rev-parse, diff --cached) are plumbing whose output plumb
 // parses, and are deliberately left inheriting.
 //
@@ -249,8 +249,15 @@ func beginSerialisedGit(ctx context.Context, repoRoot, sub string, tier gitTier,
 // every go command its hooks run, and this is the one place every hook-running
 // git child — commit, rebase, cherry-pick, push — passes through. goWorkOff is
 // the go.work that was switched off ("" when none was), so a failure can say so.
+//
+// A nil cmd.Env is filled in with gitChildEnv(nil) for the same reason again:
+// the non-interactive defaults (GIT_EDITOR=true, GIT_TERMINAL_PROMPT=0, …) must
+// reach every git child, and a nil Env would inherit the daemon's editor.
 func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) (goWorkOff string, err error) {
 	boundGitChildWait(cmd)
+	if cmd.Env == nil {
+		cmd.Env = gitChildEnv(nil)
+	}
 	goWorkOff = applyAutoGoWork(cmd)
 	pinChildPWD(cmd)
 	if err := cmd.Start(); err != nil {

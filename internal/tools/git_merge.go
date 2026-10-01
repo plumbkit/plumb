@@ -20,8 +20,9 @@ import (
 // treated as rebase's and cherry-pick's are: --abort resets the working tree,
 // discarding any conflict resolution, and --quit strands a half-done merge, so
 // both are DESTRUCTIVE. --continue is refused outright rather than tiered: it
-// runs `git commit` with no message, which opens an editor the tool cannot drive,
-// and the tool's own commit concludes a merge just as well.
+// runs `git commit` and takes git's prepared message unseen (the git child's
+// editor is the no-op GIT_EDITOR=true, git_child.go), and the tool's own commit
+// concludes a merge just as well, with a message the caller chose.
 
 // classifyMerge is the merge arm of classifyGit. Safe-biased like its
 // neighbours: a state flag anywhere in args lifts the whole call to destructive,
@@ -60,12 +61,12 @@ func checkMergeArgs(args []string) error {
 }
 
 var (
-	errMergeEditor = errors.New("git merge: -e/--edit is not permitted — it opens an editor the tool cannot drive. " +
-		"Pass the message with -m, or --no-edit to accept git's default")
+	errMergeEditor = errors.New("git merge: -e/--edit is not permitted — the tool's editor is a no-op (GIT_EDITOR=true), so it would " +
+		"take git's default message without letting you change it. Pass the message with -m, or --no-edit to accept git's default")
 	errMergeFile = errors.New("git merge: -F/--file is not permitted — it reads the message from a file outside the tool's " +
 		"path checks. Pass the message with -m")
-	errMergeContinue = errors.New("git merge: --continue is not permitted — it runs `git commit` with no message, which opens an editor " +
-		"the tool cannot drive. Conclude the merge with subcommand \"commit\" and a message instead: stage the resolved files with " +
+	errMergeContinue = errors.New("git merge: --continue is not permitted — it runs `git commit` with no message of yours, taking git's " +
+		"prepared one unseen. Conclude the merge with subcommand \"commit\" and a message instead: stage the resolved files with " +
 		"subcommand \"add\" first, and the commit records the two-parent merge and runs the hooks")
 )
 
