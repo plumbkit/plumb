@@ -49,6 +49,7 @@ func (s *connSession) onProxySession(id string) {
 	}
 	s.mutate(func(v *sessionView) { v.proxySessionID = id })
 	s.restoreIdentity(id)
+	s.restoreDeclaredLinkages(id)
 	// DISABLED — see seedLogicalAgentsFromState. Re-arming the ceiling from
 	// durable state locks out every client that cannot stamp a per-call
 	// identity, which is the client this whole card is about.
