@@ -60,6 +60,15 @@ func TestProjectWatchManager_RecreatesLostWatcher(t *testing.T) {
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
 	first := nextWatcher(t, built)
+	// An earlier ordinary error set the failed latch (poll engaged); a
+	// successful recreate is a fresh watcher, so it must clear the latch.
+	m.testErrs <- fsnotify.ErrEventOverflow
+	// The loop takes the next error only once it has handled this one, so a
+	// second send is the barrier that makes the latch observable.
+	m.testErrs <- fsnotify.ErrEventOverflow
+	if m.healthy(ws) {
+		t.Fatal("healthy = true after a watcher error; the precondition for the latch check below is missing")
+	}
 
 	m.testErrs <- lostWatcherErr()
 	second := nextWatcher(t, built)
