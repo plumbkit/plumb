@@ -386,6 +386,13 @@ func (t *SessionStart) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
+	// Validate `detail` BEFORE resolveLinkage: linking is a commitment (it
+	// declares the caller's identity on a shared connection, issue #513), and a
+	// call that is about to fail on a malformed argument must commit nothing.
+	// The real resolution stays below, where the auto-brief signal exists.
+	if _, err := resolveDetail(raw, false); err != nil {
+		return "", err
+	}
 	inheritedName, linked := t.resolveLinkage(raw)
 	lang, lspKey := detectLanguageInfo(ws)
 	// A forced/attached primary may have no root marker (e.g. swift pinned on an

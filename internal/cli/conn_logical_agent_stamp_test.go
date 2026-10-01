@@ -65,6 +65,11 @@ func TestStampChannelStateAgreesWithTheWriteGate(t *testing.T) {
 			ctx := mcp.WithLogicalAgent(context.Background(), tc.callerID)
 
 			st := s.stampChannelState(ctx)
+			// The note is read INSIDE session_start, and a successful
+			// session_start is itself the declaration of the identity it ran
+			// under (issue #513), so the gate the note predicts is the one after
+			// this call — exactly as the after-tool hook leaves it.
+			s.declareSessionStartCaller(ctx, "session_start", false)
 			// "The note would warn that writes are being refused" must hold
 			// exactly when the gate would in fact refuse one.
 			noteWarnsRefused := st.Shared && !st.PerCallStamped
