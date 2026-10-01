@@ -314,7 +314,7 @@ destructive-tier call that is still waiting at the deadline — on the child, or
 on the per-repository lock in front of it — stops waiting. A child that is
 running is **not killed** (that strands `index.lock`); the call returns a
 success result saying the operation is **still running in the background**,
-with the child's pid, when it started and the HEAD it started from. Until it
+with the child's pid, when it started and the HEAD at that moment. Until it
 finishes:
 
 - every further write, destructive or network call on that repository is

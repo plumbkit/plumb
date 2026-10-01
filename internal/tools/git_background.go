@@ -28,8 +28,8 @@ import (
 // The fix keeps the decoupling (killing git mid-commit is worse) and bounds
 // only how long the CALL waits: after [git] detach_after — kept below the
 // usual client call timeout — the call returns a "still running in the
-// background" result naming the child's pid, start time and the HEAD it
-// started from, and the op is registered here. Until it finishes every further
+// background" result naming the child's pid, start time and HEAD at
+// that moment, and the op is registered here. Until it finishes every further
 // non-read git call on that repository is refused with that explanation, reads
 // keep working (and carry a note), and once it has finished the next git call
 // from each session reports the outcome: landed as <sha>, or failed with git's
@@ -58,12 +58,16 @@ const maxGitBackgroundOutcomeBytes = 4 * 1024
 // never written again. mu guards the outcome fields and seen; done is closed
 // exactly once, by finish, after the outcome is stored.
 type gitBackgroundOp struct {
-	repoRoot   string
-	sub        string
-	pid        int
-	started    time.Time
-	headBefore string // "abc1234 (main)", or "" when it could not be read
-	detachedAt time.Duration
+	repoRoot string
+	sub      string
+	pid      int
+	started  time.Time
+	// headAtDetach is HEAD as of the moment the call stopped waiting, as
+	// "abc1234 (main)", or "" when it could not be read. For a commit that is
+	// the HEAD it started from (HEAD moves when the commit lands); for a verb
+	// that moves HEAD as it goes, such as rebase, it may already be partway.
+	headAtDetach string
+	detachedAt   time.Duration
 
 	done chan struct{}
 
@@ -102,8 +106,8 @@ func (op *gitBackgroundOp) finish(failed bool, outcome string) {
 // describe is the one-line identity of the op, shared by every message.
 func (op *gitBackgroundOp) describe() string {
 	s := fmt.Sprintf("git %s (pid %d, started %s", op.sub, op.pid, op.started.Format(time.RFC3339))
-	if op.headBefore != "" {
-		s += ", HEAD was " + op.headBefore
+	if op.headAtDetach != "" {
+		s += ", HEAD " + op.headAtDetach + " when it detached"
 	}
 	return s + ")"
 }
@@ -207,8 +211,8 @@ func gitStillRunningMessage(op *gitBackgroundOp) string {
 	fmt.Fprintf(&b, "It outlived plumb's %s foreground deadline ([git] detach_after, kept below the MCP client's call timeout); "+
 		"the usual cause is a slow hook.\n", op.detachedAt.Round(time.Millisecond))
 	fmt.Fprintf(&b, "  pid:     %d\n  started: %s\n", op.pid, op.started.Format(time.RFC3339))
-	if op.headBefore != "" {
-		fmt.Fprintf(&b, "  HEAD:    %s when it started", op.headBefore)
+	if op.headAtDetach != "" {
+		fmt.Fprintf(&b, "  HEAD:    %s when this call stopped waiting", op.headAtDetach)
 		if op.sub == "commit" {
 			b.WriteString(" — HEAD moves to the new commit when it lands")
 		}
@@ -244,13 +248,13 @@ func (r *gitChildRun) awaitOrDetach(cmd *exec.Cmd, wait func() error) (*gitBackg
 	default:
 	}
 	op := &gitBackgroundOp{
-		repoRoot:   r.repoRoot,
-		sub:        r.sub,
-		pid:        cmd.Process.Pid,
-		started:    r.start,
-		headBefore: gitHeadSummary(r.execCtx, r.repoRoot),
-		detachedAt: r.detachAfter,
-		done:       make(chan struct{}),
+		repoRoot:     r.repoRoot,
+		sub:          r.sub,
+		pid:          cmd.Process.Pid,
+		started:      r.start,
+		headAtDetach: gitHeadSummary(r.execCtx, r.repoRoot),
+		detachedAt:   r.detachAfter,
+		done:         make(chan struct{}),
 	}
 	registerGitBackground(op)
 	go r.finishInBackground(op, done)

@@ -65,7 +65,7 @@
   `[git] detach_after` (default `45s`, `PLUMB_GIT_DETACH_AFTER`, trust-gated),
   counting any wait for the per-repository lock. The child is not killed: the
   call returns "still running in the background" with its pid, start time and
-  starting HEAD. Until it finishes, further non-read calls on that repository
+  HEAD at that moment. Until it finishes, further non-read calls on that repository
   are refused with that explanation and reads still run with a note. After it
   finishes, the next `git` call from each session reports `landed as <sha>` or
   the failure with git's output. A value at or above `write_timeout` restores

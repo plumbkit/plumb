@@ -325,3 +325,60 @@ func gitStaged(t *testing.T, dir string) string {
 	}
 	return string(out)
 }
+
+// TestGit_DetachedOpReRecordsOwnWritesWhenItFinishes: plumb's own working-tree
+// rewrite must not be blamed on a peer (#529) even when the op outlives its call
+// (#549). A slow pre-rebase hook holds the call past its deadline BEFORE git
+// touches init.txt, so a refresh taken when the call returns would find nothing
+// changed, and the rewrite that follows would be reported by the next read as
+// "a peer or external process" edit. The finisher has to do the re-recording,
+// once git has exited and before the outcome is visible.
+func TestGit_DetachedOpReRecordsOwnWritesWhenItFinishes(t *testing.T) {
+	repo, tracker, _ := ownWritesFixture(t)
+	installHook(t, repo, "pre-rebase", "sleep 3\nexit 0\n")
+	tool := NewGit(
+		WriteDeps{WorkspaceFn: func(context.Context) string { return repo }, Writes: tracker},
+		func() GitPolicy {
+			return GitPolicy{AllowWrites: true, AllowDestructive: true, WriteTimeout: 30 * time.Second, DetachAfter: testDetachAfter}
+		},
+	)
+	root, err := findGitRoot(repo)
+	if err != nil {
+		t.Fatalf("findGitRoot: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = waitGitBackground(ctx, root)
+		gitBackgroundOps.Delete(root)
+	})
+	path := filepath.Join(repo, "init.txt")
+
+	var out string
+	runBounded(t, 25*time.Second, "git rebase past the foreground deadline", func() {
+		out, err = callGit(t, tool, map[string]any{"subcommand": "rebase", "args": []string{"other"}, "confirm": true})
+	})
+	if err != nil || !strings.Contains(out, "STILL RUNNING") {
+		t.Fatalf("the rebase should have detached (err=%v):\n%s", err, out)
+	}
+	if data, _ := os.ReadFile(path); string(data) == "other's version\n" {
+		t.Fatal("git had already rewritten init.txt when the call returned, so this test is not exercising a rewrite after the call")
+	}
+
+	waitBackground(t, root)
+	if data, _ := os.ReadFile(path); string(data) != "other's version\n" {
+		t.Fatalf("the background rebase did not rewrite init.txt (got %q), so this test proves nothing", data)
+	}
+	if readWarns(t, tracker, path) {
+		t.Error("read after plumb's own detached rebase warned of a peer edit")
+	}
+
+	// Positive control: a peer's edit after the op is still reported.
+	if err := os.WriteFile(path, []byte("peer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backdate(t, path, time.Hour)
+	if !readWarns(t, tracker, path) {
+		t.Error("a peer edit after the detached rebase was not reported")
+	}
+}

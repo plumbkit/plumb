@@ -73,7 +73,7 @@ type GitConfig struct {
 	WriteTimeout Duration `toml:"write_timeout"`
 	// DetachAfter bounds how long a git tool CALL waits for an index/ref-mutating
 	// child, not the child: past it the call returns "still running in the
-	// background" (pid, start time, starting HEAD) and the child finishes under
+	// background" (pid, start time, HEAD at that moment) and the child finishes under
 	// WriteTimeout, with its outcome reported on the next git call and further
 	// writes to the repository refused until then. Default 45s, below the 60s
 	// call timeout MCP clients commonly apply — a call that outlived its client
