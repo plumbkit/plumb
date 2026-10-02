@@ -105,7 +105,12 @@ func claudePreToolUseDecision(input claudeHookInput, env func(string) string, da
 	if !ok {
 		return nil, "tool_input is not a JSON object"
 	}
-	key, why := identityStampDecision(daemon)
+	var rec identityProbeRecord
+	probe := daemon
+	if daemon != nil {
+		probe = func() identityProbeRecord { rec = daemon(); return rec }
+	}
+	key, why := identityStampDecision(probe)
 	if key == "" {
 		return nil, why
 	}
@@ -118,6 +123,10 @@ func claudePreToolUseDecision(input claudeHookInput, env func(string) string, da
 	args[key] = json.RawMessage(mustJSONString(id))
 	if input.ToolName == claudeIdentityPrefix+"session_start" {
 		args["session_id"] = json.RawMessage(mustJSONString(id))
+		// The proof is the hook's alone, like the stamp: a typed one is dropped, and one
+		// is added only for a daemon that drops it too (see addResumeProof).
+		delete(args, mcp.ArgHookProofKey)
+		addResumeProof(args, id, rec)
 	}
 	return map[string]any{
 		"hookSpecificOutput": map[string]any{
@@ -125,6 +134,22 @@ func claudePreToolUseDecision(input claudeHookInput, env func(string) string, da
 			"updatedInput":  orderedRawObject(args),
 		},
 	}, ""
+}
+
+// addResumeProof adds the resume proof for the stamp to a session_start's arguments, so
+// `plumb serve` can tell that the hook, and not a model, named the conversation (see
+// resume_proof.go). It fails open: when the daemon does not list the proof key, or the
+// per-user key cannot be read or made, the call goes out with the stamp alone and a
+// replacement serve resumes by name only.
+func addResumeProof(args map[string]json.RawMessage, stamp string, daemon identityProbeRecord) {
+	if !daemon.HookProof {
+		return
+	}
+	key, err := ensureResumeProofKey()
+	if err != nil {
+		return
+	}
+	args[mcp.ArgHookProofKey] = json.RawMessage(mustJSONString(resumeProofFor(key, stamp)))
 }
 
 // runClaudePreToolUse is the PreToolUse command body: one JSON document on
@@ -270,6 +295,10 @@ type identityProbeRecord struct {
 	// label, so a version threshold kept the declared key off exactly the
 	// builds that had it.
 	DeclaredKey bool `json:"declared_key,omitempty"`
+	// HookProof reports that the daemon listed mcp.ArgHookProofKey, which it also
+	// drops: the resume proof is added only for a daemon that would not reject it
+	// when a serve process that predates the proof forwards it unstripped.
+	HookProof bool `json:"hook_proof,omitempty"`
 	// DaemonInstance is the daemonInstanceMarker read BEFORE the probe that
 	// produced this record. A cached record answers only while the marker
 	// still matches, so a daemon swapped inside the minute — for an older

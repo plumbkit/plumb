@@ -37,6 +37,19 @@ func TestSplitLogicalAgentArg(t *testing.T) {
 			name: "nested occurrence is not the channel",
 			in:   `{"name":"x","inner":{"dev.plumbkit/logical-agent":"C"}}`,
 		},
+		{
+			name: "the hook's proof is dropped and never an identity",
+			in:   `{"name":"x","plumb_hook_proof":"p"}`, wantID: "", wantRest: `{"name":"x"}`,
+		},
+		{
+			name:   "the proof beside a stamp: the stamp is the identity, both go",
+			in:     `{"plumb_agent":"C","plumb_hook_proof":"p","n":1.10}`,
+			wantID: "C", wantRest: `{"n":1.10}`,
+		},
+		{
+			name: "a nested proof is not the channel",
+			in:   `{"name":"x","inner":{"plumb_hook_proof":"p"}}`,
+		},
 		{name: "array arguments untouched", in: `[1,2]`},
 		{name: "scalar arguments untouched", in: `"x"`},
 		{name: "null untouched", in: `null`},

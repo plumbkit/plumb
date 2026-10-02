@@ -34,6 +34,37 @@
   changes no behaviour yet, and `rsk1-` tokens are now scrubbed by
   `internal/redact`. The threat model records the new authority and the accepted
   griefing vector of the revocation counter.
+- **A replacement `plumb serve` now resumes the full identity: the proxy half of the
+  resume credential.** (#556, `docs/identity-resume-credential-design.md`) `plumb serve`
+  announces `dev.plumbkit/resume-credential-consumer: 1` in its initialize `_meta`,
+  removes `dev.plumbkit/resume-credential` from every `_meta` object in every frame it
+  forwards to its client (the initialize result, every tool result including a late C3
+  disclosure, a replayed handshake, a notification, at any depth in the frame; only the
+  key goes, so tool text that merely names it or holds a token-shaped fixture is left
+  as written, while a frame that does not parse, or repeats a member, has any token
+  redacted rather than forwarded), and keeps what it removed. Once a `session_start`
+  whose conversation the identity hook proved links it, the credential is stored in the proxy's own
+  state directory (`<state dir>/serve/resume-credentials/`, mode 0600, one atomically
+  written file per conversation, bound to the daemon whose session-state database
+  issued it, capped at 256 entries with the oldest evicted) and refreshed at every
+  rotation. A replacement serve whose daemon reports a fresh identity presents the
+  stored credential once, in the request `_meta` of the first `session_start` that
+  names that conversation, so the internal session ID, name, mail and thread seats
+  come back instead of the name alone (symptoms 2 and 4); a credential a client put
+  in the request `_meta` itself is never forwarded. A conversation id and a stamp are
+  strings a model can type, so neither entitles a presentation: the Claude Code
+  identity hook adds `plumb_hook_proof`, an HMAC of its stamp under a per-user key
+  (`<state dir>/serve/hook-proof.key`, mode 0600, made by `plumb hooks install` or the
+  hook's first run), and `plumb serve` presents only when that verifies and names the
+  conversation. A client with no hook, or a call whose proof does not verify, resumes
+  by name only and has nothing filed under the conversation it named. The proof is
+  removed before the request reaches the daemon, which also drops it and lists it in its
+  `identity-keys` answer, so the hook adds it only for a daemon that does. Against a daemon that predates the
+  credential the announcement is ignored and nothing is stored or presented. A
+  presentation that earns no successor leaves the stored entry in place, because the
+  daemon does not say whether it was refused or merely could not finish, and a retry
+  can still restore the predecessor. `TestSmoke_ServeReplacementResumesByName` now
+  asserts the full restore it used to assert could not happen.
 
 ### Fixed
 

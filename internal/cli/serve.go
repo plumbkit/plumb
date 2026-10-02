@@ -96,6 +96,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		allowDirs:         allowDirs,
 		proxySessionID:    newProxySessionID(),
 		workspace:         workspace,
+		resumeStore:       openDefaultResumeStore(),
+		resumeProofKey:    loadResumeProofKey,
 	})
 	return p.run(ctx)
 }

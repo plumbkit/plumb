@@ -62,6 +62,9 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 			return fmt.Errorf("awaiting initialize response: %w", err)
 		}
 		e := parseEnvelope(frame)
+		// A replayed initialize result is swallowed and never reaches writeClient, but it
+		// carries a freshly minted resume credential this proxy must keep.
+		p.observeResumeFrame(e, frame)
 		if e.isResponse() && idKey(e.ID) == initID {
 			// The replayed response is the fresh daemon's authoritative answer
 			// about who this connection now is (PLAN-426). Capture it here, before

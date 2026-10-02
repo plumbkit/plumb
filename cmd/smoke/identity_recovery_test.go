@@ -25,7 +25,9 @@ package smoke_test
 // harness stops only the daemon it spawned, by the pid file inside that tree.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -471,14 +473,57 @@ func retryCall(t *testing.T, c *mcpClient, tool string, args map[string]any, bud
 	}
 }
 
+// hookedSessionStart returns the arguments of a main-thread session_start of conversation
+// as Claude Code's identity hook leaves them, by running the real hook
+// (`plumb hooks run-claude`, PreToolUse) against the isolated daemon: the session_id and
+// the stamp both the conversation, and the proof of the stamp that is the only thing
+// entitling a replacement serve to present the credential its predecessor stored. A
+// client with no hook types the conversation and proves nothing, and is not presented for.
+func hookedSessionStart(t *testing.T, plumbBin, tmpHome, conversation string, args map[string]any) map[string]any {
+	t.Helper()
+	input, err := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse", "session_id": conversation, "tool_use_id": "smoke-hook",
+		"tool_name": "mcp__plumb__session_start", "tool_input": args,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(plumbBin, "hooks", "run-claude")
+	cmd.Env = isolatedEnv(tmpHome)
+	cmd.Stdin = bytes.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("plumb hooks run-claude: %v\n%s", err, stderr.String())
+	}
+	var doc struct {
+		Hook struct {
+			UpdatedInput map[string]any `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil || doc.Hook.UpdatedInput == nil {
+		t.Fatalf("the hook produced no updatedInput (%v): stdout %q, stderr %q", err, out, stderr.String())
+	}
+	if _, ok := doc.Hook.UpdatedInput["plumb_hook_proof"]; !ok {
+		t.Fatalf("the hook stamped the call but did not prove the stamp: %v (stderr %q)", doc.Hook.UpdatedInput, stderr.String())
+	}
+	return doc.Hook.UpdatedInput
+}
+
 // TestSmoke_ServeReplacementResumesByName is the machine-reboot case, and the
 // reason the two restart tests above are not the whole story: a reboot kills
 // the serve proxy TOO, so no proxy credential survives and the daemon-restart
-// restore cannot fire. Continuity then rests entirely on the external linkage:
-// the new serve process presents the same conversation ID and takes back the
-// NAME its predecessor answered to. The internal session ID does NOT come
-// back — that would mean the credential boundary leaked — and the packet must
-// say the caller resumed rather than silently handing back the name.
+// restore cannot fire. What carries the conversation across is the resume
+// credential (docs/identity-resume-credential-design.md): the first serve was
+// disclosed one, kept it in its own state directory, and the replacement serve
+// presents it at the session_start that names the conversation. So the
+// replacement is the SAME identity: the internal session ID comes back along
+// with the name, and the packet says the identity was restored. Before the
+// credential this test asserted the opposite (a name-only resume under a new
+// ID), which was correct while the proxy credential was the only authority;
+// TestSmoke_ServeReplacementWithoutLinkStartsAFreshIdentity still pins the case
+// where there is nothing to present.
 func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	plumbBin := buildPlumb(t)
 	fixture := makeMarkerFixture(t)
@@ -490,16 +535,14 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	const externalID = "smoke-reboot-426"
 	first := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	first.initialize(t, fixture)
-	packet1, meta1 := first.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	waitForPID(t, tmpHome, 15*time.Second)
+	packet1, meta1 := first.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	want := parseSelfIdentity(packet1)
 	full1 := fullSessionID(t, meta1)
 	if want.name == "" || full1 == "" {
 		t.Fatalf("the first serve never established an identity; packet:\n%s", packet1)
 	}
-	waitForPID(t, tmpHome, 15*time.Second)
 
 	// Pre-restart sanity: the linkage must already resolve through the real CLI,
 	// so a resume failure below indicts the resume path, not the send.
@@ -518,10 +561,8 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 
 	second := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	second.initialize(t, fixture)
-	packet2, meta2 := second.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	packet2, meta2 := second.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	t.Logf("successor packet:\n%s", packet2)
 	got := parseSelfIdentity(packet2)
 	full2 := fullSessionID(t, meta2)
@@ -534,12 +575,12 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
 			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
 	}
-	if !strings.Contains(packet2, "new internal identity — mail and threads bound to the predecessor ID are not inherited") {
-		t.Errorf("the replacement packet does not disclose the name-only recovery boundary:\n%s", packet2)
+	if !strings.Contains(packet2, "identity restored — mail and threads bound to your previous session followed you") {
+		t.Errorf("the replacement packet does not report the full restore:\n%s", packet2)
 	}
-	if full2 == full1 {
-		t.Fatalf("the replacement serve recovered the internal session ID %q — only the proxy "+
-			"credential may restore an ID, and no credential survived the replacement", full2)
+	if full2 != full1 {
+		t.Fatalf("the replacement serve came back as session %q, want the predecessor's %q — the "+
+			"credential its predecessor's serve stored was not presented, or the daemon did not accept it", full2, full1)
 	}
 
 	// And the linkage is resolvable by the real CLI, not only in-process.

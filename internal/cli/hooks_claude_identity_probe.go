@@ -100,7 +100,7 @@ func probeDaemonIdentityBy(deadline time.Time, haveRecord bool) (identityProbeRe
 	}
 	answer := parseIdentityKeysReply(reply)
 	if err == nil && answer.version != "" {
-		return identityProbeRecord{DaemonVersion: answer.version, DeclaredKey: answer.declared}, nil
+		return identityProbeRecord{DaemonVersion: answer.version, DeclaredKey: answer.declared, HookProof: answer.proof}, nil
 	}
 	if err != nil && haveRecord {
 		return identityProbeRecord{}, err
@@ -109,13 +109,16 @@ func probeDaemonIdentityBy(deadline time.Time, haveRecord bool) (identityProbeRe
 	if verr != nil {
 		return identityProbeRecord{}, verr
 	}
-	return identityProbeRecord{DaemonVersion: version, DeclaredKey: answer.declared, uncertain: err != nil}, nil
+	return identityProbeRecord{DaemonVersion: version, DeclaredKey: answer.declared, HookProof: answer.proof, uncertain: err != nil}, nil
 }
 
 // identityKeysAnswer is a parsed `identity-keys` reply.
 type identityKeysAnswer struct {
 	// declared: the daemon lists mcp.ArgLogicalAgentDeclaredKey.
 	declared bool
+	// proof: the daemon lists mcp.ArgHookProofKey, so it drops the proof a serve that
+	// predates it forwards.
+	proof bool
 	// version is the daemon's own version when the reply carries it, so one ask
 	// answers both questions; empty from a daemon that predates the field.
 	version string
@@ -141,6 +144,8 @@ func parseIdentityKeysReply(line string) identityKeysAnswer {
 			answer.version = version
 		case field == mcp.ArgLogicalAgentDeclaredKey:
 			answer.declared = true
+		case field == mcp.ArgHookProofKey:
+			answer.proof = true
 		}
 	}
 	return answer
