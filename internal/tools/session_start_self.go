@@ -83,9 +83,15 @@ func (t *SessionStart) selfIdentityLine(resumedName string) string {
 			// its predecessor's bound mail and threads will not follow it and
 			// one that discovers it when a note goes missing.
 			sb.WriteString("; new internal identity — mail and threads bound to the predecessor ID are not inherited")
+		} else if t.callLink.Credential == ResumeRestored {
+			// A presented resume credential carried the predecessor's internal session ID
+			// back, which is the one thing the linkage never grants: say so, so the agent
+			// stops treating its predecessor's mail and threads as lost.
+			sb.WriteString("; identity restored — mail and threads bound to your previous session followed you")
 		}
 	}
 	sb.WriteString("\n")
+	sb.WriteString(t.callLink.Credential.credentialNote())
 	return sb.String()
 }
 

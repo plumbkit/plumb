@@ -35,10 +35,12 @@ package cli
 //     happened to link the connection first, or another conversation sharing it, did
 //     not resume anything, and being told it had is how a subagent that had never
 //     existed came to report "resumed".
-//   - Nothing but the name follows. The predecessor's session ID, with the threads
-//     and the mail bound to it, is never granted here: the linkage is a conversation
-//     id, a routing key the model can type, and only the proxy credential
-//     (restoreIdentity) proves an agent is its predecessor.
+//   - Nothing but the name follows from the LINKAGE. The predecessor's session ID,
+//     with the threads and the mail bound to it, is never granted by it: the linkage
+//     is a conversation id, a routing key the model can type. Only a credential
+//     proves an agent is its predecessor: the proxy credential (restoreIdentity), or
+//     a resume credential the call presents, which is tried before the relink
+//     (conn_resume_accept.go).
 
 import (
 	"context"
@@ -87,8 +89,19 @@ func (s *connSession) linkExternalID(ctx context.Context, externalID string) too
 		s.recordLogicalAgentAttach(externalID)
 		return tools.LinkResult{}
 	}
+	// A presented resume credential is tried first, so that a restore it earns has
+	// already moved the connection onto the predecessor's session ID before the
+	// name-only relink below runs (and finds nothing left to resume).
+	resumed := s.resumeWithCredential(ctx, linkage)
 	s.relinkTo(externalID)
-	return s.deliverResume(mcp.LogicalAgentFromCtx(ctx), linkage)
+	if resumed == tools.ResumeRestored {
+		// The full restore supersedes the name resume the linkage would have reported.
+		s.takeResume(linkage)
+		return tools.LinkResult{InheritedName: s.sessionName(), Credential: resumed}
+	}
+	link := s.deliverResume(mcp.LogicalAgentFromCtx(ctx), linkage)
+	link.Credential = resumed
+	return link
 }
 
 // keepsLinkageFor reports whether a session_start naming the conversation linkage

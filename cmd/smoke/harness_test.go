@@ -166,6 +166,11 @@ type mcpClient struct {
 	rootsPath string
 
 	cancel context.CancelFunc
+
+	// credentialFrames are the frames this client received, redacted, that carried a
+	// resume-credential-shaped token (see scanForwardedFrame).
+	credentialFramesMu sync.Mutex
+	credentialFrames   []string
 }
 
 // newMCPClient starts a plumb serve subprocess and returns a ready client.
@@ -223,8 +228,40 @@ func newMCPClient(t *testing.T, ctx context.Context, plumbBin, tmpHome, rootsPat
 		c.cancel()
 		stopDaemonBestEffort(t, tmpHome)
 	})
+	// Registered last, so it runs first, while the connection is still live. Every
+	// smoke test that talks to a serve proxy gets the check, whatever it asserts.
+	t.Cleanup(func() { c.assertNoForwardedCredential(t) })
 
 	return c
+}
+
+// scanForwardedFrame records a received frame that carries a resume credential. This
+// client sits on the proxy's stdout, so what it reads is exactly what a real MCP
+// client (and the transcript it persists, and the model that can read it) would
+// receive: the initialize result, every tool result, every notification, `_meta`
+// included. A daemon that discloses to a proxy that forwards verbatim writes a bearer
+// secret to disk, so ANY frame carrying one fails the test that received it, not
+// merely the tool-result text a scenario happened to collect.
+func (c *mcpClient) scanForwardedFrame(line []byte) {
+	if !resumeCredentialShape.Match(line) {
+		return
+	}
+	redacted := resumeCredentialShape.ReplaceAllString(strings.TrimSpace(string(line)), "rsk1-<redacted>")
+	c.credentialFramesMu.Lock()
+	c.credentialFrames = append(c.credentialFrames, redacted)
+	c.credentialFramesMu.Unlock()
+}
+
+// assertNoForwardedCredential fails if scanForwardedFrame recorded anything.
+func (c *mcpClient) assertNoForwardedCredential(t *testing.T) {
+	t.Helper()
+	c.credentialFramesMu.Lock()
+	defer c.credentialFramesMu.Unlock()
+	for _, frame := range c.credentialFrames {
+		t.Errorf("a frame forwarded to the client carries a resume credential, which Claude Code would "+
+			"persist to its on-disk transcripts. Only a proxy that consumes and strips the key may be "+
+			"disclosed one:\n%s", frame)
+	}
 }
 
 // isolatedEnv returns an environment slice that overrides HOME and every XDG
@@ -278,6 +315,7 @@ func (c *mcpClient) readLoop(ctx context.Context, r *bufio.Reader) {
 		if len(strings.TrimSpace(string(line))) == 0 {
 			continue
 		}
+		c.scanForwardedFrame(line) // before parsing: an unparseable frame is still forwarded
 
 		var msg mcpMsg
 		if err := json.Unmarshal(line, &msg); err != nil {

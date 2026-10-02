@@ -401,11 +401,53 @@ func fullSessionID(t *testing.T, meta map[string]any) string {
 // prove itself — which must never reach client-visible output.
 var uuidShape = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
+// resumeCredentialShape matches a resume credential: `rsk1-` and 22 base64url
+// characters (docs/identity-resume-credential-design.md). Unlike the proxy session
+// credential it is DISCLOSED by the daemon, in `_meta`, to a proxy that announced it
+// strips the key. The proxy forwards every other frame verbatim, and Claude Code
+// persists a tool result's `_meta` to disk where a model can read it, so NO frame
+// forwarded to the client may carry one (mcpClient.scanForwardedFrame checks every
+// frame, `_meta` included), and neither may any packet, CLI output or log.
+var resumeCredentialShape = regexp.MustCompile(`rsk1-[A-Za-z0-9_-]{22}`)
+
+// A scan that has never seen a credential proves nothing by finding none. The
+// positive control: the forwarded-frame scan fires on a credential in a tool result's
+// `_meta` and in an initialize result's `_meta`, and stays silent on the identity
+// snapshot that legitimately rides the same keys.
+func TestSmoke_ForwardedFrameScanSeesACredentialInMeta(t *testing.T) {
+	const secret = "rsk1-AAAAAAAAAAAAAAAAAAAAAA"
+	frames := map[string]string{
+		"a tool result":     `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok"}],"_meta":{"dev.plumbkit/resume-credential":"` + secret + `"}}}`,
+		"an initialize":     `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/resume-credential":"` + secret + `"}}}`,
+		"an unparseable":    `{"result":{"_meta":{"dev.plumbkit/resume-credential":"` + secret,
+		"a clean identity":  `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/session-identity":{"recovery":"established"}}}}`,
+		"another key shape": `{"jsonrpc":"2.0","id":2,"result":{"_meta":{"dev.plumbkit/session-id":"bd11d96cee90-a1b231df"}}}`,
+	}
+	wantHit := map[string]bool{"a tool result": true, "an initialize": true, "an unparseable": true}
+	for name, frame := range frames {
+		c := &mcpClient{}
+		c.scanForwardedFrame([]byte(frame + "\n"))
+		hit := len(c.credentialFrames) == 1
+		if hit != wantHit[name] {
+			t.Errorf("%s: scan hit = %v, want %v", name, hit, wantHit[name])
+		}
+		if hit && strings.Contains(c.credentialFrames[0], secret) {
+			t.Errorf("%s: the recorded frame still carries the secret", name)
+		}
+	}
+}
+
 // assertNoCredentialLeak fails when a UUID-shaped token appears in
 // client-visible output. Every identity scenario below funnels its tool
 // results, packets and CLI output through this.
 func assertNoCredentialLeak(t *testing.T, label, out string) {
 	t.Helper()
+	// The resume credential rides `_meta` and nowhere a model or an operator reads, so
+	// its shape (rsk1- and 22 base64url characters) is scanned for beside the UUID.
+	if leaked := resumeCredentialShape.FindString(out); leaked != "" {
+		t.Errorf("%s: client-visible output contains a resume-credential-shaped token (%q…); it must never "+
+			"appear in any tool result, packet, or CLI output:\n%s", label, leaked[:9], out)
+	}
 	if leaked := uuidShape.FindString(out); leaked != "" {
 		t.Errorf("%s: client-visible output contains a UUID-shaped token (%q…). The only UUID in "+
 			"play is the proxy session credential, and it must never appear in any tool result, "+

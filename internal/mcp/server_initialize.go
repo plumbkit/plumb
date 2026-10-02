@@ -115,6 +115,11 @@ func (s *Server) fireInitParamHooks(ctx context.Context, params json.RawMessage)
 	// out, each was two branches, and the seventh took this function past the
 	// complexity limit — which is the limit doing its job: a list of identical
 	// clauses is a list, not control flow.
+	// Before OnProxySession: that hook settles identity, and what the connection may
+	// be disclosed afterwards depends on this announcement.
+	if s.OnResumeCredentialConsumer != nil && resumeCredentialConsumerFromParams(params) {
+		s.OnResumeCredentialConsumer(ctx)
+	}
 	fireStringHook(ctx, s.OnProxySession, func() string { return proxySessionFromParams(params) })
 	fireStringHook(ctx, s.OnProxyVersion, func() string { return proxyVersionFromParams(params) })
 	fireStringHook(ctx, s.OnWorkspaceHint, func() string { return workspaceHintFromParams(params) })
