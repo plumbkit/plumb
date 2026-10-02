@@ -86,6 +86,13 @@
   flagged. Recreating a renamed-away file was flagged too. Both read as edits
   made outside plumb.
 
+- **Write history applies the `[history]` settings of the project a file is
+  written in.** Previously it used the settings of the project the connection
+  was pinned to, so an agent working in another project (or writing an absolute
+  path into one) had that project's `sensitive_globs` ignored. Crash-recovery
+  restores of a file too large to carry are now recorded by size and hash.
+  Before, they were recorded as an existing empty file.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
