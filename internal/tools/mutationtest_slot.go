@@ -158,7 +158,7 @@ func (h mutationHolder) busyError(now time.Time) error {
 	return fmt.Errorf("mutation_test: another mutation run is already in progress on this daemon — %s. "+
 		"Concurrent runs would read each other's breakage as their own result, so this one is refused rather than queued. "+
 		"Wait for it to finish and retry. The run is cancelled and the slot frees itself as soon as its client cancels the call or its connection closes; "+
-		"a client that silently stops waiting does neither, and the run then holds the slot until it finishes",
+		"a client that silently stops waiting (Claude Code's idle timeout on a call that reports no progress) does neither, and the run then holds the slot until it finishes",
 		h.describe(now))
 }
 
@@ -170,7 +170,9 @@ func (h mutationHolder) busyError(now time.Time) error {
 // maxMutationStepSeconds steps — against every other agent, and keep writing
 // mutants nobody will read the verdict on. The two are separate signals because
 // a client abandons a CALL far more often than it closes its connection: Claude
-// Code drops an idle tools/call and keeps a shared connection open. Cancelling
+// Code cancels an interrupted tools/call and keeps a shared connection open.
+// (Its idle abort sends no cancel at all — enterStep's progress is what keeps a
+// long run from being dropped that way.) Cancelling
 // takes the ordinary cancellation path: the step in flight is killed, the file
 // is restored, the slot released.
 func cancelOnAbandon(ctx context.Context) (context.Context, context.CancelFunc) {
