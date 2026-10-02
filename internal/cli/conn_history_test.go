@@ -278,6 +278,45 @@ func TestHistoryUsesTheWrittenProjectsConfig(t *testing.T) {
 	}
 }
 
+// The response gate (what a write's tool result may show) must decide exactly as
+// the store does: every spelling of the path, and the WRITTEN project's globs.
+func TestResponseGateMatchesTheStoresSensitivityRule(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	connRoot, other := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, connRoot)
+	mustGitDir(t, other)
+	if err := os.WriteFile(filepath.Join(connRoot, ".env"), []byte("K=V\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(connRoot, "notes.txt")
+	if err := os.Symlink(filepath.Join(connRoot, ".env"), link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(other, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, ".plumb", "config.toml"),
+		[]byte("[history]\nsensitive_globs = [\"*.secret\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newPersistSession(t, store, ss, "proxy-response-gate")
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false, false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	gate := s.buildWriteDeps().SensitivePathFn
+	ctx := context.Background()
+	if !gate(ctx, link) {
+		t.Error("a write through a symlink to .env is shown in the response")
+	}
+	if !gate(ctx, filepath.Join(other, "api.secret")) {
+		t.Error("a write into another project ignores that project's sensitive_globs in the response")
+	}
+	if gate(ctx, filepath.Join(connRoot, "main.go")) {
+		t.Error("control: an ordinary file was withheld")
+	}
+}
+
 func TestAgentConfigSetRecordsConfigToml(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	store, ss := newOriginStore(t)
