@@ -81,8 +81,8 @@ func TestRecoveryOfAnOversizedFileIsHashedNotEmptied(t *testing.T) {
 	}
 	b := got[0].Before
 	want := sha256.Sum256(big)
-	if !b.Exists || b.Content != nil || b.Size != int64(len(big)) || !bytes.Equal(b.SHA, want[:]) {
+	if !b.Exists || b.Content != nil || b.Size != int64(len(big)) || !bytes.Equal(b.SHA(), want[:]) {
 		t.Fatalf("before = exists %v, carried %d bytes, size %d, sha match %v; want the 11 MiB file hashed, not carried",
-			b.Exists, len(b.Content), b.Size, bytes.Equal(b.SHA, want[:]))
+			b.Exists, len(b.Content), b.Size, bytes.Equal(b.SHA(), want[:]))
 	}
 }

@@ -196,6 +196,11 @@
   - **Newer schema.** The daemon no longer retries such a database, logging a
     warning, every minute.
 
+- **Writes no longer hash file contents when write history is off.** Every
+  write built its history record, including a sha256 of the before and after
+  content, whether or not `[history] enabled` was set. The hash is now computed
+  only when the record is actually queued.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon

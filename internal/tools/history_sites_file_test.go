@@ -255,7 +255,7 @@ func TestRenameFileRecordsRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := f.only(t)
-	if c.Op != history.OpRename || c.From != src || !bytes.Equal(c.Before.SHA, c.After.SHA) {
+	if c.Op != history.OpRename || c.From != src || !bytes.Equal(c.Before.SHA(), c.After.SHA()) {
 		t.Fatalf("rename change mismatch: %+v", c)
 	}
 }
@@ -514,7 +514,7 @@ func TestConcurrentWritesRecordInLockOrder(t *testing.T) {
 		if next.c.At.Before(cur.c.At) {
 			t.Errorf("timestamp decreased between seq %d and %d", cur.seq, next.seq)
 		}
-		if !bytes.Equal(cur.c.After.SHA, next.c.Before.SHA) {
+		if !bytes.Equal(cur.c.After.SHA(), next.c.Before.SHA()) {
 			t.Errorf("broken sha chain between seq %d and %d", cur.seq, next.seq)
 		}
 	}
