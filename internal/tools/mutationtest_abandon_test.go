@@ -235,6 +235,10 @@ func TestSilentBudgetRefusal(t *testing.T) {
 			name: "not even one fits", elapsed: 4 * m, perMutant: 30 * m, mutants: 1, wantRefused: true,
 			want: []string{"1 mutant ", "Not even one mutant fits"},
 		},
+		{
+			name: "over an hour keeps its minutes", elapsed: 2 * m, perMutant: 11 * m, mutants: 8, wantRefused: true,
+			want: []string{"took 11m", "about 1h30m", "batches of at most 2"},
+		},
 		{name: "progress keeps it alive", progress: true, elapsed: 4 * m, perMutant: 30 * m, mutants: 20},
 		{name: "no measured baseline", elapsed: 4 * m, perMutant: 0, mutants: 20},
 	}

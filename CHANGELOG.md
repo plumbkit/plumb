@@ -60,7 +60,10 @@
   run silently skipped the rest. A mutation run with that filter reported
   every mutant SURVIVED, all falsely. `go test -list` applies the flag to the
   whole pattern, so it looked right. The refusal suggests putting the flag on
-  every part, `(?i)write|(?i)delete`.
+  every part, `(?i)write|(?i)delete`. This also refuses a pattern that
+  happened to work, such as `(?i)TestFoo/baz` with a lowercase subtest name:
+  write `(?i)TestFoo/(?i)baz`. A part that is empty or opens with its own
+  flag group is left alone.
 
 ### Tests
 
