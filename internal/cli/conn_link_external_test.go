@@ -94,7 +94,9 @@ func TestDeliverResume(t *testing.T) {
 // connection's: it is linked to it, it answers to the name its peers already write to,
 // mail sent to that name reaches it, and the Stop hook and `plumb mail --external-id`
 // find it by its new id. A guard that held the connection to the first conversation
-// stranded all four.
+// stranded all four. What lets the connection tell /clear from a second concurrent
+// conversation is the SessionStart hook's announcement (conn_clear_handover.go),
+// which the daemon holds as a marker until the new id's first call arrives.
 func TestClearRelinksTheConnectionToTheNewConversation(t *testing.T) {
 	w := newIdentityWorld(t)
 	ws := identityRepo(t)
@@ -107,6 +109,7 @@ func TestClearRelinksTheConnectionToTheNewConversation(t *testing.T) {
 		t.Fatalf("peer leave_note: %s", out)
 	}
 
+	w.registry.clears.mark("conv-NEW")
 	out := c.start("conv-NEW", "", "conv-NEW", nil)
 	if got := c.s.externalID(); got != "conv-NEW" {
 		t.Fatalf("after /clear the connection is linked to %q, want conv-NEW", got)
@@ -135,37 +138,53 @@ func TestClearRelinksTheConnectionToTheNewConversation(t *testing.T) {
 
 // Relinking moves the connection's owner with it: the owner is whichever conversation
 // the connection is linked to NOW. The one it was linked to is a stranger from then
-// on, and a subagent of either is never the connection.
+// on, and a subagent of either is never the connection. A connection is relinked two
+// ways: by a session_start that carries no stamp, which cannot be told from the
+// conversation it replaces, and by the /clear handover.
 func TestTheOwnerIsWhicheverConversationIsLinked(t *testing.T) {
-	s := newIdentitySession(t)
 	const old, now = "conv-OLD", "conv-NEW"
-	s.linkExternalID(stampedCtx(old), old)
-	s.recordLogicalAgentCall(old)
-	s.inheritSessionID("pred-1")
-
-	s.linkExternalID(stampedCtx(now), now)
-	s.recordLogicalAgentCall(now)
-	s.recordLogicalAgentCall(now + "/agent-1")
-
-	for _, c := range []struct {
-		agent string
-		owner bool
-	}{
-		{now, true},
-		{now + "/agent-1", false},
-		{old, false},
-		{"", false},
+	for how, relink := range map[string]func(s *connSession){
+		"an unstamped session_start": func(s *connSession) { s.linkExternalID(context.Background(), now) },
+		"a /clear handover": func(s *connSession) {
+			s.registry = newConnRegistry()
+			s.registry.clears.mark(now)
+			s.handOverOnClear(now)
+		},
 	} {
-		got := s.inheritedSessionIDsFor(stampedCtx(c.agent))
-		if c.owner != (len(got) == 1 && got[0] == "pred-1") || (!c.owner && len(got) != 0) {
-			t.Errorf("after the relink, %q inherited %v (owner=%v)", c.agent, got, c.owner)
-		}
-		name := s.sessionNameFor(stampedCtx(c.agent))
-		if c.owner && name != s.sessionName() {
-			t.Errorf("after the relink the new owner answers to %q, want the connection's %q", name, s.sessionName())
-		}
-		if !c.owner && c.agent != "" && (name == "" || name == s.sessionName()) {
-			t.Errorf("after the relink %q answers to %q, want a name of its own and not the connection's %q", c.agent, name, s.sessionName())
-		}
+		t.Run(how, func(t *testing.T) {
+			s := newIdentitySession(t)
+			s.linkExternalID(stampedCtx(old), old)
+			s.recordLogicalAgentCall(old)
+			s.inheritSessionID("pred-1")
+
+			relink(s)
+			if got := s.externalID(); got != now {
+				t.Fatalf("the connection is linked to %q, want %q", got, now)
+			}
+			s.recordLogicalAgentCall(now)
+			s.recordLogicalAgentCall(now + "/agent-1")
+
+			for _, c := range []struct {
+				agent string
+				owner bool
+			}{
+				{now, true},
+				{now + "/agent-1", false},
+				{old, false},
+				{"", false},
+			} {
+				got := s.inheritedSessionIDsFor(stampedCtx(c.agent))
+				if c.owner != (len(got) == 1 && got[0] == "pred-1") || (!c.owner && len(got) != 0) {
+					t.Errorf("after the relink, %q inherited %v (owner=%v)", c.agent, got, c.owner)
+				}
+				name := s.sessionNameFor(stampedCtx(c.agent))
+				if c.owner && name != s.sessionName() {
+					t.Errorf("after the relink the new owner answers to %q, want the connection's %q", name, s.sessionName())
+				}
+				if !c.owner && c.agent != "" && (name == "" || name == s.sessionName()) {
+					t.Errorf("after the relink %q answers to %q, want a name of its own and not the connection's %q", c.agent, name, s.sessionName())
+				}
+			}
+		})
 	}
 }

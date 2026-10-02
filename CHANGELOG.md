@@ -41,6 +41,52 @@
   added/removed counts and points at `plumb history` for the diffs. An error's
   first job is the remedy, and the diffs are already in the store.
 
+### Fixed
+
+- **A second conversation on a shared connection no longer takes the first
+  one's name and mail; Claude Code's `/clear` hands its connection over
+  explicitly.** (#564, part of #556) A stamped `session_start` from a
+  conversation other than the one the connection was linked to relinked the
+  connection and renamed it, so the first conversation lost its linkage, its
+  name and the mail addressed to it. Each stamped conversation now keeps its
+  own identity: the second one gets a session row of its own on first need,
+  recorded under (proxy session, agent) like a subagent's, so it keeps its own
+  name and mail and gets both back after a daemon restart on the same proxy.
+  An unstamped `session_start` cannot be told apart and relinks as before.
+  `/clear` starts a new conversation id on the same connection, so the
+  `SessionStart` hook now sends `conversation-cleared <new session id>` to the
+  daemon's control socket when its `source` is `clear` (best effort, one
+  second, silent on failure, stdout unchanged). The daemon keeps a one-shot,
+  in-memory marker for 24 hours (at most 256; the hook fires when `/clear` is
+  typed, not when the next prompt is sent), and the first stamped call of that
+  id to reach a connection consumes it and takes the connection over with its
+  name, mail and threads, but only when the linked conversation is the only one
+  the connection has seen. A marker acts only on the connection that receives
+  that call, never on another, and no stamp or `session_id` can request it.
+  Without a marker (hook not installed, daemon restarted in between) or where
+  other conversations share the connection, the new conversation is a newcomer
+  with an identity of its own and the marker is left unconsumed.
+- **Queued session-registry writes no longer each hold a descriptor on
+  `.sessions.lock`.** (#583) While another process held the registry lock (a
+  stuck Stop hook, a hung CLI, a test), every pending write in the daemon
+  opened the lock file and blocked in `flock`. That was one goroutine and one
+  descriptor per write, with no bound: about 500 were observed on the live
+  registry, and a longer stall would approach the fd limit and break
+  unrelated opens. A per-directory in-process mutex now sits in front of the
+  file lock, so at most one descriptor waits on `flock` and the other writers
+  wait in memory. The file lock still serialises writers across processes.
+
+### Tests
+
+- **The registry lock's bound is now pinned on both sides.** (#583, #585)
+  `TestSessionDirLock_OneDescriptorWaits` also asserts the lock file is back
+  to the holder's one descriptor once every queued writer finishes, and a new
+  `TestSessionDirLock_ReleasedOnEveryPath` asserts the in-process mutex is
+  released and the descriptor closed when the guarded function panics or
+  errors, or the directory or lock file cannot be opened. Stale comments in
+  `workspace_sessions` that said no Go mutex sits in front of the
+  session-directory flock were corrected. No behaviour change.
+
 ## 0.21.0 (2026-10-02)
 
 ### Upgrading: read this first

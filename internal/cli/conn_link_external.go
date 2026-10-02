@@ -8,15 +8,23 @@ package cli
 // every claim of "this connection is that conversation" resolve through, and it is
 // the OWNER of the connection's identity (conn_agent_identity.go).
 //
-// The linker relinks. A session_start that names a different conversation moves the
-// linkage to it, as it always has, and the owner moves with it. That is deliberate:
-// Claude Code's /clear keeps the serve connection and starts a NEW conversation id,
-// so a connection passes from one conversation to the next in the ordinary course of
-// one agent's work, and holding it to the first would strand the second without the
-// name its peers write to, the mail sent to it, and the wake lookup by its id.
-// Whether a stamp and the id it carries agree, and who may relink a connection that
-// several conversations share, is the resume credential's question (#556 items 3 and
-// 4), not this linker's.
+// Who may relink it is decided here, by what the call can prove about itself:
+//
+//   - A STAMPED call (the identity hook, or a per-call _meta) says which
+//     conversation it is. One that names a conversation other than the linked one
+//     is a second conversation sharing the connection (Claude desktop's Code tab),
+//     and it must not take the first one's linkage, name and mail (#564): it keeps
+//     the connection as it is and is given an identity of its own, like a subagent
+//     (conn_agent_roster.go).
+//   - An UNSTAMPED call cannot be told from the conversation it would replace, so
+//     it relinks as it always has. That is the only way a client with no per-call
+//     identity can hand a connection to its next conversation.
+//   - The exception that keeps Claude Code's /clear whole: /clear starts a NEW
+//     conversation id on the same connection, which a stamped call alone cannot
+//     tell from a second concurrent conversation. The SessionStart hook says so
+//     (`source: "clear"`), and that marker lets the connection hand its identity to
+//     the conversation whose first call arrives (conn_clear_handover.go), before
+//     this linker runs.
 //
 // What it does decide is how much a resume is worth:
 //
@@ -73,6 +81,39 @@ type resumeState struct {
 // name the session already holds is at best a no-op.
 func (s *connSession) linkExternalID(ctx context.Context, externalID string) tools.LinkResult {
 	linkage := linkageIDOf(externalID)
+	if s.keepsLinkageFor(ctx, linkage) {
+		// Declared, so its state-changing calls are admitted (#513), and recorded
+		// as an identity on the connection. Nothing of the connection's moves.
+		s.recordLogicalAgentAttach(externalID)
+		return tools.LinkResult{}
+	}
+	s.relinkTo(externalID)
+	return s.deliverResume(mcp.LogicalAgentFromCtx(ctx), linkage)
+}
+
+// keepsLinkageFor reports whether a session_start naming the conversation linkage
+// must leave the connection's linkage alone: it is stamped, so it is a conversation
+// in its own right, and the connection is already linked to a different one.
+//
+// A connection linked to nothing has no one to take it from, and the call that
+// names the conversation it is already linked to has nothing to move.
+func (s *connSession) keepsLinkageFor(ctx context.Context, linkage string) bool {
+	if linkage == "" || mcp.LogicalAgentFromCtx(ctx) == "" {
+		return false
+	}
+	cur := s.externalID()
+	return cur != "" && cur != linkage
+}
+
+// relinkTo links the session RECORD to the conversation externalID names: it moves
+// the linkage, declares the identity, mirrors the linkage into the durable record,
+// and takes back the conversation's name when it resumed. The connection's session
+// ID, and with it the mail and threads bound to it, stay where they are. This is
+// what a session_start has always done to a connection, and what a /clear handover
+// does (conn_clear_handover.go); the resume it finds is left pending, for the
+// session_start that tells its owner.
+func (s *connSession) relinkTo(externalID string) {
+	linkage := linkageIDOf(externalID)
 	alreadyLinked := linkage != "" && s.externalID() == linkage
 	session.SetExternalID(s.sessionID(), linkage)
 	// The linkage may arrive AFTER the shard it belongs to. session_start's
@@ -94,7 +135,6 @@ func (s *connSession) linkExternalID(ctx context.Context, externalID string) too
 	if !alreadyLinked {
 		s.beginResume(linkage)
 	}
-	return s.deliverResume(mcp.LogicalAgentFromCtx(ctx), linkage)
 }
 
 // beginResume looks for the predecessor of a connection that has just been linked

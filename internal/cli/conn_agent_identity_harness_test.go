@@ -36,6 +36,9 @@ type identityWorld struct {
 	pool *collabPool
 	ss   *sessionstate.Store
 	ids  atomic.Int64
+	// registry is the daemon's, shared by every connection: it carries the /clear
+	// markers a hook announces to the control socket.
+	registry *connRegistry
 }
 
 // identityConn is one MCP connection: its connSession and the server in front of it.
@@ -51,7 +54,7 @@ func newIdentityWorld(t *testing.T) *identityWorld {
 	cfg := config.Defaults()
 	cfg.Git.CommitTrailer = true
 	cfg.Collab.Mailbox = true
-	w := &identityWorld{t: t, cfg: cfg, pool: newCollabPool()}
+	w := &identityWorld{t: t, cfg: cfg, pool: newCollabPool(), registry: newConnRegistry()}
 	t.Cleanup(w.pool.closeAll)
 	return w
 }
@@ -74,6 +77,7 @@ func (w *identityWorld) conn(proxy string) *identityConn {
 	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(w.cfg), nil, w.ss, newSharedBudgets())
 	w.t.Cleanup(s.close)
 	s.collabPool = w.pool
+	s.registry = w.registry
 	if proxy != "" {
 		s.onProxySession(proxy)
 	}

@@ -415,6 +415,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			webStart:      webServer.Start,
 			webStatus:     webServer.Status,
 			webStop:       webServer.Stop,
+			// The marker lives on the registry, beside the connections that consume it.
+			conversationCleared: registry.conversationClears().mark,
 		})
 	}
 

@@ -177,13 +177,15 @@ func TestOnlyTheConversationsOwnerIsToldItResumed(t *testing.T) {
 
 // What was pending for one conversation is not told to the next one that links the
 // connection: a subagent of conv-A reached the restarted connection first and the
-// news waited for conv-A's main thread, which never came before conv-B relinked it.
+// news waited for conv-A's main thread, which never came before conv-B relinked it
+// (here by /clear, the one way a stamped conversation takes a linked connection).
 // conv-B resumed nothing.
 func TestAPendingResumeIsNotToldToAConversationThatRelinksTheConnection(t *testing.T) {
 	f := newResumeFixture(t)
 	second := f.w.conn("")
 	second.start(resumeSubConv, f.ws, resumeSubConv, nil)
 
+	f.w.registry.clears.mark("conv-B")
 	out := second.start("conv-B", "", "conv-B", nil)
 	if got := second.s.externalID(); got != "conv-B" {
 		t.Fatalf("precondition: conv-B did not relink the connection: %q", got)
