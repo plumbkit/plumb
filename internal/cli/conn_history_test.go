@@ -124,11 +124,10 @@ func TestTxlogRecoveryRowsAreReverts(t *testing.T) {
 
 	sink := s.txlogRecoverySink(root)
 	sink(txlog.Restored{
-		Path:          filepath.Join(root, "f"),
-		Before:        []byte("b\n"),
-		After:         []byte("a\n"),
-		BeforeExisted: true,
-		CallID:        "",
+		Path:   filepath.Join(root, "f"),
+		Before: history.SideFromBytes([]byte("b\n")),
+		After:  []byte("a\n"),
+		CallID: "",
 	})
 
 	if err := s.historyStore.store().Sync(context.Background()); err != nil {
@@ -221,6 +220,61 @@ func TestCrashRecoveryAtAttachIsRecorded(t *testing.T) {
 	if len(entries) != 1 || entries[0].Op != history.OpRevert || entries[0].Reason != "crash_recovery" ||
 		entries[0].CallID != "01CRASHCALL0000000000000000" {
 		t.Fatalf("crash recovery at attach recorded %+v; want one crash_recovery revert under the manifest's call id", entries)
+	}
+}
+
+// A write into another project is classified by THAT project's [history]
+// config, not by the config of the project the connection is pinned to.
+func TestHistoryUsesTheWrittenProjectsConfig(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	connRoot, other := freshTempDir(t), freshTempDir(t)
+	mustGitDir(t, connRoot)
+	mustGitDir(t, other)
+	if err := os.MkdirAll(filepath.Join(other, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, ".plumb", "config.toml"),
+		[]byte("[history]\nsensitive_globs = [\"*.secret\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newPersistSession(t, store, ss, "proxy-history-project")
+	s.historyStore = newHistoryStore(nil)
+	defer s.historyStore.Close()
+	if _, err := s.repinWorkspace(context.Background(), "file://"+connRoot, "", false, false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	change := func(path string) history.Change {
+		return history.Change{
+			Op: history.OpCreate, Kind: history.KindFile, At: time.Now(), Path: path,
+			After: history.SideFromBytes([]byte("token=abc\n")),
+		}
+	}
+	ctx := context.Background()
+	s.recordHistory(ctx, change(filepath.Join(other, "api.secret")))
+	// Positive control: the same name in the connection's own project is not
+	// sensitive there (its config never mentions *.secret).
+	s.recordHistory(ctx, change(filepath.Join(connRoot, "api.secret")))
+	if err := s.historyStore.store().Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r, err := history.OpenReadOnlyAt(history.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	contentIn := func(root string) history.Content {
+		es, err := r.List(history.Filter{Workspace: root})
+		if err != nil || len(es) != 1 {
+			t.Fatalf("entries under %s = %+v, %v", root, es, err)
+		}
+		return es[0].Content
+	}
+	if got := contentIn(other); got != history.ContentSensitive {
+		t.Errorf("write into the other project stored %q; its own sensitive_globs must apply", got)
+	}
+	if got := contentIn(connRoot); got != history.ContentDiff {
+		t.Errorf("control: the connection project's write stored %q, want a diff", got)
 	}
 }
 
