@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -49,5 +50,15 @@ func silentBudgetRefusal(hasProgress bool, elapsed, perMutant time.Duration, mut
 	return fmt.Errorf("mutation_test: refused before mutating anything — the unmutated baseline took %s, so %d %s would keep this call silent for about %s, "+
 		"past the %s budget for a call with no progress: a client may give up on a silent call (Claude Code does at 30 min) and the report would be lost. "+
 		"This client did not ask for progress notifications, which would keep the call alive. %s",
-		humaniseAge(perMutant), mutants, textfmt.Plural(mutants, "mutant", "mutants"), humaniseAge(estimate), humaniseAge(budget), advice)
+		roughDuration(perMutant), mutants, textfmt.Plural(mutants, "mutant", "mutants"), roughDuration(estimate), roughDuration(budget), advice)
+}
+
+// roughDuration renders d to the minute ("1h30m", "4m"), or to the second
+// under a minute ("40s"). Unlike humaniseAge it keeps the minutes past an
+// hour, which an estimate of 1h30m would otherwise lose a third of.
+func roughDuration(d time.Duration) string {
+	if d < time.Minute {
+		return d.Round(time.Second).String()
+	}
+	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }

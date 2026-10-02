@@ -182,6 +182,7 @@ func TestRunFilter_FlagOverAlternationIsRefused(t *testing.T) {
 	for _, ok := range []string{
 		"(?i)(write|delete|copy)", "(?i)TestWrite", "(?i)Test(A|B)", "(?i)[a|b]x", "TestA|TestB", "TestFoo/bar",
 		"(?i)[[:alpha:]|x]y", "(?i)[[]|a", "(?i:a|b)",
+		"(?i)TestFoo/", "(?i)TestA|(?i:b)", "(?i)TestA|(?s)b",
 	} {
 		if err := validateRunFilter("run", ok); err != nil {
 			t.Errorf("%q must be accepted: %v", ok, err)

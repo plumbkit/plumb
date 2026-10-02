@@ -135,10 +135,6 @@ var leadingFlagGroup = regexp.MustCompile(`^\(\?[a-zA-Z-]+\)`)
 // therefore case-insensitive for `write` only, and `(?i)TestFoo/bar` for the
 // top-level name only. The tests that then run are a silent subset, which can
 // pass a mutant its real tests would kill — mutation_test reports it SURVIVED.
-//
-// The scan mirrors splitRegexp: a [ ] nesting count (an unmatched ] is legal),
-// parentheses counted only outside a class. runPattern refuses a backslash, so
-// there is no escape to skip.
 func flagCoversOnlyFirstPart(run string) (flag, fixed string, ok bool) {
 	flag = leadingFlagGroup.FindString(run)
 	if flag == "" {
@@ -146,15 +142,34 @@ func flagCoversOnlyFirstPart(run string) (flag, fixed string, ok bool) {
 	}
 	var out strings.Builder
 	bare := false // a part the flag does not reach
-	start, cs, cp := 0, 0, 0
-	emit := func(part, sep string) {
-		if !strings.HasPrefix(part, flag) {
+	for _, p := range splitRunParts(run) {
+		// An empty part (`TestFoo/` runs every subtest) has nothing for a flag
+		// to change, and a part opening with its own flag group — (?i)… or a
+		// scoped (?i:…) — has chosen its flags.
+		if p.text != "" && !strings.HasPrefix(p.text, "(?") {
 			out.WriteString(flag)
 			bare = true
 		}
-		out.WriteString(part)
-		out.WriteString(sep)
+		out.WriteString(p.text)
+		out.WriteString(p.sep)
 	}
+	if !bare {
+		return "", "", false
+	}
+	return flag, out.String(), true
+}
+
+// runPart is one part of a -run pattern and the separator that ended it
+// ("|", "/", or "" for the last).
+type runPart struct{ text, sep string }
+
+// splitRunParts splits a -run pattern exactly where testing.splitRegexp does:
+// at a top-level | or /, tracking a [ ] nesting count (an unmatched ] is legal)
+// and counting parentheses only outside a class. runPattern refuses a
+// backslash, so there is no escape to skip.
+func splitRunParts(run string) []runPart {
+	var parts []runPart
+	start, cs, cp := 0, 0, 0
 	for i := range len(run) {
 		switch run[i] {
 		case '[':
@@ -173,14 +188,10 @@ func flagCoversOnlyFirstPart(run string) (flag, fixed string, ok bool) {
 			}
 		case '|', '/':
 			if cs == 0 && cp == 0 {
-				emit(run[start:i], string(run[i]))
+				parts = append(parts, runPart{run[start:i], string(run[i])})
 				start = i + 1
 			}
 		}
 	}
-	emit(run[start:], "")
-	if !bare {
-		return "", "", false
-	}
-	return flag, out.String(), true
+	return append(parts, runPart{run[start:], ""})
 }
