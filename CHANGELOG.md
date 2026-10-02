@@ -97,10 +97,19 @@
   single run slot against every other agent. plumb now sends
   `notifications/progress` against the call's `progressToken`, which Claude
   Code always sends, and `mutation_test` reports one update at the start of
-  each compile and test step, resetting the idle window between steps. A run
-  whose client asked for no progress, and that the baseline shows would
-  outlast 25 minutes, is refused before anything is mutated, with a batch size
-  that fits.
+  each compile and test step, resetting the idle window between steps. A
+  single step longer than 30 minutes, which needs a raised `timeout_seconds`,
+  can still be dropped. A run whose client asked for no progress, and that the
+  baseline shows would outlast 25 minutes, is refused before anything is
+  mutated, with a batch size that fits. The baseline can understate the cost,
+  because Go may serve the unmutated suite from its test cache, so such a run
+  is also stopped between mutants once their real cost shows it would outlast
+  the budget. The report then covers the mutants that ran and says why the
+  rest did not. A cycle's cost is only known once it has run, so a run can
+  still overshoot by one cycle: the first mutant runs on the baseline's
+  estimate alone. The 25-minute budget is fixed, not configurable: progress is
+  what keeps a long run alive, and the budget only protects a client that
+  asks for none.
 - **A cancelled `mutation_test` call now stops.** plumb now tracks
   `notifications/cancelled`, which Claude Code sends when you interrupt a
   tool, and `mutation_test` acts on it. Before, only a closed connection

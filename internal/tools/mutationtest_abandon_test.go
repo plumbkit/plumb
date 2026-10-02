@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,23 +176,58 @@ func TestMutationTest_ReportsProgressPerStep(t *testing.T) {
 	}
 }
 
+// seenMutantScript is a test step that records, in a marker file next to the
+// target, that it ran against a MUTATED tree (any line rewritten to start with
+// "b"). The file is restored after every mutant, so its final content cannot
+// tell "never mutated" from "mutated and put back"; the marker can.
+const seenMutantScript = `if grep -q '^b' "$(dirname "$0")/target.txt"; then touch "$(dirname "$0")/mutant-seen"; fi
+exit 0`
+
+// lineMutants rewrites lines a1..aN to b1..bN, one mutant each.
+func lineMutants(t *testing.T, file string, n int) json.RawMessage {
+	t.Helper()
+	ms := make([]map[string]any, n)
+	for i := range n {
+		ms[i] = map[string]any{"file_path": file, "old_string": fmt.Sprintf("a%d\n", i+1), "new_string": fmt.Sprintf("b%d\n", i+1)}
+	}
+	raw, err := json.Marshal(map[string]any{"mutants": ms})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func lineFixture(n int) string {
+	var sb strings.Builder
+	for i := range n {
+		fmt.Fprintf(&sb, "a%d\n", i+1)
+	}
+	return sb.String()
+}
+
+func withSilentBudget(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := mutationSilentBudget
+	mutationSilentBudget = d
+	t.Cleanup(func() { mutationSilentBudget = prev })
+}
+
 // TestMutationTest_SilentRunOverBudgetIsRefusedUnmutated: a client that asked
 // for no progress will hear nothing until the report, and Claude Code drops a
 // silent call at 30 minutes. A run the baseline says will outlast that is
-// refused before any mutant is written. The same run WITH a progressToken is
-// kept alive by its progress, so it must not be refused (the control).
+// refused before any mutant is written — pinned by a marker the test step
+// leaves whenever it sees a mutant, since the restored file cannot show it. The
+// same run WITH a progressToken is kept alive by its progress, so it must not be
+// refused (the control).
 func TestMutationTest_SilentRunOverBudgetIsRefusedUnmutated(t *testing.T) {
-	prev := mutationSilentBudget
-	mutationSilentBudget = time.Nanosecond
-	t.Cleanup(func() { mutationSilentBudget = prev })
-
-	const original = "answer = 42\n"
+	withSilentBudget(t, time.Nanosecond)
+	original := lineFixture(1)
 	env := newMutationEnv(t, original)
-	// A mutant that would be KILLED proves the run never got that far.
-	env.failsOnlyWhenMutated(t, env.testScript, "43", "FAIL: TestAnswer")
+	env.installScript(t, env.testScript, seenMutantScript)
 	env.commitAll(t)
+	marker := filepath.Join(env.root, "mutant-seen")
 
-	_, err := env.run(t, "42", "43")
+	_, err := env.tool.Execute(context.Background(), lineMutants(t, env.file, 1))
 	if err == nil {
 		t.Fatal("a silent run over the budget must be refused")
 	}
@@ -199,15 +236,146 @@ func TestMutationTest_SilentRunOverBudgetIsRefusedUnmutated(t *testing.T) {
 			t.Errorf("refusal is missing %q:\n%v", want, err)
 		}
 	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the refused run applied a mutant and ran its tests before refusing")
+	}
 	if got := env.content(t); got != original {
 		t.Fatalf("the refused run touched the file: got %q", got)
 	}
 
 	send, frames := servedMutationTool(t, env)
-	send(mutationCall(1, oneMutant(t, env.file), map[string]any{"progressToken": 1}))
+	send(mutationCall(1, lineMutants(t, env.file, 1), map[string]any{"progressToken": 1}))
 	resp, _ := awaitResponse(t, frames, 1, 30*time.Second)
-	if !strings.Contains(resp, "KILLED") {
-		t.Fatalf("with progress the run must go ahead and kill the mutant:\n%s", resp)
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("with progress the run must go ahead and test the mutant:\n%s", resp)
+	}
+}
+
+// TestMutationTest_SilentBudgetUsesTheMeasuredBaseline pins what the up-front
+// check is fed, with a real budget rather than a 1 ns one: a 0.4 s compile per
+// cycle, 10 mutants and a 3 s budget is ~4.5 s and must be refused, while 1
+// mutant (~1 s) must run — about 2 s of margin either way for a loaded machine.
+// Feeding it a wrong per-mutant cost or mutant count flips one of the two.
+func TestMutationTest_SilentBudgetUsesTheMeasuredBaseline(t *testing.T) {
+	withSilentBudget(t, 3*time.Second)
+	env := newMutationEnv(t, lineFixture(10))
+	env.installScript(t, env.compileScript, "sleep 0.4\nexit 0")
+	env.installScript(t, env.testScript, seenMutantScript)
+	env.commitAll(t)
+	marker := filepath.Join(env.root, "mutant-seen")
+
+	if _, err := env.tool.Execute(context.Background(), lineMutants(t, env.file, 10)); err == nil || !strings.Contains(err.Error(), "refused before mutating anything") {
+		t.Fatalf("10 mutants at ~0.4 s each against a 3 s budget must be refused up front: %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the refused run tested a mutant")
+	}
+
+	out, err := env.tool.Execute(context.Background(), lineMutants(t, env.file, 1))
+	if err != nil {
+		t.Fatalf("1 mutant at ~0.4 s fits a 3 s budget and must run: %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("the fitting run never tested its mutant:\n%s", out)
+	}
+}
+
+// TestMutationTest_SilentRunStopsWhenAMutantCostsMoreThanTheBaseline: the
+// baseline is only an estimate. Go's test cache can make the unmutated suite
+// look nearly free while every mutant pays for the whole suite, so a run the
+// up-front check let through can still outlast the budget. Here the baseline is
+// instant and each mutant takes 1.2 s: the up-front check sees ~0.5 s against a
+// 2 s budget and lets it through, but after the first mutant 3 more would take
+// ~3.6 s, so the run stops, reports the one that ran and says why the rest did
+// not. With progress the same run completes (the control).
+func TestMutationTest_SilentRunStopsWhenAMutantCostsMoreThanTheBaseline(t *testing.T) {
+	withSilentBudget(t, 2*time.Second)
+	original := lineFixture(4)
+	env := newMutationEnv(t, original)
+	env.installScript(t, env.testScript, `grep -q '^b' "$(dirname "$0")/target.txt" && sleep 1.2
+exit 0`)
+	env.commitAll(t)
+
+	out, err := env.tool.Execute(context.Background(), lineMutants(t, env.file, 4))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, want := range []string{"stopped early: 3 of 4 mutants never ran", "costliest compile+test cycle", "did not ask for progress"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report is missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "b2") || strings.Contains(out, "cancelled:") {
+		t.Errorf("only the first mutant may run, and the stop is not a cancellation:\n%s", out)
+	}
+	if got := env.content(t); got != original {
+		t.Fatalf("file not restored: got %q", got)
+	}
+
+	send, frames := servedMutationTool(t, env)
+	send(mutationCall(1, lineMutants(t, env.file, 4), map[string]any{"progressToken": "keep-alive"}))
+	resp, _ := awaitResponse(t, frames, 1, 30*time.Second)
+	if strings.Contains(resp, "stopped early") || !strings.Contains(resp, "b4") {
+		t.Fatalf("with progress every mutant must run:\n%s", resp)
+	}
+}
+
+// TestNewSilentRunWatch_SeedsTheBaseline: the projection starts from the
+// measured baseline, so a first mutant costlier than the budget allows is
+// caught before the second; and a call with no progress is the one it watches.
+func TestNewSilentRunWatch_SeedsTheBaseline(t *testing.T) {
+	withSilentBudget(t, 7*time.Minute)
+	start := time.Now()
+	w := newSilentRunWatch(context.Background(), start, 3*time.Minute)
+	if !w.active || w.worst != 3*time.Minute || w.budget != 7*time.Minute || !w.start.Equal(start) {
+		t.Fatalf("watch = %+v, want active, worst 3m (the baseline), budget 7m, the given start", *w)
+	}
+	if note := w.stopBefore(start, 0, 3); note == "" {
+		t.Error("3 cycles at the baseline's 3m pass a 7m budget, so the watch must stop before the first")
+	}
+}
+
+// TestSilentRunWatch_StopBefore pins the projection: inert with progress or
+// nothing left, the time already spent counts, and the costliest cycle seen —
+// not the baseline — is what the rest is projected from.
+func TestSilentRunWatch_StopBefore(t *testing.T) {
+	start := time.Now()
+	now := start.Add(4 * time.Minute)
+	newWatch := func(active bool) *silentRunWatch {
+		return &silentRunWatch{active: active, start: start, budget: 25 * time.Minute, worst: time.Minute}
+	}
+
+	if note := newWatch(true).stopBefore(now, 1, 20); note != "" {
+		t.Errorf("4m + 19 × 1m fits 25m, but it stopped: %s", note)
+	}
+	w := newWatch(true)
+	w.observe(30 * time.Second) // cheaper than the baseline: the worst stays 1m
+	if note := w.stopBefore(now, 1, 22); note != "" {
+		t.Errorf("4m + 21 × 1m is exactly 25m and fits, but it stopped: %s", note)
+	}
+	if note := w.stopBefore(now, 1, 23); note == "" {
+		t.Error("4m + 22 × 1m is past 25m and must stop")
+	}
+	w = newWatch(true)
+	w.observe(6 * time.Minute)
+	note := w.stopBefore(now, 1, 5)
+	for _, want := range []string{"4 of 5 mutants never ran", "took 6m", "about 28m in all", "25m budget"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note is missing %q: %s", want, note)
+		}
+	}
+	if note := w.stopBefore(now, 5, 5); note != "" {
+		t.Errorf("nothing left to run, but it stopped: %s", note)
+	}
+	inactive := newWatch(false)
+	inactive.observe(time.Hour)
+	if note := inactive.stopBefore(now, 1, 20); note != "" {
+		t.Errorf("a call with progress is never stopped, but it was: %s", note)
+	}
+	var none *silentRunWatch
+	none.observe(time.Hour)
+	if note := none.stopBefore(now, 0, 3); note != "" {
+		t.Errorf("a nil watch must be inert: %s", note)
 	}
 }
 
