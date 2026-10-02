@@ -66,10 +66,27 @@ func (e PolicyEntry) Warning(base Config) string {
 	if field, ok := strings.CutPrefix(key, "topology."); ok {
 		return topologyFieldWarning(field)
 	}
+	if strings.HasPrefix(key, "history.") {
+		return historyEnabledWarning(e.Value, base.History.Enabled)
+	}
 	if w := execFieldWarning(key, e.Value); w != "" {
 		return w
 	}
 	return ""
+}
+
+// historyEnabledWarning explains a project's [history] enabled, the only gated
+// [history] key, by the direction it moves the user's global setting. Asking for
+// what is already in force changes nothing, so it needs no warning.
+func historyEnabledWarning(v any, global bool) string {
+	on, ok := v.(bool)
+	switch {
+	case ok && !on:
+		return "switches write history off for this repository: plumb keeps no record of what agents write here"
+	case ok && global:
+		return ""
+	}
+	return "switches write history on for this repository, over your global setting: plumb records a diff of every write agents make here"
 }
 
 // topologyFieldWarning explains why a gated [topology] key needs approval.

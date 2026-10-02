@@ -232,13 +232,15 @@
   decision for the change: it is sensitive if the destination project's globs
   match either path, or the source project's globs match the source.
 
-- **A project config can no longer switch write history off or narrow its
-  sensitive globs (breaking for project configs).** `[history] enabled` and
-  `sensitive_globs` were ordinary preferences, so a cloned repository could set
-  `enabled = false` to leave no record of what agents wrote there, or
-  `sensitive_globs = []` to have its `.env` stored in `history.db` and shown in
-  write responses. `enabled` is now one-way: a project may switch history on,
-  never off. A project's `sensitive_globs` are now added to the global list
+- **A project config's `[history] enabled` now needs `plumb trust`, and it can no
+  longer narrow the sensitive globs (breaking for project configs).**
+  `[history] enabled` and `sensitive_globs` were ordinary preferences, so a
+  cloned repository could set `enabled = false` to leave no record of what
+  agents wrote there, `enabled = true` to switch recording on over a user who
+  had turned it off, or `sensitive_globs = []` to have its `.env` stored in
+  `history.db` and shown in write responses. A project's `enabled` is now
+  honoured only once approved with `plumb trust`, which lists it with what it
+  does. A project's `sensitive_globs` are now added to the global list
   instead of replacing it. The `[history]` docs now give the real default globs
   (base-name or workspace-relative `filepath.Match` patterns, no `**`), the
   content markers `plumb history` actually prints (`[withheld:sensitive]`,

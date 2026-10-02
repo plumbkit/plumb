@@ -108,15 +108,17 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// durability contract for every other session.
 	"edits.fsync": ClassInert,
 
-	// --- History. enabled and sensitive_globs are ONE-WAY. History is the record
-	// of what agents wrote, so a repository switching it off for itself hides
-	// evidence an auditor relies on (the edits.show_write_diff reasoning); it may
-	// switch it on. sensitive_globs is a UNION: a project adds globs for its own
+	// --- History. enabled is TRUST-GATED. History is the record of what agents
+	// wrote, so a repository switching it off for itself hides evidence an
+	// auditor relies on; and switching it ON over a user who turned it off
+	// globally overrides a privacy choice. Neither direction is safe, so neither
+	// is a one-way value: `plumb trust` honours the project's choice.
+	// sensitive_globs is ONE-WAY, as a UNION: a project adds globs for its own
 	// files, and cannot narrow the user's list, which would let its .env reach
 	// history.db and the write response. max_content_bytes and max_diff_bytes
 	// are ClassForcedGlobal (size caps protect the daemon from memory/disk
 	// exhaustion and are user/daemon-wide).
-	"history.enabled":           ClassOneWay,
+	"history.enabled":           ClassTrustGated,
 	"history.sensitive_globs":   ClassOneWay,
 	"history.max_content_bytes": ClassForcedGlobal,
 	"history.max_diff_bytes":    ClassForcedGlobal,
@@ -425,7 +427,6 @@ var oneWaySafeValue = map[string]bool{
 	"edits.show_write_diff":      true,
 	"commands.require_sandbox":   true,
 	"memory.generated_summaries": false,
-	"history.enabled":            true,
 }
 
 // applyOneWayBools resolves the ClassOneWay boolean fields: the project's value
@@ -445,7 +446,6 @@ func applyOneWayBools(base Config, merged *Config) {
 		oneWaySafeValue["commands.require_sandbox"])
 	merged.Edits.RateLimitPerMinute = oneWayRateLimit(base.Edits.RateLimitPerMinute, merged.Edits.RateLimitPerMinute)
 	merged.Tools.Profile = oneWayToolsProfile(base.Tools.Profile, merged.Tools.Profile)
-	merged.History.Enabled = oneWayBool(base.History.Enabled, merged.History.Enabled, oneWaySafeValue["history.enabled"])
 	merged.History.SensitiveGlobs = unionGlobs(base.History.SensitiveGlobs, merged.History.SensitiveGlobs)
 }
 

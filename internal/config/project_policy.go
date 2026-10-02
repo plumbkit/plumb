@@ -196,6 +196,7 @@ func projectPolicySpecFrom(raw map[string]any) ProjectPolicySpec {
 			out = append(out, PolicyEntry{Key: "topology." + k, Value: v})
 		}
 	}
+	out = append(out, historyPolicyEntries(raw)...)
 	out = append(out, execPolicyEntries(raw)...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
@@ -294,6 +295,28 @@ var policyTopologyFreeFields = map[string]bool{
 // exact-match check would let it past the gate unseen.
 func isFreeTopologyField(key string) bool { return policyTopologyFreeFields[strings.ToLower(key)] }
 
+// isGatedHistoryField reports whether a [history] key is gated on trust: only
+// enabled. Unlike its siblings this is a deny-list of one, because every other
+// [history] key already has a rule that holds without trust (sensitive_globs is
+// a union, the size caps are forced global); a new key gets its class in
+// projectFieldClasses, whose completeness test fails until it is classified.
+func isGatedHistoryField(key string) bool { return strings.ToLower(key) == "enabled" }
+
+// historyPolicyEntries is the [history] share of the trust spec: enabled only,
+// since the rest of the table is one-way or forced global and never needs
+// approval. Matched case-insensitively, like its siblings.
+func historyPolicyEntries(raw map[string]any) []PolicyEntry {
+	var out []PolicyEntry
+	for _, hist := range rawTables(raw, "history") {
+		for k, v := range hist {
+			if isGatedHistoryField(k) {
+				out = append(out, PolicyEntry{Key: "history." + k, Value: v})
+			}
+		}
+	}
+	return out
+}
+
 // IsGatedProjectKey reports whether a dotted TOML key is one LoadProject gates
 // on trust. It exists so a display surface cannot drift from the loader: the TUI
 // needs the same answer to decide how to present a row whose trust status could
@@ -319,6 +342,8 @@ func IsGatedProjectKey(dotted string) bool {
 		return true
 	case strings.HasPrefix(key, "topology."):
 		return !isFreeTopologyField(strings.TrimPrefix(key, "topology."))
+	case strings.HasPrefix(key, "history."):
+		return isGatedHistoryField(strings.TrimPrefix(key, "history."))
 	}
 	return false
 }
@@ -471,6 +496,10 @@ func forceCapabilityFieldsToBase(base Config, merged *Config) {
 	// sharing base's backing array with every per-connection merged config would
 	// make the boundary a property of caller discipline instead of this function.
 	merged.Topology.ExcludePatterns = slices.Clone(base.Topology.ExcludePatterns)
+	// [history] enabled: switching history off erases the record of what agents
+	// wrote here, and switching it on overrides a user who turned it off. The
+	// project's choice stands only once the user has approved it.
+	merged.History.Enabled = base.History.Enabled
 }
 
 // forceLSPExecToBase returns merged's per-language [lsp.<lang>] tables with every

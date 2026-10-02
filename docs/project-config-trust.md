@@ -59,11 +59,14 @@ resolver can consult the trust store at call time.
 
 ## The direction of "safe" is per field
 
-For `[edits] strict`, `block_dirty_writes` and `show_write_diff`, and for
-`[history] enabled`, the safe value is **on**. For `[memory] generated_summaries`
-it is **off** — fewer files written into the workspace. Getting that backwards
-would silently invert the protection, so each is stated in `oneWaySafeValue`
-rather than left to a convention.
+For `[edits] strict`, `block_dirty_writes` and `show_write_diff`, the safe value
+is **on**. For `[memory] generated_summaries` it is **off** — fewer files written
+into the workspace. Getting that backwards would silently invert the protection,
+so each is stated in `oneWaySafeValue` rather than left to a convention.
+
+Some switches have no safe direction. `[history] enabled` is one: off leaves no
+record of what agents wrote in the repository, and on overrides a user who
+turned history off globally. It is therefore trust-gated, not one-way.
 
 `[history] sensitive_globs` is a list, so its rule is a union: a project's globs
 are added to the user's, and none of the user's can be removed. A narrower list
