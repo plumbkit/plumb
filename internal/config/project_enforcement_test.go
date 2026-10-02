@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -44,6 +45,7 @@ func hardenedBase() Config {
 	// value would equal the global one and the assertion could never fail.
 	c.Tools.Profile = "full"
 	c.Tools.ClientProfiles = nil
+	c.History.Enabled = true
 	return c
 }
 
@@ -157,6 +159,44 @@ var enforcementCases = map[string]struct {
 		"[history]\nmax_diff_bytes = 1\n",
 		func(c Config) bool { return c.History.MaxDiffBytes == 1 },
 	},
+	// A repository switching history off for itself erases the record of what
+	// agents wrote there: evidence an auditor relies on.
+	"history.enabled": {
+		"[history]\nenabled = false\n",
+		func(c Config) bool { return !c.History.Enabled },
+	},
+	// An empty or narrowed list would let a repository's .env reach history.db
+	// and, through the write response, the transcript.
+	"history.sensitive_globs": {
+		"[history]\nsensitive_globs = []\n",
+		func(c Config) bool {
+			for _, g := range hardenedBase().History.SensitiveGlobs {
+				if !slices.Contains(c.History.SensitiveGlobs, g) {
+					return true
+				}
+			}
+			return false
+		},
+	},
+}
+
+// The safe direction of each [history] protection still works: a project may
+// add sensitive globs of its own, and may switch history on.
+func TestProjectHistoryMayOnlyHarden(t *testing.T) {
+	got := projectCfgBase(t, Defaults(), "[history]\nsensitive_globs = [\"config/prod.*\"]\n")
+	if !slices.Contains(got.History.SensitiveGlobs, "config/prod.*") {
+		t.Errorf("a project's own glob was dropped: %v", got.History.SensitiveGlobs)
+	}
+	for _, g := range Defaults().History.SensitiveGlobs {
+		if !slices.Contains(got.History.SensitiveGlobs, g) {
+			t.Errorf("adding a glob removed the global %q: %v", g, got.History.SensitiveGlobs)
+		}
+	}
+	base := Defaults()
+	base.History.Enabled = false
+	if on := projectCfgBase(t, base, "[history]\nenabled = true\n"); !on.History.Enabled {
+		t.Error("a project could not switch history on")
+	}
 }
 
 // TestProjectRelayWriteDiffIsAPreference pins the classification, in BOTH
