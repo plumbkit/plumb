@@ -498,9 +498,12 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 // chargeWrites spends one write-budget slot per mutant — each is a write, twice
 // over counting the restore — and refuses the run when the budget is exhausted.
 // It runs after every instant refusal (preflight's and rerootPlan's), so a call
-// that writes nothing never spends the budget the session shares with every write
+// refused up front never spends the budget the session shares with every write
 // tool; the baseline, which can take minutes, runs after it so a run the budget
-// would refuse is refused before that cost is paid.
+// would refuse is refused before that cost is paid. A run refused by the
+// baseline or by checkSilentBudget has been charged without writing.
+// That is the price of this order: it is a few slots of a per-minute budget,
+// against a baseline of minutes for a run that was never going to be allowed.
 func (t *MutationTest) chargeWrites(ctx context.Context, targets []mutationTarget) error {
 	for i, tgt := range targets {
 		if !t.deps.limiter(ctx).Allow() {

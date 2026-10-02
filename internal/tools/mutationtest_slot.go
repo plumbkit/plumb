@@ -172,9 +172,9 @@ func (h mutationHolder) busyError(now time.Time) error {
 // a client abandons a CALL far more often than it closes its connection: Claude
 // Code cancels an interrupted tools/call and keeps a shared connection open.
 // (Its idle abort sends no cancel at all — enterStep's progress is what keeps a
-// long run from being dropped that way.) Cancelling
-// takes the ordinary cancellation path: the step in flight is killed, the file
-// is restored, the slot released.
+// long run from being dropped that way.) Cancelling takes the ordinary
+// cancellation path: the step in flight is killed, the file is restored, the
+// slot released.
 func cancelOnAbandon(ctx context.Context) (context.Context, context.CancelFunc) {
 	gone, cancelled := mcp.ConnectionClosed(ctx), mcp.RequestCancelled(ctx)
 	ctx, cancel := context.WithCancel(ctx)

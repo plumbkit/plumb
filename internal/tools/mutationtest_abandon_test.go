@@ -102,8 +102,9 @@ func awaitResponse(t *testing.T, frames <-chan string, id int, within time.Durat
 // connection open, as Claude Code does when the user interrupts a tool on a
 // shared serve connection. Watching only for the connection to close, an
 // abandoned run carried on for another 50 minutes, writing mutant after mutant
-// and refusing every other agent's run. It must stop instead: no further mutant, the file
-// restored, the slot released — all while the connection is still open.
+// and refusing every other agent's run. It must stop instead: no further
+// mutant, the file restored, the slot released — all while the connection is
+// still open.
 func TestMutationTest_SlotFreedWhenClientCancelsTheCall(t *testing.T) {
 	const original = "answer = 42\nother = 7\n"
 	env := newMutationEnv(t, original)
@@ -207,5 +208,61 @@ func TestMutationTest_SilentRunOverBudgetIsRefusedUnmutated(t *testing.T) {
 	resp, _ := awaitResponse(t, frames, 1, 30*time.Second)
 	if !strings.Contains(resp, "KILLED") {
 		t.Fatalf("with progress the run must go ahead and kill the mutant:\n%s", resp)
+	}
+}
+
+// TestSilentBudgetRefusal pins the budget's arithmetic: the time already spent
+// counts, the batch size offered is what still fits, a run that fits is let
+// through, and a call with progress or an unmeasured baseline is never refused.
+func TestSilentBudgetRefusal(t *testing.T) {
+	const budget = 25 * time.Minute
+	m := time.Minute
+	cases := []struct {
+		name               string
+		progress           bool
+		elapsed, perMutant time.Duration
+		mutants            int
+		wantRefused        bool
+		want               []string
+	}{
+		{name: "fits", elapsed: 4 * m, perMutant: 4 * m, mutants: 5},
+		{name: "fits only without the time already spent", elapsed: 0, perMutant: 4 * m, mutants: 6},
+		{
+			name: "over", elapsed: 4 * m, perMutant: 4 * m, mutants: 6, wantRefused: true,
+			want: []string{"took 4m", "6 mutants", "about 28m", "25m budget", "batches of at most 5"},
+		},
+		{
+			name: "not even one fits", elapsed: 4 * m, perMutant: 30 * m, mutants: 1, wantRefused: true,
+			want: []string{"1 mutant ", "Not even one mutant fits"},
+		},
+		{name: "progress keeps it alive", progress: true, elapsed: 4 * m, perMutant: 30 * m, mutants: 20},
+		{name: "no measured baseline", elapsed: 4 * m, perMutant: 0, mutants: 20},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := silentBudgetRefusal(tc.progress, tc.elapsed, tc.perMutant, tc.mutants, budget)
+			if (err != nil) != tc.wantRefused {
+				t.Fatalf("refused = %v, want %v (err: %v)", err != nil, tc.wantRefused, err)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("refusal is missing %q:\n%v", w, err)
+				}
+			}
+		})
+	}
+}
+
+// TestMutationHolder_BusyErrorSaysWhenTheSlotFrees: the refusal used to promise
+// that the slot frees "as soon as its connection closes", which is false on a
+// shared connection whose client merely stopped waiting — the exact case that
+// left agents refused for an hour. It must name both real release paths and the
+// case that releases nothing.
+func TestMutationHolder_BusyErrorSaysWhenTheSlotFrees(t *testing.T) {
+	msg := mutationHolder{step: stepTest, current: 1, mutants: 2, started: time.Now()}.busyError(time.Now()).Error()
+	for _, want := range []string{"cancels the call", "its connection closes", "silently stops waiting", "holds the slot until it finishes"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("busy refusal is missing %q:\n%s", want, msg)
+		}
 	}
 }

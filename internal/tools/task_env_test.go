@@ -145,25 +145,44 @@ func TestRunTask_RunAndVerboseReachTheResolver(t *testing.T) {
 }
 
 // TestRunFilter_FlagOverAlternationIsRefused: go test -run compiles each
-// top-level | alternative on its own, so `(?i)write|delete|copy` is
-// case-insensitive for `write` only. Reproduced in PLAN-450: that filter ran 159
-// of the 215 tests -list selected and a harness reported 17/17 SURVIVED, every
-// one false. The grouped spelling, and alternation with no flag, stay accepted.
+// top-level | alternative, and each top-level / subtest level, on its own, so
+// `(?i)write|delete|copy` is case-insensitive for `write` only. Reproduced in
+// PLAN-450: that filter ran 159 of the 215 tests -list selected and a harness
+// reported 17/17 SURVIVED, every one false. The suggested spelling must itself
+// be accepted, and splits Go does not make (inside a group or a nested class)
+// must not be refused.
 func TestRunFilter_FlagOverAlternationIsRefused(t *testing.T) {
-	for _, bad := range []string{"(?i)write|delete|copy", "(?i)a|b", "(?is)Test(A|B)|TestC", "(?i)[|]x|y"} {
+	for bad, fixed := range map[string]string{
+		"(?i)write|delete|copy": "(?i)write|(?i)delete|(?i)copy",
+		"(?i)a|b":               "(?i)a|(?i)b",
+		"(?is)Test(A|B)|TestC":  "(?is)Test(A|B)|(?is)TestC",
+		"(?i)[|]x|y":            "(?i)[|]x|(?i)y",
+		"(?i)TestFoo/bar":       "(?i)TestFoo/(?i)bar",
+		"(?-i)a|b":              "(?-i)a|(?-i)b",
+		"(?i-s)a|(?i-s)b|c":     "(?i-s)a|(?i-s)b|(?i-s)c",
+	} {
 		err := validateRunFilter("run", bad)
 		if err == nil {
 			t.Errorf("%q must be refused", bad)
 			continue
 		}
-		if !strings.Contains(err.Error(), "Group the alternatives") {
-			t.Errorf("%q: the refusal must give the grouped spelling: %v", bad, err)
+		if !strings.Contains(err.Error(), "Put the flag on every part: "+fixed) {
+			t.Errorf("%q: the refusal must suggest %q: %v", bad, fixed, err)
+		}
+		if verr := validateRunFilter("run", fixed); verr != nil {
+			t.Errorf("the suggested %q must itself be accepted: %v", fixed, verr)
 		}
 	}
-	if err := validateRunFilter("run", "(?i)write|delete"); err == nil || !strings.Contains(err.Error(), "(?i)(write|delete)") {
-		t.Errorf("the refusal must suggest (?i)(write|delete): %v", err)
+	if err := validateRunFilter("run", "(?i)write|delete"); err == nil || !strings.Contains(err.Error(), "or group the alternatives: (?i)(write|delete)") {
+		t.Errorf("with no / the refusal must also offer the grouped spelling: %v", err)
 	}
-	for _, ok := range []string{"(?i)(write|delete|copy)", "(?i)TestWrite", "(?i)Test(A|B)", "(?i)[a|b]x", "TestA|TestB"} {
+	if err := validateRunFilter("run", "(?i)TestFoo/bar"); err == nil || strings.Contains(err.Error(), "group the alternatives") {
+		t.Errorf("grouping across a / would stop subtest matching, so it must not be offered: %v", err)
+	}
+	for _, ok := range []string{
+		"(?i)(write|delete|copy)", "(?i)TestWrite", "(?i)Test(A|B)", "(?i)[a|b]x", "TestA|TestB", "TestFoo/bar",
+		"(?i)[[:alpha:]|x]y", "(?i)[[]|a", "(?i:a|b)",
+	} {
 		if err := validateRunFilter("run", ok); err != nil {
 			t.Errorf("%q must be accepted: %v", ok, err)
 		}

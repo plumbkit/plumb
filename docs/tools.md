@@ -1274,22 +1274,29 @@ second call is refused rather than queued, since concurrent runs would read each
 other's breakage as their own result. The refusal names the run in the way: its
 session name and id, workspace, how long ago it started, and its progress
 (checking its mutants, the unmutated baseline, or mutant *k* of *n* and the step
-it is on). A run its caller abandons is cancelled (the file is restored as on
-any cancellation) and the slot released, rather than holding it for a report
-nobody can receive. That covers both a client that cancels the call
+it is on). The slot stays per daemon, not per workspace: workspaces nest (a
+superproject and its submodule are two workspaces over one tree), so two of them
+can mutate and build the same files.
+
+A run its caller abandons is cancelled (the file is restored as on any
+cancellation) and the slot released, rather than holding it for a report nobody
+can receive. That covers a client that cancels the call
 (`notifications/cancelled`, which Claude Code sends when the user interrupts a
-tool, keeping the connection) and a connection that closes. A client that asks
-for progress (a `progressToken`, which Claude Code always sends) gets one
-`notifications/progress` per compile and test step. That resets an
-idle-timeout client's window: Claude Code drops a call that is silent for 30
-minutes, and sends no cancel when it does. A client that does not
-hears nothing until the report, so a run the baseline says would take longer
-than 25 minutes is refused before anything is mutated, with a batch size that
-fits. The `test_run` filter refuses a leading inline flag over top-level
-alternation, such as `(?i)a|b`: `go test -run` applies the flag to the first
-alternative only. Write `(?i)(a|b)`. The slot stays per daemon, not per workspace: workspaces nest (a superproject and its
-submodule are two workspaces over one tree), so two of them can mutate and build
-the same files.
+tool, keeping the connection) and a connection that closes.
+
+A long run stays alive through progress. A client that asks for it (a
+`progressToken`, which Claude Code always sends) gets one
+`notifications/progress` at the start of each compile and test step, and each
+one resets an idle-timeout client's window. Claude Code drops a call that is
+silent for 30 minutes and sends no cancel when it does, so a single step longer
+than that (only possible with a raised `timeout_seconds`) can still be dropped.
+A client that asks for no progress hears nothing until the report, so a run the
+baseline says would take longer than 25 minutes is refused before anything is
+mutated, with a batch size that fits.
+
+The `test_run` filter refuses a leading inline flag that `go test -run` would
+apply to part of the pattern only (see `{run}` in
+[configuration](configuration.md)): `(?i)a|b` is case-insensitive for `a` alone.
 
 ### `agent_config`
 Read and (when the user enabled `[agent_config_writes]`) write a small allowlist
