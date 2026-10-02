@@ -33,6 +33,7 @@ var CoCallRules = []CoCallRule{{
 		"safeWrite", "safeWriteSibling", "os.WriteFile", "os.Create", "os.OpenFile",
 		"os.Truncate", "os.Remove", "os.RemoveAll", "os.Rename", "fsync.AtomicWrite", "fsync.AtomicWriteFunc",
 		"memory.WriteIndexedWithOptions", "memory.WriteWithOptions", "memory.DeleteIndexed", "memory.Delete",
+		"memory.WriteGenerated", "memory.PruneGeneratedEpisodic",
 		"config.AgentApplyBatch",
 	},
 	Requires: "recordHistory",
@@ -47,8 +48,14 @@ var CoCallRules = []CoCallRule{{
 		"internal/tools.safeWriteSibling": "primitive temp-file staging and atomic rename; callers record history",
 
 		// Internal and test helpers.
-		"internal/tools.applyTextEditsToFile": "test-only helper for applying text edits without a session or history store",
+		"internal/tools.applyTextEditsToFile": "called only from tests (it lives in edit_apply.go beside the production path); tools apply edits through applyWorkspaceEditDetailed, which records",
 		"internal/tools.readGoConfigFile":     "read-only open of go.mod/go.work config file, not a write",
+
+		// Generated memories: plumb writes them itself and prunes them to a
+		// retention cap. Spec §2 leaves episodic memories out; a shared finding is
+		// the same kind of entry in the same pruned pool.
+		"internal/tools.ShareFindings.run":                      "generated memory in plumb's auto-pruned pool (an agent-shared finding), plus that pool's prune; out of scope with episodic memories (spec §2)",
+		"internal/cli.connSession.writeGeneratedEpisodicMemory": "episodic memory and its pool's prune: out of scope (spec §2)",
 
 		// Mutants: temporary modifications reverted within the test call.
 		"internal/tools.MutationTest.runOne":        "temporary mutant restored within the call (owner decision)",
@@ -172,6 +179,14 @@ func triggerCall(call *ast.CallExpr, triggers []string) (string, bool) {
 }
 
 // InspectFuncDecl inspects a function or method declaration against a CoCallRule.
+//
+// Each trigger needs its OWN Requires call later in the body: a Requires call
+// settles the most recent trigger still waiting (in source order), and the
+// function is satisfied when none is left waiting. So a function with two
+// writes and one record fails, which a "does the body call Requires at all"
+// test let through. The match is syntactic: it cannot tell that one write needs
+// two records (rename_file's delete-of-destination plus rename rows), so those
+// remain pinned by the write-site tests, not by this rule.
 func InspectFuncDecl(fset *token.FileSet, pkg, relPath string, fn *ast.FuncDecl, rule CoCallRule) CoCallSite {
 	site := CoCallSite{
 		Key: FuncDeclKey(pkg, fn),
@@ -179,25 +194,29 @@ func InspectFuncDecl(fset *token.FileSet, pkg, relPath string, fn *ast.FuncDecl,
 	if fn.Body == nil {
 		return site
 	}
+	type waiting struct {
+		name string
+		pos  token.Pos
+	}
+	var pending []waiting
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if isSatisfiedCall(call, rule.Requires) {
-			site.Satisfied = true
+		if isSatisfiedCall(call, rule.Requires) && len(pending) > 0 {
+			pending = pending[:len(pending)-1]
 		}
 		if name, ok := triggerCall(call, rule.Triggers); ok {
 			site.Triggered = true
-			if site.TriggerName == "" {
-				site.TriggerName = name
-				site.Pos = relPath + ":" + strconv.Itoa(fset.Position(call.Pos()).Line)
-			}
+			pending = append(pending, waiting{name, call.Pos()})
 		}
 		return true
 	})
-	if site.Pos == "" && site.Triggered {
-		site.Pos = relPath + ":" + strconv.Itoa(fset.Position(fn.Pos()).Line)
+	site.Satisfied = site.Triggered && len(pending) == 0
+	if len(pending) > 0 {
+		site.TriggerName = pending[0].name
+		site.Pos = relPath + ":" + strconv.Itoa(fset.Position(pending[0].pos).Line)
 	}
 	return site
 }
