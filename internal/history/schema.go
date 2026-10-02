@@ -66,6 +66,17 @@ CREATE INDEX IF NOT EXISTS idx_ch_sess_ts ON changes(session_id, ts_ms);
 CREATE INDEX IF NOT EXISTS idx_ch_call    ON changes(call_id);
 CREATE INDEX IF NOT EXISTS idx_ch_ts_seq  ON changes(ts_ms, seq);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+` + fkIndexes
+
+// fkIndexes index the two columns that REFERENCE changes. With foreign keys on,
+// deleting a change scans for rows pointing at it; without these, prune is
+// quadratic (measured 34 s for 20k rows, 135 ms with them) and holds the write
+// lock against the daemon the whole time. They are created on every
+// read-write open rather than by a version bump: a file written before them
+// still reads as v1, so an older plumb keeps reading and writing it.
+const fkIndexes = `
+CREATE INDEX IF NOT EXISTS idx_ch_reverts ON changes(reverts_seq);
+CREATE INDEX IF NOT EXISTS idx_ch_from    ON changes(from_path_id);
 `
 
 // initSchema creates the schema on a fresh database and stamps v1; accepts v1;
@@ -79,6 +90,9 @@ func initSchema(db *sql.DB) error {
 		return fmt.Errorf("%w (file v%d, this plumb v%d)", ErrNewerSchema, v, SchemaVersion)
 	}
 	if v == SchemaVersion {
+		if _, err := db.Exec(fkIndexes); err != nil {
+			return fmt.Errorf("history: create foreign-key indexes: %w", err)
+		}
 		return nil
 	}
 	if _, err := db.Exec(ddl); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,14 @@ type Options struct {
 	MaxQueuedBytes int64         // 256 MiB
 	BatchWait      time.Duration // 250 ms
 	MaxDiffBytes   func() int64  // per batch; nil → 4 MiB
+	// BusyTimeout is the writer's wait for another process's lock (a running
+	// `plumb history prune`). Zero takes the sqlitex default; tests shorten it.
+	BusyTimeout time.Duration
 }
+
+// closeGrace bounds how long Close waits, after its own deadline, for a writer
+// that degraded to markers but is still stuck on another process's lock.
+const closeGrace = 5 * time.Second
 
 func (o Options) withDefaults() Options {
 	if o.QueueSize <= 0 {
@@ -68,6 +76,7 @@ type Store struct {
 	queuedBytes int64
 	dropped     int64 // since the last batch persisted it
 	lastDrop    time.Time
+	errsPending int64 // insert errors a failed batch could not persist yet
 
 	enqueued atomic.Int64
 	degrade  atomic.Bool // set by Close past its deadline: write markers only
@@ -78,7 +87,8 @@ type Store struct {
 
 // Open opens (creating as needed) history.db at path and starts the writer.
 func Open(path string, opts Options) (*Store, error) {
-	db, err := sqlitex.Open(path, sqlitex.Options{Sync: sqlitex.SyncNormal, MaxOpenConns: 1})
+	o := opts.withDefaults()
+	db, err := sqlitex.Open(path, sqlitex.Options{Sync: sqlitex.SyncNormal, MaxOpenConns: 1, BusyTimeout: o.BusyTimeout})
 	if err != nil {
 		return nil, fmt.Errorf("history: open %s: %w", path, err)
 	}
@@ -91,7 +101,6 @@ func Open(path string, opts Options) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("history: zstd encoder: %w", err)
 	}
-	o := opts.withDefaults()
 	s := &Store{
 		path:    path,
 		db:      db,
@@ -143,12 +152,29 @@ func marker(it Item) Item {
 	return it
 }
 
-func (s *Store) takeOverflow() []Item {
+// takeQueued appends everything waiting — the channel's buffered items, then
+// the overflow list — to batch, atomically. Enqueue sends under mu, so holding
+// mu across both steps closes the window in which an item could reach the
+// channel after the drain but before the overflow is taken, and be written
+// AFTER an overflow item that is younger than it.
+func (s *Store) takeQueued(batch []Item) []Item {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.overflow
-	s.overflow = nil
-	return out
+	for {
+		select {
+		case it, ok := <-s.ch:
+			if !ok {
+				batch = append(batch, s.overflow...)
+				s.overflow = nil
+				return batch
+			}
+			batch = append(batch, it)
+		default:
+			batch = append(batch, s.overflow...)
+			s.overflow = nil
+			return batch
+		}
+	}
 }
 
 func (s *Store) release(items []Item) {
@@ -161,12 +187,32 @@ func (s *Store) release(items []Item) {
 	s.mu.Unlock()
 }
 
-func (s *Store) takeDrops() (int64, time.Time) {
+// takeCounts hands the writer the drop and error counts it must persist with
+// its next batch, and clears them; giveBack returns them (plus anything the
+// batch itself lost) when that batch could not persist them, so no count is
+// ever zeroed without reaching meta.
+func (s *Store) takeCounts() (drops int64, dropAt time.Time, errs int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	n, at := s.dropped, s.lastDrop
-	s.dropped = 0
-	return n, at
+	drops, dropAt, errs = s.dropped, s.lastDrop, s.errsPending
+	s.dropped, s.errsPending = 0, 0
+	return drops, dropAt, errs
+}
+
+func (s *Store) giveBack(drops int64, dropAt time.Time, errs int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropped += drops
+	s.errsPending += errs
+	if drops > 0 && dropAt.After(s.lastDrop) {
+		s.lastDrop = dropAt
+	}
+}
+
+func (s *Store) hasPendingCounts() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropped > 0 || s.errsPending > 0
 }
 
 // Sync blocks until everything enqueued before the call is committed. For
@@ -204,7 +250,15 @@ func (s *Store) Close(ctx context.Context) error {
 	case <-s.done:
 	case <-ctx.Done():
 		s.degrade.Store(true)
-		<-s.done
+		// Markers are cheap, but a writer stuck on another process's lock is
+		// not: bound the wait so a daemon shutdown is never held hostage. The
+		// database is left open for the stuck writer rather than closed under it.
+		select {
+		case <-s.done:
+		case <-time.After(closeGrace):
+			slog.Warn("history: writer still busy after the close grace; leaving history.db to it", "grace", closeGrace)
+			return ctx.Err()
+		}
 	}
 	_, _ = s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
 	_ = s.enc.Close()
