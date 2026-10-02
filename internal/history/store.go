@@ -21,7 +21,7 @@ type Options struct {
 	BatchSize      int           // 64
 	MaxQueuedBytes int64         // 256 MiB
 	BatchWait      time.Duration // 250 ms
-	MaxDiffBytes   func() int64  // per batch; nil → 4 MiB
+	MaxDiffBytes   func() int64  // per diff, on the rendered text before redaction and compression; nil → 4 MiB
 	// BusyTimeout is the writer's wait for another process's lock (a running
 	// `plumb history prune`). Zero takes the sqlitex default; tests shorten it.
 	BusyTimeout time.Duration

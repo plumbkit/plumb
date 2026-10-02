@@ -137,6 +137,19 @@
   file deleted since plumb wrote it recorded, and showed, the replaced side as
   an existing empty file.
 
+- **A project config can no longer switch write history off or narrow its
+  sensitive globs (breaking for project configs).** `[history] enabled` and
+  `sensitive_globs` were ordinary preferences, so a cloned repository could set
+  `enabled = false` to leave no record of what agents wrote there, or
+  `sensitive_globs = []` to have its `.env` stored in `history.db` and shown in
+  write responses. `enabled` is now one-way: a project may switch history on,
+  never off. A project's `sensitive_globs` are now added to the global list
+  instead of replacing it. The `[history]` docs now give the real default globs
+  (base-name or workspace-relative `filepath.Match` patterns, no `**`), the
+  content markers `plumb history` actually prints (`[withheld:sensitive]`,
+  `[withheld:too_large]` and so on), and the fact that `max_diff_bytes` is
+  measured before compression.
+
 - **The write-history guard now checks every write, not every function.** The
   architecture rule that a file write must be followed by a history record was
   satisfied by any one record anywhere in the function, so a function with two

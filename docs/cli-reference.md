@@ -736,12 +736,14 @@ Review the diffs of every file change plumb made on an agent's behalf. Changes a
 
 ### Content markers
 
-For files whose diff content was withheld, the list and show outputs display a bracketed marker instead of a diff:
-- `[sensitive]`: path matched `sensitive_globs` in configuration;
-- `[binary]`: file contained NUL bytes or failed UTF-8 check;
-- `[too large]`: file size or diff exceeded byte limits;
-- `[redacted]`: secret patterns were masked in the recorded diff;
-- `[omitted]`: content not recorded (e.g. directory deletions).
+A change recorded without a diff shows its content marker in brackets: at the end of its `list` line, and in place of the diff in `show`. The JSON output carries the same value in `content` (`diff` when a diff is stored).
+- `[none]`: nothing to diff: a directory, a rename that moved the content unchanged, or a write that left the bytes as they were;
+- `[withheld:sensitive]`: the path, its resolved path or its copy/rename source matched `[history] sensitive_globs`;
+- `[withheld:binary]`: a side contained a NUL byte in its first 8000 bytes;
+- `[withheld:too_large]`: a side exceeded `max_content_bytes`, or the diff exceeded `max_diff_bytes`;
+- `[withheld:overflow]`: the write queue overflowed or the row could not be written in full, so only its metadata was kept.
+
+Redaction does not use a marker. A stored diff shows each secret it masked as a labelled placeholder (`[REDACTED:aws-key]` and so on), and the JSON output counts them in `redactions`.
 
 ---
 
