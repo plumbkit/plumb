@@ -44,12 +44,12 @@ var writeToolNames = []string{
 
 // WorkspaceSessions returns peer-session awareness for the caller's workspace.
 // Concurrency: Execute is pure-read and takes no in-process mutexes of its own;
-// it calls session.List (filesystem flock) and stats.SharedReadOnly (a process-
-// cached read-only connection). Both are bounded by the wsSessionsTimeout so a stuck
-// NFS mount or an unusually large session directory never blocks the MCP
-// response. No deadlock is possible because the tool never holds more than one
-// resource at a time, and the resource it does hold (an OS flock) is not
-// involved in any Go mutex ordering.
+// it calls session.List (the session directory's in-process mutex, then its
+// filesystem flock) and stats.SharedReadOnly (a process-cached read-only
+// connection). Both are bounded by the wsSessionsTimeout so a stuck NFS mount or
+// an unusually large session directory never blocks the MCP response. No
+// deadlock is possible because the tool holds no other lock while it waits on
+// the session directory's, and session.List runs no callback into the tool.
 type WorkspaceSessions struct {
 	workspace  func() string
 	selfSessID func() string
@@ -247,9 +247,9 @@ func (t *WorkspaceSessions) Execute(ctx context.Context, raw json.RawMessage) (s
 
 // runSync performs the actual work: reads session files and queries the stats
 // DB. Called inside runWithTimeout so it never blocks the caller past
-// wsSessionsTimeout. It holds no Go mutexes and acquires only one OS-level
-// resource at a time (the session-dir flock, then a fresh read-only DB
-// connection), so no deadlock is possible.
+// wsSessionsTimeout. It holds no locks of its own and takes one lock at a time
+// (the session directory's mutex and flock inside session.List, released before
+// the fresh read-only DB connection opens), so no deadlock is possible.
 func (t *WorkspaceSessions) runSync(workspace string, caller wsCaller, recentLimit int) string {
 	now := time.Now()
 

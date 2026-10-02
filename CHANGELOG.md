@@ -37,6 +37,17 @@
   `go test -list` applies the flag to the whole pattern, so it looked right.
   The refusal suggests the grouped spelling, `(?i)(write|delete)`.
 
+### Tests
+
+- **The registry lock's bound is now pinned on both sides.** (#583, #585)
+  `TestSessionDirLock_OneDescriptorWaits` also asserts the lock file is back
+  to the holder's one descriptor once every queued writer finishes, and a new
+  `TestSessionDirLock_ReleasedOnEveryPath` asserts the in-process mutex is
+  released and the descriptor closed when the guarded function panics or
+  errors, or the directory or lock file cannot be opened. Stale comments in
+  `workspace_sessions` that said no Go mutex sits in front of the
+  session-directory flock were corrected. No behaviour change.
+
 ## 0.21.0 (2026-10-02)
 
 ### Upgrading: read this first
