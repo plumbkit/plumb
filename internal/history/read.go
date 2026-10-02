@@ -250,12 +250,46 @@ func populateEntry(e *Entry, tsMs int64, kindStr, opStr, contentStr string, bSiz
 	}
 }
 
+// prevStateSQL finds a path's state just before seq ?2: the newest earlier row
+// that left path ?1 in a known state. That is a row ON the path (its after
+// side), or a rename AWAY from it, which left the path absent (NULL). A
+// copy from the path does not change it, so only renames count.
+const prevStateSQL = `SELECT CASE WHEN path_id = ?1 THEN after_sha ELSE NULL END, ts_ms
+	FROM changes
+	WHERE seq < ?2 AND (path_id = ?1 OR (from_path_id = ?1 AND op = 'rename'))
+	ORDER BY seq DESC LIMIT 1`
+
+// chainFor is the path whose chain e's before side continues: its own, or for
+// a rename its source's.
+func chainFor(fromStmt *sql.Stmt, e Entry, pathID int64) (int64, error) {
+	if e.Op != OpRename {
+		return pathID, nil
+	}
+	var from sql.NullInt64
+	if err := fromStmt.QueryRow(e.Seq).Scan(&from); err != nil {
+		return 0, fmt.Errorf("history: check gap: %w", err)
+	}
+	if !from.Valid {
+		return pathID, nil
+	}
+	return from.Int64, nil
+}
+
+// detectGaps marks each entry whose before side does not continue its path's
+// chain. A rename row's before is its SOURCE's content, so it is checked
+// against the source path's chain, not the destination's (whose previous
+// state the rename replaced).
 func (r *Reader) detectGaps(scanned []scanResult) ([]Entry, error) {
-	gapStmt, err := r.db.Prepare(`SELECT after_sha, ts_ms FROM changes WHERE path_id=? AND seq<? ORDER BY seq DESC LIMIT 1`)
+	gapStmt, err := r.db.Prepare(prevStateSQL)
 	if err != nil {
 		return nil, fmt.Errorf("history: prepare gap query: %w", err)
 	}
 	defer gapStmt.Close()
+	fromStmt, err := r.db.Prepare(`SELECT from_path_id FROM changes WHERE seq=?`)
+	if err != nil {
+		return nil, fmt.Errorf("history: prepare gap query: %w", err)
+	}
+	defer fromStmt.Close()
 
 	var lastDropMs int64
 	if meta, err := r.Meta(); err == nil && meta != nil {
@@ -267,9 +301,13 @@ func (r *Reader) detectGaps(scanned []scanResult) ([]Entry, error) {
 	out := make([]Entry, len(scanned))
 	for i, s := range scanned {
 		e := s.entry
+		chain, err := chainFor(fromStmt, e, s.pathID)
+		if err != nil {
+			return nil, err
+		}
 		var prevAfter []byte
 		var prevTsMs int64
-		err := gapStmt.QueryRow(s.pathID, e.Seq).Scan(&prevAfter, &prevTsMs)
+		err = gapStmt.QueryRow(chain, e.Seq).Scan(&prevAfter, &prevTsMs)
 		if err == nil {
 			if !bytes.Equal(prevAfter, e.BeforeSHA) {
 				e.GapBefore = true

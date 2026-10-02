@@ -236,3 +236,58 @@ func TestAFailedOverflowMarkerIsCountedOnce(t *testing.T) {
 		t.Fatalf("overflow_rows = %q but %d overflow markers are stored; a marker that never landed is not an overflow row", got, landed)
 	}
 }
+
+// A rename moves content between two paths' chains: the rename row continues
+// the SOURCE's chain (its before is the source's content), and it ends the
+// source path's chain (the source no longer exists). Neither may read as an
+// edit made outside plumb.
+func TestRenamesDoNotFabricateGaps(t *testing.T) {
+	ws := t.TempDir()
+	p := filepath.Join(t.TempDir(), "h.db")
+	s, err := Open(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := filepath.Join(ws, "a.txt"), filepath.Join(ws, "b.txt")
+	at := int64(1000)
+	add := func(it Item) {
+		at++
+		it.Workspace, it.At = ws, time.UnixMilli(at)
+		s.Enqueue(it)
+	}
+	add(item(OpCreate, a, nil, []byte("A\n")))
+	add(item(OpCreate, b, nil, []byte("B\n")))
+	// rename_file over an existing b.txt deletes it, then renames a.txt onto it.
+	add(item(OpDelete, b, []byte("B\n"), nil))
+	ren := item(OpRename, b, []byte("A\n"), []byte("A\n"))
+	ren.From = a
+	add(ren)
+	// a.txt recreated, then b.txt edited after the rename.
+	add(item(OpCreate, a, nil, []byte("C\n")))
+	add(item(OpUpdate, b, []byte("A\n"), []byte("D\n")))
+	add(item(OpUpdate, b, []byte("OUTSIDE\n"), []byte("E\n")))
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenReadOnlyAt(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	es, err := r.List(Filter{Workspace: ws, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es) != 7 {
+		t.Fatalf("%d entries, want 7", len(es))
+	}
+	// Newest first: es[0] is the OUTSIDE edit — the positive control.
+	if !es[0].GapBefore {
+		t.Fatal("positive control: an edit whose before does not match the chain must show a gap")
+	}
+	for _, e := range es[1:] {
+		if e.GapBefore {
+			t.Errorf("false gap before seq %d (%s %s from %q)", e.Seq, e.Op, e.Path, e.From)
+		}
+	}
+}
