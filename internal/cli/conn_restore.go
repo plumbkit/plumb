@@ -180,6 +180,7 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 	if adoption == idResumed && named {
 		s.repairBlankLinkage(rec)
 		s.setRecovery(recoveryRestored)
+		s.mintResumeCredential() // a proven restore, so it is issued a credential on the same terms (C3)
 		// onProxySession restored declarations from what it could read THEN;
 		// the record (and any declaration written while this connection sat
 		// degraded) is only now in hand. Additive, so re-running is safe.
@@ -194,6 +195,7 @@ func (s *connSession) retryRestoreIdentity(proxyID string) bool {
 		// connection stays degraded and the next attempt tries again.
 		s.setRecovery(recoveryEstablished)
 		if s.persistIdentity() {
+			s.mintResumeCredential()
 			s.restoreDeclaredLinkages(proxyID)
 			return true
 		}

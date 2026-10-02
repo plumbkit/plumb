@@ -211,3 +211,27 @@ const ArgLogicalAgentKey = MetaLogicalAgentKey
 // ^[a-zA-Z0-9_.-]{1,64}$. For such a client the server advertises this key in
 // every tool's schema (Server.DeclareIdentityArg); no tool declares it itself.
 const ArgLogicalAgentDeclaredKey = "plumb_agent"
+
+// MetaResumeCredentialKey is the `_meta` key of the resume credential
+// (docs/identity-resume-credential-design.md), and it travels BOTH ways under the
+// one name:
+//
+//   - Disclosed by the daemon, once per generation, as a string in an initialize
+//     RESULT `_meta` (identity established or restored under a proxy credential), and
+//     in a tools/call RESULT `_meta` for the two cases that have no initialize to ride:
+//     the successor after an accepted resume, and a connection whose degraded
+//     recovery converged on the bounded retry. It is a sibling of
+//     MetaSessionIdentityKey, not a field inside it, so a proxy that predates it
+//     ignores it wholesale and each key's fail-safe rule ("absence is not evidence of
+//     anything") applies to it on its own.
+//   - Presented by a `plumb serve` proxy, as a string in the `_meta` of a
+//     `session_start` tools/call REQUEST that names a conversation it holds a stored
+//     credential for. Only the request `_meta` is read: a value in the arguments is
+//     the model's own and is ignored. Any other tool, and an initialize, ignores it.
+//
+// The value is a bearer secret (`rsk1-` and 22 base64url characters). It is never
+// written to a tool result's text, a packet, a log line or the stats database;
+// only its SHA-256 is stored. A daemon that predates the key sends nothing and
+// ignores a presentation, and a proxy that predates it ignores the disclosure, so
+// either half upgrades independently. Reverse-DNS namespaced per the MCP convention.
+const MetaResumeCredentialKey = "dev.plumbkit/resume-credential" //nolint:gosec // G101: the NAME of a _meta key, not a credential

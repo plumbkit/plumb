@@ -2,6 +2,35 @@
 
 ## 0.21.1 (unreleased)
 
+### Added
+
+- **A resume credential: the daemon's half of letting a replacement `plumb serve`
+  resume the full identity, not only the name.** (part of #556,
+  `docs/identity-resume-credential-design.md`) A serve restart, an agent relaunch
+  or a reboot kills the proxy session ID, so the replacement recovered only the
+  NAME, and the internal session ID, the mail bound to it and the thread seats
+  stayed behind (symptoms 2 and 4). The daemon now mints a credential (`rsk1-` and
+  22 base64url characters, 128 bits from `crypto/rand`, derived from nothing) when
+  an initialize establishes or restores an identity under a proxy credential,
+  and discloses it once in the initialize result `_meta`
+  (`dev.plumbkit/resume-credential`); a connection that converges on the degraded
+  retry gets it in its next tool result. A degraded connection, an ordinary MCP
+  client and a session with `[session] persist_state` off are never issued one,
+  and only a SHA-256 hash is stored (`resume_credential`, session-state schema
+  v11). A `session_start` that presents the credential in its request `_meta`
+  restores the internal session ID, name, mail and thread seats, re-records the
+  identity under the new proxy credential, and is handed a successor in the same
+  response; a conversation ID, a stamp or a name still authorises nothing. Every
+  accepted resume rotates it, the first of two claimants of one credential wins
+  (the loser is told it was superseded and keeps running under a temporary
+  identity), a replay of a superseded generation is refused and logged at Warn as
+  a possible theft, and it is revoked when its conversation's linkage is replaced
+  or after three presentations that match no generation. It has no TTL. Nothing
+  presents a credential until the proxy half ships, so this changes no behaviour
+  yet, and `rsk1-` tokens are now scrubbed by `internal/redact`. The threat model
+  records the new authority and the accepted griefing vector of the revocation
+  counter.
+
 ### Fixed
 
 - **A second conversation on a shared connection no longer takes the first

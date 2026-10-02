@@ -27,6 +27,9 @@ type LinkResult struct {
 	// was not, so mail and threads bound to that ID do not follow the caller. Only
 	// the proxy credential can carry them. Owner only.
 	NewIdentity bool
+	// Credential is what a resume credential the call presented did for it, "" when it
+	// presented none (see ResumeOutcome). Owner only, like everything above.
+	Credential ResumeOutcome
 }
 
 // WithLinkage wires the caller-aware external-ID linker. fn receives the call's

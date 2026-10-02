@@ -1,8 +1,9 @@
 # Resume credentials for serve-replacement identity continuity
 
-*Status: design document. Nothing in it is implemented. The proxy session ID
-remains the sole authority for identity restoration until an implementation card
-ships and is reviewed; this document is the artefact that card will implement
+*Status: daemon side implemented (#PRNUM); proxy side pending. The daemon mints,
+discloses, accepts, rotates and revokes as specified, but nothing presents a
+credential until the proxy half ships, so the proxy session ID remains the only
+authority in practice. This document is the artefact the proxy card implements
 against. It extends the vocabulary of [threat-model.md](threat-model.md) and
 must not contradict it — where this design narrows a guarantee the threat model
 states, it says so in [Residual risks](#9-residual-risks).*

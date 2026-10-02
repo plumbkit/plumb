@@ -401,11 +401,23 @@ func fullSessionID(t *testing.T, meta map[string]any) string {
 // prove itself — which must never reach client-visible output.
 var uuidShape = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
+// resumeCredentialShape matches a resume credential: `rsk1-` and 22 base64url
+// characters (docs/identity-resume-credential-design.md). Unlike the proxy session
+// credential it is DISCLOSED to the proxy, in `_meta`, so it can be found in a
+// frame the proxy handles; no tool result, packet, CLI output or log may carry it.
+var resumeCredentialShape = regexp.MustCompile(`rsk1-[A-Za-z0-9_-]{22}`)
+
 // assertNoCredentialLeak fails when a UUID-shaped token appears in
 // client-visible output. Every identity scenario below funnels its tool
 // results, packets and CLI output through this.
 func assertNoCredentialLeak(t *testing.T, label, out string) {
 	t.Helper()
+	// The resume credential rides `_meta` and nowhere a model or an operator reads, so
+	// its shape (rsk1- and 22 base64url characters) is scanned for beside the UUID.
+	if leaked := resumeCredentialShape.FindString(out); leaked != "" {
+		t.Errorf("%s: client-visible output contains a resume-credential-shaped token (%q…); it must never "+
+			"appear in any tool result, packet, or CLI output:\n%s", label, leaked[:9], out)
+	}
 	if leaked := uuidShape.FindString(out); leaked != "" {
 		t.Errorf("%s: client-visible output contains a UUID-shaped token (%q…). The only UUID in "+
 			"play is the proxy session credential, and it must never appear in any tool result, "+

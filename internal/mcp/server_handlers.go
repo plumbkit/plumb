@@ -328,6 +328,7 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 
 	logicalAgent := resolveLogicalAgent(params.Meta, argAgent)
 	ctx = WithLogicalAgent(ctx, logicalAgent)
+	ctx = withResumeCredential(ctx, resumeCredentialFromMeta(params.Meta))
 	// The scratchpad a tool's callbacks note their decisions in, for ToolResultMeta
 	// to read after the run (result_notes.go).
 	ctx = WithResultNotes(ctx)

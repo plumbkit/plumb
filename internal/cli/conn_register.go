@@ -328,6 +328,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.OnProxySession = func(_ context.Context, id string) {
 		s.onProxySession(id)
+		// After identity has settled, so only a proven outcome is issued a credential.
+		s.mintResumeCredential()
 	}
 	srv.OnProxyVersion = func(_ context.Context, version string) {
 		s.onProxyVersion(version)
@@ -345,10 +347,16 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		// Runs after the param hooks above, so restoreIdentity has already
 		// decided who this connection is — the identity stated here is the
 		// settled one, not a guess made before recovery ran.
-		return map[string]any{
+		meta := map[string]any{
 			mcp.MetaSessionIdentityKey: s.identityMeta(),
 			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),
 		}
+		// Disclosed once, here, for a connection that was proven at initialize. A
+		// sibling key, so an older proxy ignores it and each key's fail-safe applies.
+		if secret := s.takePendingCredential(); secret != "" {
+			meta[mcp.MetaResumeCredentialKey] = secret
+		}
+		return meta
 	}
 	srv.OnAfterTool = s.afterToolFromCtx
 	srv.OnInit = func(initCtx context.Context, request mcp.RequestFn, notify mcp.NotifyFn) {

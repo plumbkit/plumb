@@ -27,7 +27,9 @@ package sessionstate
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -86,7 +88,19 @@ func (s *Store) SaveIdentity(proxySessionID string, id Identity) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sessionstate: save identity: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	// The linkage the row holds NOW, read in the same transaction as the write that
+	// may replace it, so "was it replaced?" cannot be answered against a row another
+	// writer has since moved.
+	var prev string
+	if err := tx.QueryRow(`SELECT external_id FROM session_names WHERE proxy_session_id=?`, proxySessionID).Scan(&prev); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sessionstate: save identity: %w", err)
+	}
+	_, err = tx.Exec(
 		`INSERT INTO session_names (proxy_session_id, name, plumb_session_id, external_id, name_revision, updated_at)
 		 VALUES (?, ?, ?, ?, 1, ?)
 		 ON CONFLICT(proxy_session_id)
@@ -101,6 +115,23 @@ func (s *Store) SaveIdentity(proxySessionID string, id Identity) error {
 		proxySessionID, id.Name, id.SessionID, id.ExternalID, time.Now().UnixMilli(),
 	)
 	if err != nil {
+		return fmt.Errorf("sessionstate: save identity: %w", err)
+	}
+	// A save that REPLACES a known linkage detaches the row from its conversation, and
+	// the credential goes with it (design §5, Detach): revocation is a consequence of
+	// the linkage write. A first linkage (blank to known) is how every identity gets
+	// one and revokes nothing, and a blank one never clears (above), so those are
+	// exactly the writes that must leave the credential alone.
+	//
+	// The revoke is best effort. An unreadable credential table degrades to "no
+	// credential recorded" (matching fails closed), and it must never be the reason an
+	// identity write is refused: the identity record is the authority in every failure.
+	if prev != "" && id.ExternalID != "" && prev != id.ExternalID {
+		if err := revokeCredentialsLocked(tx, proxySessionID); err != nil {
+			slog.Warn("sessionstate: a replaced external linkage could not revoke its resume credentials", "err", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("sessionstate: save identity: %w", err)
 	}
 	return nil
