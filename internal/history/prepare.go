@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/textdiff"
 )
 
@@ -26,7 +27,7 @@ func Prepare(it Item, p Policy) Item {
 		it.Content = ContentNone
 	case it.Op == OpRename && bytes.Equal(it.Before.SHA, it.After.SHA):
 		it.Content = ContentNone
-	case MatchSensitive(p.SensitiveGlobs, it.Workspace, it.Path):
+	case isSensitive(p.SensitiveGlobs, it):
 		if carried(it.Before) && carried(it.After) {
 			it.Added, it.Removed = textdiff.Counts(textdiff.ComputeExact(string(it.Before.Content), string(it.After.Content)))
 		}
@@ -50,8 +51,41 @@ func limit(p Policy) int64 {
 func carried(s Side) bool                { return !s.Exists || s.Content != nil }
 func tooBig(s Side, maxBytes int64) bool { return s.Exists && (s.Content == nil || s.Size > maxBytes) }
 
+// isSensitive reports whether the change touches a sensitive file under ANY
+// spelling the row could end up filed under or the content could come from:
+//
+//   - the path as the tool resolved it AND as the writer will store it
+//     (paths.Canonical follows symlinks, so a write through `notes.txt -> .env`
+//     is filed under .env and must be classified as .env);
+//   - the copy/rename SOURCE (From): a copy of .env carries .env's content to
+//     a destination whose own name matches nothing;
+//   - against the root as given and as canonicalised, so a workspace-relative
+//     glob still matches when the root and the path disagree on an alias
+//     (/var vs /private/var, a symlinked checkout).
+//
+// Classification runs before the queue, so a miss here stores plaintext.
+func isSensitive(globs []string, it Item) bool {
+	if len(globs) == 0 {
+		return false
+	}
+	roots := []string{it.Workspace, paths.Canonical(it.Workspace)}
+	cands := []string{it.Path, paths.Canonical(it.Path)}
+	if it.From != "" {
+		cands = append(cands, it.From, paths.Canonical(it.From))
+	}
+	for _, c := range cands {
+		for _, r := range roots {
+			if MatchSensitive(globs, r, c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // MatchSensitive reports whether path matches any glob by base name or by its
-// path relative to root ("/"-separated).
+// path relative to root ("/"-separated). It matches the one spelling it is
+// given; isSensitive is what tries every spelling a change can carry.
 func MatchSensitive(globs []string, root, path string) bool {
 	base := filepath.Base(path)
 	rel, err := filepath.Rel(root, path)

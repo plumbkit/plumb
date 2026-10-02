@@ -127,6 +127,16 @@
   Without a marker (hook not installed, daemon restarted in between) or where
   other conversations share the connection, the new conversation is a newcomer
   with an identity of its own and the marker is left unconsumed.
+- **Write history no longer stores a sensitive file's contents when it is
+  reached by another name.** Sensitive-file matching (`[history]
+  sensitive_globs`) only looked at the destination path as the tool spelled it.
+  So `copy_file` from `.env` to `env.bak`, or a write through a symlink that
+  points at `.env`, stored the secret in plaintext in `history.db`. Matching now
+  also checks the resolved path, the copy source, and the workspace root under
+  its resolved spelling, so a root-relative glob still matches under a symlinked
+  checkout. Rows written before the fix keep whatever they stored; prune them
+  with `plumb history prune` if a secret may have been copied.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
