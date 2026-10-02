@@ -300,7 +300,7 @@ exit 0`)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	for _, want := range []string{"stopped early: 3 of 4 mutants never ran", "more than the baseline suggested", "did not ask for progress"} {
+	for _, want := range []string{"stopped early: 3 of 4 mutants never ran", "costliest compile+test cycle", "did not ask for progress"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report is missing %q:\n%s", want, out)
 		}
@@ -317,6 +317,21 @@ exit 0`)
 	resp, _ := awaitResponse(t, frames, 1, 30*time.Second)
 	if strings.Contains(resp, "stopped early") || !strings.Contains(resp, "b4") {
 		t.Fatalf("with progress every mutant must run:\n%s", resp)
+	}
+}
+
+// TestNewSilentRunWatch_SeedsTheBaseline: the projection starts from the
+// measured baseline, so a first mutant costlier than the budget allows is
+// caught before the second; and a call with no progress is the one it watches.
+func TestNewSilentRunWatch_SeedsTheBaseline(t *testing.T) {
+	withSilentBudget(t, 7*time.Minute)
+	start := time.Now()
+	w := newSilentRunWatch(context.Background(), start, 3*time.Minute)
+	if !w.active || w.worst != 3*time.Minute || w.budget != 7*time.Minute || !w.start.Equal(start) {
+		t.Fatalf("watch = %+v, want active, worst 3m (the baseline), budget 7m, the given start", *w)
+	}
+	if note := w.stopBefore(start, 0, 3); note == "" {
+		t.Error("3 cycles at the baseline's 3m pass a 7m budget, so the watch must stop before the first")
 	}
 }
 
@@ -344,7 +359,7 @@ func TestSilentRunWatch_StopBefore(t *testing.T) {
 	w = newWatch(true)
 	w.observe(6 * time.Minute)
 	note := w.stopBefore(now, 1, 5)
-	for _, want := range []string{"4 of 5 mutants never ran", "took 6m", "about 24m more", "25m budget"} {
+	for _, want := range []string{"4 of 5 mutants never ran", "took 6m", "about 28m in all", "25m budget"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("note is missing %q: %s", want, note)
 		}
