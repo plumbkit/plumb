@@ -191,8 +191,8 @@ func (t *RenameFile) formatRenameResult(ctx context.Context, from, to string, de
 	if !dest.Exists {
 		return sb.String()
 	}
-	// Both paths go to the gate, matching the store's own From-side check.
-	diff := t.deps.responseDiffAcross(ctx, []string{from, to}, to, sideOf(dest), absentSide())
+	// The pair goes to the gate as one change, as the store classifies it.
+	diff := t.deps.responseDiffAcross(ctx, to, from, sideOf(dest), absentSide())
 	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
 	return sb.String()
 }

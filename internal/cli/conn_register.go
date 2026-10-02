@@ -79,11 +79,11 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Contested:             s.pinContested,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		RelayDiffFn:           func() bool { return s.editsConfig().RelayWriteDiff },
-		// The response diff makes the store's own sensitive-file decision
-		// (responseSensitive: same root, same project's globs, every spelling),
-		// so a path withheld from history.db is withheld from the transcript too
-		// (which leaves the machine; history.db does not).
-		SensitivePathFn:   s.responseSensitive,
+		// The response diff takes the store's own sensitive-file decision
+		// (changeSensitive, which recordHistory also uses), so content withheld
+		// from history.db is withheld from the transcript too (which leaves the
+		// machine; history.db does not).
+		SensitivePathFn:   s.changeSensitive,
 		BlockDirtyFn:      func() bool { return s.editsConfig().BlockDirtyWrites },
 		PostWriteNotifyFn: s.javaPostWriteNotify,
 		QualityReport:     qualityReport,

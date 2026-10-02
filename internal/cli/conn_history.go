@@ -44,6 +44,8 @@ func (s *connSession) recordHistory(ctx context.Context, c history.Change) {
 	s.historyStore.Enqueue(history.Prepare(it, history.Policy{
 		SensitiveGlobs:  hc.SensitiveGlobs,
 		MaxContentBytes: hc.MaxContentBytes,
+		// The same verdict the response gate takes, so the two cannot disagree.
+		Sensitive: s.changeSensitive(ctx, c.Path, c.From),
 	}))
 }
 
@@ -75,14 +77,28 @@ func (s *connSession) historyRootFor(ctx context.Context, path string) string {
 	return root
 }
 
-// responseSensitive is WriteDeps.SensitivePathFn: whether a write's tool result
-// may show path's content. It asks exactly what the store asks — the same root,
-// the same project's globs, every spelling of the path — so the transcript (the
-// copy that leaves the machine) and history.db never disagree. A copy/rename
-// source is passed through here as a path of its own by the response renderer.
-func (s *connSession) responseSensitive(ctx context.Context, path string) bool {
+// changeSensitive is the ONE decision about whether a change's content may be
+// seen. It is WriteDeps.SensitivePathFn (the tool result, the copy that leaves
+// the machine) and recordHistory's Policy.Sensitive (history.db), so the two
+// agree by construction.
+//
+// A change with a source spans two projects when a copy or rename crosses them,
+// so it is sensitive when EITHER project's globs say so: the destination
+// project's globs about either path (what IsSensitiveChange asks), or the
+// source project's globs about the source. Asking each path only of its own
+// project, or both only of the destination's, leaks in one direction or the
+// other when a glob is declared in only one of them.
+func (s *connSession) changeSensitive(ctx context.Context, path, from string) bool {
 	root := s.historyRootFor(ctx, path)
-	return history.IsSensitiveChange(s.historyConfigFor(root).SensitiveGlobs, root, path, "")
+	if history.IsSensitiveChange(s.historyConfigFor(root).SensitiveGlobs, root, path, from) {
+		return true
+	}
+	if from == "" {
+		return false
+	}
+	srcRoot := s.historyRootFor(ctx, from)
+	return srcRoot != root &&
+		history.IsSensitiveChange(s.historyConfigFor(srcRoot).SensitiveGlobs, srcRoot, from, "")
 }
 
 // pathArg shapes a path as the tool-argument JSON workspaceFromArgs reads.

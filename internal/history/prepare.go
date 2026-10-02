@@ -12,6 +12,10 @@ import (
 type Policy struct {
 	SensitiveGlobs  []string
 	MaxContentBytes int64
+	// Sensitive is the caller's own verdict for the change, for a rule this
+	// package cannot see: the daemon also asks the SOURCE project's globs about a
+	// cross-project copy or rename. It only ever adds withholding.
+	Sensitive bool
 }
 
 // binarySniffBytes matches internal/tools/walk.go (the ripgrep/git heuristic).
@@ -30,7 +34,7 @@ func Prepare(it Item, p Policy) Item {
 		it.Content = ContentNone
 	case it.Op == OpRename && bytes.Equal(it.Before.SHA(), it.After.SHA()):
 		it.Content = ContentNone
-	case IsSensitiveChange(p.SensitiveGlobs, it.Workspace, it.Path, it.From):
+	case p.Sensitive || IsSensitiveChange(p.SensitiveGlobs, it.Workspace, it.Path, it.From):
 		if carried(it.Before) && carried(it.After) {
 			it.Added, it.Removed = textdiff.Counts(textdiff.ComputeExact(string(it.Before.Content), string(it.After.Content)))
 		}

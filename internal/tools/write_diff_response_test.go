@@ -16,12 +16,12 @@ import (
 
 // sensitiveTo returns a resolver that withholds exactly the named paths, the way
 // the daemon's [history] sensitive_globs does.
-func sensitiveTo(paths ...string) func(context.Context, string) bool {
+func sensitiveTo(paths ...string) func(context.Context, string, string) bool {
 	set := make(map[string]bool, len(paths))
 	for _, p := range paths {
 		set[p] = true
 	}
-	return func(_ context.Context, path string) bool { return set[path] }
+	return func(_ context.Context, path, from string) bool { return set[path] || set[from] }
 }
 
 func TestResponseDiffWithholdsASensitivePath(t *testing.T) {

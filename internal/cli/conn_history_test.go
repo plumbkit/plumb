@@ -306,13 +306,13 @@ func TestResponseGateMatchesTheStoresSensitivityRule(t *testing.T) {
 	}
 	gate := s.buildWriteDeps().SensitivePathFn
 	ctx := context.Background()
-	if !gate(ctx, link) {
+	if !gate(ctx, link, "") {
 		t.Error("a write through a symlink to .env is shown in the response")
 	}
-	if !gate(ctx, filepath.Join(other, "api.secret")) {
+	if !gate(ctx, filepath.Join(other, "api.secret"), "") {
 		t.Error("a write into another project ignores that project's sensitive_globs in the response")
 	}
-	if gate(ctx, filepath.Join(connRoot, "main.go")) {
+	if gate(ctx, filepath.Join(connRoot, "main.go"), "") {
 		t.Error("control: an ordinary file was withheld")
 	}
 }

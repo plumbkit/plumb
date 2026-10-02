@@ -9,8 +9,9 @@ package tools
 // and MatchSensitive resolves the globs against the WORKSPACE ROOT, so a site
 // passing a path relative to something else (find_replace's search root) silently
 // degraded every path-shaped glob to a base-name match. Only a test that runs the
-// production matcher can see that, so this file uses history.MatchSensitive with
-// a path-shaped glob and a real workspace root.
+// production rule can see that, so this file uses history.IsSensitiveChange (the
+// one rule the store and the daemon's gate share) with a path-shaped glob and a
+// real workspace root.
 //
 // Every case runs TWICE: once with a glob that matches, and once with a glob that
 // cannot match, so a marker that appears for the wrong reason — or content that
@@ -31,14 +32,14 @@ import (
 // path. The PATH is allowed to appear; the value is not.
 const secretValue = "SECRETVALUE"
 
-// matchNothing cannot match any path shape MatchSensitive tries.
+// matchNothing cannot match any path shape IsSensitiveChange tries.
 const matchNothing = "no-such-glob-*"
 
-// realGate mirrors conn_register.go's wiring: the store's own matcher, the
-// connection's workspace root, and a glob list.
-func realGate(root string, globs ...string) func(context.Context, string) bool {
-	return func(_ context.Context, path string) bool {
-		return history.MatchSensitive(globs, root, path)
+// realGate stands in for the daemon's gate with its rule: IsSensitiveChange over
+// the change's path and source, one workspace root, and a glob list.
+func realGate(root string, globs ...string) func(context.Context, string, string) bool {
+	return func(_ context.Context, path, from string) bool {
+		return history.IsSensitiveChange(globs, root, path, from)
 	}
 }
 

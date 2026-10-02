@@ -222,6 +222,16 @@
   file deleted since plumb wrote it recorded, and showed, the replaced side as
   an existing empty file.
 
+- **A copy or rename between two projects is withheld the same way in history
+  and in the write response.** The history store judged both paths by the
+  destination project's `[history] sensitive_globs`, while the response judged
+  each path by its own project's globs. With a glob declared in only one of the
+  two projects, one side leaked. A glob only in the source's project stored the
+  content in `history.db` in cleartext. A glob only in the destination's project
+  printed in the transcript what `history.db` withheld. Both now take one
+  decision for the change: it is sensitive if the destination project's globs
+  match either path, or the source project's globs match the source.
+
 - **A project config can no longer switch write history off or narrow its
   sensitive globs (breaking for project configs).** `[history] enabled` and
   `sensitive_globs` were ordinary preferences, so a cloned repository could set

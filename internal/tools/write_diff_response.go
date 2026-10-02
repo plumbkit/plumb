@@ -115,24 +115,23 @@ func sideOf(s history.Side) diffContent {
 // knob first (nothing is rendered at all when it is off), then the reasons
 // content must not be shown.
 func (d WriteDeps) responseDiff(ctx context.Context, path string, before, after diffContent) string {
-	return d.responseDiffAcross(ctx, []string{path}, path, before, after)
+	return d.responseDiffAcross(ctx, path, "", before, after)
 }
 
-// responseDiffAcross is responseDiff for a change whose content came from more
-// than one path — a copy (source → destination), or a rename whose destination
-// the move destroyed. The sensitive decision is taken over EVERY path involved,
-// not just the one the diff is headed with: copying .env to notes.txt renders
-// the secret under a name matching no glob, and the question is where the
-// content came from. (The store reaches the same conclusion through its own
-// From-side check.)
-func (d WriteDeps) responseDiffAcross(ctx context.Context, paths []string, headerPath string, before, after diffContent) string {
+// responseDiffAcross is responseDiff for a change that also has a source — a
+// copy (from → path), or a rename whose destination the move destroyed. The
+// sensitive decision is taken for the CHANGE, both paths together, not just the
+// one the diff is headed with: copying .env to notes.txt renders the secret
+// under a name matching no glob, and the question is where the content came
+// from. The pair goes to the gate as one change, because that is how the store
+// classifies it; asking about each path on its own lets the two disagree when
+// the paths sit in projects with different globs.
+func (d WriteDeps) responseDiffAcross(ctx context.Context, path, from string, before, after diffContent) string {
 	if !d.showWriteDiff() {
 		return ""
 	}
-	for _, p := range paths {
-		if m := d.withheldForResponse(ctx, p); m != "" {
-			return m
-		}
+	if m := d.withheldForResponse(ctx, path, from); m != "" {
+		return m
 	}
 	if before.State == sideUnknown || after.State == sideUnknown {
 		return withheldTooLargeNote
@@ -140,7 +139,7 @@ func (d WriteDeps) responseDiffAcross(ctx context.Context, paths []string, heade
 	if isBinaryContent(before.Content) || isBinaryContent(after.Content) {
 		return withheldBinaryNote
 	}
-	return unifiedDiff(headerPath, before.Content, after.Content)
+	return unifiedDiff(path, before.Content, after.Content)
 }
 
 // ResponseDiffSuffix renders everything a write response appends for one change:
@@ -182,20 +181,20 @@ func (d WriteDeps) gatedDiff(ctx context.Context, path, diff string) string {
 	if diff == "" {
 		return ""
 	}
-	if m := d.withheldForResponse(ctx, path); m != "" {
+	if m := d.withheldForResponse(ctx, path, ""); m != "" {
 		return m
 	}
 	return diff
 }
 
-// withheldForResponse returns the marker to render INSTEAD of a diff when this
-// path's content must not be shown, or "" to render the diff. A nil resolver
+// withheldForResponse returns the marker to render INSTEAD of a diff when the
+// change's content must not be shown, or "" to render the diff. A nil resolver
 // withholds nothing, which is what a bare WriteDeps{} wants.
-func (d WriteDeps) withheldForResponse(ctx context.Context, path string) string {
+func (d WriteDeps) withheldForResponse(ctx context.Context, path, from string) string {
 	if d.SensitivePathFn == nil {
 		return ""
 	}
-	if d.SensitivePathFn(ctx, path) {
+	if d.SensitivePathFn(ctx, path, from) {
 		return withheldSensitiveNote
 	}
 	return ""

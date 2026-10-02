@@ -137,12 +137,13 @@ type WriteDeps struct {
 	RelayDiff bool
 	// RelayDiffFn, when set, overrides RelayDiff at call time.
 	RelayDiffFn func() bool
-	// SensitivePathFn reports whether path must have its content withheld from
-	// a RESPONSE (rendered as a marker, never as bytes). The daemon wires it to
-	// the same [history] sensitive_globs the store classifies with, so the
-	// transcript and history.db agree about which content may be seen. nil
-	// withholds nothing.
-	SensitivePathFn func(ctx context.Context, path string) bool
+	// SensitivePathFn reports whether a change's content must be withheld from a
+	// RESPONSE (rendered as a marker, never as bytes). path is the file the
+	// change landed in and from is its copy/rename source, or "". The pair is ONE
+	// change: the daemon wires this to the same decision the history store takes
+	// for it, so the transcript and history.db agree about which content may be
+	// seen. nil withholds nothing.
+	SensitivePathFn func(ctx context.Context, path, from string) bool
 	// BlockDirtyFn reports whether the dirty-guard is enabled for this call
 	// (the resolved [edits].block_dirty_writes / PLUMB_BLOCK_DIRTY_WRITES). When
 	// it returns false the guard is a no-op — a destructive write to a
