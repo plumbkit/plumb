@@ -192,18 +192,101 @@ func TestConversationIdentity_MarkerIsConnectionScopedAndOneShot(t *testing.T) {
 	}
 }
 
-// A marker that lapsed hands over nothing.
+// A marker that lapsed hands over nothing. It lapses after a day, the grace an
+// ended conversation is given, and not before.
 func TestConversationIdentity_ExpiredMarkerDoesNothing(t *testing.T) {
 	f := newConvFixture(t)
 	now := time.Now()
 	f.w.registry.clears.now = func() time.Time { return now }
 	f.w.registry.clears.mark(convNew)
-	now = now.Add(clearMarkerTTL + time.Second)
+	now = now.Add(24*time.Hour + time.Second)
 
 	f.c.start(convNew, "", convNew, nil)
 
 	if got := f.c.s.externalID(); got != convOld {
 		t.Errorf("an expired marker moved the linkage to %q", got)
+	}
+}
+
+// Claude Code fires SessionStart(clear) when /clear is typed, not when the next
+// prompt is sent, so a user can clear and step away. The marker must still be
+// there when they come back.
+func TestConversationIdentity_MarkerSurvivesALongGap(t *testing.T) {
+	f := newConvFixture(t)
+	now := time.Now()
+	f.w.registry.clears.now = func() time.Time { return now }
+	f.w.registry.clears.mark(convNew)
+	now = now.Add(2 * time.Hour)
+
+	out := f.c.start(convNew, "", convNew, nil)
+
+	if got := f.c.s.externalID(); got != convNew {
+		t.Fatalf("linkage = %q after a two hour gap, want %q", got, convNew)
+	}
+	got, _ := f.c.call(convNew, "check_messages", nil)
+	if !strings.Contains(out+got, "NOTE to the established name") {
+		t.Errorf("the conversation after the gap did not receive the connection's mail: %q", out+got)
+	}
+}
+
+// The marker names the conversation that began, not the one it replaced, so on a
+// connection several conversations share it cannot be told whose /clear it was.
+// B2 may be the successor of B, or of A: it must not take the connection from A,
+// and it is a newcomer with an identity of its own. The marker is left alone.
+func TestConversationIdentity_ClearOnASharedConnectionHandsNothingOver(t *testing.T) {
+	w := newIdentityWorld(t)
+	ws := identityRepo(t)
+	peer := w.conn("")
+	peer.call("", "session_start", map[string]any{"workspace": ws})
+	c := w.conn("")
+	c.start(convA, ws, convA, nil)
+	nameA := c.s.sessionName()
+	c.start(convB, ws, convB, nil) // a second conversation shares the connection
+	leaveNote(t, peer, nameA, "A-SECRET")
+
+	const convB2 = "conv-B2"
+	w.registry.clears.mark(convB2)
+	// B2's first call is session_start, as the model's is after /clear: a call that
+	// changes state from an undeclared identity on a shared connection is refused
+	// before the handover is ever considered, which would make this test vacuous.
+	out := c.start(convB2, "", convB2, nil)
+	got, _ := c.call(convB2, "check_messages", nil)
+
+	if strings.Contains(out+got, "A-SECRET") {
+		t.Errorf("the conversation after /clear read the linked conversation's mail: %s / %q", sessionLine(out), got)
+	}
+	if ext := c.s.externalID(); ext != convA {
+		t.Errorf("the connection was handed to %q, want it left on %q", ext, convA)
+	}
+	if got := c.s.sessionNameFor(stampedCtx(convA)); got != nameA {
+		t.Errorf("the linked conversation answers to %q, want %q", got, nameA)
+	}
+	if name := c.s.sessionNameFor(stampedCtx(convB2)); name == "" || name == nameA {
+		t.Errorf("B2's name = %q, want one of its own (not %q)", name, nameA)
+	}
+	if n := w.registry.clears.size(); n != 1 {
+		t.Errorf("the marker was consumed by a call it could not hand over to: %d held, want 1", n)
+	}
+	// The control: A's note was there to be read, by A.
+	if got, _ := c.call(convA, "check_messages", nil); !strings.Contains(got, "A-SECRET") {
+		t.Errorf("A cannot read its own note, so the absence above proves nothing: %q", got)
+	}
+}
+
+// A second conversation heard only through its subagent is still a second
+// conversation: its /clear must not take the connection from the linked one.
+func TestConversationIdentity_ClearWithASecondConversationKnownOnlyBySubagent(t *testing.T) {
+	f := newConvFixture(t)
+	f.c.call(convB+"/agent-1", "workspace_sessions", nil) // B's main thread has not called
+	if !f.c.s.logicalAgents.has(convB + "/agent-1") {
+		t.Fatal("precondition: the connection has not seen the second conversation's subagent")
+	}
+
+	f.w.registry.clears.mark("conv-B2")
+	f.c.start("conv-B2", "", "conv-B2", nil)
+
+	if got := f.c.s.externalID(); got != convOld {
+		t.Errorf("a /clear beside a second conversation took the connection: linkage = %q, want %q", got, convOld)
 	}
 }
 

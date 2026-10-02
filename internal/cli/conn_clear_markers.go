@@ -23,8 +23,8 @@ package cli
 //     let the connection that receives the conversation's first call hand its OWN
 //     linked identity to that conversation (conn_clear_handover.go). It names no
 //     connection and no predecessor, so there is nothing for it to move elsewhere.
-//   - It expires (clearMarkerTTL) and is bounded (clearMarkerCap), so a hook that
-//     fires for a conversation which never reaches plumb leaves nothing behind.
+//   - It expires (clearMarkerTTL, a day) and is bounded (clearMarkerCap), so a hook
+//     that fires for a conversation which never reaches plumb leaves nothing behind.
 //   - It lives in memory only. A daemon restart forgets it, and the conversation is
 //     then treated as the newcomer it cannot be shown not to be.
 //
@@ -44,11 +44,19 @@ import (
 
 const (
 	// clearMarkerTTL is how long a marker waits for its conversation's first call.
-	// The hook runs before the model sees anything, so the call normally follows
-	// within seconds; ten minutes covers a long first turn and nothing more.
-	clearMarkerTTL = 10 * time.Minute
+	// Claude Code fires SessionStart(clear) when /clear is typed, not when the next
+	// prompt is sent, so the user can clear and step away: the first call may be
+	// hours off, and a marker that lapsed meanwhile would cost the handover (the
+	// new conversation would be a newcomer, and the name and mail would stay on the
+	// dead linkage). A day matches the grace session.FindEnded gives an ended
+	// conversation, after which there is nothing left to hand over anyway.
+	clearMarkerTTL = 24 * time.Hour
 	// clearMarkerCap bounds the table. A full table evicts the marker closest to
-	// expiry, so a flood cannot grow memory and a fresh /clear always lands.
+	// expiry, so a flood cannot grow memory. The same flood can evict a real marker:
+	// a local process of the same user that writes clearMarkerCap markers loses
+	// another conversation's /clear its handover (threat-model A6). The cost is only
+	// that handover, since the conversation is then a newcomer with an identity of
+	// its own.
 	clearMarkerCap = 256
 	// clearMarkerMaxIDLen bounds one id. Claude Code's are 36 bytes.
 	clearMarkerMaxIDLen = 128

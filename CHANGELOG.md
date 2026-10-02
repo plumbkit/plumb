@@ -18,12 +18,15 @@
   `SessionStart` hook now sends `conversation-cleared <new session id>` to the
   daemon's control socket when its `source` is `clear` (best effort, one
   second, silent on failure, stdout unchanged). The daemon keeps a one-shot,
-  in-memory marker for about ten minutes (at most 256), and the first stamped
-  call of that id to reach a connection consumes it and takes the connection
-  over with its name, mail and threads. A marker acts only on the connection
-  that receives that call, never on another, and no stamp or `session_id` can
-  request it. Without a marker (hook not installed, daemon restarted in
-  between) the new conversation is a newcomer with an identity of its own.
+  in-memory marker for 24 hours (at most 256; the hook fires when `/clear` is
+  typed, not when the next prompt is sent), and the first stamped call of that
+  id to reach a connection consumes it and takes the connection over with its
+  name, mail and threads, but only when the linked conversation is the only one
+  the connection has seen. A marker acts only on the connection that receives
+  that call, never on another, and no stamp or `session_id` can request it.
+  Without a marker (hook not installed, daemon restarted in between) or where
+  other conversations share the connection, the new conversation is a newcomer
+  with an identity of its own and the marker is left unconsumed.
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
