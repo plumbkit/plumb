@@ -99,6 +99,11 @@ func (t *writeMemoryTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("write_memory: %w", err)
 	}
 	path, _ := memory.Path(ws, a.Name)
+	// The path lock every plumb writer takes: an edit_file on the memory file, or
+	// a second write_memory, cannot land between the Before read, the write and
+	// the After read, so the history row pairs sides of one write.
+	unlock := lockPath(path)
+	defer unlock()
 	before := history.Side{}
 	if t.historyOn() {
 		if s, err := history.SideFromFile(path); err == nil {
@@ -108,8 +113,6 @@ func (t *writeMemoryTool) Execute(ctx context.Context, args json.RawMessage) (st
 	if err := memory.WriteIndexedWithOptions(resolveMemoryIndex(t.indexFn, ws), ws, a.Name, a.Content, memory.WriteOptions{Description: a.Description, Paths: a.Paths}); err != nil {
 		return "", err
 	}
-	// Memory writes have no per-path lock. Two concurrent write_memory calls
-	// to one name are ordered by their ts_ms only.
 	if t.historyOn() {
 		if after, err := history.SideFromFile(path); err == nil {
 			op := history.OpUpdate

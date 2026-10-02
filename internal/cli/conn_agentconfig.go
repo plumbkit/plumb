@@ -67,25 +67,9 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 		Timestamp: time.Now(),
 	}
 	cfgPath := config.ProjectConfigPath(ws)
-	before, _ := history.SideFromFile(cfgPath)
-	changed, err := config.AgentApplyBatch(s.store.Current(), ws, pairs, prov)
+	changed, err := s.writeAgentConfig(ctx, ws, cfgPath, pairs, prov)
 	if err != nil {
 		return "", err
-	}
-	if after, aerr := history.SideFromFile(cfgPath); aerr == nil {
-		op := history.OpUpdate
-		if !before.Exists {
-			op = history.OpCreate
-		}
-		s.recordHistory(ctx, history.Change{
-			At:     time.Now(),
-			Op:     op,
-			Kind:   history.KindFile,
-			Tool:   "agent_config",
-			Path:   cfgPath,
-			Before: before,
-			After:  after,
-		})
 	}
 	// Live before the tool returns. The connection's own project is cached in its
 	// view and is re-applied; any other root is read per call (projectViewFor), so
@@ -103,4 +87,38 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 	return fmt.Sprintf(
 		"applied %d key(s) to %s/.plumb/config.toml (provenance=agent): %s\nrevert any with: plumb config unset <key> --workspace .",
 		len(changed), ws, strings.Join(changed, ", ")), nil
+}
+
+// writeAgentConfig applies the batch under config.toml's path lock, the one
+// edit_file and write_file take, so no other plumb write lands between the
+// history row's Before read, the write and its After read. The sides are read
+// only when history would record them.
+func (s *connSession) writeAgentConfig(ctx context.Context, ws, cfgPath string, pairs map[string]any, prov config.ProvenanceEntry) ([]string, error) {
+	unlock := tools.LockPath(cfgPath)
+	defer unlock()
+	record := s.historyOnFor(ctx, cfgPath)
+	var before history.Side
+	if record {
+		before, _ = history.SideFromFile(cfgPath)
+	}
+	changed, err := config.AgentApplyBatch(s.store.Current(), ws, pairs, prov)
+	if err != nil || !record {
+		return changed, err
+	}
+	if after, aerr := history.SideFromFile(cfgPath); aerr == nil {
+		op := history.OpUpdate
+		if !before.Exists {
+			op = history.OpCreate
+		}
+		s.recordHistory(ctx, history.Change{
+			At:     time.Now(),
+			Op:     op,
+			Kind:   history.KindFile,
+			Tool:   "agent_config",
+			Path:   cfgPath,
+			Before: before,
+			After:  after,
+		})
+	}
+	return changed, nil
 }

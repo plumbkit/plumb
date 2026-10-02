@@ -47,6 +47,12 @@ func (s *connSession) recordHistory(ctx context.Context, c history.Change) {
 	}))
 }
 
+// historyOnFor reports whether recordHistory would record a write to path, so
+// a write site outside WriteDeps can skip reading its sides when it would not.
+func (s *connSession) historyOnFor(ctx context.Context, path string) bool {
+	return s != nil && s.historyStore != nil && s.historyConfigFor(s.historyRootFor(ctx, path)).Enabled
+}
+
 // historyRootFor is the project a write to path is attributed to: the calling
 // agent's root, then the project the path itself lies in (onAfterTool's
 // resolution, so history and stats file a call under the same project), else
