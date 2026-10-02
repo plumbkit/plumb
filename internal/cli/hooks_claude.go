@@ -119,6 +119,8 @@ type claudeHookInput struct {
 	CWD            string `json:"cwd"`
 	Event          string `json:"hook_event_name"`
 	StopHookActive bool   `json:"stop_hook_active"`
+	// Source is SessionStart's reason: startup, resume, clear or compact.
+	Source string `json:"source"`
 	// PreToolUse fields. AgentID is present only inside a subagent; ToolInput
 	// is the tool's arguments, which the identity hook echoes back with one
 	// key added (updatedInput replaces the whole input).
@@ -147,11 +149,7 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 		runClaudePreToolUse(input, os.Getenv, claudeIdentityDaemon, os.Stdout, os.Stderr)
 		return nil
 	case "SessionStart":
-		// Plain stdout reaches the agent for this event, so the linkage
-		// sentence needs no JSON envelope.
-		if id := strings.TrimSpace(input.SessionID); id != "" {
-			fmt.Println(sessionLinkageSentence(id, "conversation"))
-		}
+		runClaudeSessionStart(input, notifyConversationCleared, os.Stdout)
 		return nil
 	case "Stop":
 		wake := claudeStopHook(input, hookWakeProbe)
