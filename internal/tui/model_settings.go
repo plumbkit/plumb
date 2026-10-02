@@ -41,6 +41,7 @@ const (
 	skLogFile
 	skStrict
 	skShowWriteDiff
+	skRelayWriteDiff
 	skBlockDirtyWrites
 	skFsync
 	skRateLimit
@@ -284,6 +285,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 
 		{group: "Editing", label: "Strict edits", kind: settingToggle, key: skStrict, value: onOff(cfg.Edits.Strict)},
 		{group: "Editing", label: "Show write diff", kind: settingToggle, key: skShowWriteDiff, value: onOff(cfg.Edits.ShowWriteDiff)},
+		{group: "Editing", label: "Relay write diff", kind: settingToggle, key: skRelayWriteDiff, value: onOff(cfg.Edits.RelayWriteDiff)},
 		{group: "Editing", label: "Block dirty writes", kind: settingToggle, key: skBlockDirtyWrites, value: onOff(cfg.Edits.BlockDirtyWrites)},
 		{group: "Editing", label: "Fsync before ack", kind: settingToggle, key: skFsync, value: onOff(cfg.Edits.Fsync)},
 		{group: "Editing", label: "Rate limit / min", kind: settingNumber, key: skRateLimit, value: rateLimitValue(cfg.Edits.RateLimitPerMinute)},

@@ -39,14 +39,14 @@ type fileChange struct {
 	newData []byte
 }
 
-// maxFindReplaceDiffFiles caps how many per-file unified diffs are rendered in
-// a find_replace response. Beyond it, a "+N more file(s)" summary is appended.
-const maxFindReplaceDiffFiles = 20
-
-// maxFindReplaceDiffBytes bounds the pre-replacement content captured for the
-// diff, mirroring write_file's 200 KiB cap. A larger file still gets replaced;
-// only its inline diff is skipped.
-const maxFindReplaceDiffBytes = 200 * 1024
+// find_replace's two diff caps are the shared response-diff caps
+// (write_diff_response.go), kept as local aliases so a reader of this file still
+// sees which knobs bound it. They are not separate policy: the capture decision
+// below and the render cap in every other write tool move together.
+const (
+	maxFindReplaceDiffFiles = maxResponseDiffFiles
+	maxFindReplaceDiffBytes = maxResponseDiffBytes
+)
 
 func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
 	var d WriteDeps
@@ -143,7 +143,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		formatted, formatErrs = runFormatterOnFiles(ctx, changes)
 	}
 
-	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs, wantDiff, truncated)
+	out := formatFindReplaceOutput(ctx, &t.deps, changes, a, totalReplacements, formatted, formatErrs, wantDiff, truncated)
 	if len(writeErrs) > 0 {
 		return out, errors.Join(writeErrs...)
 	}
@@ -442,7 +442,7 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 	return changes, writeErrs, totalReplacements, truncated.Load()
 }
 
-func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff, truncated bool) string {
+func formatFindReplaceOutput(ctx context.Context, deps *WriteDeps, changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff, truncated bool) string {
 	var sb strings.Builder
 	if a.dryRun {
 		sb.WriteString("DRY RUN — no files modified.\n\n")
@@ -459,7 +459,7 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 		fmt.Fprintf(&sb, "  %s  (%d)\n", findReplaceRelPath(a.Path, c.path), c.count)
 	}
 	if wantDiff {
-		appendFindReplaceDiffs(&sb, changes, a.Path)
+		appendFindReplaceDiffs(ctx, &sb, deps, changes, a.Path)
 	}
 	if a.dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
@@ -488,28 +488,38 @@ func findReplaceRelPath(root, path string) string {
 }
 
 // appendFindReplaceDiffs writes a per-file unified diff for up to
-// maxFindReplaceDiffFiles changes, then a "+N more file(s)" summary when the
-// set is larger. Files captured without diff content (oversized or unchanged
-// rendering) are skipped silently.
-func appendFindReplaceDiffs(sb *strings.Builder, changes []fileChange, root string) {
-	shown := 0
+// maxResponseDiffFiles changes, then a "+N more file(s)" summary when the set is
+// larger. The relay instruction is emitted once, above the diffs.
+//
+// A file whose captured content exceeds maxResponseDiffBytes is skipped (its
+// diff was never captured); a sensitive path renders the withholding marker
+// instead of its content. Both are silent about nothing: a skipped file still
+// has its summary line above.
+func appendFindReplaceDiffs(ctx context.Context, sb *strings.Builder, deps *WriteDeps, changes []fileChange, root string) {
+	var sections []string
 	for _, c := range changes {
-		if shown >= maxFindReplaceDiffFiles {
+		if len(sections) >= maxResponseDiffFiles {
 			break
 		}
-		if c.oldData == nil || len(c.oldData) > maxFindReplaceDiffBytes {
+		if c.oldData == nil || len(c.oldData) > maxResponseDiffBytes {
 			continue
 		}
-		d := unifiedDiff(findReplaceRelPath(root, c.path), string(c.oldData), string(c.newData))
-		if d == "" {
-			continue
+		rel := findReplaceRelPath(root, c.path)
+		if d := deps.gatedDiff(ctx, rel, unifiedDiff(rel, string(c.oldData), string(c.newData))); d != "" {
+			sections = append(sections, d)
 		}
+	}
+	if relay := deps.relayNoteFor(sections...); relay != "" {
+		sb.WriteString("\n")
+		sb.WriteString(relay)
+		sb.WriteString("\n")
+	}
+	for _, d := range sections {
 		sb.WriteString("\n")
 		sb.WriteString(d)
 		sb.WriteString("\n")
-		shown++
 	}
-	if remaining := len(changes) - maxFindReplaceDiffFiles; shown >= maxFindReplaceDiffFiles && remaining > 0 {
+	if remaining := len(changes) - maxResponseDiffFiles; len(sections) >= maxResponseDiffFiles && remaining > 0 {
 		fmt.Fprintf(sb, "\n… +%d more file(s) (diffs omitted)\n", remaining)
 	}
 }

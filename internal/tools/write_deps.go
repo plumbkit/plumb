@@ -121,14 +121,28 @@ type WriteDeps struct {
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
 	WorkspaceFn func(ctx context.Context) string
-	// ShowWriteDiff, when true, appends a unified diff of the change to
-	// write_file and edit_file responses. Defaults to true (zero value of
-	// bool is false, but callers should set this from the resolved config).
-	// Set to false for implicit-verification mode (tokens matter more than
-	// inline confirmation).
+	// ShowWriteDiff, when true, appends a diff of the change to every
+	// content-changing write response: create, update, delete, rename, copy and
+	// revert alike (write_diff_response.go owns the policy). Defaults to true
+	// (zero value of bool is false, but callers should set this from the
+	// resolved config). Set to false for implicit-verification mode (tokens
+	// matter more than inline confirmation).
 	ShowWriteDiff bool
 	// ShowWriteDiffFn, when set, overrides ShowWriteDiff at call time.
 	ShowWriteDiffFn func() bool
+	// RelayDiff, when true, appends one line asking the agent to show the diff
+	// to the user. Wired from [edits].relay_write_diff (default true). A bare
+	// WriteDeps{} leaves it off, exactly like ShowWriteDiff, so unit tests see
+	// the unchanged response unless they opt in.
+	RelayDiff bool
+	// RelayDiffFn, when set, overrides RelayDiff at call time.
+	RelayDiffFn func() bool
+	// SensitivePathFn reports whether path must have its content withheld from
+	// a RESPONSE (rendered as a marker, never as bytes). The daemon wires it to
+	// the same [history] sensitive_globs the store classifies with, so the
+	// transcript and history.db agree about which content may be seen. nil
+	// withholds nothing.
+	SensitivePathFn func(ctx context.Context, path string) bool
 	// BlockDirtyFn reports whether the dirty-guard is enabled for this call
 	// (the resolved [edits].block_dirty_writes / PLUMB_BLOCK_DIRTY_WRITES). When
 	// it returns false the guard is a no-op — a destructive write to a
@@ -362,6 +376,19 @@ func (d WriteDeps) resolvePath(ctx context.Context, path string) (string, error)
 		return filepath.Clean(p), nil
 	}
 	return filepath.Join(base, p), nil
+}
+
+// writeDepsOrZero normalises a possibly-nil *WriteDeps to a usable value. The
+// symbol edits take write deps as a pointer and can be constructed with none at
+// all (unit tests, and any caller that wired none); a zero WriteDeps is exactly
+// what "no deps" should mean — no sensitive-path resolver, no relay knob,
+// history off — so callers get an ordinary value to call methods on rather than
+// a nil check at every use.
+func writeDepsOrZero(deps *WriteDeps) *WriteDeps {
+	if deps == nil {
+		return &WriteDeps{}
+	}
+	return deps
 }
 
 // recordWritten marks path as written by plumb this session in BOTH per-session

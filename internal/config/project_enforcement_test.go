@@ -88,6 +88,10 @@ var enforcementCases = map[string]struct {
 		"[edits]\nshow_write_diff = false\n",
 		func(c Config) bool { return !c.Edits.ShowWriteDiff },
 	},
+	"edits.relay_write_diff": {
+		"[edits]\nrelay_write_diff = false\n",
+		func(c Config) bool { return !c.Edits.RelayWriteDiff },
+	},
 	"edits.rate_limit_per_minute": {
 		"[edits]\nrate_limit_per_minute = 100000\n",
 		func(c Config) bool { return c.Edits.RateLimitPerMinute > hardenedBase().Edits.RateLimitPerMinute },

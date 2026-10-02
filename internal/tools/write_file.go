@@ -187,7 +187,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 			before: undoBefore, existedBefore: !isNew, wrote: a.Content, diag: diag,
 		})
 	}
-	result := t.formatWriteFileResult(path, a.Content, oldContent, isNew, diag)
+	result := t.formatWriteFileResult(ctx, path, a.Content, oldContent, isNew, diag)
 	t.deps.notifyTopology(path)
 	return result + t.deps.reportQuality(ctx, path), nil
 }
@@ -310,7 +310,7 @@ func (t *WriteFile) writeFilePostWrite(ctx context.Context, path, uri string, is
 	return notifyFailed
 }
 
-func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, isNew bool, diag postWriteDiagResult) string {
+func (t *WriteFile) formatWriteFileResult(ctx context.Context, path, newContent, oldContent string, isNew bool, diag postWriteDiagResult) string {
 	verb := "updated"
 	if isNew {
 		verb = "created"
@@ -319,10 +319,12 @@ func (t *WriteFile) formatWriteFileResult(path, newContent, oldContent string, i
 	fmt.Fprintf(&sb, "%s %s %s", verb, path, sizeSummary(newContent))
 	if t.deps.showWriteDiff() {
 		if isNew {
+			// A creation deliberately reports the marker rather than the whole
+			// content: the agent supplied those bytes, so re-sending them is
+			// cost without information.
 			sb.WriteString("\nnew file")
-		} else if d := unifiedDiff(path, oldContent, newContent); d != "" {
-			sb.WriteString("\n")
-			sb.WriteString(d)
+		} else if d := t.deps.gatedDiff(ctx, path, unifiedDiff(path, oldContent, newContent)); d != "" {
+			appendSections(&sb, t.deps.relayNoteFor(d), d)
 		}
 	}
 	sb.WriteString(diag.text)

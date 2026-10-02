@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.21.1 (unreleased)
+
+### Added
+
+- **Every content-changing write response now carries the diff, and can ask the
+  agent to show it to you.** `[edits].show_write_diff` (default on) covered
+  `edit_file`, `write_file`, `find_replace`, the symbol edits and
+  `transaction_apply`; it now also covers `delete_file` (every line removed, per
+  file in a batch), `copy_file` (what landed, plus the destination it replaced),
+  `rename_file` (only when the move destroyed an existing destination),
+  `move_symbol`, and `undo_edit`'s removal of a file its write created. A new
+  `[edits].relay_write_diff` (default on, `PLUMB_RELAY_WRITE_DIFF`) appends one
+  line asking the agent to include the diff in its reply to you; set it false to
+  keep the diff in the tool result without asking the agent to repeat it. A
+  response reports `… (diff withheld: …)` instead of content when a side was not
+  read (a file past the 200 KiB response-diff cap), when a side is binary, or —
+  see below — when the path matches `[history] sensitive_globs`.
+
+### Changed
+
+- **A sensitive path no longer renders its content in a write response.**
+  `edit_file`/`write_file` showed a diff of whatever they edited, including
+  `.env`, `*.pem` and the rest of `[history] sensitive_globs`, while the history
+  store withheld that same content. The transcript leaves the machine and
+  history.db does not, so the response now reaches the store's own decision —
+  through the same matcher — and reports the withholding instead.
+- **A truncated diff now points at `plumb history`, not `file_diff`.** The old
+  note could not help for a deleted file, whose content `file_diff` cannot show.
+- **Automatic reverts report counts, not diffs.** When a failed write, move or
+  transaction is rolled back, the error names each reverted path with its
+  added/removed counts and points at `plumb history` for the diffs. An error's
+  first job is the remedy, and the diffs are already in the store.
+
 ## 0.21.0 (2026-10-02)
 
 ### Upgrading: read this first

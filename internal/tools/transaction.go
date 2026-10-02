@@ -221,7 +221,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 
 	var result strings.Builder
-	result.WriteString(formatTransactionResult(written, t.deps.showWriteDiff()))
+	result.WriteString(formatTransactionResult(ctx, t.deps, written))
 	for _, w := range written {
 		t.deps.notifyTopology(w.path)
 		result.WriteString(t.deps.reportQuality(ctx, w.path))
@@ -444,10 +444,10 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 			if !info.ModTime().Equal(p.preMtime) {
 				rollback(written, t.deps.historySink(ctx))
 				txl.Rollback()
-				return nil, nil, fmt.Errorf(
+				return nil, nil, withRevertNote(fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written),
-				)
+				), txReverted(written))
 			}
 		}
 		if err := txl.Record(p.path, []byte(p.before), p.perm); err != nil {
@@ -458,8 +458,8 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 		if err != nil {
 			rollback(written, t.deps.historySink(ctx))
 			txl.Rollback()
-			return nil, nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
-				p.path, err, len(written))
+			return nil, nil, withRevertNote(fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
+				p.path, err, len(written)), txReverted(written))
 		}
 		p.written = res.written
 		t.deps.recordHistory(ctx, history.Change{
@@ -503,28 +503,53 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 	return failed
 }
 
-func formatTransactionResult(written []txPrepared, showDiff bool) string {
+// formatTransactionResult renders the response: the header, the relay
+// instruction once when any file's diff rendered, then each file as a summary
+// line with its own diff beneath. The diffs are computed first so the
+// instruction can sit above them — a truncated response must not lose it —
+// while each file's diff still follows that file's summary.
+func formatTransactionResult(ctx context.Context, deps WriteDeps, written []txPrepared) string {
+	diffs := make([]string, len(written))
+	if deps.showWriteDiff() {
+		for i, p := range written {
+			diffs[i] = deps.gatedDiff(ctx, p.path, unifiedDiff(p.path, p.before, p.after))
+		}
+	}
 	var sb strings.Builder
 	totalBytes := 0
 	for _, p := range written {
 		totalBytes += len(p.after)
 	}
 	fmt.Fprintf(&sb, "transaction applied: %d files updated (%d bytes total)\n", len(written), totalBytes)
-	for _, p := range written {
+	if relay := deps.relayNoteFor(diffs...); relay != "" {
+		sb.WriteString(relay)
+		sb.WriteByte('\n')
+	}
+	for i, p := range written {
 		summary := summariseLineChanges(p.before, p.after)
 		fmt.Fprintf(&sb, "  %s", p.path)
 		if summary != "" {
 			fmt.Fprintf(&sb, " — %s", summary)
 		}
 		sb.WriteByte('\n')
-		if showDiff {
-			if d := unifiedDiff(p.path, p.before, p.after); d != "" {
-				sb.WriteString(d)
-				sb.WriteByte('\n')
-			}
+		if diffs[i] != "" {
+			sb.WriteString(diffs[i])
+			sb.WriteByte('\n')
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// txReverted lists the paths a transaction's rollback put back, for the failed
+// call's revert summary. Every prepared write is attempted, so the list is the
+// written set — and each entry's before/after are the bytes the rollback moved
+// between.
+func txReverted(written []txPrepared) []revertedPath {
+	out := make([]revertedPath, 0, len(written))
+	for _, p := range written {
+		out = append(out, revertedPath{path: p.path, before: p.before, after: p.after})
+	}
+	return out
 }
 
 func opFor(p txPrepared) history.Op {

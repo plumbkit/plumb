@@ -78,13 +78,15 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 
 	// --- Edits. The safety knobs are ONE-WAY: a project may raise the bar for
 	// its own workspace, never lower the user's. strict disables read-before-
-	// edit; block_dirty_writes is what stops a write clobbering uncommitted work
-	// the user has not reviewed; show_write_diff is the only part of a write
-	// response that says WHAT changed, so switching it off blinds a reviewer
-	// reading the live transcript.
+	// edit; block_dirty_writes is what stops a write colliding with uncommitted
+	// work the user has not reviewed; show_write_diff and relay_write_diff are
+	// the only parts of a write response that say WHAT changed, so switching
+	// them off blinds a reviewer reading the live transcript. Both are safe when
+	// ON, so a project may force them on for its own workspace.
 	"edits.strict":             ClassOneWay,
 	"edits.block_dirty_writes": ClassOneWay,
 	"edits.show_write_diff":    ClassOneWay,
+	"edits.relay_write_diff":   ClassOneWay,
 	// The write-rate budget is an anti-runaway-loop guard rather than an access
 	// boundary, but it is still a budget a project should not be able to raise.
 	// 0 means unlimited, which is why "larger is weaker" needs its own rule.
@@ -411,6 +413,7 @@ var oneWaySafeValue = map[string]bool{
 	"edits.strict":               true,
 	"edits.block_dirty_writes":   true,
 	"edits.show_write_diff":      true,
+	"edits.relay_write_diff":     true,
 	"commands.require_sandbox":   true,
 	"memory.generated_summaries": false,
 }
@@ -425,6 +428,8 @@ func applyOneWayBools(base Config, merged *Config) {
 		base.Edits.BlockDirtyWrites, merged.Edits.BlockDirtyWrites, oneWaySafeValue["edits.block_dirty_writes"])
 	merged.Edits.ShowWriteDiff = oneWayBool(
 		base.Edits.ShowWriteDiff, merged.Edits.ShowWriteDiff, oneWaySafeValue["edits.show_write_diff"])
+	merged.Edits.RelayWriteDiff = oneWayBool(
+		base.Edits.RelayWriteDiff, merged.Edits.RelayWriteDiff, oneWaySafeValue["edits.relay_write_diff"])
 	merged.Memory.GeneratedSummaries = oneWayBool(
 		base.Memory.GeneratedSummaries, merged.Memory.GeneratedSummaries, oneWaySafeValue["memory.generated_summaries"])
 	merged.CommandPolicy.RequireSandbox = oneWayBool(
