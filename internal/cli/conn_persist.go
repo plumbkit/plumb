@@ -574,9 +574,12 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 // front of an older proxy is the normal state after an upgrade. Given the
 // connection's root that proxy records what it did before the key existed.
 func (s *connSession) toolResultMeta(ctx context.Context, name string, args json.RawMessage) map[string]any {
-	meta := s.resumeCredentialMeta(ctx) // never nil; see conn_resume_credential.go
+	meta := s.resumeCredentialMeta(ctx) // nil unless a credential is owed; see conn_resume_credential.go
 	if name != sessionStartTool {
 		return meta
+	}
+	if meta == nil {
+		meta = map[string]any{}
 	}
 	if id := s.sessionID(); id != "" {
 		meta[mcp.MetaSessionIDKey] = id
@@ -593,8 +596,5 @@ func (s *connSession) toolResultMeta(ctx context.Context, name string, args json
 			meta[mcp.MetaResolvedWorkspaceKey] = ws
 		}
 	}
-	if len(meta) == 0 {
-		return nil
-	}
-	return meta
+	return nilIfEmpty(meta)
 }

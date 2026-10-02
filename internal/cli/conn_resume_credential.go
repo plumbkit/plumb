@@ -78,8 +78,18 @@ func (s *connSession) takePendingCredential() string {
 	return secret
 }
 
+// nilIfEmpty is the "nothing to say" contract of toolResultMeta: an empty `_meta` is
+// reported as none at all, never as an empty map.
+func nilIfEmpty(m map[string]any) map[string]any {
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
 // resumeCredentialMeta is the `_meta` a tool result carries for the resume credential,
-// never nil so callers can add to it.
+// or nil when none is owed, so a tool that has nothing to disclose reports exactly
+// what it did before.
 //
 // Two sources, deliberately different. The successor an accepted resume produced is
 // noted on THIS call's scratchpad (conn_resume_accept.go), so it reaches the response
@@ -87,13 +97,11 @@ func (s *connSession) takePendingCredential() string {
 // degraded connection converged has no call to belong to, so it rides the next
 // successful result, once.
 func (s *connSession) resumeCredentialMeta(ctx context.Context) map[string]any {
-	meta := map[string]any{}
 	if secret, ok := mcp.ResultMetaNote(ctx, mcp.MetaResumeCredentialKey); ok && secret != "" {
-		meta[mcp.MetaResumeCredentialKey] = secret
-		return meta
+		return map[string]any{mcp.MetaResumeCredentialKey: secret}
 	}
 	if secret := s.takePendingCredential(); secret != "" {
-		meta[mcp.MetaResumeCredentialKey] = secret
+		return map[string]any{mcp.MetaResumeCredentialKey: secret}
 	}
-	return meta
+	return nil
 }
