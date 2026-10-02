@@ -29,7 +29,7 @@ type deadlineWriter interface {
 //
 // Concurrency: enc/wd are written through wrMu; broken is read and written only
 // under wrMu. cancel is set once before any goroutine starts and only read
-// afterwards.
+// afterwards. inflight is guarded by inflightMu (request_cancel.go).
 type serveState struct {
 	s            *Server
 	enc          *json.Encoder
@@ -39,6 +39,11 @@ type serveState struct {
 	wrMu         sync.Mutex
 	broken       bool // a write failed; further writes are no-ops (guarded by wrMu)
 	wg           sync.WaitGroup
+
+	// inflight maps each running request's id (requestKey) to the channel its
+	// RequestCancelled signal closes, for notifications/cancelled to find.
+	inflightMu sync.Mutex
+	inflight   map[string]chan struct{}
 }
 
 func newServeState(s *Server, w io.Writer) *serveState {
@@ -111,12 +116,25 @@ func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce
 	// Peek at method before full handling (needed for post-init hook).
 	var peek struct {
 		Method string `json:"method"`
+		ID     any    `json:"id"`
 	}
 	_ = json.Unmarshal(data, &peek)
 
+	// A request (a method and an id) is tracked for notifications/cancelled and
+	// can send progress; a notification or a response is neither.
+	if peek.Method != "" && peek.ID != nil {
+		var untrack func()
+		ctx, untrack = ss.trackRequest(ctx, peek.ID)
+		defer untrack()
+		ctx = withNotifier(ctx, ss.notify)
+	}
+
 	resp, isRequest := ss.s.handle(ctx, data)
 	if !isRequest {
-		if peek.Method == "notifications/roots/list_changed" && ss.s.OnRootsChanged != nil {
+		switch {
+		case peek.Method == "notifications/cancelled":
+			ss.cancelRequest(data)
+		case peek.Method == "notifications/roots/list_changed" && ss.s.OnRootsChanged != nil:
 			go safeRun("OnRootsChanged", func() { ss.s.OnRootsChanged(ctx, ss.makeRequest) })
 		}
 		return

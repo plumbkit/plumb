@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/redact"
@@ -101,9 +102,58 @@ func describeTaskEnv(env []string) string {
 // validateRunFilter checks a {run} test-name filter (runPattern says what is
 // allowed and why). Empty is valid: no filter.
 func validateRunFilter(what, run string) error {
-	if run == "" || runPattern.MatchString(run) {
+	if run == "" {
 		return nil
 	}
-	return fmt.Errorf("%s %q is not an accepted test-name filter: up to 256 of letters, digits, space and ._/:@|^$*+?()[]-, "+
-		"not starting with -, @ or a space", what, run)
+	if !runPattern.MatchString(run) {
+		return fmt.Errorf("%s %q is not an accepted test-name filter: up to 256 of letters, digits, space and ._/:@|^$*+?()[]-, "+
+			"not starting with -, @ or a space", what, run)
+	}
+	if flag, rest, ok := flagCoversOnlyFirstAlternative(run); ok {
+		return fmt.Errorf("%s %q would silently select too few tests: go test -run matches each top-level | alternative as its own regex, "+
+			"so the leading %s applies to the first alternative only (go test -list applies it to all, so -list looks right). "+
+			"Group the alternatives: %s(%s)", what, run, flag, flag, rest)
+	}
+	return nil
+}
+
+// leadingFlagGroup is an inline flag group opening a pattern: (?i), (?is), …
+var leadingFlagGroup = regexp.MustCompile(`^\(\?[a-zA-Z]+\)`)
+
+// flagCoversOnlyFirstAlternative reports whether run opens with an inline flag
+// group and then alternates at the top level, e.g. `(?i)write|delete`. Go's
+// testing package splits a -run pattern on its top-level | (and /) and compiles
+// each alternative separately, so the flag reaches only the first: `delete`
+// stays case-sensitive and, for a mixed-case test name, matches nothing. The
+// subset of tests that then runs can pass a mutant its real tests would kill,
+// which mutation_test reports as SURVIVED. It returns the flag group and the
+// rest of the pattern, for the grouped spelling the refusal suggests.
+func flagCoversOnlyFirstAlternative(run string) (flag, rest string, ok bool) {
+	flag = leadingFlagGroup.FindString(run)
+	if flag == "" {
+		return "", "", false
+	}
+	rest = run[len(flag):]
+	depth, inClass := 0, false
+	for i := 0; i < len(rest); i++ {
+		switch c := rest[i]; {
+		case c == '\\':
+			i++
+		case inClass:
+			if c == ']' {
+				inClass = false
+			}
+		case c == '[':
+			inClass = true
+		case c == '(':
+			depth++
+		case c == ')':
+			if depth > 0 {
+				depth--
+			}
+		case c == '|' && depth == 0:
+			return flag, rest, true
+		}
+	}
+	return "", "", false
 }
