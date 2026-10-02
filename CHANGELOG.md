@@ -65,6 +65,34 @@
   unrelated opens. A per-directory in-process mutex now sits in front of the
   file lock, so at most one descriptor waits on `flock` and the other writers
   wait in memory. The file lock still serialises writers across processes.
+- **Long `mutation_test` runs are no longer dropped at 30 minutes.** Claude
+  Code abandons a tool call that sends nothing for 30 minutes. A mutation run
+  on a large package takes longer, so its report was lost. The run then kept
+  going for up to an hour more, applying mutants and holding the daemon's
+  single run slot against every other agent. plumb now sends
+  `notifications/progress` against the call's `progressToken`, which Claude
+  Code always sends, and `mutation_test` reports one update at the start of
+  each compile and test step, resetting the idle window between steps. A run
+  whose client asked for no progress, and that the baseline shows would
+  outlast 25 minutes, is refused before anything is mutated, with a batch size
+  that fits.
+- **A cancelled `mutation_test` call now stops.** plumb now tracks
+  `notifications/cancelled`, which Claude Code sends when you interrupt a
+  tool, and `mutation_test` acts on it. Before, only a closed connection
+  stopped a run, and an interrupted call on a shared connection ran to the
+  end. Now the step in flight is stopped, the file restored and the slot
+  freed. The refusal a second caller gets no longer claims the slot frees
+  only when the holder's connection closes.
+- **A `run`/`test_run` filter like `(?i)write|delete` is refused.** `go test
+  -run` splits a pattern at each top-level `|` and `/` and matches every part
+  as a separate regex. The leading flag therefore covered only `write`, and the
+  run silently skipped the rest. A mutation run with that filter reported
+  every mutant SURVIVED, all falsely. `go test -list` applies the flag to the
+  whole pattern, so it looked right. The refusal suggests putting the flag on
+  every part, `(?i)write|(?i)delete`. This also refuses a pattern that
+  happened to work, such as `(?i)TestFoo/baz` with a lowercase subtest name:
+  write `(?i)TestFoo/(?i)baz`. A part that is empty or opens with its own
+  flag group is left alone.
 
 ### Tests
 

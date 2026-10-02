@@ -174,6 +174,7 @@ type mutationPlan struct {
 }
 
 func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	start := time.Now()
 	args, err := parseMutationTestArgs(raw)
 	if err != nil {
 		return "", err
@@ -191,7 +192,7 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	defer mutationRun.release()
 	// Deferred after release, so it runs FIRST: the watcher is stopped before
 	// the slot is handed on.
-	ctx, cancel := cancelOnDisconnect(ctx)
+	ctx, cancel := cancelOnAbandon(ctx)
 	defer cancel()
 
 	targets, warnings, err := t.preflight(ctx, args.Mutants)
@@ -210,7 +211,11 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.chargeWrites(ctx, targets); err != nil {
 		return "", err
 	}
+	baselineStart := time.Now()
 	if plan, err = t.baseline(ctx, plan); err != nil {
+		return "", err
+	}
+	if err := checkSilentBudget(ctx, time.Since(start), time.Since(baselineStart), len(targets)); err != nil {
 		return "", err
 	}
 	results, restoreErr := t.runAll(ctx, targets, plan)
@@ -288,12 +293,12 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 // It returns the plan with goWorkOff recorded from what the commands actually ran
 // with, for the report header.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) (mutationPlan, error) {
-	mutationRun.atStep(stepCompile)
+	enterStep(ctx, stepCompile)
 	compile := t.runStep(ctx, plan.compile, plan.timeout)
 	if compile.failed() {
 		return plan, t.baselineError(ctx, plan, plan.compile, compile, roleCompile)
 	}
-	mutationRun.atStep(stepTest)
+	enterStep(ctx, stepTest)
 	test := t.runStep(ctx, plan.test, plan.timeout)
 	if test.failed() {
 		return plan, t.baselineError(ctx, plan, plan.test, test, roleTest)
@@ -493,9 +498,12 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 // chargeWrites spends one write-budget slot per mutant — each is a write, twice
 // over counting the restore — and refuses the run when the budget is exhausted.
 // It runs after every instant refusal (preflight's and rerootPlan's), so a call
-// that writes nothing never spends the budget the session shares with every write
+// refused up front never spends the budget the session shares with every write
 // tool; the baseline, which can take minutes, runs after it so a run the budget
-// would refuse is refused before that cost is paid.
+// would refuse is refused before that cost is paid. A run refused by the
+// baseline or by checkSilentBudget has been charged without writing.
+// That is the price of this order: it is a few slots of a per-minute budget,
+// against a baseline of minutes for a run that was never going to be allowed.
 func (t *MutationTest) chargeWrites(ctx context.Context, targets []mutationTarget) error {
 	for i, tgt := range targets {
 		if !t.deps.limiter(ctx).Allow() {

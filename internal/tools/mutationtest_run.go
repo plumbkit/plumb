@@ -170,11 +170,11 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	// Sequenced, not evaluated as two arguments: a mutant that does not compile
 	// has nothing to learn from running the suite against a tree that will not
 	// build, and doing so burns a full test timeout per broken mutant.
-	mutationRun.atStep(stepCompile)
+	enterStep(ctx, stepCompile)
 	compile := t.runStep(ctx, plan.compile, plan.timeout)
 	var test stepOutcome
 	if !compile.failed() {
-		mutationRun.atStep(stepTest)
+		enterStep(ctx, stepTest)
 		test = t.runStep(ctx, plan.test, plan.timeout)
 	}
 	res.classify(compile, test)
