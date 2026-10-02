@@ -288,7 +288,19 @@ client's own conversation ID as a fact, so the agent's first `session_start`
 can pass it as `session_id` — the linkage that lets `plumb mail`, `leave_note`
 and the wake path address that exact session rather than guessing from a
 shared directory. **`Stop`** reports unread peer mail as a turn ends. Claude
-Code gets a third:
+Code's `SessionStart` does one more thing when its `source` is `clear` (the
+conversation was begun by `/clear`, which keeps the `plumb serve` connection and
+starts a new conversation id): it sends `conversation-cleared <new session id>`
+to the daemon's control socket, so the connection can hand its identity, name
+and mail to the new conversation instead of treating it as a second one sharing
+the connection. The notification is best effort and fails open: it has a one
+second budget, an absent or older daemon is ignored, and the hook's stdout is
+still only the linkage sentence. The daemon keeps it as a one-shot marker for
+24 hours (the hook fires when `/clear` is typed, not when the next prompt is
+sent), consumed by that conversation's first call, and only when the linked
+conversation is the only one on the connection. Without it (the hook not
+installed, a daemon restart in between, or other conversations on the
+connection) the new conversation simply gets an identity of its own. Claude Code gets a third hook:
 
 - **`PreToolUse` stamps identity.** Claude Code runs every subagent over the
   parent's one `plumb serve`, and its transport carries no per-agent identity,

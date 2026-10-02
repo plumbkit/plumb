@@ -37,13 +37,28 @@ type connRegistry struct {
 	// summarisedAt records the last-seen time a session was summarised at, so the
 	// reaper summarises at most once per idle spell (re-arming after new activity).
 	summarisedAt map[string]time.Time
+	// clears holds the /clear announcements the control socket received, for the
+	// connection that receives the new conversation's first call to consume
+	// (conn_clear_markers.go). Daemon-wide because the announcement cannot know which
+	// connection that will be.
+	clears *clearMarkers
 }
 
 func newConnRegistry() *connRegistry {
 	return &connRegistry{
 		conns:        make(map[string]connHandle),
 		summarisedAt: make(map[string]time.Time),
+		clears:       newClearMarkers(),
 	}
+}
+
+// conversationClears is the registry's /clear marker table; nil, which holds
+// nothing, for a connection built without a registry.
+func (r *connRegistry) conversationClears() *clearMarkers {
+	if r == nil {
+		return nil
+	}
+	return r.clears
 }
 
 // liveProxyIDs returns the non-empty proxy session IDs of every live
