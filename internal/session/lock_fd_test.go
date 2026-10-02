@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -93,6 +94,97 @@ func TestSessionDirLock_OneDescriptorWaits(t *testing.T) {
 	if len(infos) != writers {
 		t.Errorf("List returned %d sessions, want %d", len(infos), writers)
 	}
+	// Back to baseline: only the holder still has the lock file open. Every
+	// writer's descriptor was closed, none leaked behind the queue.
+	if n := openLockFDs(t, lockStat); n != 1 {
+		t.Errorf("%d descriptors open on .sessions.lock after every writer finished, want 1 (the holder)", n)
+	}
+}
+
+// TestSessionDirLock_ReleasedOnEveryPath guards the other half of #583's
+// bound: the in-process mutex a writer queues on must be released, and the lock
+// descriptor closed, on every way out of withSessionDirLock. A path that kept
+// the mutex would park every later registry write in the process forever, with
+// no descriptor to show for it, which is worse than the leak #583 fixed.
+func TestSessionDirLock_ReleasedOnEveryPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	base := t.TempDir()
+
+	// acquires reports the result of a fresh acquisition of dir's lock, failing
+	// the test if it does not return: a held mutex hangs here, it does not error.
+	acquires := func(t *testing.T, dir string) error {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- session.WithSessionDirLockForTest(dir, func() error { return nil }) }()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(3 * time.Second):
+			t.Fatalf("withSessionDirLock(%s) did not return: the in-process mutex was not released", dir)
+			return nil
+		}
+	}
+
+	t.Run("panic in fn", func(t *testing.T) {
+		dir := filepath.Join(base, "panic")
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Error("the panic did not propagate")
+				}
+			}()
+			_ = session.WithSessionDirLockForTest(dir, func() error { panic("boom") })
+		}()
+		if err := acquires(t, dir); err != nil {
+			t.Errorf("acquire after a panic: %v", err)
+		}
+		if n := openLockFDsAt(t, dir); n != 0 {
+			t.Errorf("%d descriptors left open on .sessions.lock after a panic", n)
+		}
+	})
+
+	t.Run("error from fn", func(t *testing.T) {
+		dir := filepath.Join(base, "fnerr")
+		want := os.ErrInvalid
+		if err := session.WithSessionDirLockForTest(dir, func() error { return want }); !errors.Is(err, want) {
+			t.Fatalf("got %v, want fn's error back", err)
+		}
+		if err := acquires(t, dir); err != nil {
+			t.Errorf("acquire after an fn error: %v", err)
+		}
+		if n := openLockFDsAt(t, dir); n != 0 {
+			t.Errorf("%d descriptors left open on .sessions.lock after an fn error", n)
+		}
+	})
+
+	t.Run("directory cannot be created", func(t *testing.T) {
+		file := filepath.Join(base, "afile")
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(file, "sub") // a path under a regular file
+		if err := session.WithSessionDirLockForTest(dir, func() error { return nil }); err == nil {
+			t.Fatal("want an error creating a directory under a regular file")
+		}
+		if err := acquires(t, dir); err == nil {
+			t.Error("want the same error again, not a success")
+		}
+	})
+
+	t.Run("lock file cannot be opened", func(t *testing.T) {
+		dir := filepath.Join(base, "noopen")
+		// A directory where the lock file belongs: MkdirAll succeeds, OpenFile
+		// fails, after the mutex has been taken.
+		if err := os.MkdirAll(filepath.Join(dir, ".sessions.lock"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := session.WithSessionDirLockForTest(dir, func() error { return nil }); err == nil {
+			t.Fatal("want an error opening a lock path that is a directory")
+		}
+		if err := acquires(t, dir); err == nil {
+			t.Error("want the same error again, not a success")
+		}
+	})
 }
 
 // openLockFDs counts this process's descriptors open on the file lockStat
@@ -126,4 +218,14 @@ func openLockFDs(t *testing.T, lockStat syscall.Stat_t) int {
 		}
 	}
 	return n
+}
+
+// openLockFDsAt counts this process's descriptors open on dir's .sessions.lock.
+func openLockFDsAt(t *testing.T, dir string) int {
+	t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Stat(filepath.Join(dir, ".sessions.lock"), &st); err != nil {
+		t.Fatalf("stat lock file: %v", err)
+	}
+	return openLockFDs(t, st)
 }

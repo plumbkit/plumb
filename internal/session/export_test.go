@@ -61,3 +61,11 @@ func CountSessionFileReadsForTest(t *testing.T) *atomic.Int64 {
 	t.Cleanup(func() { readSessionFile = orig })
 	return &n
 }
+
+// WithSessionDirLockForTest runs fn under the session directory's in-process
+// mutex and .sessions.lock flock, exactly as the registry operations do, so a
+// test can drive the lock's failure paths (a panic, an error, a lock file that
+// cannot be opened) that no registry operation reaches on purpose.
+func WithSessionDirLockForTest(dir string, fn func() error) error {
+	return withSessionDirLock(dir, fn)
+}

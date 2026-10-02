@@ -144,9 +144,9 @@ func TestFormatWorkspaceSessions_ListsActiveLSPs(t *testing.T) {
 }
 
 // TestWorkspaceSessions_ConcurrentNoDeadlock proves that concurrent Execute
-// calls do not deadlock. Each call takes the session-dir flock (LOCK_EX) for a
-// brief read then releases — concurrent callers queue behind it, which is
-// correct serialisation, not deadlock. The wsSessionsTimeout backstop (500ms)
+// calls do not deadlock. Each call takes the session-dir lock (the in-process
+// mutex, then the LOCK_EX flock) for a brief read then releases — concurrent
+// callers queue behind it, which is correct serialisation, not deadlock. The wsSessionsTimeout backstop (500ms)
 // inside Execute is a second line of defence, but this test verifies the
 // access is inherently safe: all goroutines must finish well inside the
 // deadline regardless of which code path fires first.
