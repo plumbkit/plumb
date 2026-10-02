@@ -73,6 +73,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.acquireSpawnLock":            "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.acquireWakeLockWith":         "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.claudeStopHook":              "daemon/CLI bookkeeping, not an agent file write",
+		"internal/cli.ensureResumeProofKey":        "the identity hook and serve's own per-user proof key under the state directory (removes its temporary file), not an agent file write",
 		"internal/cli.findAllDaemonPIDs":           "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.handleHeapProfile":           "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.handleStacksProfile":         "daemon/CLI bookkeeping, not an agent file write",

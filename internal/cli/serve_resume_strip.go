@@ -14,9 +14,15 @@ package cli
 //
 // So the removal is not a feature of any one frame kind. stripResumeCredential is the
 // last step of writeClient, the single place every byte bound for the client passes
-// through, and it removes the key from EVERY JSON object in the frame at any depth,
-// not only from `result._meta`. It fails closed: a frame it cannot parse that still
-// names the key has any token-shaped value redacted rather than forwarded intact.
+// through, and it removes the key from EVERY `_meta` object in the frame at any depth,
+// not only from `result._meta`. Only the key goes: every other string in a frame, tool
+// text included, is left as the daemon wrote it. A file or a diff that merely names the
+// key, or holds something shaped like a credential, is ordinary output, and redacting it
+// would corrupt what the model reads.
+//
+// It fails closed on a frame it cannot trust. A frame that does not parse, or that
+// repeats a member name (which a map would collapse and so hide), is not one the daemon
+// wrote, and any token-shaped value in it is redacted rather than forwarded intact.
 //
 // Capturing the value is a separate act at the places a daemon frame is READ
 // (observeResumeFrame), because a replayed initialize response is swallowed and never
@@ -25,6 +31,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"regexp"
 
 	"github.com/plumbkit/plumb/internal/mcp"
@@ -55,7 +62,7 @@ func mayCarryResumeCredential(b []byte) bool {
 }
 
 // stripResumeCredential returns frame with mcp.MetaResumeCredentialKey removed from
-// every JSON object in it. A frame that does not carry the key is returned
+// every `_meta` object in it. A frame that does not carry the key is returned
 // unchanged, byte for byte.
 func stripResumeCredential(frame []byte) []byte {
 	clean, _ := scrubResumeCredential(frame)
@@ -69,20 +76,16 @@ func scrubResumeCredential(frame []byte) (clean []byte, secrets []string) {
 		return frame, nil
 	}
 	sc := &resumeScrub{}
-	out, changed, err := sc.value(frame)
+	out, changed, err := sc.value(frame, false)
 	if err != nil {
-		// Fail closed. A frame the daemon wrote always parses, so this is a frame
-		// nothing here understands; the one thing it must not do is forward a token.
+		// Fail closed. A frame the daemon wrote always parses and never repeats a member,
+		// so this is a frame nothing here understands; the one thing it must not do is
+		// forward a token. Only this path touches text, and only on a frame that is not
+		// well-formed JSON the daemon produced.
 		return redactResumeTokens(frame), nil
 	}
 	if !changed {
 		out = frame
-	}
-	if bytes.Contains(out, resumeKeyBytes) {
-		// The key's name survived, either inside a text value (harmless) or in a shape
-		// the structured pass did not see, such as a duplicate member a map collapsed.
-		// Redact any token left in the frame; a frame with no token is returned as is.
-		out = redactResumeTokens(out)
 	}
 	return out, sc.secrets
 }
@@ -91,14 +94,18 @@ func redactResumeTokens(b []byte) []byte {
 	return resumeTokenScan.ReplaceAll(b, []byte(resumeRedacted))
 }
 
+// errDuplicateMember marks an object that repeats a member name.
+var errDuplicateMember = errors.New("serve: a JSON object repeats a member name")
+
 // resumeScrub walks a JSON document removing the key and collecting its values.
 type resumeScrub struct {
 	secrets []string
 }
 
-// value processes one JSON value. changed reports whether the returned bytes differ
-// from raw; an unchanged value is returned as the original slice.
-func (sc *resumeScrub) value(raw []byte) (out []byte, changed bool, err error) {
+// value processes one JSON value. inMeta says the value is a member of a `_meta` key,
+// the only place the credential is removed from. changed reports whether the returned
+// bytes differ from raw; an unchanged value is returned as the original slice.
+func (sc *resumeScrub) value(raw []byte, inMeta bool) (out []byte, changed bool, err error) {
 	if !mayCarryResumeCredential(raw) {
 		return raw, false, nil
 	}
@@ -108,25 +115,25 @@ func (sc *resumeScrub) value(raw []byte) (out []byte, changed bool, err error) {
 	}
 	switch t[0] {
 	case '{':
-		return sc.object(raw)
+		return sc.object(raw, inMeta)
 	case '[':
 		return sc.array(raw)
 	}
 	return raw, false, nil // a scalar: its text is not a member
 }
 
-func (sc *resumeScrub) object(raw []byte) (out []byte, changed bool, err error) {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &obj); err != nil {
+func (sc *resumeScrub) object(raw []byte, inMeta bool) (out []byte, changed bool, err error) {
+	obj, err := decodeObject(raw)
+	if err != nil {
 		return raw, false, err
 	}
-	if v, ok := obj[mcp.MetaResumeCredentialKey]; ok {
+	if v, ok := obj[mcp.MetaResumeCredentialKey]; ok && inMeta {
 		sc.capture(v)
 		delete(obj, mcp.MetaResumeCredentialKey)
 		changed = true
 	}
 	for k, v := range obj {
-		nv, ch, err := sc.value(v)
+		nv, ch, err := sc.value(v, k == metaMember)
 		if err != nil {
 			return raw, false, err
 		}
@@ -148,7 +155,7 @@ func (sc *resumeScrub) array(raw []byte) (out []byte, changed bool, err error) {
 		return raw, false, err
 	}
 	for i, v := range arr {
-		nv, ch, err := sc.value(v)
+		nv, ch, err := sc.value(v, false)
 		if err != nil {
 			return raw, false, err
 		}
@@ -162,6 +169,46 @@ func (sc *resumeScrub) array(raw []byte) (out []byte, changed bool, err error) {
 	}
 	out, err = marshalPlain(arr)
 	return out, true, err
+}
+
+// metaMember is the JSON-RPC member name of an object's metadata.
+const metaMember = "_meta"
+
+// decodeObject reads a JSON object into raw members, refusing one that repeats a member
+// name: a map keeps the last and so would hide an earlier one, which could be the
+// credential.
+func decodeObject(raw []byte) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // the opening brace
+		return nil, err
+	}
+	obj := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, errors.New("serve: a JSON object member name is not a string")
+		}
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		if _, dup := obj[key]; dup {
+			return nil, errDuplicateMember
+		}
+		obj[key] = val
+	}
+	if _, err := dec.Token(); err != nil { // the closing brace
+		return nil, err
+	}
+	// Anything after the object is not a JSON value this strip can vouch for.
+	if dec.More() {
+		return nil, errors.New("serve: trailing data after a JSON object")
+	}
+	return obj, nil
 }
 
 // capture records a removed value when it is a string of the credential shape.

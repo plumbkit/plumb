@@ -80,6 +80,10 @@ type proxyDeps struct {
 	// proxy still announces that it strips the key and strips it, but persists and
 	// presents nothing.
 	resumeStore *resumeStore
+	// resumeProofKey reads the per-user key that verifies the identity hook's proof of a
+	// session_start's conversation (resume_proof.go). nil: no proof verifies, so the
+	// proxy presents no stored credential and files none under a conversation.
+	resumeProofKey func() ([]byte, error)
 
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
@@ -200,6 +204,7 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 		hbNonce:      newHeartbeatNonce(),
 	}
 	p.rc.store = deps.resumeStore
+	p.rc.proofKey = deps.resumeProofKey
 	p.daemonPID.Store(int64(readDaemonPID()))
 	return p
 }

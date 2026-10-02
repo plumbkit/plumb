@@ -82,18 +82,44 @@ type resumeStore struct {
 	max   int
 }
 
-// newResumeStore opens (creating, 0700) a store in dir for the daemon scope. It returns
-// nil, and says so without any secret, when the directory cannot be made: the proxy then
-// still strips the credential but cannot persist it, and the feature is inert.
+// newResumeStore opens (creating, and tightening to 0700) a store in dir for the daemon
+// scope. It returns nil, and says so without any secret, when the directory cannot be made
+// or is a symbolic link: the proxy then still strips the credential but cannot persist
+// it, and the feature is inert.
 func newResumeStore(dir, scope string) *resumeStore {
 	if dir == "" || scope == "" {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := ensurePrivateDir(dir); err != nil {
 		slog.Warn("serve: resume credentials cannot be stored; serve-replacement continuity falls back to the name", "err", err)
 		return nil
 	}
 	return &resumeStore{dir: dir, scope: scope, max: resumeStoreMaxEntries}
+}
+
+// ensurePrivateDir makes dir (0700) and returns it private. A directory that already
+// exists is not trusted for its mode: MkdirAll leaves one alone, so an older plumb, a
+// manual mkdir or a loose umask could have left it open to other users, and the files
+// inside carry bearer secrets. It is tightened to 0700, and a symbolic link is refused,
+// because a link can point the secrets anywhere, including inside a workspace.
+func ensurePrivateDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link; refusing to keep credentials behind one", dir)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("%s is not a directory", dir)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
 }
 
 // openDefaultResumeStore is the production store: under the proxy's own state

@@ -35,10 +35,13 @@ type e2eServe struct {
 	t         *testing.T
 	w         *identityWorld
 	oldDaemon bool
-	cancel    context.CancelFunc
-	runDone   chan struct{}
-	clientIn  *io.PipeWriter
-	frames    chan string
+	// unhooked is a client with no identity hook: it types the stamp itself, and there is
+	// nothing to prove that the hook, rather than a model, named the conversation.
+	unhooked bool
+	cancel   context.CancelFunc
+	runDone  chan struct{}
+	clientIn *io.PipeWriter
+	frames   chan string
 
 	mu     sync.Mutex
 	seen   []string // every frame the client received
@@ -77,6 +80,7 @@ func (w *identityWorld) startServe(t *testing.T, store *resumeStore, proxyID str
 		dial:           func(context.Context) (net.Conn, error) { return sv.newDaemonConn(), nil },
 		proxySessionID: proxyID,
 		resumeStore:    store,
+		resumeProofKey: rcProofKey,
 		maxReconnects:  3,
 		baseBackoff:    time.Millisecond,
 		handshakeWait:  10 * time.Second,
@@ -162,8 +166,9 @@ func (sv *e2eServe) initialize() {
 	}
 }
 
-// call is a tools/call stamped as the conversation (what the Claude Code hook does), with
-// the text a model sees and the `_meta` only a proxy reads.
+// call is a tools/call stamped as the conversation (what the Claude Code hook does, which
+// also proves the stamp on a session_start), with the text a model sees and the `_meta`
+// only a proxy reads. An unhooked serve's client types the stamp and proves nothing.
 func (sv *e2eServe) call(agent, tool string, args map[string]any) (text string, meta map[string]json.RawMessage) {
 	sv.t.Helper()
 	if args == nil {
@@ -171,6 +176,9 @@ func (sv *e2eServe) call(agent, tool string, args map[string]any) (text string, 
 	}
 	if agent != "" {
 		args[mcp.ArgLogicalAgentKey] = agent
+		if tool == "session_start" && !sv.unhooked {
+			args[mcp.ArgHookProofKey] = resumeProofFor(rcTestKey, agent)
+		}
 	}
 	sv.mu.Lock()
 	sv.nextID++
@@ -359,6 +367,40 @@ func TestServeReplacement_WithoutTheStoredCredentialStaysNameOnly(t *testing.T) 
 			s.assertNeverSaw()
 		})
 	}
+}
+
+// The reviewer's repro, end to end: with the credential stored and the real daemon, a
+// replacement whose client has no hook (it types the conversation, and even the stamp)
+// is refused the credential, so a model that names another conversation gets none of that
+// conversation's identity: not its session ID, its mail or its thread. The hooked
+// replacement of TestServeReplacement_RestoresTheFullIdentity is the control.
+func TestServeReplacement_AnUnhookedClaimDoesNotRestoreTheIdentity(t *testing.T) {
+	w := newIdentityWorld(t).withState()
+	dir, scope := t.TempDir(), "scope-e2e"
+	first := e2eEstablish(t, w, rcStore(t, dir, scope))
+	stored, ok := rcStore(t, dir, scope).load(e2eConv)
+	if !ok {
+		t.Fatal("precondition: the hooked first serve stored no credential")
+	}
+
+	s := w.startServe(t, rcStore(t, dir, scope), "proxy-intruder", false)
+	s.unhooked = true
+	s.initialize()
+	id, _, packet := s.start(e2eConv, first.ws)
+	if id == first.id {
+		t.Fatalf("a client with no hook named the conversation and got its internal session %q: "+
+			"the proxy presented a credential on a claim nothing verified", id)
+	}
+	if out, _ := s.call(e2eConv, "check_messages", nil); strings.Contains(packet+out, credBoundNote) {
+		t.Errorf("an unhooked claim read mail bound to the conversation's session:\n%s", out)
+	}
+	if reply, _ := s.call(e2eConv, "leave_note", map[string]any{"conversation_id": first.threadID, "body": "intruder"}); !strings.Contains(reply, "not one of yours") {
+		t.Errorf("an unhooked claim took the conversation's thread seat: %q", reply)
+	}
+	if cur, _ := rcStore(t, dir, scope).load(e2eConv); cur.Secret != stored.Secret || cur.Generation != stored.Generation {
+		t.Errorf("the conversation's entry is now %+v; an unverified claim must leave it as %+v", cur, stored)
+	}
+	s.assertNeverSaw(stored.Secret)
 }
 
 // A daemon that predates the credential ignores the announcement and the presentation: the

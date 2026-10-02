@@ -28,11 +28,22 @@ package cli
 // agent. The proxy is the sole presenter: a credential the client put in the request
 // `_meta` itself is removed from every session_start.
 //
-// What is stored, and when. The first successful session_start that names a conversation
-// links this process's identity to it, and the credential the daemon has disclosed to this
-// process is then recorded under it, and re-recorded at every later disclosure (the
-// successor after an accepted resume, a re-mint after a daemon restart, a late C3
-// disclosure). The exception is a process that PRESENTED a stored credential and was not
+// The conversation must also be VERIFIED. A conversation id and a stamp are both strings a
+// model can type, so neither entitles a presentation; the identity hook's binding does,
+// and only because the hook proves it (resume_proof.go): its `plumb_hook_proof` argument
+// is an HMAC of the stamp under a key only the user's own processes can read. A
+// session_start whose proof does not verify against its stamp, or whose conversation is
+// not the verified stamp's, is neither presented for nor stored under. A client with no
+// hook never verifies, which is the name-only resume that shipped before the credential.
+// The proof is removed from every session_start before it is forwarded.
+//
+// What is stored, and when. The first successful session_start that names a VERIFIED
+// conversation links this process's identity to it, and the credential the daemon has
+// disclosed to this process is then recorded under it, and re-recorded at every later
+// disclosure (the successor after an accepted resume, a re-mint after a daemon restart, a
+// late C3 disclosure). A session_start that was not verified links nothing, so a
+// credential this process was issued is never filed under a conversation a model named.
+// The exception is a process that PRESENTED a stored credential and was not
 // given a successor: it was refused, or could not complete (a live session still holds the
 // predecessor's ID), and the daemon does not say which. The stored entry is then left
 // alone for the life of the process, because overwriting it with this process's fresh
@@ -51,6 +62,9 @@ import (
 // store: it strips and holds in memory but persists and presents nothing.
 type resumeCreds struct {
 	store *resumeStore
+	// proofKey reads the per-user key that verifies the hook's proof (resume_proof.go).
+	// nil verifies nothing, so a proxy built without one presents and stores nothing.
+	proofKey func() ([]byte, error)
 
 	mu sync.Mutex
 	// secret is the credential the daemon last disclosed to THIS process.
@@ -86,7 +100,9 @@ type sessionStartCall struct {
 	id           string
 	conversation string
 	stamp        string
-	clientMeta   bool // the client put a credential in the request _meta itself
+	proof        string // plumb_hook_proof, as the call carried it
+	hasProof     bool   // the call carried the proof argument at all, whatever its value
+	clientMeta   bool   // the client put a credential in the request _meta itself
 }
 
 // parseSessionStartCall reads a tools/call frame. ok is false for anything that is not a
@@ -115,6 +131,8 @@ func parseSessionStartCall(frame []byte) (sessionStartCall, bool) {
 	if call.stamp == "" {
 		call.stamp = rawString(req.Params.Arguments, mcp.ArgLogicalAgentDeclaredKey)
 	}
+	_, call.hasProof = req.Params.Arguments[mcp.ArgHookProofKey]
+	call.proof = rawString(req.Params.Arguments, mcp.ArgHookProofKey)
 	_, call.clientMeta = req.Params.Meta[mcp.MetaResumeCredentialKey]
 	return call, true
 }
@@ -130,13 +148,20 @@ func rawString(m map[string]json.RawMessage, key string) string {
 // presentResumeCredential returns the frame to forward for a client request: a
 // session_start has its request `_meta` set to the credential stored for the conversation
 // it names, when this process is entitled to present one, and cleared of any credential
-// the client supplied otherwise. Every other frame is returned unchanged.
+// the client supplied otherwise. The hook's proof is verified here and always removed.
+// Every other frame is returned unchanged.
 func (p *reconnectingProxy) presentResumeCredential(frame []byte) []byte {
 	call, ok := parseSessionStartCall(frame)
 	if !ok {
 		return frame
 	}
-	secret := p.rc.claim(call, p.heldIdentity().recovery)
+	secret := p.rc.claim(call, p.heldIdentity().recovery, p.rc.verifies(call))
+	if call.hasProof {
+		// The proof is for this proxy alone. It is an unknown parameter to a daemon that
+		// does not drop it, and a value that proves a stamp is not something to leave in
+		// a request the daemon records.
+		frame = setRequestMember(frame, "arguments", mcp.ArgHookProofKey, nil)
+	}
 	switch {
 	case secret != "":
 		raw, err := json.Marshal(secret)
@@ -150,23 +175,45 @@ func (p *reconnectingProxy) presentResumeCredential(frame []byte) []byte {
 	return frame
 }
 
+// verifies reports whether the call's conversation is one the identity hook named: its
+// proof is the HMAC of its stamp under the per-user key, and its conversation is that
+// stamp's conversation half. Nothing the call says about itself is enough without the
+// proof. The key is read only for a call that carries a proof.
+func (rc *resumeCreds) verifies(call sessionStartCall) bool {
+	if rc.proofKey == nil || call.proof == "" || call.stamp == "" || call.conversation == "" ||
+		linkageIDOf(call.stamp) != call.conversation {
+		return false
+	}
+	key, err := rc.proofKey()
+	if err != nil {
+		slog.Debug("serve: no resume proof key to verify a session_start against; resuming by name only", "err", err)
+		return false
+	}
+	return verifyResumeProof(key, call.stamp, call.proof)
+}
+
 // claim records an in-flight session_start and decides whether it presents a credential,
-// returning it ("" for none). The entitlement rules are in the file comment.
-func (rc *resumeCreds) claim(call sessionStartCall, recovery string) string {
+// returning it ("" for none). verified is rc.verifies for the call: an unverified call
+// is tracked for its response but names no conversation, so nothing is linked or stored
+// under it. The entitlement rules are in the file comment.
+func (rc *resumeCreds) claim(call sessionStartCall, recovery string, verified bool) string {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	if call.id == "" || call.conversation == "" {
 		return ""
 	}
-	start := resumeStart{conversation: call.conversation}
+	var start resumeStart
+	if verified {
+		start.conversation = call.conversation
+	}
 	defer func() {
 		if rc.inflight == nil {
 			rc.inflight = map[string]resumeStart{}
 		}
 		rc.inflight[call.id] = start
 	}()
-	if rc.store == nil || recovery != string(recoveryEstablished) || rc.conversation != "" ||
-		rc.presented[call.conversation] || (call.stamp != "" && call.stamp != call.conversation) {
+	if !verified || rc.store == nil || recovery != string(recoveryEstablished) || rc.conversation != "" ||
+		rc.presented[call.conversation] || call.stamp != call.conversation {
 		return ""
 	}
 	entry, ok := rc.store.load(call.conversation)
@@ -247,10 +294,16 @@ func (rc *resumeCreds) observe(secrets []string, start resumeStart, linked bool)
 }
 
 // setRequestMeta sets (or, with a nil value, removes) one key of a request frame's
-// params._meta, returning the rewritten frame. Like injectInitMeta it is fail-safe and
-// envelope-preserving: any frame that does not round-trip, or whose routing envelope
-// would move, is returned unchanged.
+// params._meta, returning the rewritten frame.
 func setRequestMeta(frame []byte, key string, value json.RawMessage) []byte {
+	return setRequestMember(frame, "_meta", key, value)
+}
+
+// setRequestMember sets (or, with a nil value, removes) one key of the object a request
+// frame holds at params.<member> ("_meta" or "arguments"). Like injectInitMeta it is
+// fail-safe and envelope-preserving: any frame that does not round-trip, or whose routing
+// envelope would move, is returned unchanged.
+func setRequestMember(frame []byte, member, key string, value json.RawMessage) []byte {
 	var full map[string]json.RawMessage
 	if err := json.Unmarshal(frame, &full); err != nil {
 		return frame
@@ -261,18 +314,21 @@ func setRequestMeta(frame []byte, key string, value json.RawMessage) []byte {
 			return frame
 		}
 	}
-	meta := map[string]json.RawMessage{}
-	if raw, ok := params["_meta"]; ok {
-		if err := json.Unmarshal(raw, &meta); err != nil {
+	obj := map[string]json.RawMessage{}
+	if raw, ok := params[member]; ok {
+		if err := json.Unmarshal(raw, &obj); err != nil {
 			return frame
+		}
+		if obj == nil { // a JSON null decodes to a nil map, which cannot be assigned to
+			obj = map[string]json.RawMessage{}
 		}
 	}
 	if value == nil {
-		delete(meta, key)
+		delete(obj, key)
 	} else {
-		meta[key] = value
+		obj[key] = value
 	}
-	if !encodeInto(meta, params, "_meta") || !encodeInto(params, full, "params") {
+	if !encodeInto(obj, params, member) || !encodeInto(params, full, "params") {
 		return frame
 	}
 	out, err := json.Marshal(full)

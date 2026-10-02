@@ -71,6 +71,40 @@ func TestResumeStore_FilesArePrivate(t *testing.T) {
 	}
 }
 
+// N3. A store directory that already exists is not trusted for its mode, and one that is
+// a symbolic link is not used at all: the secrets would go wherever the link points.
+func TestResumeStore_TightensAnExistingDirectoryAndRefusesASymlink(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits")
+	}
+	loose := filepath.Join(t.TempDir(), "resume")
+	if err := os.Mkdir(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loose, 0o755); err != nil { // not subject to the umask
+		t.Fatal(err)
+	}
+	if s := newResumeStore(loose, "scope-a"); s == nil {
+		t.Fatal("an existing directory was refused")
+	}
+	if fi, _ := os.Stat(loose); fi.Mode().Perm() != 0o700 {
+		t.Errorf("an existing 0755 store directory was left at %v, want 0700", fi.Mode().Perm())
+	}
+
+	elsewhere := t.TempDir()
+	link := filepath.Join(t.TempDir(), "resume")
+	if err := os.Symlink(elsewhere, link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	if s := newResumeStore(link, "scope-a"); s != nil {
+		t.Fatal("a symbolic-linked store directory was used")
+	}
+	if ents, _ := os.ReadDir(elsewhere); len(ents) != 0 {
+		t.Errorf("the link target holds %d entries", len(ents))
+	}
+}
+
 // A conversation id is a client-supplied claim. It never becomes a path.
 func TestResumeStore_ConversationIDNeverBecomesAPath(t *testing.T) {
 	t.Parallel()

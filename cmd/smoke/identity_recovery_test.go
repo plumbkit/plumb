@@ -25,7 +25,9 @@ package smoke_test
 // harness stops only the daemon it spawned, by the pid file inside that tree.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -471,6 +473,44 @@ func retryCall(t *testing.T, c *mcpClient, tool string, args map[string]any, bud
 	}
 }
 
+// hookedSessionStart returns the arguments of a main-thread session_start of conversation
+// as Claude Code's identity hook leaves them, by running the real hook
+// (`plumb hooks run-claude`, PreToolUse) against the isolated daemon: the session_id and
+// the stamp both the conversation, and the proof of the stamp that is the only thing
+// entitling a replacement serve to present the credential its predecessor stored. A
+// client with no hook types the conversation and proves nothing, and is not presented for.
+func hookedSessionStart(t *testing.T, plumbBin, tmpHome, conversation string, args map[string]any) map[string]any {
+	t.Helper()
+	input, err := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse", "session_id": conversation, "tool_use_id": "smoke-hook",
+		"tool_name": "mcp__plumb__session_start", "tool_input": args,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(plumbBin, "hooks", "run-claude")
+	cmd.Env = isolatedEnv(tmpHome)
+	cmd.Stdin = bytes.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("plumb hooks run-claude: %v\n%s", err, stderr.String())
+	}
+	var doc struct {
+		Hook struct {
+			UpdatedInput map[string]any `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil || doc.Hook.UpdatedInput == nil {
+		t.Fatalf("the hook produced no updatedInput (%v): stdout %q, stderr %q", err, out, stderr.String())
+	}
+	if _, ok := doc.Hook.UpdatedInput["plumb_hook_proof"]; !ok {
+		t.Fatalf("the hook stamped the call but did not prove the stamp: %v (stderr %q)", doc.Hook.UpdatedInput, stderr.String())
+	}
+	return doc.Hook.UpdatedInput
+}
+
 // TestSmoke_ServeReplacementResumesByName is the machine-reboot case, and the
 // reason the two restart tests above are not the whole story: a reboot kills
 // the serve proxy TOO, so no proxy credential survives and the daemon-restart
@@ -495,16 +535,14 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	const externalID = "smoke-reboot-426"
 	first := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	first.initialize(t, fixture)
-	packet1, meta1 := first.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	waitForPID(t, tmpHome, 15*time.Second)
+	packet1, meta1 := first.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	want := parseSelfIdentity(packet1)
 	full1 := fullSessionID(t, meta1)
 	if want.name == "" || full1 == "" {
 		t.Fatalf("the first serve never established an identity; packet:\n%s", packet1)
 	}
-	waitForPID(t, tmpHome, 15*time.Second)
 
 	// Pre-restart sanity: the linkage must already resolve through the real CLI,
 	// so a resume failure below indicts the resume path, not the send.
@@ -523,10 +561,8 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 
 	second := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	second.initialize(t, fixture)
-	packet2, meta2 := second.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	packet2, meta2 := second.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	t.Logf("successor packet:\n%s", packet2)
 	got := parseSelfIdentity(packet2)
 	full2 := fullSessionID(t, meta2)

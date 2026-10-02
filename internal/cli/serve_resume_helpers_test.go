@@ -6,6 +6,7 @@ package cli
 // property under test is about what a client can see.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -20,6 +21,30 @@ import (
 
 // rcSecret is the n-th test credential: a valid rsk1- token (22 base64url characters).
 func rcSecret(n int) string { return fmt.Sprintf("rsk1-%022d", n) }
+
+// rcTestKey is the per-user proof key the test proxies verify against. rcOtherKey is
+// another user's, which no proof made with it may satisfy.
+var (
+	rcTestKey  = bytes.Repeat([]byte{0x5a}, resumeProofKeyLen)
+	rcOtherKey = bytes.Repeat([]byte{0xa5}, resumeProofKeyLen)
+)
+
+func rcProofKey() ([]byte, error) { return rcTestKey, nil }
+
+// rcHooked is the arguments of a session_start as the identity hook leaves them: the
+// session_id and the stamp both the conversation, and the proof of that stamp. extra is
+// folded in (a workspace, say).
+func rcHooked(conversation string, extra map[string]any) map[string]any {
+	args := map[string]any{
+		"session_id":           conversation,
+		mcp.ArgLogicalAgentKey: conversation,
+		mcp.ArgHookProofKey:    resumeProofFor(rcTestKey, conversation),
+	}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return args
+}
 
 // rcStore is a resume store in a fresh directory for the given daemon scope.
 func rcStore(t *testing.T, dir, scope string) *resumeStore {
@@ -221,6 +246,7 @@ func startRCServe(t *testing.T, store *resumeStore, first net.Conn, replacements
 	t.Helper()
 	h := startProxy(t, first, 0, 0)
 	h.proxy.rc.store = store
+	h.proxy.rc.proofKey = rcProofKey
 	for _, r := range replacements {
 		h.dialQueue <- r
 	}

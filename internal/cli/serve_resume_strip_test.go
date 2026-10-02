@@ -21,22 +21,26 @@ import (
 
 const rcKey = mcp.MetaResumeCredentialKey
 
-// withoutKey is v with every member named rcKey removed, at any depth: what a correct
-// strip must leave behind.
-func withoutKey(v any) any {
+// withoutKey is v with the member named rcKey removed from every `_meta` object, at any
+// depth: what a correct strip must leave behind. A member of that name anywhere else is
+// data, and stays.
+func withoutKey(v any) any { return withoutKeyIn(v, false) }
+
+func withoutKeyIn(v any, inMeta bool) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := map[string]any{}
 		for k, val := range x {
-			if k != rcKey {
-				out[k] = withoutKey(val)
+			if k == rcKey && inMeta {
+				continue
 			}
+			out[k] = withoutKeyIn(val, k == "_meta")
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, val := range x {
-			out[i] = withoutKey(val)
+			out[i] = withoutKeyIn(val, false)
 		}
 		return out
 	}
@@ -56,7 +60,7 @@ func TestStripResumeCredential_EveryFrameShape(t *testing.T) {
 		"a notification":                    `{"jsonrpc":"2.0","method":"notifications/message","params":{"_meta":{` + member + `}}}`,
 		"a JSON-RPC batch":                  `[{"jsonrpc":"2.0","id":7,"result":{"_meta":{` + member + `}}},{"jsonrpc":"2.0","id":8,"result":{}}]`,
 		"an error response":                 `{"jsonrpc":"2.0","id":9,"error":{"code":-32000,"message":"x","data":{"_meta":{` + member + `}}}}`,
-		"a key at the top of the frame":     `{"jsonrpc":"2.0","id":10,"result":{},` + member + `}`,
+		"_meta nested under _meta":          `{"jsonrpc":"2.0","id":10,"result":{"_meta":{"x":{"_meta":{` + member + `}}}}}`,
 		"an escaped spelling of the key":    `{"jsonrpc":"2.0","id":11,"result":{"_meta":{"dev.plumbkit/resume-credential":"` + secret + `"}}}`,
 		"whitespace between tokens":         "{ \"jsonrpc\" : \"2.0\", \"id\":12, \"result\" : { \"_meta\" : { \"" + rcKey + "\" :\n \"" + secret + "\" } } }",
 		"HTML characters elsewhere in text": `{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"a < b && c > d"}],"_meta":{` + member + `}}}`,
@@ -114,19 +118,99 @@ func TestStripResumeCredential_LeavesOtherFramesByteForByte(t *testing.T) {
 		"the identity snapshot":   `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/session-identity":{"recovery":"restored"}}}}`,
 		// The key's name in a text value is prose, not a member; and a token in text is the
 		// daemon's own business (it never writes one there), not this strip's.
-		"the key's name in text":     `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"the ` + rcKey + ` key"}]}}`,
-		"a token-shaped text value":  `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"` + rcSecret(9) + `"}]}}`,
-		"the consumer announcement":  `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"` + mcp.MetaResumeCredentialConsumerKey + `":1}}}`,
-		"a frame that is not JSON":   `not json`,
-		"an empty frame":             ``,
-		"a non-string credential":    `{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`,
-		"another dev.plumbkit key":   `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/resume":"x"}}}`,
+		"the key's name in text":    `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"the ` + rcKey + ` key"}]}}`,
+		"a token-shaped text value": `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"` + rcSecret(9) + `"}]}}`,
+		"the consumer announcement": `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"_meta":{"` + mcp.MetaResumeCredentialConsumerKey + `":1}}}`,
+		"a frame that is not JSON":  `not json`,
+		"an empty frame":            ``,
+		"a non-string credential":   `{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`,
+		"another dev.plumbkit key":  `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/resume":"x"}}}`,
+		// Only a `_meta` object carries the credential. A member of that name elsewhere is
+		// the daemon relaying somebody's data, and the strip does not rewrite data.
+		"the key outside any _meta":  `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"` + rcKey + `":"x"}}}`,
 		"a result with only content": `{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}]}}`,
 	} {
 		if got := stripResumeCredential([]byte(frame)); !bytes.Equal(got, []byte(frame)) {
 			t.Errorf("%s was rewritten:\n before: %s\n after:  %s", name, frame, got)
 		}
 	}
+}
+
+// N1. Output that merely mentions the key, or holds something shaped like a credential
+// (a file, a diff, a test fixture), is ordinary tool text. The strip must not redact it,
+// whether or not the frame also carries a real disclosure in its `_meta`.
+func TestStripResumeCredential_LeavesTextThatNamesTheKeyAlone(t *testing.T) {
+	t.Parallel()
+	text := "// the proxy strips " + rcKey + " from every frame\nconst fixture = \"" + rcSecret(21) + "\"\nvar again = `" + rcSecret(22) + "`"
+	frame := func(meta string) string {
+		res := map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}}
+		b, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 5, "result": res})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if meta == "" {
+			return string(b)
+		}
+		return strings.Replace(string(b), `"result":{`, `"result":{"_meta":{`+meta+`},`, 1)
+	}
+
+	t.Run("a frame with no disclosure comes through byte for byte", func(t *testing.T) {
+		t.Parallel()
+		f := frame("")
+		if got, secrets := scrubResumeCredential([]byte(f)); !bytes.Equal(got, []byte(f)) || len(secrets) != 0 {
+			t.Fatalf("ordinary output was rewritten (captured %v):\n before: %s\n after:  %s", secrets, f, got)
+		}
+	})
+	t.Run("a real disclosure is removed and the text beside it is not touched", func(t *testing.T) {
+		t.Parallel()
+		f := frame(`"` + rcKey + `":"` + rcSecret(23) + `"`)
+		got, secrets := scrubResumeCredential([]byte(f))
+		if len(secrets) != 1 || secrets[0] != rcSecret(23) {
+			t.Fatalf("captured %v, want the disclosed credential", secrets)
+		}
+		var res struct {
+			Result struct {
+				Content []struct{ Text string } `json:"content"`
+				Meta    map[string]any          `json:"_meta"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(got, &res); err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Result.Content) != 1 || res.Result.Content[0].Text != text {
+			t.Errorf("the strip changed the tool text:\n want: %q\n got:  %q", text, res.Result.Content)
+		}
+		if _, still := res.Result.Meta[rcKey]; still || strings.Contains(string(got), rcSecret(23)) {
+			t.Errorf("the credential survived: %s", got)
+		}
+	})
+	t.Run("through the proxy, a tool result naming the key arrives unchanged", func(t *testing.T) {
+		t.Parallel()
+		_, p := newScriptedDaemon(func(e rpcEnvelope, frame []byte) ([][]byte, bool) {
+			if e.Method == "initialize" {
+				return [][]byte{rcInitResult(t, e.ID, "established", rcSecret(1))}, false
+			}
+			if e.isRequest() {
+				return [][]byte{rcToolResult(t, e.ID, text, "")}, false
+			}
+			return nil, false
+		})
+		srv := startRCServe(t, rcStore(t, t.TempDir(), "scope-n1"), p)
+		var res struct {
+			Result struct {
+				Content []struct{ Text string } `json:"content"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(srv.call("read_file", map[string]any{"file_path": "internal/redact/redact_test.go"}, nil)), &res); err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Result.Content) != 1 || res.Result.Content[0].Text != text {
+			t.Fatalf("the proxy changed what read_file returned:\n want: %q\n got:  %q", text, res.Result.Content)
+		}
+		if strings.Contains(srv.everything(), "[REDACTED:resume-credential]") {
+			t.Error("the strip redacted ordinary output")
+		}
+	})
 }
 
 // A value that is not a credential is removed all the same, and never stored.
@@ -199,7 +283,7 @@ func TestServeProxy_NeverForwardsTheResumeCredential(t *testing.T) {
 	store := rcStore(t, t.TempDir(), "scope-strip")
 	srv := startRCServe(t, store, p1, p2)
 
-	if got := srv.call("session_start", map[string]any{"session_id": conv}, nil); !strings.Contains(got, "oriented") {
+	if got := srv.call("session_start", rcHooked(conv, nil), nil); !strings.Contains(got, "oriented") {
 		t.Fatalf("the session_start result lost its content: %s", got)
 	}
 	if got := srv.call("late", nil, nil); !strings.Contains(got, "late") {

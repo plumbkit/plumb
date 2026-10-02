@@ -212,6 +212,16 @@ const ArgLogicalAgentKey = MetaLogicalAgentKey
 // every tool's schema (Server.DeclareIdentityArg); no tool declares it itself.
 const ArgLogicalAgentDeclaredKey = "plumb_agent"
 
+// ArgHookProofKey is the argument the identity hook adds to a session_start beside its
+// identity stamp: an HMAC of the stamp under a per-user key the hook and `plumb serve`
+// share, which is how a serve tells a conversation the hook named from one a model
+// typed (docs/identity-resume-credential-design.md section 3, "Presentation"). `plumb
+// serve` verifies it and removes it; the daemon never verifies it, because it never
+// holds the key. The daemon removes it as well (splitLogicalAgentArg), and lists it in
+// its identity-keys answer, so the hook adds a proof only for a daemon that would not
+// reject it as an unknown parameter when a serve that predates the proof forwards it.
+const ArgHookProofKey = "plumb_hook_proof"
+
 // MetaResumeCredentialKey is the `_meta` key of the resume credential
 // (docs/identity-resume-credential-design.md), and it travels BOTH ways under the
 // one name:

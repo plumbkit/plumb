@@ -434,9 +434,9 @@ const ctrlIdentityKeysCommand = "identity-keys"
 // identityKeysReply is the daemon's answer to ctrlIdentityKeysCommand: the keys
 // it lifts, then its own version, so the identity hook gets both of the things
 // it needs from one dial (see probeDaemonIdentity). An older hook reads only
-// whether the declared key is listed, so the trailing field costs it nothing.
+// whether the declared key is listed, so the trailing fields cost it nothing.
 func identityKeysReply() string {
-	reply := "ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey
+	reply := "ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + " " + mcp.ArgHookProofKey
 	if fields := strings.Fields(Version); len(fields) == 1 {
 		reply += " " + ctrlIdentityKeysVersionField + fields[0]
 	}
