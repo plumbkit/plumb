@@ -9,12 +9,14 @@ import (
 // request_cancel.go is the server side of notifications/cancelled: the client
 // telling us it has abandoned one request it sent, by that request's id.
 //
-// A client abandons a CALL far more often than it closes its connection. Claude
-// Code drops a tools/call that has sent nothing for its idle window (30 min by
-// default) and keeps the connection; on a shared serve connection every
-// subagent's calls ride one connection that outlives all of them. So
-// ConnectionClosed alone cannot tell a long-running tool that nobody is waiting
-// for its answer any more — this signal can.
+// A client abandons a CALL far more often than it closes its connection: Claude
+// Code sends this when the user interrupts a running tool, or when the SDK's own
+// request timeout fires, and keeps the connection open. On a shared serve
+// connection every subagent's calls ride one connection that outlives all of
+// them. So ConnectionClosed alone cannot tell a long-running tool that nobody is
+// waiting for its answer any more — this signal can. (Claude Code's 30-minute
+// IDLE abort sends no cancel: it just stops waiting. Progress is what prevents
+// that one; see progress.go.)
 //
 // Like ConnectionClosed it is OPT-IN: the request ctx is not cancelled, a tool
 // that holds something worth giving back watches RequestCancelled and decides.

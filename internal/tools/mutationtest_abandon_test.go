@@ -99,10 +99,10 @@ func awaitResponse(t *testing.T, frames <-chan string, id int, within time.Durat
 
 // TestMutationTest_SlotFreedWhenClientCancelsTheCall is PLAN-450's core case:
 // the client abandons the CALL (notifications/cancelled) but keeps its
-// connection open, as Claude Code does when it drops an idle tools/call on a
-// shared serve connection. Watching only for the connection to close, the run
-// carried on for another 50 minutes, writing mutant after mutant and refusing
-// every other agent's run. It must stop instead: no further mutant, the file
+// connection open, as Claude Code does when the user interrupts a tool on a
+// shared serve connection. Watching only for the connection to close, an
+// abandoned run carried on for another 50 minutes, writing mutant after mutant
+// and refusing every other agent's run. It must stop instead: no further mutant, the file
 // restored, the slot released — all while the connection is still open.
 func TestMutationTest_SlotFreedWhenClientCancelsTheCall(t *testing.T) {
 	const original = "answer = 42\nother = 7\n"
