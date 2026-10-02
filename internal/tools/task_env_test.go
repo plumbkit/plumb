@@ -144,6 +144,32 @@ func TestRunTask_RunAndVerboseReachTheResolver(t *testing.T) {
 	}
 }
 
+// TestRunFilter_FlagOverAlternationIsRefused: go test -run compiles each
+// top-level | alternative on its own, so `(?i)write|delete|copy` is
+// case-insensitive for `write` only. Reproduced in PLAN-450: that filter ran 159
+// of the 215 tests -list selected and a harness reported 17/17 SURVIVED, every
+// one false. The grouped spelling, and alternation with no flag, stay accepted.
+func TestRunFilter_FlagOverAlternationIsRefused(t *testing.T) {
+	for _, bad := range []string{"(?i)write|delete|copy", "(?i)a|b", "(?is)Test(A|B)|TestC", "(?i)[|]x|y"} {
+		err := validateRunFilter("run", bad)
+		if err == nil {
+			t.Errorf("%q must be refused", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Group the alternatives") {
+			t.Errorf("%q: the refusal must give the grouped spelling: %v", bad, err)
+		}
+	}
+	if err := validateRunFilter("run", "(?i)write|delete"); err == nil || !strings.Contains(err.Error(), "(?i)(write|delete)") {
+		t.Errorf("the refusal must suggest (?i)(write|delete): %v", err)
+	}
+	for _, ok := range []string{"(?i)(write|delete|copy)", "(?i)TestWrite", "(?i)Test(A|B)", "(?i)[a|b]x", "TestA|TestB"} {
+		if err := validateRunFilter("run", ok); err != nil {
+			t.Errorf("%q must be accepted: %v", ok, err)
+		}
+	}
+}
+
 func TestRunFilter_Validation(t *testing.T) {
 	for _, ok := range []string{"TestA|TestB", "^TestX$", "TestFoo/sub_case", "slow and not db", "Test(A|B)[0-9]+.*", "a@b"} {
 		if err := validateRunFilter("run", ok); err != nil {

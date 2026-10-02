@@ -334,6 +334,11 @@ func (s *Server) handleToolsCall(ctx context.Context, req mcpRequest) mcpRespons
 	// One id per call, minted before every hook so OnBeforeTool, the tool and
 	// OnAfterTool all see the same value — it links history rows to the stats row.
 	ctx = WithCallID(ctx, NewCallID())
+	// Progress is reported against the client's progressToken until this call
+	// returns; the deferred close runs before dispatchMessage writes the
+	// response, so no notification can follow it (progress.go).
+	ctx, closeProgress := withProgress(ctx, params.Meta)
+	defer closeProgress()
 	if resp := s.refusalResponse(ctx, req, params.Name, logicalAgent); resp != nil {
 		return *resp
 	}

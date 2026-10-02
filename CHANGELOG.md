@@ -13,6 +13,26 @@
   unrelated opens. A per-directory in-process mutex now sits in front of the
   file lock, so at most one descriptor waits on `flock` and the other writers
   wait in memory. The file lock still serialises writers across processes.
+- **A `mutation_test` run that its client gives up on now stops.** Claude
+  Code drops a tool call that sends nothing for 30 minutes, but keeps the
+  connection open. The run kept going anyway, for up to an hour more on a real
+  package. It kept applying mutants for a report nobody could receive, and held
+  the daemon's single run slot against every other agent. plumb now honours
+  `notifications/cancelled`: the step in flight is stopped, the file restored
+  and the slot freed. The refusal a second caller gets no longer claims the
+  slot frees only when the holder's connection closes.
+- **Long `mutation_test` runs stay alive.** plumb now sends
+  `notifications/progress` when the client asks for it with a `progressToken`.
+  `mutation_test` reports one update per compile and test step, which resets
+  the client's idle window. A run that asked for no progress, and that the
+  baseline shows would outlast 25 minutes, is refused before anything is
+  mutated, with a batch size that fits.
+- **A `run`/`test_run` filter like `(?i)write|delete` is refused.** `go test
+  -run` matches each top-level `|` alternative as a separate regex, so the
+  leading flag covered only `write`, and the run silently skipped the rest. A
+  mutation run with that filter reported every mutant SURVIVED, all falsely.
+  `go test -list` applies the flag to the whole pattern, so it looked right.
+  The refusal suggests the grouped spelling, `(?i)(write|delete)`.
 
 ## 0.21.0 (2026-10-02)
 

@@ -12,7 +12,7 @@ import (
 )
 
 // mutationtest_slot.go is mutation_test's daemon-wide run slot: who holds it,
-// how far their run has got, and the release when the holder's connection goes.
+// how far their run has got, and the release when the holder abandons the call.
 //
 // ONE RUN PER DAEMON, NOT PER WORKSPACE. A per-workspace slot looks tempting but
 // is unsafe: workspaces nest (the ops root and the ./plumb submodule it
@@ -24,7 +24,7 @@ import (
 // What made the single slot painful was never its scope but its opacity: a
 // refusal that named nobody, and a slot that stayed held for as long as a
 // crashed client's run took to finish. The holder record fixes the first; the
-// connection watch in cancelOnDisconnect fixes the second.
+// abandonment watch in cancelOnAbandon fixes the second.
 
 // mutationRun is THE slot. Process-global by design, like pathLocks in
 // file_write_helpers.go: tool instances are per-connection, so a field on
@@ -89,13 +89,34 @@ func (s *mutationSlot) atMutant(k int) {
 	}
 }
 
-// atStep records the phase the holder is in: one of the step* constants.
-func (s *mutationSlot) atStep(step string) {
+// atStep records the phase the holder is in: one of the step* constants. It
+// returns the holder as updated, for enterStep's progress report.
+func (s *mutationSlot) atStep(step string) mutationHolder {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.held {
 		s.holder.step = step
 	}
+	return s.holder
+}
+
+// enterStep records that the run is starting step (stepCompile or stepTest) of
+// the mutant it is at, and tells the client: one notifications/progress per
+// step, when the client asked for progress. Without it a run longer than the
+// client's idle window (Claude Code: 30 min) is dropped mid-run even though it
+// is working. Steps are numbered over the whole run — the baseline is mutant 0 —
+// so the progress value strictly increases, as the spec requires.
+func enterStep(ctx context.Context, step string) {
+	h := mutationRun.atStep(step)
+	index := 2 * h.current
+	if step == stepTest {
+		index++
+	}
+	what := "unmutated baseline"
+	if h.current > 0 {
+		what = fmt.Sprintf("mutant %d/%d", h.current, h.mutants)
+	}
+	mcp.ReportProgress(ctx, float64(index+1), float64(2*(h.mutants+1)), fmt.Sprintf("mutation_test: %s, %s", what, step))
 }
 
 // snapshot reports the holder and whether the slot is held.
@@ -136,26 +157,35 @@ func (h mutationHolder) describe(now time.Time) string {
 func (h mutationHolder) busyError(now time.Time) error {
 	return fmt.Errorf("mutation_test: another mutation run is already in progress on this daemon — %s. "+
 		"Concurrent runs would read each other's breakage as their own result, so this one is refused rather than queued. "+
-		"Wait for it to finish and retry; if that session has gone, its run is cancelled as soon as its connection closes and the slot frees itself",
+		"Wait for it to finish and retry. The run is cancelled and the slot frees itself as soon as its client cancels the call or its connection closes; "+
+		"a client that silently stops waiting does neither, and the run then holds the slot until it finishes",
 		h.describe(now))
 }
 
-// cancelOnDisconnect derives a ctx that is also cancelled when the connection
-// that issued this call closes (mcp.ConnectionClosed). A run whose client has
-// crashed or disconnected can never deliver its report, so carrying on would only
-// hold the daemon-wide slot — for up to maxMutants × two maxMutationStepSeconds
-// steps — against every other agent. Cancelling takes the ordinary cancellation
-// path: the step in flight is killed, the file is restored, the slot released.
-func cancelOnDisconnect(ctx context.Context) (context.Context, context.CancelFunc) {
-	gone := mcp.ConnectionClosed(ctx)
+// cancelOnAbandon derives a ctx that is also cancelled when the caller abandons
+// the call: the client sends notifications/cancelled for it
+// (mcp.RequestCancelled), or the connection that issued it closes
+// (mcp.ConnectionClosed). Either way the report can never be delivered, so
+// carrying on would only hold the daemon-wide slot — for up to maxMutants × two
+// maxMutationStepSeconds steps — against every other agent, and keep writing
+// mutants nobody will read the verdict on. The two are separate signals because
+// a client abandons a CALL far more often than it closes its connection: Claude
+// Code drops an idle tools/call and keeps a shared connection open. Cancelling
+// takes the ordinary cancellation path: the step in flight is killed, the file
+// is restored, the slot released.
+func cancelOnAbandon(ctx context.Context) (context.Context, context.CancelFunc) {
+	gone, cancelled := mcp.ConnectionClosed(ctx), mcp.RequestCancelled(ctx)
 	ctx, cancel := context.WithCancel(ctx)
-	if gone == nil {
+	if gone == nil && cancelled == nil {
 		return ctx, cancel
 	}
 	go func() {
 		select {
 		case <-gone:
 			slog.Info("mutation_test: the owning connection closed mid-run; cancelling it and releasing the run slot")
+			cancel()
+		case <-cancelled:
+			slog.Info("mutation_test: the client cancelled the call mid-run; cancelling it and releasing the run slot")
 			cancel()
 		case <-ctx.Done():
 		}
