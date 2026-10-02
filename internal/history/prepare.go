@@ -22,10 +22,13 @@ const binarySniffBytes = 8000
 // renames need no diff; sensitive paths keep counts and shas only; oversized
 // sides are stripped. Everything else is left for the writer.
 func Prepare(it Item, p Policy) Item {
+	// Fix the hashes first: every branch below may strip the content they are
+	// computed from.
+	it.Before, it.After = settled(it.Before), settled(it.After)
 	switch {
 	case it.Kind == KindDir:
 		it.Content = ContentNone
-	case it.Op == OpRename && bytes.Equal(it.Before.SHA, it.After.SHA):
+	case it.Op == OpRename && bytes.Equal(it.Before.SHA(), it.After.SHA()):
 		it.Content = ContentNone
 	case IsSensitiveChange(p.SensitiveGlobs, it.Workspace, it.Path, it.From):
 		if carried(it.Before) && carried(it.After) {

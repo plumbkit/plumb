@@ -3,7 +3,9 @@ package history
 // Regression tests for the post-merge adversarial review of #580 (store core).
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"path/filepath"
 	"slices"
@@ -289,5 +291,69 @@ func TestRenamesDoNotFabricateGaps(t *testing.T) {
 		if e.GapBefore {
 			t.Errorf("false gap before seq %d (%s %s from %q)", e.Seq, e.Op, e.Path, e.From)
 		}
+	}
+}
+
+// A Side is built at every write site, history on or off; the spec says a
+// disabled call does no hashing. So building one must not hash — Prepare (which
+// only runs when history is on) settles the hash, before anything strips the
+// content it is computed from.
+func TestSideFromBytesDefersTheHashUntilPrepare(t *testing.T) {
+	content := []byte("DB_PASSWORD=x\n")
+	want := sha256.Sum256(content)
+	s := SideFromBytes(content)
+	if s.sha != nil {
+		t.Fatal("SideFromBytes hashed eagerly; a write with history off must not pay for it")
+	}
+	if !bytes.Equal(s.SHA(), want[:]) {
+		t.Fatal("SHA() on demand is wrong")
+	}
+	// Prepare strips a sensitive side's content: the hash must survive it.
+	it := Prepare(Item{Workspace: "/w", Change: Change{Op: OpCreate, Path: "/w/.env", After: SideFromBytes(content)}},
+		Policy{SensitiveGlobs: []string{".env"}})
+	if it.After.Content != nil || !bytes.Equal(it.After.SHA(), want[:]) {
+		t.Fatalf("after Prepare: content kept=%v, sha ok=%v", it.After.Content != nil, bytes.Equal(it.After.SHA(), want[:]))
+	}
+}
+
+// An item queued without Prepare (and then downgraded to an overflow marker,
+// which strips content) must still store the right hash.
+func TestAnOverflowMarkerKeepsTheRightHash(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "h.db")
+	s, err := Open(p, Options{QueueSize: 1, BatchWait: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	s.pauseWriter()
+	dir := t.TempDir()
+	wants := make([][32]byte, 0, 3)
+	for i := range 3 {
+		after := []byte{'v', byte('0' + i), '\n'}
+		wants = append(wants, sha256.Sum256(after))
+		s.Enqueue(item(OpCreate, filepath.Join(dir, strconv.Itoa(i)), nil, after))
+	}
+	s.resumeWriter()
+	if err := s.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.db.Query(`SELECT after_sha FROM changes ORDER BY seq`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	i := 0
+	for rows.Next() {
+		var got []byte
+		if err := rows.Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, wants[i][:]) {
+			t.Errorf("row %d stored a wrong after_sha (an overflow marker lost the content before hashing)", i)
+		}
+		i++
+	}
+	if i != 3 {
+		t.Fatalf("%d rows, want 3", i)
 	}
 }

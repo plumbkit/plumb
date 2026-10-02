@@ -16,7 +16,7 @@ func TestPrepareWithholdsSensitiveContentBeforeItIsQueued(t *testing.T) {
 	if got.Content != ContentSensitive || got.Before.Content != nil || got.After.Content != nil {
 		t.Fatalf("sensitive item still carries content: %+v", got)
 	}
-	if got.Added != 1 || got.Removed != 1 || got.Before.SHA == nil {
+	if got.Added != 1 || got.Removed != 1 || got.Before.SHA() == nil {
 		t.Fatalf("counts/shas lost: %+v", got)
 	}
 	// Positive control: a non-sensitive path keeps its content for the writer.

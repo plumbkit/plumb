@@ -305,7 +305,7 @@ func shaOrNil(s Side) any {
 	if !s.Exists {
 		return nil
 	}
-	return s.SHA
+	return s.SHA()
 }
 
 func sizeOrNil(s Side) any {

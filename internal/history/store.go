@@ -125,6 +125,9 @@ func (s *Store) Enqueued() int64 { return s.enqueued.Load() }
 // stays intact; past the overflow cap the row is dropped and counted.
 func (s *Store) Enqueue(it Item) {
 	s.enqueued.Add(1)
+	// Prepare has normally settled these already; an item queued without it
+	// is settled here, outside mu.
+	it.Before, it.After = settled(it.Before), settled(it.After)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -147,6 +150,8 @@ func (s *Store) Enqueue(it Item) {
 }
 
 func marker(it Item) Item {
+	// Settle first: the hash must outlive the content it is computed from.
+	it.Before, it.After = settled(it.Before), settled(it.After)
 	it.Before.Content, it.After.Content = nil, nil
 	it.Content, it.Added, it.Removed = ContentOverflow, 0, 0
 	return it

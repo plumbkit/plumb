@@ -52,23 +52,55 @@ const (
 // max_content_bytes can lower it, never raise it.
 const HardMaxContentBytes = 8 << 20
 
-// Side is one side (before or after) of a change. SHA and Size are set whenever
-// Exists; Content is nil when the side is not carried (too large, or stripped
-// by Prepare). A Side shares Content with its source slice: callers must not
-// mutate it afterwards.
+// Side is one side (before or after) of a change. Size is set whenever Exists;
+// Content is nil when the side is not carried (too large, or stripped by
+// Prepare). A Side shares its bytes with its source slice: callers must not
+// mutate them afterwards.
+//
+// The hash is LAZY. Every write site builds its Sides whether or not history
+// is on, and a disabled call must not pay for hashing (spec §6.1); so
+// SideFromBytes only records the bytes, SHA computes on demand, and settled —
+// applied by Prepare, Store.Enqueue and marker, which only run when history is
+// on — fixes the hash before anything strips the content it is computed from.
 type Side struct {
 	Exists  bool
 	Content []byte
-	SHA     []byte
 	Size    int64
+	sha     []byte // fixed by settled or SideFromFile; computed on demand until then
+	raw     []byte // an uncarried (too large) side's bytes, kept only until settled
 }
 
-// SideFromBytes describes existing content b.
+// SHA returns the side's sha256, or nil when the side does not exist.
+func (s Side) SHA() []byte {
+	if !s.Exists || s.sha != nil {
+		return s.sha
+	}
+	src := s.Content
+	if src == nil {
+		src = s.raw
+	}
+	sum := sha256.Sum256(src)
+	return sum[:]
+}
+
+// settled returns s with its hash fixed and an uncarried side's bytes released.
+// Idempotent. Anything that strips a Side's content must settle it first, or
+// the hash would be computed from nothing.
+func settled(s Side) Side {
+	if s.Exists && s.sha == nil {
+		s.sha = s.SHA()
+	}
+	s.raw = nil
+	return s
+}
+
+// SideFromBytes describes existing content b, without hashing it (see Side).
 func SideFromBytes(b []byte) Side {
-	sum := sha256.Sum256(b)
-	s := Side{Exists: true, SHA: sum[:], Size: int64(len(b))}
+	s := Side{Exists: true, Size: int64(len(b))}
 	if len(b) <= HardMaxContentBytes {
 		s.Content = b
+	} else {
+		s.raw = b
 	}
 	return s
 }
@@ -101,7 +133,7 @@ func SideFromFile(path string) (Side, error) {
 	if err != nil {
 		return Side{}, err
 	}
-	return Side{Exists: true, SHA: h.Sum(nil), Size: n}, nil
+	return Side{Exists: true, sha: h.Sum(nil), Size: n}, nil
 }
 
 // Change is what a write site reports, under its per-path lock, after the write
