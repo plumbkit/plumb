@@ -79,6 +79,13 @@
   - **Ordering.** Order is now strictly first-in, first-out across the queue's
     overflow boundary.
 
+- **`plumb history` no longer reports an "unrecorded change" around
+  `rename_file`.** A rename continues its source file's history, and ends the
+  history of the path it left. The gap check compared the rename against the
+  destination's previous state, so every rename over an existing file was
+  flagged. Recreating a renamed-away file was flagged too. Both read as edits
+  made outside plumb.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
