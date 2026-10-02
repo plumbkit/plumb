@@ -532,7 +532,7 @@ before this gate, the replayed ID alone was enough. A same-user process
 can of course read `session_state.db` directly, which is the standing
 peer-agent-as-same-user boundary above, not a property of this mechanism.
 
-**Resume credential (daemon side; the proxy does not present one yet).** A second
+**Resume credential (daemon and `plumb serve`).** A second
 authority for the same continuity, because the proxy session ID dies with the serve
 process that holds it and a replacement serve otherwise recovers only the NAME (the
 external conversation ID is a claim, and a claim never authorises an internal session
@@ -585,6 +585,32 @@ have none; a hash retained beside an identity nobody resumes discloses nothing. 
 credential is a new store (known gap 4 grows by one table), the shape is added to
 `internal/redact`, and the design's own residual risks (docs/identity-resume-credential-design.md,
 section 9) apply in full, including that it has had no independent security review.
+
+**The proxy half.** `plumb serve` is the proxy the daemon's announcement gate exists
+for, and the one thing it must never skip is the strip. It removes the credential key from
+every JSON object, at any depth, in every frame bound for its client: the strip is the
+last step of `writeClient`, the single place a frame leaves for the client, so the
+initialize result, every tool result (the rotation successor, a late disclosure to a
+connection that converged on the degraded retry), a notification and a replayed handshake
+are all covered by one site and not by a list of frame kinds; a frame it cannot parse has
+any credential-shaped token redacted instead of forwarded. The credential is kept in the
+proxy's own state directory, one file per conversation at mode 0600 written atomically,
+bound to the daemon whose session-state database issued it so it is never presented to a
+daemon that cannot evaluate it, and capped at 256 entries (the oldest evicted). It is
+presented once, in the request `_meta` of the first `session_start` that names a
+conversation with a stored entry, and only by a replacement serve (the daemon's last word
+on the connection is a fresh `established` identity, never `restored`), never on a call
+stamped as another agent; a credential a client put in the request `_meta` itself is
+removed, so the proxy is the only presenter. Residual: the store is a same-user-readable
+file (the standing boundary above), and the daemon does not tell a proxy that it refused a
+credential, so a dead entry stays until the cap evicts it or the conversation's next
+disclosure replaces it. A superseded or revoked presentation is answered and not
+punished, but a generation the daemon has since pruned matches nothing and counts toward
+its three-strikes revocation, so a dead entry presented by three successive replacements
+can cost its own conversation the credential, which is the name-only continuity that ships
+today. The leak scan
+(A5) now covers every frame the proxy forwards, `_meta` included
+(`cmd/smoke` scans each frame its client receives).
 
 ### A7 — Store corruption or downgrade
 

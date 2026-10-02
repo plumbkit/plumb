@@ -34,6 +34,27 @@
   changes no behaviour yet, and `rsk1-` tokens are now scrubbed by
   `internal/redact`. The threat model records the new authority and the accepted
   griefing vector of the revocation counter.
+- **A replacement `plumb serve` now resumes the full identity: the proxy half of the
+  resume credential.** (#556, `docs/identity-resume-credential-design.md`) `plumb serve`
+  announces `dev.plumbkit/resume-credential-consumer: 1` in its initialize `_meta`,
+  removes `dev.plumbkit/resume-credential` from every frame it forwards to its client
+  (the initialize result, every tool result including a late C3 disclosure, a replayed
+  handshake, a notification, at any depth in the frame; a frame it cannot parse has
+  any token redacted rather than forwarded), and keeps what it removed. Once
+  `session_start` links a conversation, the credential is stored in the proxy's own
+  state directory (`<state dir>/serve/resume-credentials/`, mode 0600, one atomically
+  written file per conversation, bound to the daemon whose session-state database
+  issued it, capped at 256 entries with the oldest evicted) and refreshed at every
+  rotation. A replacement serve whose daemon reports a fresh identity presents the
+  stored credential once, in the request `_meta` of the first `session_start` that
+  names that conversation, so the internal session ID, name, mail and thread seats
+  come back instead of the name alone (symptoms 2 and 4); a credential a client put
+  in the request `_meta` itself is never forwarded. Against a daemon that predates the
+  credential the announcement is ignored and nothing is stored or presented. A
+  presentation that earns no successor leaves the stored entry in place, because the
+  daemon does not say whether it was refused or merely could not finish, and a retry
+  can still restore the predecessor. `TestSmoke_ServeReplacementResumesByName` now
+  asserts the full restore it used to assert could not happen.
 
 ### Fixed
 

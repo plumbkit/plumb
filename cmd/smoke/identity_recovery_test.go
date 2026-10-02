@@ -474,11 +474,16 @@ func retryCall(t *testing.T, c *mcpClient, tool string, args map[string]any, bud
 // TestSmoke_ServeReplacementResumesByName is the machine-reboot case, and the
 // reason the two restart tests above are not the whole story: a reboot kills
 // the serve proxy TOO, so no proxy credential survives and the daemon-restart
-// restore cannot fire. Continuity then rests entirely on the external linkage:
-// the new serve process presents the same conversation ID and takes back the
-// NAME its predecessor answered to. The internal session ID does NOT come
-// back — that would mean the credential boundary leaked — and the packet must
-// say the caller resumed rather than silently handing back the name.
+// restore cannot fire. What carries the conversation across is the resume
+// credential (docs/identity-resume-credential-design.md): the first serve was
+// disclosed one, kept it in its own state directory, and the replacement serve
+// presents it at the session_start that names the conversation. So the
+// replacement is the SAME identity: the internal session ID comes back along
+// with the name, and the packet says the identity was restored. Before the
+// credential this test asserted the opposite (a name-only resume under a new
+// ID), which was correct while the proxy credential was the only authority;
+// TestSmoke_ServeReplacementWithoutLinkStartsAFreshIdentity still pins the case
+// where there is nothing to present.
 func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	plumbBin := buildPlumb(t)
 	fixture := makeMarkerFixture(t)
@@ -534,12 +539,12 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
 			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
 	}
-	if !strings.Contains(packet2, "new internal identity — mail and threads bound to the predecessor ID are not inherited") {
-		t.Errorf("the replacement packet does not disclose the name-only recovery boundary:\n%s", packet2)
+	if !strings.Contains(packet2, "identity restored — mail and threads bound to your previous session followed you") {
+		t.Errorf("the replacement packet does not report the full restore:\n%s", packet2)
 	}
-	if full2 == full1 {
-		t.Fatalf("the replacement serve recovered the internal session ID %q — only the proxy "+
-			"credential may restore an ID, and no credential survived the replacement", full2)
+	if full2 != full1 {
+		t.Fatalf("the replacement serve came back as session %q, want the predecessor's %q — the "+
+			"credential its predecessor's serve stored was not presented, or the daemon did not accept it", full2, full1)
 	}
 
 	// And the linkage is resolvable by the real CLI, not only in-process.
