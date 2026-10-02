@@ -440,61 +440,55 @@ func checkHistoryDB() []checkResult {
 	}
 	r, err := history.OpenReadOnlyAt(dbPath)
 	if err != nil {
-		return []checkResult{{
-			name:   "history db",
-			ok:     false,
-			detail: err.Error(),
-			fix:    "upgrade plumb or remove " + contractConfigPath(dbPath) + " to reset",
-		}}
+		fix := "the database may be corrupt — remove " + contractConfigPath(dbPath) + " to reset (write history is lost)"
+		if errors.Is(err, history.ErrNewerSchema) {
+			fix = "upgrade plumb: history.db was written by a newer version, and this one will not write to it"
+		}
+		return []checkResult{{name: "history db", ok: false, detail: err.Error(), fix: fix}}
 	}
 	defer r.Close()
 
 	count, _ := r.Count()
-	res := []checkResult{{
-		name:   "history db",
-		ok:     true,
-		detail: fmt.Sprintf("%s  (%d changes, %s)", contractConfigPath(dbPath), count, textfmt.HumanBytes(fi.Size())),
-	}}
-
 	meta, _ := r.Meta()
-	now := time.Now().UnixMilli()
-	cutoff := now - 24*time.Hour.Milliseconds()
+	return []checkResult{{
+		name: "history db",
+		ok:   true,
+		detail: fmt.Sprintf("%s  (v%d, %d changes, %s)", contractConfigPath(dbPath), r.Version(), count,
+			textfmt.HumanBytes(fi.Size())),
+	}, historyHealth(meta, time.Now())}
+}
 
-	hasDropRecent := false
-	if v, ok := meta["last_drop_at_ms"]; ok && v != "" {
-		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= cutoff {
-			hasDropRecent = true
+// historyHealth summarises the writer's loss counters. A drop or write error in
+// the last 24 h is a warning — ok stays true, so it never fails the run.
+func historyHealth(meta map[string]string, now time.Time) checkResult {
+	count := func(k string) string {
+		if v := meta[k]; v != "" {
+			return v
 		}
+		return "0"
 	}
-	hasErrorRecent := false
-	if v, ok := meta["last_error_at_ms"]; ok && v != "" {
-		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms >= cutoff {
-			hasErrorRecent = true
+	recent := func(k string) (time.Time, bool) {
+		ms, err := strconv.ParseInt(meta[k], 10, 64)
+		if err != nil {
+			return time.Time{}, false
 		}
+		at := time.UnixMilli(ms)
+		return at, now.Sub(at) <= 24*time.Hour
 	}
-
-	if hasDropRecent || hasErrorRecent {
-		dropped := meta["dropped_rows"]
-		if dropped == "" {
-			dropped = "0"
-		}
-		errs := meta["write_errors"]
-		if errs == "" {
-			errs = "0"
-		}
-		res = append(res, checkResult{
-			name:   "history health",
-			warn:   true,
-			detail: fmt.Sprintf("dropped_rows=%s write_errors=%s last_error=%s", dropped, errs, meta["last_error"]),
-		})
-	} else {
-		res = append(res, checkResult{
-			name:   "history health",
-			ok:     true,
-			detail: "ok",
-		})
+	_, dropRecent := recent("last_drop_at_ms")
+	errAt, errRecent := recent("last_error_at_ms")
+	if !dropRecent && !errRecent {
+		return checkResult{name: "history health", ok: true, detail: "ok"}
 	}
-	return res
+	detail := fmt.Sprintf("dropped_rows=%s overflow_rows=%s write_errors=%s",
+		count("dropped_rows"), count("overflow_rows"), count("write_errors"))
+	if errRecent {
+		detail += fmt.Sprintf(" last_error=%q (%s ago)", meta["last_error"], now.Sub(errAt).Round(time.Second))
+	}
+	return checkResult{
+		name: "history health", ok: true, warn: true, detail: detail,
+		fix: "history rows were dropped or failed to write recently; check the daemon log for \"history:\" warnings",
+	}
 }
 
 // checkRastro reports whether the Rastro integration is enabled and, if so,

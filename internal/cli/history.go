@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -111,12 +112,26 @@ func parseWhen(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid time %q: expected RFC 3339, YYYY-MM-DD, or age like 2h or 7d", s)
 }
 
+// cliPath turns a user-typed path into the spelling history.db stores: absolute
+// (relative to the shell's cwd, as the user meant it) and canonical. Without
+// the first step paths.Canonical leaves a relative path relative, and
+// `--workspace .` or `--file f.txt` silently matched nothing.
+func cliPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return paths.Canonical(p)
+}
+
 func resolveHistoryWorkspace() (string, error) {
 	if historyFlagAll {
 		return "", nil
 	}
 	if historyFlagWorkspace != "" {
-		return paths.Canonical(historyFlagWorkspace), nil
+		return cliPath(historyFlagWorkspace), nil
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -174,7 +189,7 @@ func buildHistoryFilter(ws string) (history.Filter, error) {
 		SessionID: historyFlagSession,
 		Agent:     historyFlagAgent,
 		Tool:      historyFlagTool,
-		File:      historyFlagFile,
+		File:      cliPath(historyFlagFile),
 		Limit:     historyFlagLimit,
 	}
 
@@ -192,6 +207,10 @@ func buildHistoryFilter(ws string) (history.Filter, error) {
 			return filter, fmt.Errorf("invalid --until: %w", err)
 		}
 		filter.Until = t
+	}
+	if !filter.Since.IsZero() && !filter.Until.IsZero() && !filter.Since.Before(filter.Until) {
+		return filter, fmt.Errorf("--since (%s) is not before --until (%s): the range is empty",
+			filter.Since.Format(time.RFC3339), filter.Until.Format(time.RFC3339))
 	}
 	return filter, nil
 }
@@ -445,10 +464,7 @@ func runHistoryPrune(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	ws := historyFlagPruneWorkspace
-	if ws != "" {
-		ws = paths.Canonical(ws)
-	}
+	ws := cliPath(historyFlagPruneWorkspace)
 
 	res, err := history.Prune(history.DBPath(), before, ws)
 	if err != nil {

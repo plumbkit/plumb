@@ -8,12 +8,16 @@ import (
 )
 
 // CallSummary is the tool_calls metadata `plumb history show` prints beside a
-// call's diffs.
+// call's diffs. Its JSON keys are part of `plumb history show --json`'s output,
+// so they follow that output's snake_case.
 type CallSummary struct {
-	Tool, ErrorMsg, SessionName, Workspace string
-	CalledAt                               time.Time
-	DurationMs                             int64
-	Success                                bool
+	Tool        string    `json:"tool"`
+	ErrorMsg    string    `json:"error_msg,omitempty"`
+	SessionName string    `json:"session_name,omitempty"`
+	Workspace   string    `json:"workspace,omitempty"`
+	CalledAt    time.Time `json:"called_at"`
+	DurationMs  int64     `json:"duration_ms"`
+	Success     bool      `json:"success"`
 }
 
 // CallByID returns the call recorded under callID. ok is false when no row

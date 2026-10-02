@@ -109,6 +109,15 @@ func (r *Reader) Close() error {
 	return r.db.Close()
 }
 
+// Version is the history.db schema version this reader opened (0 for a file
+// with no schema yet).
+func (r *Reader) Version() int {
+	if r == nil {
+		return 0
+	}
+	return r.v
+}
+
 // Count returns the total number of change rows.
 func (r *Reader) Count() (int64, error) {
 	if r == nil || r.v == 0 {
@@ -174,12 +183,16 @@ func buildListQuery(f Filter) (string, []any) {
 	}
 	if f.File != "" {
 		canonFile := paths.Canonical(f.File)
-		filePath := canonFile
 		if !f.All && canonRoot != "" {
-			filePath = relTo(canonRoot, canonFile)
+			conds = append(conds, "p.path = ?")
+			args = append(args, relTo(canonRoot, canonFile))
+		} else {
+			// Across workspaces each row's path is relative to ITS root, so an
+			// absolute file matches root + "/" + path (or a path stored absolute
+			// because it lay outside every workspace).
+			conds = append(conds, "(p.path = ? OR w.root || '/' || p.path = ?)")
+			args = append(args, canonFile, canonFile)
 		}
-		conds = append(conds, "p.path = ?")
-		args = append(args, filePath)
 	}
 	if !f.Since.IsZero() {
 		conds = append(conds, "c.ts_ms >= ?")
