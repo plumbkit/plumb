@@ -52,6 +52,33 @@
   checkout. Rows written before the fix keep whatever they stored; prune them
   with `plumb history prune` if a secret may have been copied.
 
+- **Crash-recovery restores are recorded in write history again.** When a
+  workspace attaches and plumb rolls back a transaction a crash left
+  half-applied, the restore is meant to appear as a `revert` (reason
+  `crash_recovery`). It never did: recovery runs before the project config is
+  applied, and the connection did not yet carry `[history]` at that point, so
+  recording was off. The next write to the file then showed a spurious
+  "unrecorded change" gap.
+
+- **`plumb history prune` no longer slows to a crawl, and history never loses
+  a row without counting it.**
+  - **Prune.** It was quadratic: every deleted change scanned the whole table
+    for rows that referenced it (about 34 s for 20,000 rows). That held the
+    database lock against the daemon the whole time. The two referencing
+    columns are now indexed, which is added automatically to existing
+    `history.db` files with no schema-version change, and prune deletes in
+    bounded chunks.
+  - **Uncounted losses.** A batch the writer could not commit, for example
+    while a prune held the lock, dropped its rows without counting them. Those
+    rows, and the drop and error counts the batch was carrying, now reach
+    `dropped_rows` / `write_errors` (shown by `plumb doctor`) with the next
+    batch.
+  - **Reverts after a prune.** A revert whose original write had been pruned
+    was dropped. It is now stored, with no link to the pruned row.
+  - **Counting.** An overflow marker that failed to insert was counted twice.
+  - **Ordering.** Order is now strictly first-in, first-out across the queue's
+    overflow boundary.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
