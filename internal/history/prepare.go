@@ -27,7 +27,7 @@ func Prepare(it Item, p Policy) Item {
 		it.Content = ContentNone
 	case it.Op == OpRename && bytes.Equal(it.Before.SHA, it.After.SHA):
 		it.Content = ContentNone
-	case isSensitive(p.SensitiveGlobs, it):
+	case IsSensitiveChange(p.SensitiveGlobs, it.Workspace, it.Path, it.From):
 		if carried(it.Before) && carried(it.After) {
 			it.Added, it.Removed = textdiff.Counts(textdiff.ComputeExact(string(it.Before.Content), string(it.After.Content)))
 		}
@@ -51,8 +51,13 @@ func limit(p Policy) int64 {
 func carried(s Side) bool                { return !s.Exists || s.Content != nil }
 func tooBig(s Side, maxBytes int64) bool { return s.Exists && (s.Content == nil || s.Size > maxBytes) }
 
-// isSensitive reports whether the change touches a sensitive file under ANY
-// spelling the row could end up filed under or the content could come from:
+// IsSensitiveChange reports whether a change to path (with source from, "" if
+// none) under workspace root touches a sensitive file under ANY spelling the row
+// could end up filed under or the content could come from. It is the ONE rule:
+// the history store and anything that shows a write's content (a response diff)
+// must both ask it, or they disagree about what may be seen.
+//
+// It checks:
 //
 //   - the path as the tool resolved it AND as the writer will store it
 //     (paths.Canonical follows symlinks, so a write through `notes.txt -> .env`
@@ -64,14 +69,14 @@ func tooBig(s Side, maxBytes int64) bool { return s.Exists && (s.Content == nil 
 //     (/var vs /private/var, a symlinked checkout).
 //
 // Classification runs before the queue, so a miss here stores plaintext.
-func isSensitive(globs []string, it Item) bool {
+func IsSensitiveChange(globs []string, root, path, from string) bool {
 	if len(globs) == 0 {
 		return false
 	}
-	roots := []string{it.Workspace, paths.Canonical(it.Workspace)}
-	cands := []string{it.Path, paths.Canonical(it.Path)}
-	if it.From != "" {
-		cands = append(cands, it.From, paths.Canonical(it.From))
+	roots := []string{root, paths.Canonical(root)}
+	cands := []string{path, paths.Canonical(path)}
+	if from != "" {
+		cands = append(cands, from, paths.Canonical(from))
 	}
 	for _, c := range cands {
 		for _, r := range roots {
@@ -85,7 +90,8 @@ func isSensitive(globs []string, it Item) bool {
 
 // MatchSensitive reports whether path matches any glob by base name or by its
 // path relative to root ("/"-separated). It matches the one spelling it is
-// given; isSensitive is what tries every spelling a change can carry.
+// given; IsSensitiveChange is what tries every spelling a change can carry, and
+// is what callers deciding whether to show content must use.
 func MatchSensitive(globs []string, root, path string) bool {
 	base := filepath.Base(path)
 	rel, err := filepath.Rel(root, path)
