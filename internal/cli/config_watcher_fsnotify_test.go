@@ -59,7 +59,7 @@ func TestProjectWatchManager_RecreatesLostWatcher(t *testing.T) {
 	root := paths.Canonical(ws)
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	m.acquire(ws)
-	first := nextWatcher(t, built)
+	first, firstPlumb := nextLoopWatchers(t, built)
 	// An earlier ordinary error set the failed latch (poll engaged); a
 	// successful recreate is a fresh watcher, so it must clear the latch.
 	m.testErrs <- fsnotify.ErrEventOverflow
@@ -71,10 +71,11 @@ func TestProjectWatchManager_RecreatesLostWatcher(t *testing.T) {
 	}
 
 	m.testErrs <- lostWatcherErr()
-	second := nextWatcher(t, built)
-	// The replacement is opened only after the dead watcher's reader has
+	second, secondPlumb := nextLoopWatchers(t, built)
+	// The replacements are opened only after the dead watchers' readers have
 	// stopped delivering.
 	requireClosed(t, first, "the lost watcher must be closed before its replacement opens")
+	requireClosed(t, firstPlumb, "the lost watcher's .plumb sibling must be closed before its replacement opens")
 	// The reconcile reload: the workspace may have changed while blind.
 	awaitDispatch(t, sig, root)
 	if !m.healthy(ws) {
@@ -87,6 +88,7 @@ func TestProjectWatchManager_RecreatesLostWatcher(t *testing.T) {
 
 	m.close()
 	requireClosed(t, second, "close must not return before the replacement watcher is closed")
+	requireClosed(t, secondPlumb, "close must not return before the replacement .plumb watcher is closed")
 }
 
 // TestProjectWatchManager_LostAgainFallsBackToPoll pins the recreate budget:
@@ -103,9 +105,9 @@ func TestProjectWatchManager_LostAgainFallsBackToPoll(t *testing.T) {
 	w := m.watches[paths.Canonical(ws)]
 	m.mu.Unlock()
 
-	nextWatcher(t, built)
+	nextLoopWatchers(t, built)
 	m.testErrs <- lostWatcherErr()
-	second := nextWatcher(t, built)
+	second, _ := nextLoopWatchers(t, built)
 	m.testErrs <- lostWatcherErr()
 
 	// The loop gives up on its own and closes the replacement on the way out.
@@ -126,7 +128,7 @@ func TestProjectWatchManager_LostAgainFallsBackToPoll(t *testing.T) {
 	}
 	select {
 	case <-built:
-		t.Error("a third watcher was built; a watcher lost twice in a row must not be recreated again")
+		t.Error("a third pair of watchers was built; a watcher lost twice in a row must not be recreated again")
 	default:
 	}
 }
@@ -140,7 +142,7 @@ func TestProjectWatchManager_OtherErrorKeepsLoop(t *testing.T) {
 	ws := watchedTempDir(t, m)
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
-	nextWatcher(t, built)
+	nextLoopWatchers(t, built)
 	m.testErrs <- fsnotify.ErrEventOverflow
 
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
@@ -173,8 +175,8 @@ func TestProjectWatchManager_AttachRetriesLostDescriptor(t *testing.T) {
 	if !m.healthy(ws) {
 		t.Fatal("attach that lost a descriptor once was not retried")
 	}
-	if calls != 2 {
-		t.Errorf("watcher builds = %d, want 2 (one lost, one retry)", calls)
+	if calls != 3 {
+		t.Errorf("watcher builds = %d, want 3 (one lost, then the retry's root and .plumb watchers)", calls)
 	}
 }
 
@@ -208,7 +210,7 @@ func TestProjectWatchManager_CloseWaitsForReleasedWatcher(t *testing.T) {
 	built := captureWatchers(m)
 	writeProjectCfg(t, ws, "")
 	m.acquire(ws)
-	watcher := nextWatcher(t, built)
+	watcher, plumbWatcher := nextLoopWatchers(t, built)
 
 	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
 	select {
@@ -235,6 +237,7 @@ func TestProjectWatchManager_CloseWaitsForReleasedWatcher(t *testing.T) {
 		t.Fatal("close did not return after the dispatch finished")
 	}
 	requireClosed(t, watcher, "close returned before the released watcher was closed")
+	requireClosed(t, plumbWatcher, "close returned before the released .plumb watcher was closed")
 }
 
 // TestProjectWatchManager_CloseIsBoundedWhenADispatchIsStuck: close waits for
