@@ -213,6 +213,15 @@
   row pair a before and an after from two different writes. `agent_config`
   also no longer reads `config.toml` for history when history is off.
 
+- **Write history files an edit rollback under the tool that rolled back.** A
+  failed `rename_symbol` or other workspace edit recorded its reverts under
+  the made-up tool name `rollback`, so `plumb history --tool rename_symbol`
+  missed them.
+
+- **A forced `undo_edit` of a deleted file records it as absent.** Restoring a
+  file deleted since plumb wrote it recorded, and showed, the replaced side as
+  an existing empty file.
+
 - **`rename_file` no longer records a destination it did not destroy.** A
   case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
   `overwrite: true`, recorded a delete of the file itself and showed its content
