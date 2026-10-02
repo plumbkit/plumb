@@ -125,6 +125,15 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := renameFilePreconditions(ctx, t.deps, from, to, a); err != nil {
 		return "", err
 	}
+	// `to` may already name the source itself: a case-only rename on a
+	// case-insensitive volume, or a second hard link. Neither destroys a
+	// destination. Between two hard links rename(2) does nothing at all, so
+	// reporting success would record a move that never happened.
+	same := sameFileEntry(from, to)
+	if same && !strings.EqualFold(from, to) {
+		return "", fmt.Errorf("rename_file: %q and %q are hard links to the same file, and "+
+			"renaming one onto the other leaves both in place; delete_file the name you no longer want", from, to)
+	}
 	// The version the move publishes at `to`, read from the source through one
 	// descriptor BEFORE the rename: a rename moves the inode — bytes and mtime
 	// intact — so this is what `to` holds when it lands. rename_file writes no
@@ -138,7 +147,10 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// alone, so it stays on historySide — reading up to 8 MiB for a diff that
 	// never renders it would be waste on every rename with history off.
 	src := t.deps.historySide(from)
-	dest := t.deps.contentSide(to)
+	var dest history.Side
+	if !same {
+		dest = t.deps.contentSide(to)
+	}
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
@@ -183,6 +195,18 @@ func (t *RenameFile) formatRenameResult(ctx context.Context, from, to string, de
 	diff := t.deps.responseDiffAcross(ctx, []string{from, to}, to, sideOf(dest), absentSide())
 	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
 	return sb.String()
+}
+
+// sameFileEntry reports whether from and to are one file. Lstat, not Stat: a
+// symlink at `to` pointing at the source is a separate entry that the rename
+// really does replace.
+func sameFileEntry(from, to string) bool {
+	fi, err := os.Lstat(from)
+	if err != nil {
+		return false
+	}
+	ti, err := os.Lstat(to)
+	return err == nil && os.SameFile(fi, ti)
 }
 
 func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {

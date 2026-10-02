@@ -111,6 +111,13 @@
   - **Newer schema.** The daemon no longer retries such a database, logging a
     warning, every minute.
 
+- **`rename_file` no longer records a destination it did not destroy.** A
+  case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
+  `overwrite: true`, recorded a delete of the file itself and showed its content
+  in the response as lost. Renaming one hard link onto another reported success
+  and recorded a delete and a rename, although rename(2) leaves both names in
+  place; it is now refused with that explanation.
+
 - **Writes no longer hash file contents when write history is off.** Every
   write built its history record, including a sha256 of the before and after
   content, whether or not `[history] enabled` was set. The hash is now computed
