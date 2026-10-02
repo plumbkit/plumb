@@ -188,11 +188,14 @@ func TestAStaleRevertLinkStillRecordsTheRevert(t *testing.T) {
 	}
 	var n int
 	var link sql.NullInt64
-	if err := s.db.QueryRow(`SELECT COUNT(*), MAX(reverts_seq) FROM changes WHERE op='revert'`).Scan(&n, &link); err != nil {
+	var content string
+	if err := s.db.QueryRow(`SELECT COUNT(*), MAX(reverts_seq), MAX(content) FROM changes WHERE op='revert'`).Scan(&n, &link, &content); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 || link.Valid {
-		t.Fatalf("revert rows = %d, link = %+v; want the revert stored with a NULL link", n, link)
+	// Stored WITH its diff: a revert rescued only as a metadata marker (the
+	// failed-insert retry) would hide the stale link instead of resolving it.
+	if n != 1 || link.Valid || content != string(ContentDiff) {
+		t.Fatalf("revert rows = %d, link = %+v, content = %q; want one revert with its diff and a NULL link", n, link, content)
 	}
 }
 
