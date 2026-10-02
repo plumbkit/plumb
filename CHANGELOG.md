@@ -84,7 +84,9 @@
   because Go may serve the unmutated suite from its test cache, so such a run
   is also stopped between mutants once their real cost shows it would outlast
   the budget. The report then covers the mutants that ran and says why the
-  rest did not. The 25-minute budget is fixed, not configurable: progress is
+  rest did not. A cycle's cost is only known once it has run, so a run can
+  still overshoot by one cycle: the first mutant runs on the baseline's
+  estimate alone. The 25-minute budget is fixed, not configurable: progress is
   what keeps a long run alive, and the budget only protects a client that
   asks for none.
 - **A cancelled `mutation_test` call now stops.** plumb now tracks

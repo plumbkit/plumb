@@ -45,6 +45,11 @@ func checkSilentBudget(ctx context.Context, elapsed, perMutant time.Duration, mu
 // the costliest cycle seen so far, the baseline included, and stops the run when
 // the projection passes the budget. The report then covers the mutants that ran
 // and says why the rest did not. It is inert for a call with progress.
+//
+// It sees a cycle's cost only after that cycle has run, so a silent run can
+// still pass the budget by at most one cycle — the first mutant runs on the
+// baseline's estimate alone. With the default 600 s step timeout that is ~21
+// minutes in the worst case, inside Claude Code's 30-minute window.
 type silentRunWatch struct {
 	active bool // the call asked for no progress, so it is silent until the report
 	start  time.Time
@@ -71,14 +76,16 @@ func (w *silentRunWatch) stopBefore(now time.Time, ran, total int) string {
 		return ""
 	}
 	left := time.Duration(remaining) * w.worst
-	if now.Sub(w.start)+left <= w.budget {
+	projected := now.Sub(w.start) + left
+	if projected <= w.budget {
 		return ""
 	}
-	return fmt.Sprintf("\n⚠ stopped early: %d of %d %s never ran. A mutant cycle took %s, more than the baseline suggested "+
-		"(Go's test cache can make an unchanged tree's suite look cheap), so the rest would keep this silent call going for about %s more, "+
-		"past its %s budget — a client may give up on it and lose this report. This client did not ask for progress notifications, which would keep the call alive. "+
+	return fmt.Sprintf("\n⚠ stopped early: %d of %d %s never ran. The costliest compile+test cycle so far took %s, so running the rest "+
+		"would keep this silent call going for about %s in all, past its %s budget — a client may give up on it and lose this report "+
+		"(the unmutated baseline can understate a cycle: Go's test cache can make an unchanged tree's suite look cheap). "+
+		"This client did not ask for progress notifications, which would keep the call alive. "+
 		"Run the remaining mutants as a smaller batch. They prove nothing either way.\n",
-		remaining, total, textfmt.Plural(total, "mutant", "mutants"), roughDuration(w.worst), roughDuration(left), roughDuration(w.budget))
+		remaining, total, textfmt.Plural(total, "mutant", "mutants"), roughDuration(w.worst), roughDuration(projected), roughDuration(w.budget))
 }
 
 // silentBudgetRefusal is checkSilentBudget's decision, pure for testing.
