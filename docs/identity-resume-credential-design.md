@@ -1,6 +1,6 @@
 # Resume credentials for serve-replacement identity continuity
 
-*Status: daemon side implemented (#PRNUM); proxy side pending. The daemon mints,
+*Status: daemon side implemented (#591); proxy side pending. The daemon mints,
 discloses, accepts, rotates and revokes as specified, but nothing presents a
 credential until the proxy half ships, so the proxy session ID remains the only
 authority in practice. This document is the artefact the proxy card implements
