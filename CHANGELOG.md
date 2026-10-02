@@ -9,10 +9,10 @@
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon
   opened the lock file and blocked in `flock`. That was one goroutine and one
   descriptor per write, with no bound: about 500 were observed on the live
-  registry, enough to approach the fd limit and break unrelated opens. A
-  per-directory in-process mutex now sits in front of the file lock, so at
-  most one descriptor waits on `flock` and the other writers wait in memory.
-  The file lock still serialises writers across processes.
+  registry, and a longer stall would approach the fd limit and break
+  unrelated opens. A per-directory in-process mutex now sits in front of the
+  file lock, so at most one descriptor waits on `flock` and the other writers
+  wait in memory. The file lock still serialises writers across processes.
 
 ## 0.21.0 (2026-10-02)
 

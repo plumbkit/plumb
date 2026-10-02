@@ -99,13 +99,23 @@ func TestSessionDirLock_OneDescriptorWaits(t *testing.T) {
 // describes, matching by device and inode through the fd table.
 func openLockFDs(t *testing.T, lockStat syscall.Stat_t) int {
 	t.Helper()
-	entries, err := os.ReadDir("/dev/fd")
+	// Names only: os.ReadDir stats each /dev/fd entry on macOS, and on some
+	// macOS releases (CI's runner, not every local one) an entry fails that
+	// stat with EBADF, failing the whole read on Go releases without the
+	// go.dev/issue/80143 workaround. The Fstat below already skips descriptors
+	// it cannot stat.
+	fdDir, err := os.Open("/dev/fd")
+	if err != nil {
+		t.Fatalf("open fd table: %v", err)
+	}
+	names, err := fdDir.Readdirnames(-1)
+	fdDir.Close()
 	if err != nil {
 		t.Fatalf("read fd table: %v", err)
 	}
 	n := 0
-	for _, e := range entries {
-		fd, err := strconv.Atoi(e.Name())
+	for _, name := range names {
+		fd, err := strconv.Atoi(name)
 		if err != nil {
 			continue
 		}

@@ -10,12 +10,14 @@
 // Concurrency: Register / Unregister / Patch / List are safe to call from any
 // goroutine and from multiple processes at once (the daemon reaper and the TUI
 // refresh both call List). Mutating operations take a session-directory flock
-// before writing; every JSON write then goes through writeSessionFileAtomic
-// (temp file + rename), so concurrent writers do not lose read-modify-write
-// updates and concurrent readers never observe a torn file. Touch and FindEnded
-// are intentionally lock-free: Touch sets only an mtime (no read-modify-write)
-// and FindEnded tolerates torn reads, so neither needs the writer flock and
-// both stay off the per-tool-call hot path's contention.
+// before writing, behind an in-process mutex so at most one descriptor per
+// process waits on it (lock.go); every JSON write then goes through
+// writeSessionFileAtomic (temp file + rename), so concurrent writers do not
+// lose read-modify-write updates and concurrent readers never observe a torn
+// file. Touch and FindEnded are intentionally lock-free: Touch sets only an
+// mtime (no read-modify-write) and FindEnded tolerates torn reads, so neither
+// needs the writer flock and both stay off the per-tool-call hot path's
+// contention.
 package session
 
 import (
