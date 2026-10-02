@@ -196,6 +196,16 @@
   - **Newer schema.** The daemon no longer retries such a database, logging a
     warning, every minute.
 
+- **`find_replace` no longer overwrites a change that lands while it runs.** It
+  scanned each file before taking that file's lock, then wrote the replacement
+  it had computed from those bytes. A write that landed in between (from
+  another agent, or an editor) was silently lost, and write history recorded
+  the older bytes as the file's previous state. The file is now re-read and
+  the replacement re-applied under the lock. That closes the gap for other
+  plumb writes, which take the same lock, and narrows it for an editor to the
+  write itself. A file that no longer matches is left alone, and the reported
+  counts and diffs are the ones actually written.
+
 - **`rename_file` no longer records a destination it did not destroy.** A
   case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
   `overwrite: true`, recorded a delete of the file itself and showed its content
