@@ -97,7 +97,10 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	10 — logical_agent.roster_name + roster_session_id: the session row a
 //	    non-owner agent on a shared connection holds, so its name and ID come
 //	    back after a restart and its name stays reserved meanwhile (#526)
-const SchemaVersion = 10
+//	11 — resume_credential: the hash, generation and state of each identity's
+//	    resume credential, so a replacement serve that presents the secret can
+//	    resume the full identity and not only the name (#556)
+const SchemaVersion = 11
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of

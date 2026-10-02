@@ -175,8 +175,8 @@ func TestMigrateV9ToV10_AddsTheRosterColumnsAndKeepsTheRows(t *testing.T) {
 				if err != nil {
 					t.Fatalf("open #%d: %v", i+1, err)
 				}
-				if got := userVersion(t, s); got != SchemaVersion || SchemaVersion != 10 {
-					t.Fatalf("user_version = %d, SchemaVersion = %d, want 10", got, SchemaVersion)
+				if got := userVersion(t, s); got != SchemaVersion || SchemaVersion != 11 {
+					t.Fatalf("user_version = %d, SchemaVersion = %d, want 11", got, SchemaVersion)
 				}
 				cols := logicalAgentColumns(t, s)
 				if !cols["roster_name"] || !cols["roster_session_id"] {
@@ -210,7 +210,7 @@ func TestMigrateV10_FreshDatabaseHasTheColumns(t *testing.T) {
 	if !cols["roster_name"] || !cols["roster_session_id"] {
 		t.Fatalf("a fresh database lacks the roster columns: %v", cols)
 	}
-	if got := userVersion(t, s); got != 10 {
-		t.Fatalf("user_version = %d, want 10", got)
+	if got := userVersion(t, s); got != 11 {
+		t.Fatalf("user_version = %d, want 11", got)
 	}
 }

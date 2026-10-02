@@ -211,3 +211,46 @@ const ArgLogicalAgentKey = MetaLogicalAgentKey
 // ^[a-zA-Z0-9_.-]{1,64}$. For such a client the server advertises this key in
 // every tool's schema (Server.DeclareIdentityArg); no tool declares it itself.
 const ArgLogicalAgentDeclaredKey = "plumb_agent"
+
+// MetaResumeCredentialKey is the `_meta` key of the resume credential
+// (docs/identity-resume-credential-design.md), and it travels BOTH ways under the
+// one name:
+//
+//   - Disclosed by the daemon, once per generation, as a string in an initialize
+//     RESULT `_meta` (identity established or restored under a proxy credential), and
+//     in a tools/call RESULT `_meta` for the two cases that have no initialize to ride:
+//     the successor after an accepted resume, and a connection whose degraded
+//     recovery converged on the bounded retry. It is a sibling of
+//     MetaSessionIdentityKey, not a field inside it, so each key's fail-safe rule
+//     ("absence is not evidence of anything") applies to it on its own. It is
+//     disclosed ONLY to a proxy that announced MetaResumeCredentialConsumerKey: a
+//     proxy forwards every daemon frame to its client verbatim, and Claude Code
+//     persists a tool result's `_meta` in its on-disk transcripts, where a model with
+//     file tools can read it. An old proxy would forward the secret; only a proxy that
+//     consumes and strips the key may be handed it.
+//   - Presented by a `plumb serve` proxy, as a string in the `_meta` of a
+//     `session_start` tools/call REQUEST that names a conversation it holds a stored
+//     credential for. Only the request `_meta` is read: a value in the arguments is
+//     the model's own and is ignored. Any other tool, and an initialize, ignores it.
+//
+// The value is a bearer secret (`rsk1-` and 22 base64url characters). It is never
+// written to a tool result's text, a packet, a log line or the stats database;
+// only its SHA-256 is stored. A daemon that predates the key sends nothing and
+// ignores a presentation, and a proxy that predates it ignores the disclosure, so
+// either half upgrades independently. Reverse-DNS namespaced per the MCP convention.
+const MetaResumeCredentialKey = "dev.plumbkit/resume-credential" //nolint:gosec // G101: the NAME of a _meta key, not a credential
+
+// MetaResumeCredentialConsumerKey is the MCP initialize-params `_meta` key under
+// which a `plumb serve` proxy announces that it CONSUMES the resume credential: it
+// reads MetaResumeCredentialKey out of every daemon frame it sees and strips it
+// before the frame is forwarded to its client. The value is the number 1; anything
+// else (absent, a string, true, 0, 2) is not an announcement.
+//
+// It exists because the proxy forwards daemon frames verbatim, and the client
+// persists what it receives. A daemon that disclosed to every connection would write
+// a bearer secret into client transcripts the moment it met a proxy that predates
+// the strip. So the daemon mints and discloses nothing, and accepts no presentation,
+// on a connection that has not announced this. It travels inside the captured
+// initialize frame, so the handshake replay re-announces it on every reconnect.
+// Reverse-DNS namespaced per the MCP convention.
+const MetaResumeCredentialConsumerKey = "dev.plumbkit/resume-credential-consumer" //nolint:gosec // G101: the NAME of a _meta key, not a credential

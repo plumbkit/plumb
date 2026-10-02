@@ -70,8 +70,10 @@ type sessionView struct {
 	// external-ID linker and its owner has not been told. The agent whose call
 	// linked it is often not the owner (after a restart a subagent is routinely
 	// first), so the news waits here (see conn_link_external.go).
-	pendingResume *resumeState
-	lastCfgMtime  time.Time
+	pendingResume      *resumeState
+	pendingCredential  string // a minted resume credential not yet disclosed (conn_resume_credential.go)
+	credentialConsumer bool   // the proxy announced it strips the resume credential; none is dealt in without it
+	lastCfgMtime       time.Time
 	// configRoot is the root applyProjectConfig last loaded the blocks above for
 	// ("" before any). A re-pin moves acquiredRoot before applying the new config,
 	// so projectViewFor keys on this, never on acquiredRoot (#522).
@@ -340,6 +342,7 @@ type connSession struct {
 	// proxy credential, and the proxy credential belongs to the connection.
 	restoreRetryBackoff func(attempt int) time.Duration
 	cancel              context.CancelFunc
+	resumeSeams         resumeSeams // test seams in an accepted resume (conn_resume_accept.go); zero in production
 
 	state    atomic.Pointer[sessionView] // lock-free reads of the session snapshot
 	muMutate sync.Mutex                  // the single mutation lane (see mutate)

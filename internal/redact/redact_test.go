@@ -21,6 +21,8 @@ func TestRedact_Secrets(t *testing.T) {
 		{"openai", "use sk-abcdefghijklmnopqrstuvwxyz0123 now", "api-key"},
 		{"openai_proj", "use sk-proj-abcdefghijklmnopqrstuvwxyz0123 now", "api-key"},
 		{"jwt", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N", "jwt"},
+		{"resume_credential", "note rsk1-AAAAAAAAAAAAAAAAAAAAA- here", "resume-credential"},
+		{"resume_credential_in_json", `{"_meta":{"dev.plumbkit/resume-credential":"rsk1-w0lGhVFzlW6mbP7fV_kLog"}}`, "resume-credential"},
 		{"url_creds", "clone https://alice:s3cretpw@github.com/x.git", "url-credentials"},
 		{"api_key_assign", `api_key = "sk-abcdef123456"`, "secret"},
 		{"password_assign", "password: hunter2xyz", "secret"},
