@@ -178,6 +178,24 @@
   restores of a file too large to carry are now recorded by size and hash.
   Before, they were recorded as an existing empty file.
 
+- **`plumb history` and `plumb doctor` fixes.**
+  - **Paths.** `--workspace .`, a relative `--file`, and `--all` with an
+    absolute `--file` silently matched nothing; they now resolve as the shell
+    means them.
+  - **Time range.** A `--since` that is not before `--until` is refused rather
+    than returning nothing.
+  - **JSON (breaking).** The `call` object in `plumb history show --json` now
+    uses snake_case keys like the rest of the output (`tool`, `called_at`,
+    `duration_ms`, `success`, ...). 0.21.0 emitted `Tool`, `CalledAt`, and so
+    on.
+  - **Doctor.** A recent history drop or write error is now a warning, as
+    documented, not a failure that made `plumb doctor` exit non-zero. The check
+    also reports the schema version, `overflow_rows` and the last error's age.
+    For a `history.db` written by a newer plumb, it now says to upgrade instead
+    of suggesting deleting the file.
+  - **Newer schema.** The daemon no longer retries such a database, logging a
+    warning, every minute.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon

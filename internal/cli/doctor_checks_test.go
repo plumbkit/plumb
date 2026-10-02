@@ -136,7 +136,29 @@ func TestCheckHistoryDB(t *testing.T) {
 	if !results[1].warn {
 		t.Errorf("expected warn on recent drop, got %+v", results[1])
 	}
-	if !strings.Contains(results[1].detail, "dropped_rows=5") {
-		t.Errorf("expected detail to mention dropped_rows=5, got %q", results[1].detail)
+	// A warning keeps ok=true (checkResult's contract): ok=false is a FAILURE
+	// and would turn a recent dropped row into a non-zero doctor exit.
+	if !results[1].ok {
+		t.Errorf("a warning must keep ok=true, got %+v", results[1])
+	}
+	if !strings.Contains(results[1].detail, "dropped_rows=5") || !strings.Contains(results[1].detail, "overflow_rows=") {
+		t.Errorf("expected detail to report dropped_rows=5 and overflow_rows, got %q", results[1].detail)
+	}
+	if !strings.Contains(results[0].detail, "v1") {
+		t.Errorf("expected the schema version in the db detail, got %q", results[0].detail)
+	}
+
+	// 4. A history.db from a newer plumb: the fix is to upgrade, not to delete it.
+	db2, err := sqlitex.Open(history.DBPath(), sqlitex.Options{MaxOpenConns: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlitex.StampVersion(db2, history.SchemaVersion+1); err != nil {
+		t.Fatal(err)
+	}
+	db2.Close()
+	results = checkHistoryDB()
+	if results[0].ok || !strings.Contains(results[0].fix, "upgrade plumb") || strings.Contains(results[0].fix, "remove") {
+		t.Errorf("newer-schema db: want a failure whose fix is to upgrade plumb, got %+v", results[0])
 	}
 }
