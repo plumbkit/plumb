@@ -504,8 +504,13 @@ func appendFindReplaceDiffs(ctx context.Context, sb *strings.Builder, deps *Writ
 		if c.oldData == nil || len(c.oldData) > maxResponseDiffBytes {
 			continue
 		}
+		// The gate gets the ABSOLUTE path, not rel. MatchSensitive resolves its
+		// globs against the workspace root, and handing it a path relative to the
+		// SEARCH root makes that filepath.Rel fail — which degrades every
+		// path-shaped glob ("config/secrets.*") to a base-name match and silently
+		// un-withholds the file. rel is for the diff header only.
 		rel := findReplaceRelPath(root, c.path)
-		if d := deps.gatedDiff(ctx, rel, unifiedDiff(rel, string(c.oldData), string(c.newData))); d != "" {
+		if d := deps.gatedDiff(ctx, c.path, unifiedDiff(rel, string(c.oldData), string(c.newData))); d != "" {
 			sections = append(sections, d)
 		}
 	}

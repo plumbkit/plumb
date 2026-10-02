@@ -133,10 +133,11 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// A source this snapshot cannot read leaves the version unknown, which records
 	// no read state rather than a guessed one.
 	moved, _ := readSnapshot(from, func(io.Reader) error { return nil })
-	// contentSide, not historySide: the destination's bytes are what the
-	// response diff shows when this move destroys it, so the read must happen
-	// when EITHER the recorder or the response wants them (see wantContent).
-	src := t.deps.contentSide(from)
+	// contentSide for the DESTINATION only: its bytes are what the response diff
+	// shows when this move destroys it. The source side feeds the history row
+	// alone, so it stays on historySide — reading up to 8 MiB for a diff that
+	// never renders it would be waste on every rename with history off.
+	src := t.deps.historySide(from)
 	dest := t.deps.contentSide(to)
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)

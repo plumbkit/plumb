@@ -442,12 +442,12 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 	for _, p := range prepared {
 		if info, err := os.Stat(p.path); err == nil {
 			if !info.ModTime().Equal(p.preMtime) {
-				rollback(written, t.deps.historySink(ctx))
+				restored := rollback(written, t.deps.historySink(ctx))
 				txl.Rollback()
 				return nil, nil, withRevertNote(fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written),
-				), txReverted(written))
+				), restored)
 			}
 		}
 		if err := txl.Record(p.path, []byte(p.before), p.perm); err != nil {
@@ -456,10 +456,10 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 		}
 		res, err := safeWrite(p.path, []byte(p.after), p.perm)
 		if err != nil {
-			rollback(written, t.deps.historySink(ctx))
+			restored := rollback(written, t.deps.historySink(ctx))
 			txl.Rollback()
 			return nil, nil, withRevertNote(fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
-				p.path, err, len(written)), txReverted(written))
+				p.path, err, len(written)), restored)
 		}
 		p.written = res.written
 		t.deps.recordHistory(ctx, history.Change{
@@ -540,18 +540,6 @@ func formatTransactionResult(ctx context.Context, deps WriteDeps, written []txPr
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// txReverted lists the paths a transaction's rollback put back, for the failed
-// call's revert summary. Every prepared write is attempted, so the list is the
-// written set — and each entry's before/after are the bytes the rollback moved
-// between.
-func txReverted(written []txPrepared) []revertedPath {
-	out := make([]revertedPath, 0, len(written))
-	for _, p := range written {
-		out = append(out, revertedPath{path: p.path, before: p.before, after: p.after})
-	}
-	return out
-}
-
 func opFor(p txPrepared) history.Op {
 	if !p.existed {
 		return history.OpCreate
@@ -566,25 +554,32 @@ func txBeforeSide(p txPrepared) history.Side {
 	return history.SideFromBytes([]byte(p.before))
 }
 
-// rollback restores each entry in written to its pre-transaction content.
-// Best-effort: failures are logged and proceed. If a rollback write itself
-// fails, the file is left in the post-write state and the caller has lost
-// atomicity — but a partial application is the only outcome possible at
-// that point.
-func rollback(written []txPrepared, sink historySink) {
+// rollback restores each written file to its pre-transaction content and returns
+// the paths it ACTUALLY restored. The return value is what the failed call's
+// revert summary is built from: a restore that failed is logged and skipped, and
+// listing it as reverted would tell the caller a file came back when it did not.
+//
+// Best-effort by design. If a rollback write itself fails, the file is left in
+// the post-write state and the caller has lost atomicity — but a partial
+// application is the only outcome possible at that point, and the returned slice
+// is what keeps the report honest about it.
+func rollback(written []txPrepared, sink historySink) []revertedPath {
+	restored := make([]revertedPath, 0, len(written))
 	for _, p := range written {
 		if _, err := safeWrite(p.path, []byte(p.before), p.perm); err != nil {
 			slog.Error("transaction_apply: rollback failed", "path", p.path, "err", err)
-		} else {
-			sink.recordHistory(history.Change{
-				Op:             history.OpRevert,
-				Tool:           "transaction_apply",
-				Path:           p.path,
-				Before:         history.SideFromBytes([]byte(p.after)),
-				After:          history.SideFromBytes([]byte(p.before)),
-				RevertsOwnCall: true,
-				Reason:         "tx_rollback",
-			})
+			continue
 		}
+		sink.recordHistory(history.Change{
+			Op:             history.OpRevert,
+			Tool:           "transaction_apply",
+			Path:           p.path,
+			Before:         history.SideFromBytes([]byte(p.after)),
+			After:          history.SideFromBytes([]byte(p.before)),
+			RevertsOwnCall: true,
+			Reason:         "tx_rollback",
+		})
+		restored = append(restored, revertedPath{path: p.path, before: p.before, after: p.after})
 	}
+	return restored
 }

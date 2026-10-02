@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,8 +58,16 @@ func TestDeleteResponseHonoursTheKnob(t *testing.T) {
 	if strings.Contains(out, "--- a/") || strings.Contains(out, "-alpha") {
 		t.Fatalf("show_write_diff off still rendered content: %q", out)
 	}
-	// Positive control: the same call with the knob on does render, so the
-	// assertion above is the knob and not an empty file.
+	// Positive control: the same call with the knob on DOES render, so the
+	// assertion above is the knob and not a fixture that had nothing to show.
+	plain := filepath.Join(dir, "other.txt")
+	if err := os.WriteFile(plain, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	on := executeDelete(t, WriteDeps{ShowWriteDiff: true}, map[string]any{"file_path": plain})
+	if !strings.Contains(on, "-alpha") {
+		t.Fatalf("the positive control rendered no diff either:\n%s", on)
+	}
 }
 
 func TestDeleteResponseWithholdsASensitivePath(t *testing.T) {
@@ -275,6 +284,88 @@ func TestRenameResponseShowsOnlyTheDestroyedDestination(t *testing.T) {
 	}
 	if strings.Contains(out, "-survivor") {
 		t.Fatalf("the moved content was rendered as a change:\n%s", out)
+	}
+}
+
+// TestDeleteBatchRelayRequiresAShownDiff pins the ordering diffSections depends
+// on: empty sections are dropped BEFORE the twenty-file cap. Filtering after it
+// let an empty file consume a slot, so a batch of empty files plus one real
+// change rendered no diff at all — while still asking the agent to show one.
+func TestDeleteBatchRelayRequiresAShownDiff(t *testing.T) {
+	dir := t.TempDir()
+	paths := make([]string, 0, maxResponseDiffFiles+1)
+	for i := range maxResponseDiffFiles {
+		p := filepath.Join(dir, fmt.Sprintf("empty-%02d.txt", i))
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	// The change lands LAST: the position the cap used to swallow.
+	content := filepath.Join(dir, "content.txt")
+	if err := os.WriteFile(content, []byte("real content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paths = append(paths, content)
+
+	out := executeDelete(t, WriteDeps{ShowWriteDiff: true, RelayDiff: true}, map[string]any{"paths": paths})
+	if !strings.Contains(out, "-real content") {
+		t.Fatalf("the only file with content was dropped by the cap:\n%s", out)
+	}
+	if got := strings.Count(out, relayDiffNote); got != 1 {
+		t.Fatalf("relay note appears %d times, want exactly 1:\n%s", got, out)
+	}
+}
+
+func TestDeleteBatchCapsShownDiffs(t *testing.T) {
+	dir := t.TempDir()
+	const extra = 5
+	paths := make([]string, 0, maxResponseDiffFiles+extra)
+	for i := range maxResponseDiffFiles + extra {
+		p := filepath.Join(dir, fmt.Sprintf("f-%02d.txt", i))
+		if err := os.WriteFile(p, []byte("content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, p)
+	}
+	out := executeDelete(t, WriteDeps{ShowWriteDiff: true}, map[string]any{"paths": paths})
+	if got := strings.Count(out, "--- a/"); got != maxResponseDiffFiles {
+		t.Fatalf("rendered %d diffs, want the cap of %d:\n%s", got, maxResponseDiffFiles, out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("+%d more file(s)", extra)) {
+		t.Fatalf("missing the omitted-count line:\n%s", out)
+	}
+}
+
+// TestTransactionRollbackReportsOnlyWhatItRestored holds the revert summary to
+// what actually happened: rollback() carries on when a restore fails, so the
+// paths it returns — and nothing else — are what a failed call may call reverted.
+func TestTransactionRollbackReportsOnlyWhatItRestored(t *testing.T) {
+	dir := t.TempDir()
+	okPath := filepath.Join(dir, "ok.txt")
+	readonly := filepath.Join(dir, "locked")
+	if err := os.MkdirAll(readonly, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	badPath := filepath.Join(readonly, "bad.txt")
+	if err := os.WriteFile(badPath, []byte("current\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readonly, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(readonly, 0o755) }) //nolint:gosec // G302: a directory needs the execute bit to be traversable in the cleanup
+
+	written := []txPrepared{
+		{path: okPath, before: "before\n", after: "after\n", perm: 0o644, existed: true},
+		{path: badPath, before: "before\n", after: "current\n", perm: 0o644, existed: true},
+	}
+	restored := rollback(written, nil)
+	if len(restored) != 1 || restored[0].path != okPath {
+		t.Fatalf("rollback reported %+v, want only the path it restored (%s)", restored, okPath)
+	}
+	if got, err := os.ReadFile(okPath); err != nil || string(got) != "before\n" {
+		t.Fatalf("the restorable path was left as %q, %v", got, err)
 	}
 }
 

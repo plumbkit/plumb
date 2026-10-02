@@ -88,10 +88,6 @@ var enforcementCases = map[string]struct {
 		"[edits]\nshow_write_diff = false\n",
 		func(c Config) bool { return !c.Edits.ShowWriteDiff },
 	},
-	"edits.relay_write_diff": {
-		"[edits]\nrelay_write_diff = false\n",
-		func(c Config) bool { return !c.Edits.RelayWriteDiff },
-	},
 	"edits.rate_limit_per_minute": {
 		"[edits]\nrate_limit_per_minute = 100000\n",
 		func(c Config) bool { return c.Edits.RateLimitPerMinute > hardenedBase().Edits.RateLimitPerMinute },
@@ -161,6 +157,26 @@ var enforcementCases = map[string]struct {
 		"[history]\nmax_diff_bytes = 1\n",
 		func(c Config) bool { return c.History.MaxDiffBytes == 1 },
 	},
+}
+
+// TestProjectRelayWriteDiffIsAPreference pins the classification, in BOTH
+// directions. relay_write_diff is not a safety knob: the diff itself stays in
+// the tool result whatever it is set to, so the only thing at stake is whether
+// the agent is asked to repeat it — and a repository that could force that on
+// over a user who turned it off would be spending that user's output tokens
+// against their choice.
+func TestProjectRelayWriteDiffIsAPreference(t *testing.T) {
+	off := projectCfgBase(t, Defaults(), "[edits]\nrelay_write_diff = false\n")
+	if off.Edits.RelayWriteDiff {
+		t.Fatal("a project could not turn relay_write_diff off; it is not behaving as a preference")
+	}
+
+	base := Defaults()
+	base.Edits.RelayWriteDiff = false
+	on := projectCfgBase(t, base, "[edits]\nrelay_write_diff = true\n")
+	if !on.Edits.RelayWriteDiff {
+		t.Fatal("a project could not turn relay_write_diff on; it is not behaving as a preference")
+	}
 }
 
 func TestLoadProject_HostileValuesAreRefused(t *testing.T) {

@@ -318,11 +318,14 @@ func deleteReport(results []deleteResult, deps WriteDeps) string {
 	for i, r := range results {
 		sections[i] = r.diff
 	}
-	if relay := deps.relayNoteFor(sections...); relay != "" {
+	// Both the rendered sections and the relay decision come from diffSections,
+	// so the instruction cannot outlive the diff it is about (see its doc).
+	shown := diffSections(sections)
+	if relay := deps.relayNoteFor(shown...); relay != "" {
 		sb.WriteString("\n")
 		sb.WriteString(relay)
 	}
-	appendSections(&sb, diffSections(sections)...)
+	appendSections(&sb, shown...)
 	return sb.String()
 }
 

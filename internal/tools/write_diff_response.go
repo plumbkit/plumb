@@ -59,9 +59,12 @@ const (
 // emitted at most ONCE per response — a twenty-file batch needs one instruction,
 // not twenty — and only when a diff was actually shown.
 //
-// One line by design: it rides on every write response, so its own tokens are
-// paid per write.
-const relayDiffNote = "> Show this change to the user in your reply (one diff block per file)."
+// "this diff", not "this change": the line also rides on a dry-run preview,
+// where nothing changed yet, and on an undo, where the change is a reversal.
+//
+// One line by design: it rides on every write response that shows a diff, so its
+// own tokens are paid per write.
+const relayDiffNote = "> Show this diff to the user in your reply (one diff block per file)."
 
 // sideState says what a write site knows about one side of a change.
 type sideState uint8
@@ -262,20 +265,28 @@ func (d WriteDeps) relayDiff() bool {
 	return d.RelayDiff
 }
 
-// diffSections renders the per-file diff sections of a multi-file response,
-// dropping the empty ones and capping the number shown with a "+N more" line —
-// so a batch of a hundred deletions cannot carry a hundred diffs.
+// diffSections returns the per-file diff sections of a multi-file response: the
+// empty ones dropped FIRST, then capped at maxResponseDiffFiles with a "+N more"
+// line for the remainder.
+//
+// Order matters. Filtering after the cap let an empty section consume one of the
+// twenty slots, and — because the cap and the relay decision were taken over
+// different lists — a response could ask the agent to show a diff it had just
+// dropped. Callers take BOTH the rendered sections and the relay decision from
+// this return value, so the two cannot disagree.
 func diffSections(sections []string) []string {
-	shown, extra := sections, 0
+	nonEmpty := make([]string, 0, len(sections))
+	for _, s := range sections {
+		if s != "" {
+			nonEmpty = append(nonEmpty, s)
+		}
+	}
+	shown, extra := nonEmpty, 0
 	if len(shown) > maxResponseDiffFiles {
 		shown, extra = shown[:maxResponseDiffFiles], len(shown)-maxResponseDiffFiles
 	}
 	out := make([]string, 0, len(shown)+1)
-	for _, s := range shown {
-		if s != "" {
-			out = append(out, s)
-		}
-	}
+	out = append(out, shown...)
 	if extra > 0 {
 		out = append(out, fmt.Sprintf("… (+%d more file(s) changed — see plumb history)", extra))
 	}
