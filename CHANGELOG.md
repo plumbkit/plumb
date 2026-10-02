@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **A `.plumb` directory created while a session is attached is watched once,
+  on macOS under load as well.** (#568 follow-up) The project config watcher
+  added `.plumb` on the same fsnotify watcher that watches the workspace root,
+  whose kqueue reader registers each new directory in the root itself, without
+  a lock. The earlier fix only delayed plumb's `Add` past the debounce window,
+  and a reader held up longer than that, as on a loaded machine, still raced
+  it: the directory was opened twice and one descriptor leaked. The same
+  interleaving could also leave `.plumb` registered without write
+  notifications, so `config.toml` edits stopped hot-reloading while the
+  watcher reported healthy. `.plumb` now has a watcher of its own, so nothing
+  races the `Add`; this costs one more OS watcher per watched workspace.
 - **A second conversation on a shared connection no longer takes the first
   one's name and mail; Claude Code's `/clear` hands its connection over
   explicitly.** (#564, part of #556) A stamped `session_start` from a

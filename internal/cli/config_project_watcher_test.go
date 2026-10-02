@@ -111,6 +111,13 @@ func nextWatcher(t *testing.T, ch <-chan *fsnotify.Watcher) *fsnotify.Watcher {
 	}
 }
 
+// nextLoopWatchers returns the pair of OS watchers one open of a project
+// watch loop builds: the root watcher first, then the .plumb watcher.
+func nextLoopWatchers(t *testing.T, ch <-chan *fsnotify.Watcher) (root, plumb *fsnotify.Watcher) {
+	t.Helper()
+	return nextWatcher(t, ch), nextWatcher(t, ch)
+}
+
 // requireClosed fails unless watcher is already closed and its reader has
 // stopped delivering, so Events is closed — without waiting for it. It cannot
 // see the reader's last two descriptor closes, which come just after.
