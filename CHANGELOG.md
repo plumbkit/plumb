@@ -4,6 +4,29 @@
 
 ### Fixed
 
+- **A second conversation on a shared connection no longer takes the first
+  one's name and mail; Claude Code's `/clear` hands its connection over
+  explicitly.** (#564, part of #556) A stamped `session_start` from a
+  conversation other than the one the connection was linked to relinked the
+  connection and renamed it, so the first conversation lost its linkage, its
+  name and the mail addressed to it. Each stamped conversation now keeps its
+  own identity: the second one gets a session row of its own on first need,
+  recorded under (proxy session, agent) like a subagent's, so it keeps its own
+  name and mail and gets both back after a daemon restart on the same proxy.
+  An unstamped `session_start` cannot be told apart and relinks as before.
+  `/clear` starts a new conversation id on the same connection, so the
+  `SessionStart` hook now sends `conversation-cleared <new session id>` to the
+  daemon's control socket when its `source` is `clear` (best effort, one
+  second, silent on failure, stdout unchanged). The daemon keeps a one-shot,
+  in-memory marker for 24 hours (at most 256; the hook fires when `/clear` is
+  typed, not when the next prompt is sent), and the first stamped call of that
+  id to reach a connection consumes it and takes the connection over with its
+  name, mail and threads, but only when the linked conversation is the only one
+  the connection has seen. A marker acts only on the connection that receives
+  that call, never on another, and no stamp or `session_id` can request it.
+  Without a marker (hook not installed, daemon restarted in between) or where
+  other conversations share the connection, the new conversation is a newcomer
+  with an identity of its own and the marker is left unconsumed.
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon

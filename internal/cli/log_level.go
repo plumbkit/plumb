@@ -122,6 +122,9 @@ type ctrlHandlers struct {
 	webStart      func(int) (string, error)    // web-start [port] → URL
 	webStatus     func() string                // web-status
 	webStop       func() error                 // web-stop
+	// conversationCleared records that a Claude Code conversation was started by
+	// /clear: conversation-cleared <new session id> (conn_clear_markers.go).
+	conversationCleared func(string)
 }
 
 // serveControlSocket accepts admin connections on ln and handles each in its
@@ -159,6 +162,10 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	}
 
 	if handleLSPCommand(conn, line, h) {
+		return
+	}
+
+	if handleClearCommand(conn, line, h) {
 		return
 	}
 

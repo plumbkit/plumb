@@ -370,6 +370,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	}
 	srv.DeclareIdentityArg = s.clientStripsUndeclaredArgs
 	srv.OnBeforeTool = func(toolCtx context.Context, name string, args json.RawMessage, logicalAgent string) {
+		// Before the identity is recorded: a /clear handover is for a conversation's
+		// FIRST call on this connection.
+		s.handOverOnClear(logicalAgent)
 		s.recordLogicalAgentCall(logicalAgent)
 		s.onBeforeTool(toolCtx, name, args)
 	}
