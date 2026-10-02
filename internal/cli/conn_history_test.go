@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -159,6 +160,67 @@ func TestTxlogRecoveryRowsAreReverts(t *testing.T) {
 	}
 	if !strings.HasPrefix(e.CallID, "recovery-") {
 		t.Errorf("CallID = %q, want prefix recovery-", e.CallID)
+	}
+}
+
+// TestCrashRecoveryAtAttachIsRecorded drives a real orphaned txlog through the
+// attach path. Recovery runs inside the attach, before the project config is
+// applied, so it must already see [history] enabled from the global config —
+// the case the direct-sink test above cannot reach.
+func TestCrashRecoveryAtAttachIsRecorded(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	store, ss := newOriginStore(t)
+	root := freshTempDir(t)
+	mustGitDir(t, root)
+	if err := os.MkdirAll(filepath.Join(root, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "f.txt")
+	if err := os.WriteFile(target, []byte("orig\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A transaction snapshots f.txt, half-writes it, and the daemon "crashes":
+	// the log is left behind.
+	l, err := txlog.Begin(root, "01CRASHCALL0000000000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Record(target, []byte("orig\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("half-written\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newPersistSession(t, store, ss, "proxy-crash-attach")
+	s.daemonStartedAt = time.Now().Add(time.Second) // the log predates this daemon
+	s.historyStore = newHistoryStore(nil)
+	defer s.historyStore.Close()
+	if _, err := s.repinWorkspace(context.Background(), "file://"+root, "", false, false); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if got, _ := os.ReadFile(target); string(got) != "orig\n" {
+		t.Fatalf("control: recovery did not restore the file, got %q", got)
+	}
+	hst := s.historyStore.store()
+	if hst == nil {
+		t.Fatal("no history row was even attempted: the store never opened")
+	}
+	if err := hst.Sync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err := history.OpenReadOnlyAt(history.DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	entries, err := r.List(history.Filter{Workspace: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Op != history.OpRevert || entries[0].Reason != "crash_recovery" ||
+		entries[0].CallID != "01CRASHCALL0000000000000000" {
+		t.Fatalf("crash recovery at attach recorded %+v; want one crash_recovery revert under the manifest's call id", entries)
 	}
 }
 

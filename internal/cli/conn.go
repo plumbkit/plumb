@@ -500,6 +500,7 @@ func newConnSession(parent context.Context, pool *workspacePool, topoPool *topol
 		collab:    cfg.Collab,
 		tools:     cfg.Tools,
 		session:   cfg.Session,
+		history:   cfg.History, // read by txlog crash recovery during attach, before applyProjectConfig
 	})
 	// Mirror every strict-mode read to the durable store so it survives a daemon
 	// restart; the sink reads the live view (proxy id + workspace + gate) per call,
