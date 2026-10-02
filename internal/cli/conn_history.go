@@ -23,16 +23,7 @@ func (s *connSession) recordHistory(ctx context.Context, c history.Change) {
 	}
 	agent := mcp.LogicalAgentFromCtx(ctx)
 	v := s.view()
-	root := v.acquiredRoot
-	if w := s.recordedRootFor(agent); w != "" {
-		root = w
-	}
-	if w := workspaceFromArgs(s.pool, pathArg(c.Path), root); w != "" {
-		root = w
-	}
-	if root == "" {
-		root = filepath.Dir(c.Path)
-	}
+	root := s.historyRootFor(ctx, c.Path)
 	hc := s.historyConfigFor(root)
 	if !hc.Enabled {
 		return
@@ -54,6 +45,34 @@ func (s *connSession) recordHistory(ctx context.Context, c history.Change) {
 		SensitiveGlobs:  hc.SensitiveGlobs,
 		MaxContentBytes: hc.MaxContentBytes,
 	}))
+}
+
+// historyRootFor is the project a write to path is attributed to: the calling
+// agent's root, then the project the path itself lies in (onAfterTool's
+// resolution, so history and stats file a call under the same project), else
+// the path's directory.
+func (s *connSession) historyRootFor(ctx context.Context, path string) string {
+	root := s.view().acquiredRoot
+	if w := s.recordedRootFor(mcp.LogicalAgentFromCtx(ctx)); w != "" {
+		root = w
+	}
+	if w := workspaceFromArgs(s.pool, pathArg(path), root); w != "" {
+		root = w
+	}
+	if root == "" {
+		root = filepath.Dir(path)
+	}
+	return root
+}
+
+// responseSensitive is WriteDeps.SensitivePathFn: whether a write's tool result
+// may show path's content. It asks exactly what the store asks — the same root,
+// the same project's globs, every spelling of the path — so the transcript (the
+// copy that leaves the machine) and history.db never disagree. A copy/rename
+// source is passed through here as a path of its own by the response renderer.
+func (s *connSession) responseSensitive(ctx context.Context, path string) bool {
+	root := s.historyRootFor(ctx, path)
+	return history.IsSensitiveChange(s.historyConfigFor(root).SensitiveGlobs, root, path, "")
 }
 
 // pathArg shapes a path as the tool-argument JSON workspaceFromArgs reads.
