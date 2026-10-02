@@ -1,9 +1,9 @@
 # Resume credentials for serve-replacement identity continuity
 
 *Status: daemon side implemented (#591); proxy side pending. The daemon mints,
-discloses, accepts, rotates and revokes as specified, but nothing presents a
-credential until the proxy half ships, so the proxy session ID remains the only
-authority in practice. This document is the artefact the proxy card implements
+discloses, accepts, rotates and revokes as specified, but it deals in a credential
+only with a proxy that announces it consumes and strips the key (section 3), and no
+proxy does yet, so the proxy session ID remains the only authority in practice. This document is the artefact the proxy card implements
 against. It extends the vocabulary of [threat-model.md](threat-model.md) and
 must not contradict it — where this design narrows a guarantee the threat model
 states, it says so in [Residual risks](#9-residual-risks).*
@@ -170,13 +170,21 @@ results, and the secret rides one. The design accepts the disclosure
 deliberately. The `_meta` channel is already the restricted lane for exactly
 this class of fact — the identity snapshot (`dev.plumbkit/session-identity`)
 and the daemon-process marker (`dev.plumbkit/daemon-instance`) travel there,
-consumed by the proxy's fail-safe frame readers
-(`internal/cli/serve_proxy_identity.go`) and not by the model. The
-model-visible packet text never carries a credential, and the leak scan that
-enforces that today extends to the new token (section 7). A client that logs
-initialize results logs the secret; rotation bounds the life of any one
-disclosed value to the next accepted resume, which is the most that can be
-promised of a bearer secret that must be stored to work at all. The
+read by the proxy's fail-safe frame readers
+(`internal/cli/serve_proxy_identity.go`) and not by the model. But those readers
+only READ: the proxy forwards every daemon frame to its client verbatim, `_meta`
+included, and Claude Code persists a tool result's `_meta` to its on-disk
+transcripts (`mcpMeta._meta`), where a model with file tools can read it. A
+credential in a forwarded frame is therefore in the A3 attack surface for the
+life of its generation, and the daemon must not put one there. So disclosure is
+gated on the proxy announcing that it consumes and strips the key (section 3,
+"Establishment and disclosure"): a proxy that has not announced it is disclosed
+nothing, and the key a consuming proxy reads out of a frame never reaches its
+client. The model-visible packet text never carries a credential either, and the
+leak scan that enforces that today extends to the new token and to every frame
+the proxy forwards, `_meta` included (section 7). Rotation bounds the life of
+any one disclosed value to the next accepted resume, which is the most that can
+be promised of a bearer secret that must be stored to work at all. The
 alternative — never disclosing — is the status quo, and the status quo is the
 incident class above.
 
@@ -200,14 +208,30 @@ the credential-leak scan can match it exactly rather than guessing, and
 
 ### Establishment and disclosure
 
+**Only to a proxy that strips the key.** The daemon mints, discloses and accepts
+a credential only on a connection whose proxy announced, in its initialize
+params `_meta`, that it consumes the credential and removes the key from every
+frame before forwarding it to its client:
+`dev.plumbkit/resume-credential-consumer: 1` (the number 1; anything else is not
+an announcement). The key travels inside the captured initialize frame, so the
+handshake replay re-announces it on every reconnect. A connection without the
+announcement — a direct MCP client, and every proxy built before the strip —
+is minted nothing, disclosed nothing, in initialize or in any tool result, and
+its presentations prove nothing: the feature is inert for it, exactly as before.
+Every secret the daemon ever discloses originates in the mint at the end of an
+initialize (and the C3 convergence points) or in an accepted presentation's
+successor, and both check the announcement.
+
 At the end of an initialize exchange that established or restored identity
 under a proxy credential — the outcomes `established` and `restored` — the
 daemon mints a credential for the identity's record and discloses it once, in
 the initialize result `_meta`, under a new reverse-DNS key
 (`dev.plumbkit/resume-credential`, `internal/mcp/meta_keys.go`). It is a
-sibling key to the identity snapshot, not a field inside it, so an older proxy
-ignores it wholesale and the per-key fail-safe rule ("absence of the key is
-not evidence of anything") applies to it independently.
+sibling key to the identity snapshot, not a field inside it, so the per-key
+fail-safe rule ("absence of the key is not evidence of anything") applies to it
+independently. A proxy that predates the key would NOT ignore it: it would
+forward it, which is why the announcement above, and not the key's being a
+sibling, is what makes a mixed-version pair safe (section 6).
 
 The same trigger covers a connection whose identity converged on the bounded
 degraded-recovery retry (C3): the retry flips the outcome to restored with the
@@ -289,16 +313,17 @@ post-initialize trigger is architecturally admissible; its ordering rules
 converges) are stated as invariants of the operation, not of the initialize
 timing. On acceptance the identity is re-recorded under the NEW proxy
 credential — as the external-ID path does today, so the new serve's own later
-daemon-restart reconnects work unchanged — and every OTHER row carrying the
-same external ID has its credential marked superseded, leaving exactly one
-row holding a current generation per conversation.
+daemon-restart reconnects work unchanged — and the successor is issued under
+that new row. Acceptance consumes exactly the presented credential: it never
+touches another identity's credential for the same conversation, because a
+connection can reach a conversation it merely CLAIMED, and consuming its
+siblings would let it revoke the credential of whoever really owns it.
 
 A degraded outcome on the acceptance path — the name is held by a live
 overlap, the store hiccups — behaves like every degraded restore: the record
-is preserved, the outcome is reported, a later attempt retries. The
-generation is not consumed and no successor is issued, so the legitimate
-claimant's credential stays valid for the retry, and the fencing arbitration
-below never mistakes a degraded attempt for a superseded one.
+is preserved, the outcome is reported, a later attempt retries. The claimed
+generation is given back and no successor is issued, so the legitimate
+claimant's credential stays valid for the retry.
 
 ### Grant equivalence
 
@@ -380,8 +405,8 @@ proxy credential.
 
 ### Rotation on every accepted resume
 
-An accepted hash resume invalidates the presented generation and issues a
-successor in the same response. Rotation on every resume — not only on
+An accepted hash resume invalidates the presented generation (and only that
+one) and issues a successor in the same response. Rotation on every resume — not only on
 suspected theft — is chosen deliberately: fencing needs an invalidation
 EVENT (a claimed-newer owner must be able to prove newer-ness, and a
 monotonically moving generation is that proof); theft detection needs a
@@ -416,7 +441,10 @@ Three triggers, each riding authority that already exists:
   with one loud log line naming the attacker's connection. Hardening that
   would need an authority the client cannot forge, which is Design B's
   problem, not this counter's; the implementation card must carry the vector
-  and this acceptance, not silently inherit the counter.
+  and this acceptance, not silently inherit the counter. It is the ONLY way a
+  claim reaches another identity's credential: acceptance and rotation consume
+  exactly the credential presented, so a connection that relinked itself to a
+  victim's conversation cannot use them to revoke the victim's.
 - **Supersession.** A losing claimant's credential is dead by definition:
   the generation moved. The winner holds the only live secret.
 
@@ -425,13 +453,20 @@ Three triggers, each riding authority that already exists:
 First accepted resume wins, and the arbitration is atomic in the store: the
 generation move is a single conditional UPDATE in the pattern
 `RepairExternalID` already proves — match on the exact hash AND the current
-state, act only if rows-affected says it landed. Two concurrent claimants
-presenting the same current-generation secret therefore cannot both adopt:
-exactly one UPDATE matches, and the loser is told — in its own
-`session_start` result — that it was SUPERSEDED, with the recovery outcome
-saying so and the packet naming the fact plainly. The loser continues under
-a temporary identity under the standing degraded rules (never converges,
-never persists), and the human sees a double-open immediately, which is the
+state, act only if rows-affected says it landed. It is the FIRST step of an
+acceptance, ahead of any adoption or durable write: a claimant that loses has
+applied nothing and has nothing to undo, and a claimant that arrives after the
+winner has claimed but before it has finished (adopted, recorded, issued its
+successor) finds the generation already moved and is told so, however far the
+winner has got. A claimant that wins and then cannot finish gives the
+generation back (above). Two concurrent claimants presenting the same
+current-generation secret therefore cannot both adopt: exactly one UPDATE
+matches, and the loser is told — in its own `session_start` result — that it
+was SUPERSEDED. When it loses the UPDATE itself the recovery outcome says so
+too and the loser continues under a temporary identity under the standing
+degraded rules (never converges, never persists); one that merely finds the
+generation already moved is indistinguishable from a replay and is handled as
+one. Either way the human sees a double-open immediately, which is the
 entire point of telling rather than silently refusing. Killing the loser's
 connection is deliberately NOT specified: it is a policy decision a review
 can add, and telling is the part the fencing contract needs.
@@ -482,18 +517,22 @@ earns a "no record" answer that does not count toward revocation, and the
 existing identity restore proceeds untouched. The identity record remains
 the authority in every failure, exactly as `conn_restore.go` requires.
 
-### Mixed versions during upgrades
+Four combinations, all safe by construction, and the safety rests on the
+consumer announcement (section 3), not on the key being a sibling:
 
-Four combinations, all safe by construction:
-
-- **New daemon, old proxy.** The daemon discloses into initialize `_meta`;
-  the old proxy's frame readers extract only the keys they know and ignore
-  the rest (the fail-safe parsing `serve_proxy_identity.go` already applies).
-  Nothing is stored, nothing is presented; the hash path never fires. Today's
-  behaviour, verbatim.
+- **New daemon, old proxy.** An old proxy does not ignore the key: it forwards
+  every daemon frame to its client verbatim, `_meta` included, and the client
+  persists it. So the daemon never discloses to it. The old proxy sends no
+  `resume-credential-consumer` announcement, so the daemon mints nothing,
+  discloses nothing in initialize or in any tool result, and accepts no
+  presentation; nothing is stored and the hash path never fires. Today's
+  behaviour, verbatim. (A proxy that DOES send the announcement is one that
+  reads the key out of every daemon frame and strips it before forwarding; PR B
+  introduces it.)
 - **Old daemon, new proxy.** No key is disclosed; the proxy stores nothing
   and presents nothing. Inert in the other direction.
-- **Both new.** The design operates as specified.
+- **Both new.** The proxy announces, the daemon discloses, the proxy strips the
+  key from what it forwards, and the design operates as specified.
 - **Both old.** Unchanged.
 
 The store change is additive and forward-only (a new credential table; no
@@ -539,11 +578,15 @@ below funnels its tool results, packets and CLI output through the leak scan.
    same current-generation secret in an interleaved order the test forces:
    exactly one adoption lands; the loser's result states it was superseded;
    the loser runs under a temporary identity and did not persist one.
-4. **The secret is never in any tool result, packet, or log.** Extends
-   `assertNoCredentialLeak` with the `rsk1-` token shape alongside the UUID
-   shape, and asserts absence across initialize results as seen by a
-   packet-capturing proxy harness, every tool output, every packet, and the
-   daemon log file — including the rotation successor disclosure.
+4. **The secret is never in any tool result, packet, or log, and never in any
+   frame the proxy forwards to its client.** Extends `assertNoCredentialLeak`
+   with the `rsk1-` token shape alongside the UUID shape, and scans every raw
+   frame the smoke client receives from the proxy (initialize results, every
+   tool result, notifications, `_meta` included, since that is what a client
+   persists), every tool output, every packet, and the daemon log file —
+   including the rotation successor disclosure. A connection whose proxy never
+   announced the consumer key is disclosed no credential at all (in-process
+   test, with the announcing connection as the positive control).
 5. **Degraded connections never learn the secret.** A degraded recovery
    outcome (predecessor overlap, unreadable store) shows no credential key in
    the initialize result `_meta`, and a degraded acceptance consumes no
@@ -637,7 +680,11 @@ Stated plainly, because an unclaimed property is not a guarantee.
 - **Clients that log initialize results log the secret.** Rotation bounds the
   window; it does not close it. A client that pipes `_meta` to the model puts
   the credential inside the A3 attack surface for the life of that
-  generation.
+  generation. Claude Code is one: it persists tool-result `_meta` to its
+  transcripts. The proxy half is therefore REQUIRED to strip the key from every
+  frame before forwarding it, and the daemon discloses only to a proxy that
+  announced it does; a proxy that announces and does not strip would put the
+  secret on disk, and nothing in the daemon can see that.
 - **The identity-only ceiling still permits real harm.** A stolen credential
   lets an attacker read a conversation's mail and speak in its threads. Mail
   binding and thread membership are the assets the whole binding exists to

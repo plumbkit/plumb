@@ -163,14 +163,11 @@ func TestLookup_ScopedToTheConversationAndNeverWildcard(t *testing.T) {
 
 // Fencing: N claimants present the same current secret; exactly one conditional
 // UPDATE lands.
-func TestRotate_ExactlyOneConcurrentClaimantWins(t *testing.T) {
+func TestClaim_ExactlyOneConcurrentClaimantWins(t *testing.T) {
 	s := newTestStore(t)
 	seedIdentity(t, s, "P1", "conv-X")
 	secret, gen := mintFor(t, s, "P1")
 	const claimants = 16
-	for i := range claimants {
-		seedIdentity(t, s, "C"+string(rune('a'+i)), "")
-	}
 
 	var wins atomic.Int32
 	var wg sync.WaitGroup
@@ -181,16 +178,15 @@ func TestRotate_ExactlyOneConcurrentClaimantWins(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			start.Wait()
-			succ, _ := NewResumeSecret()
-			won, newGen, err := s.RotateResumeCredential("conv-X", HashResumeSecret(secret), "C"+string(rune('a'+i)), HashResumeSecret(succ))
+			won, consumed, err := s.ClaimResumeCredential("conv-X", HashResumeSecret(secret))
 			if err != nil {
 				t.Errorf("claimant %d: %v", i, err)
 				return
 			}
 			if won {
 				wins.Add(1)
-				if newGen != gen+1 {
-					t.Errorf("successor generation = %d, want %d", newGen, gen+1)
+				if consumed != gen {
+					t.Errorf("consumed generation = %d, want %d", consumed, gen)
 				}
 			}
 		}()
@@ -198,18 +194,22 @@ func TestRotate_ExactlyOneConcurrentClaimantWins(t *testing.T) {
 	start.Done()
 	wg.Wait()
 	if wins.Load() != 1 {
-		t.Fatalf("%d claimants won the rotation, want exactly 1", wins.Load())
+		t.Fatalf("%d claimants won the claim, want exactly 1", wins.Load())
 	}
 	if got := lookup(t, s, "conv-X", secret).State; got != CredentialSuperseded {
 		t.Errorf("the consumed generation is %q, want superseded", got)
 	}
 }
 
-// A rotation leaves exactly one row holding a current generation per conversation.
-func TestRotate_SupersedesEveryOtherCurrentCredentialOfTheConversation(t *testing.T) {
+// A rotation touches the presented credential's own row and no other. Two identities
+// hold a credential for one conversation: consuming one leaves the other current. The
+// old behaviour superseded every current credential of the conversation, so a
+// connection that merely CLAIMED a victim's conversation (an unrefused relink) could
+// present its own credential and revoke the victim's in one shot.
+func TestRotate_TouchesOnlyThePresentedCredentialsRow(t *testing.T) {
 	s := newTestStore(t)
 	seedIdentity(t, s, "P1", "conv-X")
-	seedIdentity(t, s, "P2", "conv-X") // a second serve that claimed the conversation
+	seedIdentity(t, s, "P2", "conv-X") // a second identity holding a credential for the same conversation
 	seedIdentity(t, s, "P3", "")       // the claimant, linked once the winner is recorded
 	seedIdentity(t, s, "Q1", "conv-Z") // another conversation entirely
 	sec1, _ := mintFor(t, s, "P1")
@@ -219,13 +219,17 @@ func TestRotate_SupersedesEveryOtherCurrentCredentialOfTheConversation(t *testin
 		t.Fatal(err)
 	}
 
-	succ, _ := NewResumeSecret()
-	won, gen, err := s.RotateResumeCredential("conv-X", HashResumeSecret(sec1), "P3", HashResumeSecret(succ))
+	won, consumed, err := s.ClaimResumeCredential("conv-X", HashResumeSecret(sec1))
 	if err != nil || !won {
-		t.Fatalf("rotation = (%v, %v), want a win", won, err)
+		t.Fatalf("claim = (%v, %v), want a win", won, err)
 	}
-	if gen < 2 {
-		t.Errorf("successor generation = %d, want it past the presented one", gen)
+	succ, _ := NewResumeSecret()
+	gen, err := s.IssueResumeSuccessor("P3", HashResumeSecret(succ), consumed)
+	if err != nil {
+		t.Fatalf("IssueResumeSuccessor: %v", err)
+	}
+	if gen <= consumed {
+		t.Errorf("successor generation = %d, want it past the consumed %d", gen, consumed)
 	}
 	if got := lookup(t, s, "conv-X", succ).State; got != CredentialCurrent {
 		t.Errorf("successor is %q, want current", got)
@@ -233,38 +237,101 @@ func TestRotate_SupersedesEveryOtherCurrentCredentialOfTheConversation(t *testin
 	if got := lookup(t, s, "conv-X", sec1).State; got != CredentialSuperseded {
 		t.Errorf("presented generation is %q, want superseded", got)
 	}
-	if got := lookup(t, s, "conv-X", sec2).State; got != CredentialSuperseded {
-		t.Errorf("the other row's credential for the same conversation is %q, want superseded", got)
+	if got := lookup(t, s, "conv-X", sec2).State; got != CredentialCurrent {
+		t.Errorf("the OTHER identity's credential for the same conversation is %q, want untouched (current)", got)
 	}
 	if got := lookup(t, s, "conv-Z", secZ).State; got != CredentialCurrent {
 		t.Errorf("another conversation's credential is %q, want untouched (current)", got)
 	}
 }
 
-// Only a CURRENT generation may be rotated, and a refused rotation changes nothing.
-func TestRotate_RefusesAStaleOrRevokedSecretAndChangesNothing(t *testing.T) {
+// Only a CURRENT generation may be claimed, and a refused claim changes nothing.
+func TestClaim_RefusesAStaleOrMisdirectedSecretAndChangesNothing(t *testing.T) {
 	s := newTestStore(t)
 	seedIdentity(t, s, "P1", "conv-X")
-	seedIdentity(t, s, "P2", "")
 	old, _ := mintFor(t, s, "P1")
 	cur, _ := mintFor(t, s, "P1") // old is now superseded
 
-	succ, _ := NewResumeSecret()
-	won, _, err := s.RotateResumeCredential("conv-X", HashResumeSecret(old), "P2", HashResumeSecret(succ))
+	won, _, err := s.ClaimResumeCredential("conv-X", HashResumeSecret(old))
 	if err != nil || won {
-		t.Fatalf("rotating a superseded generation = (%v, %v), want refused", won, err)
+		t.Fatalf("claiming a superseded generation = (%v, %v), want refused", won, err)
 	}
 	if got := lookup(t, s, "conv-X", cur).State; got != CredentialCurrent {
-		t.Errorf("a refused rotation moved the current generation to %q", got)
+		t.Errorf("a refused claim moved the current generation to %q", got)
 	}
-	if got := lookup(t, s, "conv-X", succ).State; got != "" {
-		t.Errorf("a refused rotation minted a successor (%q)", got)
-	}
-	// A secret presented against the wrong conversation does not rotate either.
-	won, _, _ = s.RotateResumeCredential("conv-OTHER", HashResumeSecret(cur), "P2", HashResumeSecret(succ))
+	// A secret presented against the wrong conversation does not claim either.
+	won, _, _ = s.ClaimResumeCredential("conv-OTHER", HashResumeSecret(cur))
 	if won {
-		t.Error("rotated a credential on behalf of a conversation it is not linked to")
+		t.Error("claimed a credential on behalf of a conversation it is not linked to")
 	}
+	if got := lookup(t, s, "conv-X", cur).State; got != CredentialCurrent {
+		t.Errorf("a misdirected claim moved the current generation to %q", got)
+	}
+}
+
+// A claimant whose restore could not complete gives the generation back, and only a
+// generation that is still exactly where its claim left it: a revoked one stays
+// revoked, and one overtaken by a newer generation of the same identity stays
+// superseded.
+func TestRelease_GivesBackOnlyAGenerationThatIsStillWhereTheClaimLeftIt(t *testing.T) {
+	t.Run("a claimed generation goes back to current", func(t *testing.T) {
+		s := newTestStore(t)
+		seedIdentity(t, s, "P1", "conv-X")
+		sec, _ := mintFor(t, s, "P1")
+		if won, _, err := s.ClaimResumeCredential("conv-X", HashResumeSecret(sec)); err != nil || !won {
+			t.Fatalf("claim = (%v, %v)", won, err)
+		}
+		released, err := s.ReleaseResumeCredential(HashResumeSecret(sec))
+		if err != nil || !released {
+			t.Fatalf("release = (%v, %v), want it given back", released, err)
+		}
+		if got := lookup(t, s, "conv-X", sec).State; got != CredentialCurrent {
+			t.Errorf("a released generation is %q, want current", got)
+		}
+		if won, _, _ := s.ClaimResumeCredential("conv-X", HashResumeSecret(sec)); !won {
+			t.Error("a released generation cannot be claimed again for the retry")
+		}
+	})
+	t.Run("a current generation is not touched", func(t *testing.T) {
+		s := newTestStore(t)
+		seedIdentity(t, s, "P1", "conv-X")
+		sec, _ := mintFor(t, s, "P1")
+		if released, err := s.ReleaseResumeCredential(HashResumeSecret(sec)); err != nil || released {
+			t.Errorf("release of a current generation = (%v, %v), want a no-op", released, err)
+		}
+	})
+	t.Run("a generation overtaken by a newer one of the same identity stays superseded", func(t *testing.T) {
+		s := newTestStore(t)
+		seedIdentity(t, s, "P1", "conv-X")
+		sec, _ := mintFor(t, s, "P1")
+		if won, _, _ := s.ClaimResumeCredential("conv-X", HashResumeSecret(sec)); !won {
+			t.Fatal("claim lost")
+		}
+		newer, _ := mintFor(t, s, "P1") // the identity's own serve restored meanwhile
+		if released, _ := s.ReleaseResumeCredential(HashResumeSecret(sec)); released {
+			t.Error("a superseded generation was resurrected beside a newer current one")
+		}
+		if got := lookup(t, s, "conv-X", newer).State; got != CredentialCurrent {
+			t.Errorf("the newer generation is %q, want current", got)
+		}
+	})
+	t.Run("a revoked generation stays revoked", func(t *testing.T) {
+		s := newTestStore(t)
+		seedIdentity(t, s, "P1", "conv-X")
+		sec, _ := mintFor(t, s, "P1")
+		if won, _, _ := s.ClaimResumeCredential("conv-X", HashResumeSecret(sec)); !won {
+			t.Fatal("claim lost")
+		}
+		if err := s.SaveIdentity("P1", Identity{Name: "name-P1", SessionID: "id-P1", ExternalID: "conv-Y"}); err != nil {
+			t.Fatal(err) // replacing the linkage revokes the identity's credentials
+		}
+		if released, _ := s.ReleaseResumeCredential(HashResumeSecret(sec)); released {
+			t.Error("a revoked generation was given back")
+		}
+		if got := lookup(t, s, "conv-X", sec).State; got != CredentialRevoked {
+			t.Errorf("the generation is %q, want revoked", got)
+		}
+	})
 }
 
 // A presented secret matching nothing for a conversation that has a current

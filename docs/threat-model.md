@@ -541,7 +541,14 @@ ID: decision D1). The daemon mints a credential (`rsk1-` and 22 base64url charac
 *established* or *restored* an identity under a proxy credential, with persistence on,
 and discloses it once in the initialize result `_meta`
 (`dev.plumbkit/resume-credential`); a connection that converges on the degraded-recovery
-retry is disclosed its credential in its next tool result. A degraded outcome, an
+retry is disclosed its credential in its next tool result. Only to a proxy that
+announced (`dev.plumbkit/resume-credential-consumer: 1` in its initialize `_meta`) that
+it consumes the key and strips it from every frame it forwards: the proxy forwards
+daemon frames to its client verbatim, and Claude Code persists a tool result's `_meta`
+to its on-disk transcripts, where a model with file tools can read it, so a daemon that
+disclosed to a proxy that predates the strip would write the secret to disk. A
+connection that made no announcement is minted nothing, disclosed nothing and accepts no
+presentation. A degraded outcome, an
 ordinary MCP client and a session with `persist_state` off are never issued one, and
 the store keeps only a SHA-256 hash (`resume_credential`, schema v11). A request that
 presents it in the `_meta` of a `session_start` (never in the arguments, which are the
@@ -554,10 +561,12 @@ authority**: a conversation ID, a stamp and a name remain claims.
 It is weaker than the proxy credential, and the design says so rather than hiding it:
 it crosses the wire once per generation and rests on disk between them, so it is a
 copyable bearer secret and a client that logs `_meta` logs it. What bounds that is the
-lifecycle. Every accepted resume rotates it; the conditional UPDATE that consumes a
-generation is the arbitration between two claimants (the loser is told it was
-superseded and keeps running under a temporary identity that never writes the durable
-record); a presentation of an already-superseded generation is refused and logged at
+lifecycle. Every accepted resume rotates it, consuming exactly the credential
+presented and no other identity's, so a connection that merely claimed a conversation
+cannot use a rotation to revoke its owner's credential; the conditional UPDATE that
+consumes a generation is the arbitration between two claimants, and it is the first step
+of a resume, ahead of any adoption or durable write (the loser is told it was
+superseded and applies nothing); a presentation of an already-superseded generation is refused and logged at
 Warn, because it is either a replaced process that never learned its successor or a
 copied credential replayed after its owner resumed; and it is revoked when its
 conversation's linkage is replaced, or after three presentations that match no
@@ -565,7 +574,12 @@ generation. That last counter has a named griefing vector, accepted with bounded
 harm: the request `_meta` is client-settable and conversation IDs are client-visible,
 so any connection can present three junk credentials against a victim's conversation
 and revoke its credential, which costs the victim name-only continuity until it
-establishes a new one, with one log line naming the attempt. Hardening that needs an
+establishes a new one, with one log line naming the attempt. **Accepted residual: the
+three-strikes counter is claim-targeted.** It counts presentations by the conversation
+they NAME, and a conversation ID is a claim, so it is the one way an unprivileged claim
+reaches another identity's credential. The harm is denial of continuity (the victim
+falls back to the name-only resume that ships today) and nothing leaks: a revocation
+discloses no secret, grants no identity, and is logged. Hardening that needs an
 authority the client cannot forge. There is no TTL, for the reason identity records
 have none; a hash retained beside an identity nobody resumes discloses nothing. The
 credential is a new store (known gap 4 grows by one table), the shape is added to

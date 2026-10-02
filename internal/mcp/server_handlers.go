@@ -123,6 +123,22 @@ func proxyVersionFromParams(params json.RawMessage) string {
 	return stringFromMeta(params, MetaProxyVersionKey)
 }
 
+// resumeCredentialConsumerFromParams reports whether the initialize params announce,
+// in _meta[MetaResumeCredentialConsumerKey], a proxy that consumes and strips the
+// resume credential. Fail-safe in the direction that matters: only the number 1 is an
+// announcement, and every other shape (no _meta, wrong key, a string, a boolean,
+// malformed JSON) is "not a consumer", so nothing is ever disclosed on a guess.
+func resumeCredentialConsumerFromParams(params json.RawMessage) bool {
+	var p struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return false
+	}
+	var n int
+	return json.Unmarshal(p.Meta[MetaResumeCredentialConsumerKey], &n) == nil && n == 1
+}
+
 // workspaceHintFromParams extracts the serve proxy's explicit workspace pre-pin
 // (--workspace/PLUMB_WORKSPACE; a serve without one sends no key — it starts
 // unattached) from the initialize params' _meta[MetaWorkspaceKey] field.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // credState is what the daemon holds for a secret under the conversation.
@@ -222,8 +223,8 @@ func TestResume_TwoClaimantsOfOneSecretAreFenced(t *testing.T) {
 	fx := newCredFixture(t)
 	a, b := fx.replacement("PA"), fx.replacement("PB")
 	var winner frameResult
-	b.s.afterResumeLookup = func() {
-		b.s.afterResumeLookup = nil
+	b.s.resumeSeams.afterLookup = func() {
+		b.s.resumeSeams.afterLookup = nil
 		winner = a.startPresenting("", fx.ws, credConv, fx.cred)
 	}
 	loser := b.startPresenting("", fx.ws, credConv, fx.cred)
@@ -261,6 +262,185 @@ func TestResume_TwoClaimantsOfOneSecretAreFenced(t *testing.T) {
 	}
 	if later := b.callMeta("", "session_start", nil, nil).Text; !strings.Contains(later, "same resume credential first") {
 		t.Errorf("a later session_start does not keep telling the loser:\n%s", later)
+	}
+}
+
+// The interleaving the old order lost. The winner has adopted the predecessor's ID and
+// recorded it, and has not yet issued its successor, when a second claimant of the same
+// secret arrives. The arbitration is the FIRST step of a resume, so by then the
+// generation has already moved: the second claimant is told it was superseded and
+// adopts and restores nothing. It cannot tell this from a replay moments later, and is
+// handled as one (a name-only resume under its own temporary identity). Adopt, write,
+// then arbitrate let it see "current", be refused the ID, and be told nothing.
+func TestResume_ALoserBetweenTheWinnersRestoreAndRotationIsToldSuperseded(t *testing.T) {
+	fx := newCredFixture(t)
+	a, b := fx.replacement("PA"), fx.replacement("PB")
+	var loser frameResult
+	var seamRan bool
+	a.s.resumeSeams.afterRestore = func() {
+		a.s.resumeSeams.afterRestore, seamRan = nil, true
+		if got := a.s.sessionID(); got != fx.id {
+			t.Errorf("seam: the winner holds %q, want the predecessor's %q; the interleaving is not the one under test", got, fx.id)
+		}
+		loser = b.startPresenting("", fx.ws, credConv, fx.cred)
+	}
+	winner := a.startPresenting("", fx.ws, credConv, fx.cred)
+
+	if !seamRan {
+		t.Fatal("the seam never ran, so the interleaving was not exercised")
+	}
+	if !strings.Contains(loser.Text, "superseded") {
+		t.Errorf("the loser is not told it was superseded:\n%s", loser.Text)
+	}
+	if got := loser.credential(); got != "" {
+		t.Errorf("the loser was handed a successor: %q", got)
+	}
+	if got := b.s.recovery(); got == recoveryRestored {
+		t.Error("the loser reports a restored identity")
+	}
+	if got := b.s.sessionID(); got == fx.id {
+		t.Error("the loser adopted the predecessor's session ID")
+	}
+	if rec, _, _ := fx.w.ss.LoadIdentity("PB"); rec.SessionID != b.s.sessionID() {
+		t.Errorf("the loser's durable record is not its own temporary identity: %+v", rec)
+	}
+	if !resumeSecretShape.MatchString(winner.credential()) {
+		t.Errorf("the winner was not handed a successor: %q", winner.credential())
+	}
+	if got := a.s.sessionID(); got != fx.id {
+		t.Errorf("the winner holds %q, want the predecessor's %q", got, fx.id)
+	}
+}
+
+// A claimant that wins the arbitration and then cannot finish gives the generation
+// back, so the legitimate claimant's credential is valid for the retry. Two ways it
+// can fail after the claim: the name is held elsewhere, and the successor cannot be
+// recorded.
+func TestResume_AWinnerThatCannotFinishGivesTheGenerationBack(t *testing.T) {
+	t.Run("the name is held by a live session", func(t *testing.T) {
+		fx := newCredFixture(t)
+		holder, err := session.Register(session.Info{ID: "name-holder", Name: fx.name})
+		if err != nil {
+			t.Fatalf("occupying the proven name: %v", err)
+		}
+		t.Cleanup(func() { session.Unregister(holder.ID) })
+
+		second := fx.replacement("P2")
+		r := second.startPresenting("", fx.ws, credConv, fx.cred)
+		if got := second.s.recovery(); got != recoveryDegraded {
+			t.Fatalf("recovery = %q, want degraded: the name could not be applied", got)
+		}
+		if got := r.credential(); got != "" {
+			t.Errorf("a restore that could not complete disclosed a successor: %q", got)
+		}
+		if got := fx.credState(fx.cred); got != sessionstate.CredentialCurrent {
+			t.Errorf("a degraded restore left the credential %q, want it given back (current)", got)
+		}
+	})
+	t.Run("the successor cannot be recorded", func(t *testing.T) {
+		fx := newCredFixture(t)
+		second := fx.replacement("P2")
+		second.s.resumeSeams.afterRestore = func() {
+			// The claimant's identity row vanishes, so there is nothing to hang a successor off.
+			db, err := sqlitex.Open(sessionstate.DBPath(), sqlitex.Options{MaxOpenConns: 1})
+			if err != nil {
+				t.Fatalf("opening the state database: %v", err)
+			}
+			defer db.Close()
+			if _, err := db.Exec(`DELETE FROM session_names WHERE proxy_session_id='P2'`); err != nil {
+				t.Fatalf("removing the claimant's row: %v", err)
+			}
+		}
+		r := second.startPresenting("", fx.ws, credConv, fx.cred)
+		if got := second.s.sessionID(); got != fx.id {
+			t.Fatalf("the restore itself did not complete: %q, want %q", got, fx.id)
+		}
+		if got := r.credential(); got != "" {
+			t.Errorf("a successor that could not be recorded was disclosed: %q", got)
+		}
+		if got := fx.credState(fx.cred); got != sessionstate.CredentialCurrent {
+			t.Errorf("an unrecorded successor left the presented credential %q, want it given back (current)", got)
+		}
+	})
+}
+
+// The recovery gate: only a FRESH, established connection may present. A connection
+// that is degraded is running under a stand-in, and one that is already restored holds
+// a proven identity of its own; a presentation from either must not move it onto
+// the predecessor's session ID, whatever the credential is worth.
+func TestResume_OnlyAFreshEstablishedConnectionMayPresent(t *testing.T) {
+	cases := []struct {
+		name string
+		prep func(fx *credFixture) (c *identityConn, want recoveryOutcome)
+	}{
+		{"a degraded connection", func(fx *credFixture) (*identityConn, recoveryOutcome) {
+			holder := fx.replacement("P2") // live under P2, so the next P2 connection overlaps it
+			_ = holder
+			c := fx.w.conn("")
+			c.initialize("P2")
+			return c, recoveryDegraded
+		}},
+		{"a connection that already restored its own identity", func(fx *credFixture) (*identityConn, recoveryOutcome) {
+			first := fx.replacement("P2")
+			first.startPresenting("", fx.ws, credConv, "") // a name-only resume links P2's record to the conversation
+			first.s.close()
+			c := fx.w.conn("")
+			c.initialize("P2")
+			return c, recoveryRestored
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newCredFixture(t)
+			c, want := tc.prep(fx)
+			if got := c.s.recovery(); got != want {
+				t.Fatalf("precondition: recovery = %q, want %q", got, want)
+			}
+			own := c.s.sessionID()
+			r := c.startPresenting("", fx.ws, credConv, fx.cred)
+
+			if got := c.s.sessionID(); got == fx.id {
+				t.Errorf("%s was moved onto the predecessor's session ID", tc.name)
+			} else if got != own {
+				t.Errorf("%s changed its own session ID from %q to %q", tc.name, own, got)
+			}
+			if got := c.s.recovery(); got != want {
+				t.Errorf("recovery moved from %q to %q", want, got)
+			}
+			if got := r.credential(); got != "" {
+				t.Errorf("an ineligible presentation was disclosed a successor: %q", got)
+			}
+			if got := fx.credState(fx.cred); got != sessionstate.CredentialCurrent {
+				t.Errorf("an ineligible presentation moved the credential to %q", got)
+			}
+		})
+	}
+}
+
+// The linkage gate: a connection already linked to ANOTHER conversation may not
+// present for this one. Its linkage is somebody else's, and a restore here would hand
+// it the predecessor's identity while the record still answers to the other
+// conversation.
+func TestResume_AConnectionLinkedToAnotherConversationMayNotPresent(t *testing.T) {
+	fx := newCredFixture(t)
+	c := fx.replacement("P2")
+	c.startPresenting("", fx.ws, "conv-other", "") // an unstamped call: the connection is now linked to conv-other
+	if got := c.s.externalID(); got != "conv-other" {
+		t.Fatalf("precondition: the connection is linked to %q, want conv-other", got)
+	}
+	own := c.s.sessionID()
+	r := c.startPresenting("", fx.ws, credConv, fx.cred)
+
+	if got := c.s.sessionID(); got == fx.id {
+		t.Error("a connection linked to another conversation was restored onto the predecessor's session ID")
+	} else if got != own {
+		t.Errorf("the connection's own session ID changed from %q to %q", own, got)
+	}
+	if got := r.credential(); got != "" {
+		t.Errorf("an ineligible presentation was disclosed a successor: %q", got)
+	}
+	if got := fx.credState(fx.cred); got != sessionstate.CredentialCurrent {
+		t.Errorf("an ineligible presentation moved the credential to %q", got)
 	}
 }
 

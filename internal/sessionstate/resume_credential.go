@@ -20,9 +20,10 @@ package sessionstate
 //     recognised, anything older pruned. There is NO age expiry: the outage this
 //     exists to survive (a machine off for days) is exactly what a TTL would break.
 //     Staleness is bounded by rotation and abuse by revocation.
-//   - Rotation is a single conditional UPDATE. The generation move matches on the
-//     exact hash AND the current state and acts only if rows-affected says it
-//     landed, which is the arbitration between two claimants of one secret.
+//   - Rotation is a claim and a successor. The claim is a single conditional UPDATE
+//     that matches on the exact hash AND the current state and acts only if
+//     rows-affected says it landed, which is the arbitration between two claimants of
+//     one secret, and it touches that one credential's row and no other.
 //   - A credential hangs off an identity row (session_names, keyed by the proxy
 //     session ID) and is found through that row's external linkage. It never
 //     authorises on the strength of a claim: the caller must present the secret.
@@ -69,9 +70,9 @@ type CredentialState string
 const (
 	// CredentialCurrent is the one live generation of an identity.
 	CredentialCurrent CredentialState = "current"
-	// CredentialSuperseded was current until a rotation, a later mint, or a newer
-	// generation elsewhere in the same conversation replaced it. Presenting it is a
-	// replay, answered and never punished by the failure counter.
+	// CredentialSuperseded was current until a rotation or a later mint for the same
+	// identity replaced it. Presenting it is a replay, answered and never punished by
+	// the failure counter.
 	CredentialSuperseded CredentialState = "superseded"
 	// CredentialRevoked was killed: its linkage was replaced, or the failed-ownership
 	// counter reached its limit.
@@ -119,6 +120,12 @@ func HashResumeSecret(secret string) string {
 // anything older than that is pruned. It fails with ErrNoIdentityRecord when the
 // proxy session has no identity row. nil-safe (an error: a nil store holds nothing).
 func (s *Store) MintResumeCredential(proxySessionID, hash string) (int64, error) {
+	return s.mint(proxySessionID, hash, 0)
+}
+
+// mint is MintResumeCredential with the generation floor a rotation's successor needs
+// (see mintLocked).
+func (s *Store) mint(proxySessionID, hash string, atLeast int64) (int64, error) {
 	if s == nil || proxySessionID == "" || hash == "" {
 		return 0, errors.New("sessionstate: mint resume credential: no store, proxy session or hash")
 	}
@@ -129,7 +136,7 @@ func (s *Store) MintResumeCredential(proxySessionID, hash string) (int64, error)
 		return 0, fmt.Errorf("sessionstate: mint resume credential: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	gen, err := mintLocked(tx, proxySessionID, hash, 0)
+	gen, err := mintLocked(tx, proxySessionID, hash, atLeast)
 	if err != nil {
 		return 0, err
 	}
@@ -140,7 +147,7 @@ func (s *Store) MintResumeCredential(proxySessionID, hash string) (int64, error)
 }
 
 // mintLocked inserts the new current generation inside tx. atLeast carries the
-// generation a rotation consumed, so the successor is past it even when it hangs off
+// generation a claim consumed, so the successor is past it even when it hangs off
 // a different identity row (a replacement serve has a new proxy session ID): the
 // generation is a per-conversation clock, and a clock that restarted would stop
 // proving newer-ness. Caller holds s.mu.

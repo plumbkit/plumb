@@ -17,6 +17,9 @@ package cli
 //
 // Everything is gated so that a presentation proves nothing unless it should:
 //
+//   - Only on a connection whose proxy announced it consumes and strips the key
+//     (conn_resume_credential.go), so the successor a resume discloses can never ride a
+//     frame an old proxy forwards to its client.
 //   - Only the OWNER of the connection's conversation, on a connection that is a FRESH
 //     proven identity (recovery established, a proxy credential, persistence on) and
 //     not linked to some other conversation. A subagent, another conversation, an
@@ -26,19 +29,24 @@ package cli
 //     logged loudly: a zombie serve that never learned its successor, or a copied
 //     credential replayed after its owner resumed, which the daemon cannot tell apart
 //     and does not pretend to). A revoked one is refused. Neither is a restore.
-//   - A refused or half-applied restore changes NOTHING durable. The lookup is
-//     read-only, adoption happens before the generation is consumed, and the
-//     conditional UPDATE that consumes it is the last step, so a degraded attempt
+//   - The arbitration comes FIRST. The lookup is read-only; the conditional UPDATE that
+//     consumes the generation is the first thing that changes anything, ahead of any
+//     adoption or durable write. A claimant that loses it has applied nothing, so it has
+//     nothing to undo, and it is told it was superseded however far the winner has got:
+//     the old order (adopt, write, then arbitrate) let a loser that lost between the
+//     winner's adoption and its rotation see "current" and be told nothing, or keep a
+//     restored identity it had no right to. A claimant that wins and then cannot finish
 //     (the ID is held by a live session, the name is reserved elsewhere, the store
-//     hiccups) leaves the legitimate claimant's credential valid for the retry, and
-//     the fencing arbitration never mistakes a degraded attempt for a superseded one.
+//     hiccups) gives the generation back, so the legitimate claimant's credential is
+//     valid for the retry.
 //
 // A presented credential that matches NO retained generation of a conversation that
 // has a current one counts toward revocation (three strikes). The request `_meta` is
 // client-settable and conversation ids are client-visible claims, so any connection
 // can present three junk credentials against a victim's conversation and revoke it:
-// the accepted, bounded griefing vector of design §5. The worst case is name-only
-// continuity until the victim re-establishes one, with a loud log line.
+// the accepted, bounded griefing vector of design §5 (docs/threat-model.md, residual
+// risks). The worst case is name-only continuity until the victim re-establishes one,
+// with a loud log line.
 
 import (
 	"context"
@@ -47,6 +55,13 @@ import (
 	"github.com/plumbkit/plumb/internal/sessionstate"
 	"github.com/plumbkit/plumb/internal/tools"
 )
+
+// resumeSeams are test seams between the steps of an accepted resume. Both are nil in
+// production.
+type resumeSeams struct {
+	afterLookup  func() // between a credential lookup and its claim
+	afterRestore func() // between a restore and its successor being issued
+}
 
 // presentation is a credential a session_start presented, once it has passed the
 // gates that let it count for anything.
@@ -97,7 +112,7 @@ func (s *connSession) eligiblePresentation(ctx context.Context, linkage string) 
 		return presentation{}, false
 	}
 	v := s.view()
-	if !s.namePersistEnabled(v) || v.recovery != recoveryEstablished {
+	if !v.credentialConsumer || !s.namePersistEnabled(v) || v.recovery != recoveryEstablished {
 		return presentation{}, false
 	}
 	if cur := s.externalID(); cur != "" && cur != linkage {
@@ -125,7 +140,8 @@ func (s *connSession) countFailedPresentation(linkage string, lk sessionstate.Cr
 }
 
 // acceptResumeCredential runs the full restore for a presentation that matched a
-// current generation, and consumes the generation only when it succeeded.
+// current generation: it claims the generation, applies the identity, and issues the
+// successor, giving the generation back if the restore cannot complete.
 func (s *connSession) acceptResumeCredential(ctx context.Context, p presentation, lk sessionstate.CredentialLookup) tools.ResumeOutcome {
 	if lk.ProxySessionID == p.proxyID {
 		return "" // this connection's own record: nothing to escalate
@@ -136,36 +152,68 @@ func (s *connSession) acceptResumeCredential(ctx context.Context, p presentation
 			"external_id", p.linkage, "err", err)
 		return ""
 	}
-	if s.afterResumeLookup != nil {
-		s.afterResumeLookup()
+	succ, err := sessionstate.NewResumeSecret()
+	if err != nil {
+		s.log().Warn("daemon: could not generate the successor resume credential; not resuming, and nothing is consumed", "err", err)
+		return ""
 	}
+	if s.resumeSeams.afterLookup != nil {
+		s.resumeSeams.afterLookup()
+	}
+	won, consumed, err := s.sessionState.ClaimResumeCredential(p.linkage, p.hash)
+	switch {
+	case err != nil:
+		s.log().Warn("daemon: could not claim a presented resume credential; falling back to a name resume", "err", err)
+		return ""
+	case !won:
+		return s.lostResume(p)
+	}
+	// From here this connection holds the only live claim on the generation, and every
+	// way out below either finishes the rotation or gives the generation back.
+	if !s.applyResumedIdentity(p, old) {
+		s.releaseClaim(p)
+		return ""
+	}
+	s.finishRestore(p.linkage)
+	if s.resumeSeams.afterRestore != nil {
+		s.resumeSeams.afterRestore()
+	}
+	s.issueSuccessor(ctx, p, consumed, succ)
+	return tools.ResumeRestored
+}
+
+// applyResumedIdentity moves this connection onto the predecessor's session ID and
+// name and records the result durably. It reports false, with the connection no
+// further than a degraded or temporary one, when any part could not be applied: the
+// caller then gives the claimed generation back.
+func (s *connSession) applyResumedIdentity(p presentation, old sessionstate.Identity) bool {
 	prior := s.view().persistedIdentity
 	s.mutate(func(v *sessionView) { v.persistedIdentity = old })
 	adoption := s.adoptStoredID(old)
 	if adoption != idResumed {
+		// The ID is held by a live session: an ordinary overlap. The arbitration has
+		// already been decided in this claimant's favour, so this is not a lost race.
 		s.mutate(func(v *sessionView) { v.persistedIdentity = prior })
-		return s.refusedResume(p)
+		return false
 	}
 	if !s.restoreStoredName(old, adoption) || !s.persistIdentity() {
 		// The ID came back and the name or the record did not: not a restore. Say so
-		// as every degraded outcome does, and consume nothing, so a later attempt
-		// retries on the same generation. No retry is scheduled: the connection's own
+		// as every degraded outcome does. No retry is scheduled: the connection's own
 		// record names a stand-in, and a retry would "restore" that.
 		s.setRecovery(recoveryDegraded)
 		s.log().Warn("daemon: a resume credential carried the session ID back but the name or the record could not be applied; "+
 			"running degraded, and the credential is not consumed", "external_id", p.linkage, "session_id", s.sessionID())
-		return ""
+		return false
 	}
-	s.rotateAfterRestore(ctx, p, lk)
-	return tools.ResumeRestored
+	return true
 }
 
-// refusedResume says what a refused adoption meant. The ID is held by a live session;
-// if the credential has moved since the lookup, another claimant of the same secret
-// won the rotation and this one is the loser — told, running under a temporary
-// identity under the degraded rules, and not closed. Otherwise nothing changed: an
-// ordinary overlap, and the generation is exactly where it was.
-func (s *connSession) refusedResume(p presentation) tools.ResumeOutcome {
+// lostResume says what a lost claim meant. The conditional UPDATE did not land, so the
+// generation had already moved when this claimant arrived at it: another claimant of
+// the same secret won, or the credential was revoked meanwhile. This claimant applied
+// nothing, wrote nothing, and is told: it keeps running under a temporary identity
+// under the degraded rules, and is not closed.
+func (s *connSession) lostResume(p presentation) tools.ResumeOutcome {
 	again, err := s.sessionState.LookupResumeCredential(p.linkage, p.hash)
 	if err != nil {
 		return ""
@@ -183,33 +231,34 @@ func (s *connSession) refusedResume(p presentation) tools.ResumeOutcome {
 	return ""
 }
 
-// rotateAfterRestore consumes the presented generation, issues the successor under
-// this connection's proxy credential and stages it for the response. It runs after the
-// identity is applied and durable, so every failure to rotate leaves a restored
-// connection holding a credential that is still current: logged, never fatal.
-func (s *connSession) rotateAfterRestore(ctx context.Context, p presentation, lk sessionstate.CredentialLookup) {
-	s.finishRestore(p.linkage)
-	succ, err := sessionstate.NewResumeSecret()
+// releaseClaim gives back the generation this connection claimed for a restore that
+// did not complete, so the legitimate claimant's retry presents the same credential.
+func (s *connSession) releaseClaim(p presentation) {
+	if _, err := s.sessionState.ReleaseResumeCredential(p.hash); err != nil {
+		s.log().Warn("daemon: could not give back a resume credential claimed for a restore that did not complete; "+
+			"it stays consumed until the conversation is re-established", "external_id", p.linkage, "err", err)
+	}
+}
+
+// issueSuccessor records the successor under this connection's proxy credential and
+// stages it for the response. It runs after the identity is applied and durable, so a
+// failure here leaves a restored connection: the generation is given back (the
+// restore is real, and a credential that is still current is the status quo before a
+// rotation existed), logged, never fatal.
+func (s *connSession) issueSuccessor(ctx context.Context, p presentation, consumed int64, succ string) {
+	generation, err := s.sessionState.IssueResumeSuccessor(p.proxyID, sessionstate.HashResumeSecret(succ), consumed)
 	if err != nil {
-		s.log().Warn("daemon: could not generate the successor resume credential", "err", err)
+		s.log().Warn("daemon: the identity was restored but the successor resume credential could not be recorded; "+
+			"the presented generation is given back", "external_id", p.linkage, "err", err)
+		s.releaseClaim(p)
 		return
 	}
-	won, generation, err := s.sessionState.RotateResumeCredential(p.linkage, p.hash, p.proxyID, sessionstate.HashResumeSecret(succ))
-	switch {
-	case err != nil:
-		s.log().Warn("daemon: the identity was restored but the resume credential could not be rotated; "+
-			"the presented generation stays current", "external_id", p.linkage, "err", err)
-	case !won:
-		s.log().Warn("daemon: the identity was restored but another claimant had already consumed the presented credential",
-			"external_id", p.linkage, "presented_generation", lk.Generation)
-	default:
-		// On THIS call's scratchpad: it is disclosed in the response of the session_start
-		// that earned it, so a resume costs one round-trip and never leaves the claimant
-		// holding a dead secret.
-		mcp.NoteResultMeta(ctx, mcp.MetaResumeCredentialKey, succ)
-		s.log().Info("daemon: a resume credential restored the full identity and rotated",
-			"external_id", p.linkage, "generation", generation, "session_id", s.sessionID())
-	}
+	// On THIS call's scratchpad: it is disclosed in the response of the session_start
+	// that earned it, so a resume costs one round-trip and never leaves the claimant
+	// holding a dead secret.
+	mcp.NoteResultMeta(ctx, mcp.MetaResumeCredentialKey, succ)
+	s.log().Info("daemon: a resume credential restored the full identity and rotated",
+		"external_id", p.linkage, "generation", generation, "session_id", s.sessionID())
 }
 
 // finishRestore records the result of a full restore on the connection: the outcome,

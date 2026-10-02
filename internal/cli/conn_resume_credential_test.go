@@ -11,6 +11,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -212,6 +213,119 @@ func TestResumeCredential_RetryConvergedConnectionIsDisclosedOnce(t *testing.T) 
 	}
 	if again := overlapping.callMeta("", "daemon_info", nil, nil).credential(); again != "" {
 		t.Errorf("the late credential was disclosed twice: %q", again)
+	}
+}
+
+// metaDump is a tool result's `_meta` as the proxy would forward it to its client.
+func metaDump(r frameResult) string {
+	b, _ := json.Marshal(r.Meta)
+	return string(b)
+}
+
+// A proxy forwards every daemon frame to its client verbatim, and Claude Code persists
+// a tool result's `_meta` to its on-disk transcripts, where a model with file tools can
+// read it. So the daemon deals in a credential ONLY with a proxy that announced it
+// consumes and strips the key: a connection without the announcement is minted nothing,
+// disclosed nothing in initialize or in ANY tool result, and its presentation proves
+// nothing. Each lane runs twice, and the announcing run is the positive control that
+// shows the lane would have disclosed.
+func TestResumeCredential_OnlyAProxyThatStripsTheKeyIsDisclosedAnything(t *testing.T) {
+	if !leakScanWorks() {
+		t.Fatal("the leak scan cannot see a credential-shaped token, so its silence would prove nothing")
+	}
+	for _, consumer := range []bool{true, false} {
+		t.Run(fmt.Sprintf("announced=%v", consumer), func(t *testing.T) {
+			// expect is the one assertion every lane makes: a credential rode this
+			// `_meta` exactly when the proxy announced it strips the key.
+			expect := func(lane string, got string) {
+				t.Helper()
+				if consumer && !resumeSecretShape.MatchString(got) {
+					t.Errorf("control: %s disclosed %q to a proxy that announced it strips the key, want an rsk1- credential", lane, got)
+				}
+				if !consumer && got != "" {
+					t.Errorf("%s disclosed %q to a proxy that never announced it strips the key", lane, got)
+				}
+			}
+			t.Run("initialize on first contact and on a restore", func(t *testing.T) {
+				w := newIdentityWorld(t).withState()
+				ws := identityRepo(t)
+				a := w.conn("")
+				meta := a.initializeAs("P1", consumer)
+				expect("first-contact initialize", disclosed(meta))
+				if _, present := meta[mcp.MetaResumeCredentialKey]; present == !consumer {
+					t.Errorf("key present = %v in the first-contact initialize result, announced=%v", present, consumer)
+				}
+				a.start("conv-1", ws, "conv-1", nil)
+				a.s.close()
+				b := w.conn("")
+				expect("restoring initialize", disclosed(b.initializeAs("P1", consumer)))
+				if got := b.s.recovery(); got != recoveryRestored {
+					t.Fatalf("precondition: the reconnect is %q, want restored", got)
+				}
+				if !consumer {
+					if got := credentialRows(t); got != 0 {
+						t.Errorf("a proxy that never announced left %d credential rows; nothing may be minted for it", got)
+					}
+					r := b.callMeta("", "daemon_info", nil, nil)
+					assertNoSecret(t, "a tool result _meta", metaDump(r))
+				}
+			})
+
+			t.Run("the late tool result of a connection that converged", func(t *testing.T) {
+				w := newIdentityWorld(t).withState()
+				ws := identityRepo(t)
+				first := w.conn("")
+				first.initializeAs("P1", consumer)
+				first.start("conv-1", ws, "conv-1", nil)
+				overlapping := w.conn("")
+				overlapping.s.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+				overlapping.initializeAs("P1", consumer)
+				if overlapping.s.recovery() != recoveryDegraded {
+					t.Fatal("precondition: the overlap did not degrade")
+				}
+				first.s.close()
+				deadline := time.Now().Add(3 * time.Second)
+				for overlapping.s.recovery() != recoveryRestored {
+					if time.Now().After(deadline) {
+						t.Fatal("the degraded connection never converged on the retry")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				rows := credentialRows(t)
+				r := overlapping.callMeta("", "daemon_info", nil, nil)
+				expect("the first tool result after convergence", r.credential())
+				if !consumer {
+					assertNoSecret(t, "a tool result _meta", metaDump(r))
+					if rows != 0 {
+						t.Errorf("convergence minted %d credential rows for a proxy that never announced", rows)
+					}
+				}
+			})
+
+			t.Run("a presentation", func(t *testing.T) {
+				fx := newCredFixture(t) // its first serve announced, so a credential is held
+				c := fx.w.conn("")
+				c.initializeAs("P2", consumer)
+				r := c.startPresenting("", fx.ws, credConv, fx.cred)
+				expect("the resume session_start", r.credential())
+				if consumer {
+					if got := c.s.sessionID(); got != fx.id {
+						t.Errorf("control: the announcing replacement holds %q, want the predecessor's %q", got, fx.id)
+					}
+					return
+				}
+				if got := c.s.sessionID(); got == fx.id {
+					t.Error("a presentation from a proxy that never announced restored the predecessor's session ID")
+				}
+				if got := fx.credState(fx.cred); got != sessionstate.CredentialCurrent {
+					t.Errorf("a presentation from a proxy that never announced moved the credential to %q", got)
+				}
+				for _, tool := range []string{"daemon_info", "check_messages", "session_start"} {
+					assertNoSecret(t, tool+" _meta", metaDump(c.callMeta("", tool, nil, nil)))
+				}
+				assertNoSecret(t, "the resume session_start _meta", metaDump(r))
+			})
+		})
 	}
 }
 

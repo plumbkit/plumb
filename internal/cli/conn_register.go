@@ -326,6 +326,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
 		s.onAllowDirs(dirs)
 	}
+	srv.OnResumeCredentialConsumer = func(context.Context) {
+		s.mutate(func(v *sessionView) { v.credentialConsumer = true })
+	}
 	srv.OnProxySession = func(_ context.Context, id string) {
 		s.onProxySession(id)
 		// After identity has settled, so only a proven outcome is issued a credential.
@@ -351,8 +354,8 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 			mcp.MetaSessionIdentityKey: s.identityMeta(),
 			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),
 		}
-		// Disclosed once, here, for a connection that was proven at initialize. A
-		// sibling key, so an older proxy ignores it and each key's fail-safe applies.
+		// Disclosed once, here, for a connection that was proven at initialize and
+		// whose proxy announced it strips the key (nothing is minted otherwise).
 		if secret := s.takePendingCredential(); secret != "" {
 			meta[mcp.MetaResumeCredentialKey] = secret
 		}

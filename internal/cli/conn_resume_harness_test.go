@@ -103,12 +103,24 @@ func (c *identityConn) startPresenting(agent, workspace, conversation, secret st
 	return r
 }
 
-// initialize runs what handleInitialize runs, in its order: the param hook that
-// hands the connection its proxy credential, then the hook that builds the result
-// `_meta`. It returns that `_meta`.
+// initialize is initializeAs for a proxy that announced it consumes and strips the
+// resume credential, which is what every test of the credential itself needs: the
+// daemon deals in one with no other kind.
 func (c *identityConn) initialize(proxy string) map[string]any {
 	c.w.t.Helper()
+	return c.initializeAs(proxy, true)
+}
+
+// initializeAs runs what handleInitialize runs, in its order: the hook that records
+// whether the proxy announced it consumes the key (when it did), the param hook that
+// hands the connection its proxy credential, then the hook that builds the result
+// `_meta`. It returns that `_meta`. consumer=false is a proxy that predates the strip.
+func (c *identityConn) initializeAs(proxy string, consumer bool) map[string]any {
+	c.w.t.Helper()
 	ctx := context.Background()
+	if consumer {
+		c.srv.OnResumeCredentialConsumer(ctx)
+	}
 	if proxy != "" {
 		c.srv.OnProxySession(ctx, proxy)
 	}

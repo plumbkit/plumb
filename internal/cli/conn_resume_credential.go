@@ -10,12 +10,22 @@ package cli
 // (internal session ID, mail binding, thread seats) and not only the name. See
 // conn_resume_accept.go for the other half.
 //
-// The one rule that matters here: ONLY a proven branch mints. A connection whose
-// recovery is established or restored, under a proxy credential, with persistence on,
-// is provably the recorded identity. A degraded connection runs under a stand-in, and
-// issuing it a credential would hand the identity-fork bug a credential of its own;
-// an ordinary MCP client or a session with persistence off has no continuity to
-// offer. Each of those is told nothing, exactly as before.
+// Two rules matter here. The first: the daemon deals in a resume credential ONLY with
+// a proxy that announced it consumes and strips the key (mcp.MetaResumeCredentialConsumerKey).
+// A proxy forwards every daemon frame to its client verbatim, and Claude Code persists
+// a tool result's `_meta` in its on-disk transcripts, where a model with file tools can
+// read it. So a connection that made no announcement is minted nothing, disclosed
+// nothing and accepts no presentation: the feature is inert for it, and for every
+// proxy that predates the strip. Every secret the daemon ever discloses originates in
+// mintResumeCredential or in an accepted presentation (eligiblePresentation), and
+// both check the announcement, so nothing downstream needs to.
+//
+// The second: ONLY a proven branch mints. A connection whose recovery is established
+// or restored, under a proxy credential, with persistence on, is provably the recorded
+// identity. A degraded connection runs under a stand-in, and issuing it a credential
+// would hand the identity-fork bug a credential of its own; an ordinary MCP client or
+// a session with persistence off has no continuity to offer. Each of those is told
+// nothing, exactly as before.
 //
 // Disclosure is one hop across `_meta` and never into text: the initialize result for
 // a connection that was proven at initialize, and the next successful tool result for
@@ -44,7 +54,8 @@ func (o recoveryOutcome) blocksDurableWrites() bool {
 }
 
 // mintResumeCredential issues this connection a resume credential and stages it for
-// disclosure, when — and only when — its identity is proven.
+// disclosure, when — and only when — its proxy consumes the key and its identity is
+// proven.
 //
 // Called from the initialize param hook once identity has settled, and from the C3
 // retry's convergence points. Failures are logged and swallowed: a connection that
@@ -52,6 +63,9 @@ func (o recoveryOutcome) blocksDurableWrites() bool {
 // and the identity restore must never depend on it.
 func (s *connSession) mintResumeCredential() {
 	v := s.view()
+	if !v.credentialConsumer {
+		return // the proxy did not announce it strips the key: nothing could safely carry it
+	}
 	if !s.namePersistEnabled(v) {
 		return // no proxy credential, or persistence off: no continuity on offer
 	}
