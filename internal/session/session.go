@@ -10,12 +10,14 @@
 // Concurrency: Register / Unregister / Patch / List are safe to call from any
 // goroutine and from multiple processes at once (the daemon reaper and the TUI
 // refresh both call List). Mutating operations take a session-directory flock
-// before writing; every JSON write then goes through writeSessionFileAtomic
-// (temp file + rename), so concurrent writers do not lose read-modify-write
-// updates and concurrent readers never observe a torn file. Touch and FindEnded
-// are intentionally lock-free: Touch sets only an mtime (no read-modify-write)
-// and FindEnded tolerates torn reads, so neither needs the writer flock and
-// both stay off the per-tool-call hot path's contention.
+// before writing, behind an in-process mutex so at most one descriptor per
+// process waits on it (lock.go); every JSON write then goes through
+// writeSessionFileAtomic (temp file + rename), so concurrent writers do not
+// lose read-modify-write updates and concurrent readers never observe a torn
+// file. Touch and FindEnded are intentionally lock-free: Touch sets only an
+// mtime (no read-modify-write) and FindEnded tolerates torn reads, so neither
+// needs the writer flock and both stay off the per-tool-call hot path's
+// contention.
 package session
 
 import (
@@ -191,22 +193,6 @@ func register(info Info, reserved Reserved) (Info, error) {
 		return Info{}, fmt.Errorf("writing session file: %w", err)
 	}
 	return info, nil
-}
-
-func withSessionDirLock(dir string, fn func() error) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(filepath.Join(dir, ".sessions.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return err
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck // the fd is closed on return either way, which releases the lock
-	return fn()
 }
 
 // writeSessionFileAtomic marshals info and writes it to path atomically (temp
@@ -504,12 +490,13 @@ func List() ([]Info, error) {
 // listLocked is List's body with the session-directory flock already held by
 // the CALLER. It must never be called without it.
 //
-// The split exists because withSessionDirLock is not reentrant: it opens a
-// fresh fd and takes syscall.Flock(LOCK_EX) on each call, so a nested
-// acquisition from the same process blocks forever. Anything needing the live
-// session list while holding the lock — the uniqueness checks in Register and
-// Rename, which have to read and write under one lock to be race-free — comes
-// through here rather than through List.
+// The split exists because withSessionDirLock is not reentrant: it takes a
+// per-directory sync.Mutex and then opens a fresh fd and takes
+// syscall.Flock(LOCK_EX) on each call, so a nested acquisition from the same
+// process blocks forever. Anything needing the live session list while holding
+// the lock — the uniqueness checks in Register and Rename, which have to read
+// and write under one lock to be race-free — comes through here rather than
+// through List.
 func listLocked(dir string) ([]Info, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
