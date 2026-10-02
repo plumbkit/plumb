@@ -29,8 +29,56 @@ var mutationSilentBudget = 25 * time.Minute
 // dropped, which the per-step timeout (default 600 s) normally rules out.
 // Without a token the run would be dropped mid-way, its report lost, while it
 // went on holding the slot and writing mutants until it finished for nobody.
+//
+// The baseline is only an ESTIMATE of a mutant's cost, and it can be far too
+// low: the unmutated tree's `go test` result may come from Go's test cache, so
+// the baseline pays little more than the compile while every mutant (a changed
+// file) pays for the whole suite. silentRunWatch re-checks with each mutant's
+// real cost as the run goes.
 func checkSilentBudget(ctx context.Context, elapsed, perMutant time.Duration, mutants int) error {
 	return silentBudgetRefusal(mcp.HasProgress(ctx), elapsed, perMutant, mutants, mutationSilentBudget)
+}
+
+// silentRunWatch carries the silent-call budget through the run, so that a
+// baseline which understated the cost cannot let a silent call run past the
+// client's idle window. Before each mutant it projects the rest of the run from
+// the costliest cycle seen so far, the baseline included, and stops the run when
+// the projection passes the budget. The report then covers the mutants that ran
+// and says why the rest did not. It is inert for a call with progress.
+type silentRunWatch struct {
+	active bool // the call asked for no progress, so it is silent until the report
+	start  time.Time
+	budget time.Duration
+	worst  time.Duration // costliest compile+test cycle seen
+}
+
+func newSilentRunWatch(ctx context.Context, start time.Time, baselineCost time.Duration) *silentRunWatch {
+	return &silentRunWatch{active: !mcp.HasProgress(ctx), start: start, budget: mutationSilentBudget, worst: baselineCost}
+}
+
+// observe records one mutant's real cycle cost.
+func (w *silentRunWatch) observe(cost time.Duration) {
+	if w != nil && cost > w.worst {
+		w.worst = cost
+	}
+}
+
+// stopBefore is consulted before the next mutant, with ran mutants done out of
+// total. It returns the report note explaining an early stop, or "" to go on.
+func (w *silentRunWatch) stopBefore(now time.Time, ran, total int) string {
+	remaining := total - ran
+	if w == nil || !w.active || remaining <= 0 || w.worst <= 0 {
+		return ""
+	}
+	left := time.Duration(remaining) * w.worst
+	if now.Sub(w.start)+left <= w.budget {
+		return ""
+	}
+	return fmt.Sprintf("\n⚠ stopped early: %d of %d %s never ran. A mutant cycle took %s, more than the baseline suggested "+
+		"(Go's test cache can make an unchanged tree's suite look cheap), so the rest would keep this silent call going for about %s more, "+
+		"past its %s budget — a client may give up on it and lose this report. This client did not ask for progress notifications, which would keep the call alive. "+
+		"Run the remaining mutants as a smaller batch. They prove nothing either way.\n",
+		remaining, total, textfmt.Plural(total, "mutant", "mutants"), roughDuration(w.worst), roughDuration(left), roughDuration(w.budget))
 }
 
 // silentBudgetRefusal is checkSilentBudget's decision, pure for testing.

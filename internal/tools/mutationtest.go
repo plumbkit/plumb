@@ -215,13 +215,17 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if plan, err = t.baseline(ctx, plan); err != nil {
 		return "", err
 	}
-	if err := checkSilentBudget(ctx, time.Since(start), time.Since(baselineStart), len(targets)); err != nil {
+	baselineCost := time.Since(baselineStart)
+	if err := checkSilentBudget(ctx, time.Since(start), baselineCost, len(targets)); err != nil {
 		return "", err
 	}
-	results, restoreErr := t.runAll(ctx, targets, plan)
+	results, stopNote, restoreErr := t.runAll(ctx, targets, plan, newSilentRunWatch(ctx, start, baselineCost))
 	report := formatMutationReport(args, plan, warnings, results)
 	if restoreErr != nil {
 		return "", fmt.Errorf("%w\n\nresults before the failure:\n%s", restoreErr, report)
+	}
+	if stopNote != "" {
+		return report + stopNote, nil
 	}
 	return report + skippedNote(len(results), len(targets)), nil
 }
