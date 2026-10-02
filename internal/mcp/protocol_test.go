@@ -83,8 +83,8 @@ func TestDispatchInitialize_ProtocolHookFiresOnce(t *testing.T) {
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
 			`"protocolVersion":"2025-11-25",` +
 			`"capabilities":{"roots":{"listChanged":true},"elicitation":{}}}}`)
-	ss.dispatchMessage(context.Background(), msg, &initOnce)
-	ss.dispatchMessage(context.Background(), msg, &initOnce)
+	ss.dispatchMessage(context.Background(), msg, "initialize", &initOnce)
+	ss.dispatchMessage(context.Background(), msg, "initialize", &initOnce)
 	if calls != 1 {
 		t.Fatalf("OnProtocolNegotiated fired %d times over two initialize requests, want 1", calls)
 	}

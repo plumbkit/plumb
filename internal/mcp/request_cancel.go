@@ -79,6 +79,12 @@ func (ss *serveState) trackRequest(ctx context.Context, id any) (context.Context
 // under the lock before its channel is closed, so a duplicate cancel finds
 // nothing and the channel is closed exactly once. A cancel for an id that has
 // already finished, or was never seen, is ignored, as the spec requires.
+//
+// The cancelled request is still answered when its handler returns, although
+// the spec says a receiver SHOULD NOT respond. That is deliberate: the serve
+// proxy forgets a request only when the daemon answers it, so an unanswered
+// one would sit in its outstanding set and be error-synthesised on the next
+// reconnect. A client that has forgotten the id drops the answer.
 func (ss *serveState) cancelRequest(data []byte) {
 	var n struct {
 		Params struct {

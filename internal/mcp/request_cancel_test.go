@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -49,7 +50,8 @@ func pipedServer(t *testing.T, s *mcp.Server) (send func(string), lines <-chan s
 	}, ch
 }
 
-// cancelWatchTool blocks until its call is cancelled and reports what it saw.
+// cancelWatchTool waits up to its wait_ms argument for its call to be
+// cancelled and reports what it saw, both on saw and as its result text.
 type cancelWatchTool struct {
 	started chan struct{}
 	saw     chan string
@@ -58,34 +60,43 @@ type cancelWatchTool struct {
 func (*cancelWatchTool) Name() string        { return "cancel_watch" }
 func (*cancelWatchTool) Description() string { return "waits for its call to be cancelled" }
 
-func (*cancelWatchTool) InputSchema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (*cancelWatchTool) InputSchema() json.RawMessage {
+	return json.RawMessage(`{"type":"object","properties":{"wait_ms":{"type":"integer"}}}`)
+}
 
-func (c *cancelWatchTool) Execute(ctx context.Context, _ json.RawMessage) (string, error) {
+func (c *cancelWatchTool) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
+	var args struct {
+		WaitMS int `json:"wait_ms"`
+	}
+	_ = json.Unmarshal(raw, &args)
 	cancelled := mcp.RequestCancelled(ctx)
 	c.started <- struct{}{}
+	got := "not cancelled"
 	select {
 	case <-cancelled:
-		c.saw <- "cancelled"
-	case <-time.After(400 * time.Millisecond):
-		c.saw <- "not cancelled"
+		got = "cancelled"
+	case <-time.After(time.Duration(args.WaitMS) * time.Millisecond):
 	}
-	return "done", nil
+	c.saw <- got
+	return got, nil
 }
 
 // TestRequestCancelled_FiresOnlyForTheCancelledRequest pins the signal that
 // lets a long-running tool give up a call its client has abandoned without
-// closing the connection — Claude Code dropping an idle tools/call on a shared
-// serve connection, the case ConnectionClosed can never see. The controls
-// matter as much as the hit: a cancel for another id, or for the same digits as
-// a string id, must not fire, or one subagent's cancel would abandon another's
-// call.
+// closing the connection — Claude Code cancelling an interrupted tools/call on a
+// shared serve connection, the case ConnectionClosed can never see. The
+// controls matter as much as the hit: a cancel for another id, or for the same
+// digits as a string id, must not fire, or one subagent's cancel would abandon
+// another's call.
 func TestRequestCancelled_FiresOnlyForTheCancelledRequest(t *testing.T) {
 	tool := &cancelWatchTool{started: make(chan struct{}, 4), saw: make(chan string, 4)}
 	s := mcp.New(mcp.ServerInfo{Name: "t", Version: "0"})
 	s.Register(tool)
 	send, _ := pipedServer(t, s)
 
-	send(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"cancel_watch","arguments":{}}}`)
+	// The negative control needs a bounded wait; the hit below does not, so a
+	// loaded machine cannot turn it into a false failure.
+	send(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"cancel_watch","arguments":{"wait_ms":400}}}`)
 	<-tool.started
 	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":8}}`)
 	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"7"}}`)
@@ -93,11 +104,37 @@ func TestRequestCancelled_FiresOnlyForTheCancelledRequest(t *testing.T) {
 		t.Fatalf("a cancel for another request reached this one: tool saw %q", got)
 	}
 
-	send(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"cancel_watch","arguments":{}}}`)
+	send(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"cancel_watch","arguments":{"wait_ms":10000}}}`)
 	<-tool.started
-	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9,"reason":"idle timeout"}}`)
+	send(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9,"reason":"user interrupt"}}`)
 	if got := <-tool.saw; got != "cancelled" {
 		t.Fatalf("tool saw %q, want its call reported cancelled", got)
+	}
+}
+
+// TestRequestCancelled_CancelRightBehindItsRequest: a client may write the
+// cancel immediately after the request. Messages are handled concurrently, so
+// a request registered inside its own goroutine could lose that race and the
+// cancel be dropped as "not in flight" — the reviewer measured 5-25% lost.
+// Registration happens on the reading loop, so every one must land.
+func TestRequestCancelled_CancelRightBehindItsRequest(t *testing.T) {
+	const n = 100
+	tool := &cancelWatchTool{started: make(chan struct{}, n), saw: make(chan string, n)}
+	s := mcp.New(mcp.ServerInfo{Name: "t", Version: "0"})
+	s.Register(tool)
+	send, _ := pipedServer(t, s)
+	for i := 1; i <= n; i++ {
+		send(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"cancel_watch","arguments":{"wait_ms":3000}}}`+"\n"+
+			`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":%d}}`, i, i))
+	}
+	lost := 0
+	for range n {
+		if <-tool.saw != "cancelled" {
+			lost++
+		}
+	}
+	if lost > 0 {
+		t.Fatalf("%d of %d cancels written right behind their request were lost", lost, n)
 	}
 }
 
@@ -195,5 +232,12 @@ func TestProgress_SentAgainstTheTokenAndNeverWithoutOne(t *testing.T) {
 	}
 	if !strings.Contains(resp, "has-progress=no") {
 		t.Errorf("HasProgress must be false for a call without a token: %s", resp)
+	}
+
+	// A null token is no token: there is nothing to report against.
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"progress","arguments":{},"_meta":{"progressToken":null}}}`)
+	progress, resp = collectUntilResponse(t, lines, "3")
+	if len(progress) != 0 || !strings.Contains(resp, "has-progress=no") {
+		t.Fatalf("a null progressToken must get no progress: %v / %s", progress, resp)
 	}
 }
