@@ -222,6 +222,12 @@
   file deleted since plumb wrote it recorded, and showed, the replaced side as
   an existing empty file.
 
+- **The write-history guard now checks every write, not every function.** The
+  architecture rule that a file write must be followed by a history record was
+  satisfied by any one record anywhere in the function, so a function with two
+  writes and one record passed. Each write now needs its own later record. The
+  rule also now covers plumb's generated-memory writes and prunes.
+
 - **`rename_file` no longer records a destination it did not destroy.** A
   case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
   `overwrite: true`, recorded a delete of the file itself and showed its content
