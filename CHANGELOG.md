@@ -7,21 +7,21 @@
 - **More write responses carry the diff, and can ask the agent to show it to
   you.** `[edits].show_write_diff` (default on) covered `edit_file`,
   `write_file`, `find_replace`, the symbol edits and `transaction_apply`; it now
-  also covers `delete_file` (every line removed, per file in a batch),
-  `copy_file` (what landed, plus the destination it replaced), `rename_file`
-  (only when the move destroyed an existing destination), `move_symbol`, and
-  `undo_edit`'s removal of a file its write created. A new
-  `[edits].relay_write_diff` (default on, `PLUMB_RELAY_WRITE_DIFF`, an ordinary
-  per-project setting) appends one line asking the agent to include the diff in
-  its reply to you; set it false to keep the diff in the tool result without
-  asking the agent to repeat it. A response reports `… (diff withheld: …)`
-  instead of content when a side was not read (a file past the 200 KiB
-  response-diff cap), when a side is binary, or — see below — when the path
-  matches `[history] sensitive_globs`.
-- **Not covered, and not claimed:** the `.plumb/` writers (`write_memory`,
-  `delete_memory`, `agent_config`, `git_init`) record history but still return
-  no diff, so a memory or project-config change shows in `plumb history` and not
-  in the response.
+  covers every write plumb records: `delete_file` (every line removed, per file
+  in a batch), `copy_file` (what landed, plus the destination it replaced),
+  `rename_file` (only when the move destroyed an existing destination),
+  `move_symbol`, `undo_edit`'s removal of a file its write created, and the
+  `.plumb/` writers — `write_memory`, `delete_memory`, `agent_config` and
+  `git_init`. A response reports `… (diff withheld: …)` instead of content when a
+  side was not read (a file past the 200 KiB response-diff cap), when a side is
+  binary, or — see below — when the path matches `[history] sensitive_globs`.
+- **`[edits].relay_write_diff`** (default **off**, `PLUMB_RELAY_WRITE_DIFF`) asks
+  the agent to include each write response's diff in its reply to you, once per
+  response and only when a diff was shown. It is off by default because the diff
+  is already in the tool result, where the transcript shows it, and asking the
+  agent to repeat it costs output tokens the diff itself does not. Turn it on
+  globally, or for one project, to have the agent surface changes in its own
+  words.
 
 ### Changed
 

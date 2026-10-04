@@ -166,16 +166,26 @@ var enforcementCases = map[string]struct {
 // over a user who turned it off would be spending that user's output tokens
 // against their choice.
 func TestProjectRelayWriteDiffIsAPreference(t *testing.T) {
-	off := projectCfgBase(t, Defaults(), "[edits]\nrelay_write_diff = false\n")
-	if off.Edits.RelayWriteDiff {
-		t.Fatal("a project could not turn relay_write_diff off; it is not behaving as a preference")
+	// Off by default: the diff is already in the tool result, so asking the agent
+	// to repeat it is opt-in.
+	if Defaults().Edits.RelayWriteDiff {
+		t.Fatal("relay_write_diff should default off")
 	}
 
-	base := Defaults()
-	base.Edits.RelayWriteDiff = false
-	on := projectCfgBase(t, base, "[edits]\nrelay_write_diff = true\n")
+	// Both directions, each starting from the OPPOSITE global value, so neither
+	// half can pass just because it matches the default.
+	onBase := Defaults()
+	onBase.Edits.RelayWriteDiff = false
+	on := projectCfgBase(t, onBase, "[edits]\nrelay_write_diff = true\n")
 	if !on.Edits.RelayWriteDiff {
 		t.Fatal("a project could not turn relay_write_diff on; it is not behaving as a preference")
+	}
+
+	offBase := Defaults()
+	offBase.Edits.RelayWriteDiff = true
+	off := projectCfgBase(t, offBase, "[edits]\nrelay_write_diff = false\n")
+	if off.Edits.RelayWriteDiff {
+		t.Fatal("a project could not turn relay_write_diff off; it is not behaving as a preference")
 	}
 }
 
