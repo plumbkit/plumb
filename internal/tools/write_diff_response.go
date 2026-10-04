@@ -143,6 +143,31 @@ func (d WriteDeps) responseDiffAcross(ctx context.Context, paths []string, heade
 	return unifiedDiff(headerPath, before.Content, after.Content)
 }
 
+// ResponseDiffSuffix renders everything a write response appends for one change:
+// the relay instruction (when a diff is actually shown, at most once) followed by
+// the diff section, each on its own line. It returns "" when there is nothing to
+// show, so a caller can concatenate it unconditionally.
+//
+// Exported for the two kinds of write site that have no response rendering of
+// their own: the `.plumb/` writers (write_memory, delete_memory, git_init), which
+// carry their own history hook rather than a tool's WriteDeps, and agent_config,
+// which lives in the connection layer. Both already hold the before/after sides
+// they recorded, so this is one call over bytes nobody reads twice.
+func ResponseDiffSuffix(ctx context.Context, deps WriteDeps, path string, before, after history.Side) string {
+	section := deps.responseDiff(ctx, path, sideOf(before), sideOf(after))
+	if section == "" {
+		return ""
+	}
+	var sb strings.Builder
+	if relay := deps.relayNoteFor(section); relay != "" {
+		sb.WriteString("\n")
+		sb.WriteString(relay)
+	}
+	sb.WriteString("\n")
+	sb.WriteString(section)
+	return sb.String()
+}
+
 // gatedDiff applies the withholding policy to a diff a site has ALREADY
 // rendered from content it held: write_file, edit_file, find_replace, the
 // symbol edits, transaction_apply and move_symbol reach the same verdict as

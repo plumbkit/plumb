@@ -232,9 +232,11 @@ type EditsConfig struct {
 	ShowWriteDiff bool `toml:"show_write_diff"`
 	// RelayWriteDiff appends one line to a write response that shows a diff,
 	// asking the agent to include that diff in its reply to the user. Defaults
-	// to true. Set to false (or PLUMB_RELAY_WRITE_DIFF=0) to keep the diff in
-	// the tool result (where the transcript shows it) without asking the agent
-	// to repeat it — which costs output tokens the diff itself does not.
+	// to false: the diff is already in the tool result, where the transcript
+	// shows it, and asking the agent to repeat it costs output tokens the diff
+	// itself does not. Set true (or PLUMB_RELAY_WRITE_DIFF=1) to have the agent
+	// surface it in its own reply. An ordinary setting, not a one-way knob, so it
+	// can be turned on globally or for one project.
 	RelayWriteDiff bool `toml:"relay_write_diff"`
 	// BlockDirtyWrites controls the dirty-guard on the destructive write tools
 	// (write_file, edit_file, delete_file, find_replace, rename_file, copy_file,

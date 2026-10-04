@@ -122,29 +122,34 @@ func (t *GitInit) run(ctx context.Context, a gitInitArgs) (string, error) {
 	if !a.InitPlumb {
 		return "initialised git repository at " + a.Path, nil
 	}
-	if err := createPlumbMarker(a.Path, t.deps.historySink(ctx)); err != nil {
+	suffix, err := createPlumbMarker(ctx, a.Path, t.deps)
+	if err != nil {
 		return "", fmt.Errorf("git_init: %w", err)
 	}
-	return "initialised git repository and .plumb/ workspace at " + a.Path, nil
+	return "initialised git repository and .plumb/ workspace at " + a.Path + suffix, nil
 }
 
-func createPlumbMarker(root string, sink historySink) error {
+// createPlumbMarker creates .plumb/context.md when it is absent, records the
+// creation, and returns the response-diff suffix for it. It returns "" when the
+// file was already there — nothing was written, so there is nothing to show.
+func createPlumbMarker(ctx context.Context, root string, deps WriteDeps) (string, error) {
 	plumbDir := filepath.Join(root, ".plumb")
 	if err := os.MkdirAll(plumbDir, 0o755); err != nil {
-		return fmt.Errorf("creating .plumb/: %w", err)
+		return "", fmt.Errorf("creating .plumb/: %w", err)
 	}
 	contextPath := filepath.Join(plumbDir, "context.md")
 	if _, err := os.Stat(contextPath); err == nil {
-		return nil // already exists — do not overwrite
+		return "", nil // already exists — do not overwrite
 	}
 	if err := os.WriteFile(contextPath, []byte(plumbContextTemplate), 0o644); err != nil { //nolint:gosec // G306: context.md is a user-edited project file; 0644 is intentional
-		return err
+		return "", err
 	}
-	sink.recordHistory(history.Change{
+	created := history.SideFromBytes([]byte(plumbContextTemplate))
+	deps.historySink(ctx).recordHistory(history.Change{
 		Op:    history.OpCreate,
 		Tool:  "git_init",
 		Path:  contextPath,
-		After: history.SideFromBytes([]byte(plumbContextTemplate)),
+		After: created,
 	})
-	return nil
+	return ResponseDiffSuffix(ctx, deps, contextPath, history.Side{}, created), nil
 }
