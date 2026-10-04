@@ -43,7 +43,18 @@ func repoRoot(t *testing.T) string {
 }
 
 // startSourceKitLSP spawns sourcekit-lsp and returns a ready adapter against ws.
-// The adapter and process are cleaned up via t.Cleanup.
+// The adapter and process are cleaned up via t.Cleanup. Callers create ws with
+// t.TempDir before calling this, so (cleanups being LIFO) the server is killed
+// and reaped before ws is removed.
+//
+// Background indexing is turned off. With it on, sourcekit-lsp prepares the
+// package by spawning swift-build, which writes into ws/.build/index-build and
+// runs in a process group of its own: killing sourcekit-lsp orphans it, and a
+// graceful shutdown/exit does not reliably reap it either. Under load the
+// orphan was still writing when t.TempDir's RemoveAll ran, failing the test
+// with "unlinkat …/.build/index-build/…: directory not empty". Nothing here
+// needs the index: document symbols and an open file's diagnostics come from
+// sourcekitd.
 func startSourceKitLSP(t *testing.T, ws string) *swift.Adapter {
 	t.Helper()
 	bin := requireSourceKitLSP(t)
@@ -72,7 +83,9 @@ func startSourceKitLSP(t *testing.T, ws string) *swift.Adapter {
 	ad := swift.New(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	if _, err := ad.Initialize(ctx, swift.DefaultInitParams(protocol.FileURI(ws))); err != nil {
+	params := swift.DefaultInitParams(protocol.FileURI(ws))
+	params.InitializationOptions = map[string]any{"backgroundIndexing": false}
+	if _, err := ad.Initialize(ctx, params); err != nil {
 		t.Fatal("initialize:", err)
 	}
 	if err := ad.Initialized(ctx); err != nil {
