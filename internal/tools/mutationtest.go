@@ -208,18 +208,23 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	}
 	// Charged only now: every refusal above is instant and writes nothing, so it
 	// must not spend the write budget the session shares with every write tool.
-	if err := t.chargeWrites(ctx, targets); err != nil {
+	refund, err := t.chargeWrites(ctx, targets)
+	if err != nil {
 		return "", err
 	}
 	baselineStart := time.Now()
 	if plan, err = t.baseline(ctx, plan); err != nil {
+		refund(len(targets))
 		return "", err
 	}
 	baselineCost := time.Since(baselineStart)
 	if err := checkSilentBudget(ctx, time.Since(start), baselineCost, len(targets)); err != nil {
+		refund(len(targets))
 		return "", err
 	}
 	results, stopNote, restoreErr := t.runAll(ctx, targets, plan, newSilentRunWatch(ctx, start, baselineCost))
+	// A mutant a cancel or the budget stopped before it started wrote nothing.
+	refund(len(targets) - len(results))
 	report := formatMutationReport(args, plan, warnings, results)
 	if restoreErr != nil {
 		return "", fmt.Errorf("%w\n\nresults before the failure:\n%s", restoreErr, report)
@@ -297,13 +302,11 @@ func (t *MutationTest) resolvePlan(ctx context.Context, a mutationTestArgs) (mut
 // It returns the plan with goWorkOff recorded from what the commands actually ran
 // with, for the report header.
 func (t *MutationTest) baseline(ctx context.Context, plan mutationPlan) (mutationPlan, error) {
-	enterStep(ctx, stepCompile)
-	compile := t.runStep(ctx, plan.compile, plan.timeout)
+	compile := t.runReportedStep(ctx, stepCompile, plan.compile, plan.timeout)
 	if compile.failed() {
 		return plan, t.baselineError(ctx, plan, plan.compile, compile, roleCompile)
 	}
-	enterStep(ctx, stepTest)
-	test := t.runStep(ctx, plan.test, plan.timeout)
+	test := t.runReportedStep(ctx, stepTest, plan.test, plan.timeout)
 	if test.failed() {
 		return plan, t.baselineError(ctx, plan, plan.test, test, roleTest)
 	}
@@ -504,17 +507,27 @@ func (t *MutationTest) preflightOne(ctx context.Context, spec mutantSpec) (mutat
 // It runs after every instant refusal (preflight's and rerootPlan's), so a call
 // refused up front never spends the budget the session shares with every write
 // tool; the baseline, which can take minutes, runs after it so a run the budget
-// would refuse is refused before that cost is paid. A run refused by the
-// baseline or by checkSilentBudget has been charged without writing.
-// That is the price of this order: it is a few slots of a per-minute budget,
-// against a baseline of minutes for a run that was never going to be allowed.
-func (t *MutationTest) chargeWrites(ctx context.Context, targets []mutationTarget) error {
-	for i, tgt := range targets {
-		if !t.deps.limiter(ctx).Allow() {
-			return fmt.Errorf("mutation_test: mutant %d (%s): %w", i+1, tgt.spec.Path, rateLimitError("mutation_test", t.deps.limiter(ctx)))
+// would refuse is refused before that cost is paid.
+//
+// Paying up front means a run can be charged and then write nothing: refused by
+// the baseline or by checkSilentBudget, or stopped (cancelled, or by the silent
+// budget) before some mutants start. The returned refund gives n slots back to
+// the same limiter for those; a run refused here has already had its own
+// partial charge returned.
+func (t *MutationTest) chargeWrites(ctx context.Context, targets []mutationTarget) (refund func(n int), _ error) {
+	lim := t.deps.limiter(ctx)
+	refund = func(n int) {
+		for range n {
+			lim.refund()
 		}
 	}
-	return nil
+	for i, tgt := range targets {
+		if !lim.Allow() {
+			refund(i)
+			return func(int) {}, fmt.Errorf("mutation_test: mutant %d (%s): %w", i+1, tgt.spec.Path, rateLimitError("mutation_test", lim))
+		}
+	}
+	return refund, nil
 }
 
 // displayPath renders path relative to the session workspace for the report,

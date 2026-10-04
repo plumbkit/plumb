@@ -110,15 +110,32 @@ func validateRunFilter(what, run string) error {
 			"not starting with -, @ or a space", what, run)
 	}
 	if flag, fixed, ok := flagCoversOnlyFirstPart(run); ok {
-		grouped := ""
-		if !strings.Contains(fixed, "/") {
-			grouped = fmt.Sprintf(", or group the alternatives: %s(%s)", flag, strings.TrimPrefix(run, flag))
-		}
 		return fmt.Errorf("%s %q would silently select too few tests: go test -run splits a pattern at each top-level | and / and matches every part as its own regex, "+
-			"so the leading %s applies to the first part only (go test -list applies it to the whole pattern, so -list looks right). "+
-			"Put the flag on every part: %s%s", what, run, flag, fixed, grouped)
+			"so the leading %s applies to the first part only (go test -list applies it to the whole pattern, so -list looks right). %s",
+			what, run, flag, flagFixAdvice(run, flag, fixed))
 	}
 	return nil
+}
+
+// flagFixAdvice says how to respell a filter flagCoversOnlyFirstPart refused,
+// offering only spellings this validator would itself accept: putting the flag
+// on every part lengthens the filter, and past the 256-character limit the
+// suggestion would only be refused in its turn.
+func flagFixAdvice(run, flag, fixed string) string {
+	var ways []string
+	if runPattern.MatchString(fixed) {
+		ways = append(ways, "put the flag on every part: "+fixed)
+	}
+	if !strings.Contains(fixed, "/") {
+		if grouped := flag + "(" + strings.TrimPrefix(run, flag) + ")"; runPattern.MatchString(grouped) {
+			ways = append(ways, "group the alternatives: "+grouped)
+		}
+	}
+	if len(ways) == 0 {
+		return "Put the flag on every part; the spelled-out form would pass the 256-character limit, so shorten or split the filter first."
+	}
+	advice := strings.Join(ways, ", or ")
+	return strings.ToUpper(advice[:1]) + advice[1:]
 }
 
 // leadingFlagGroup is an inline flag group opening a pattern: (?i), (?is),

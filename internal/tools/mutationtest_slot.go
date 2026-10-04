@@ -100,13 +100,26 @@ func (s *mutationSlot) atStep(step string) mutationHolder {
 	return s.holder
 }
 
+// mutationHeartbeat is how often a step that is still running re-reports
+// progress. Claude Code checks for idleness every 30 s and drops a call that has
+// been silent for its idle window — 30 min for a stdio server like `plumb
+// serve`, 5 min for http/sse — so a minute sits well inside the shortest. A var
+// only so a test can shorten it.
+var mutationHeartbeat = time.Minute
+
 // enterStep records that the run is starting step (stepCompile or stepTest) of
-// the mutant it is at, and tells the client: one notifications/progress per
-// step, when the client asked for progress. Without it a run longer than the
-// client's idle window (Claude Code: 30 min) is dropped mid-run even though it
-// is working. Steps are numbered over the whole run — the baseline is mutant 0 —
-// so the progress value strictly increases, as the spec requires.
-func enterStep(ctx context.Context, step string) {
+// the mutant it is at, and tells the client: a notifications/progress at the
+// start of the step, then a heartbeat every mutationHeartbeat while it runs, when
+// the client asked for progress. Without it a run longer than the client's idle
+// window is dropped mid-run even though it is working, and with the start-only
+// report so is a single step longer than that window. The caller runs the
+// returned done once the step has finished; it stops the heartbeat and returns
+// only when no heartbeat can still be sent.
+//
+// Steps are numbered over the whole run — the baseline is mutant 0 — and step i
+// reports i+1. Its heartbeats climb towards, but never reach, i+2, so every
+// value strictly increases, as the spec requires.
+func enterStep(ctx context.Context, step string) (done func()) {
 	h := mutationRun.atStep(step)
 	index := 2 * h.current
 	if step == stepTest {
@@ -116,7 +129,34 @@ func enterStep(ctx context.Context, step string) {
 	if h.current > 0 {
 		what = fmt.Sprintf("mutant %d/%d", h.current, h.mutants)
 	}
-	mcp.ReportProgress(ctx, float64(index+1), float64(2*(h.mutants+1)), fmt.Sprintf("mutation_test: %s, %s", what, step))
+	base, total := float64(index+1), float64(2*(h.mutants+1))
+	msg := fmt.Sprintf("mutation_test: %s, %s", what, step)
+	mcp.ReportProgress(ctx, base, total, msg)
+	if !mcp.HasProgress(ctx) {
+		return func() {}
+	}
+	stop, finished := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		start := time.Now()
+		tick := time.NewTicker(mutationHeartbeat)
+		defer tick.Stop()
+		for k := 1; ; k++ {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				climb := 0.9 * (1 - 1/float64(k+1)) // 0.45, 0.6, 0.675, … < 0.9
+				mcp.ReportProgress(ctx, base+climb, total, fmt.Sprintf("%s, still running (%s)", msg, roughDuration(time.Since(start))))
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-finished
+	}
 }
 
 // snapshot reports the holder and whether the slot is held.
