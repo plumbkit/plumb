@@ -114,7 +114,8 @@
   interleaving could also leave `.plumb` registered without write
   notifications, so `config.toml` edits stopped hot-reloading while the
   watcher reported healthy. `.plumb` now has a watcher of its own, so nothing
-  races the `Add`; this costs one more OS watcher per watched workspace.
+  races the `Add`. This costs one more OS watcher per watched workspace on
+  every platform (an inotify instance on Linux), though only kqueue needs it.
 - **A second conversation on a shared connection no longer takes the first
   one's name and mail; Claude Code's `/clear` hands its connection over
   explicitly.** (#564, part of #556) A stamped `session_start` from a

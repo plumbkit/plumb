@@ -9,12 +9,15 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -82,6 +85,25 @@ func descriptorsOn(t *testing.T, path string) int {
 		}
 	}
 	return n
+}
+
+// attached reports whether the .plumb watcher holds a watch on the CURRENT
+// plumbDir. Its WatchList alone cannot say: fsnotify keeps listing a user
+// watch until its reader handles the directory's removal, so while that is
+// pending it still names the old, deleted directory. Where each watch holds a
+// descriptor (kqueue), the attach is the second descriptor on the new inode,
+// after the root watcher reader's own registration. Elsewhere the WatchList is
+// all there is to see.
+func attached(t *testing.T, plumbWatcher *fsnotify.Watcher, plumbDir string) bool {
+	t.Helper()
+	if !slices.Equal(plumbWatcher.WatchList(), []string{plumbDir}) {
+		return false
+	}
+	switch runtime.GOOS {
+	case "darwin", "ios", "freebsd", "openbsd", "netbsd", "dragonfly":
+		return descriptorsOn(t, plumbDir) >= 2
+	}
+	return true
 }
 
 // TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs pins #568. On kqueue
@@ -167,9 +189,9 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 		// the dispatch finds the latch still set, and the re-attach follows
 		// that report with a dispatch of its own. So wait for the attach
 		// rather than assume it.
-		for deadline := time.Now().Add(10 * time.Second); !slices.Equal(plumbWatcher.WatchList(), []string{plumbDir}); {
+		for deadline := time.Now().Add(10 * time.Second); !attached(t, plumbWatcher, plumbDir); {
 			if time.Now().After(deadline) {
-				t.Fatalf("cycle %d: .plumb watcher watches %v 10s after .plumb appeared, want %s", i, plumbWatcher.WatchList(), plumbDir)
+				t.Fatalf("cycle %d: .plumb not attached 10s after it appeared: .plumb watcher watches %v, %d descriptors on it", i, plumbWatcher.WatchList(), descriptorsOn(t, plumbDir))
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
@@ -251,7 +273,16 @@ func TestProjectWatchManager_PlumbDirNeverSharesTheRootWatcher(t *testing.T) {
 			if got := plumbWatcher.WatchList(); !slices.Equal(got, []string{plumbDir}) {
 				t.Fatalf("second watcher watches %v, want only %s", got, plumbDir)
 			}
-			// And it is live: an edit inside .plumb still dispatches.
+			// And it is live: an edit inside .plumb still dispatches. Drain
+			// whatever the setup's burst still has in flight first, so the
+			// dispatch awaited can only come from this edit.
+			for quiet := false; !quiet; {
+				select {
+				case <-sig:
+				case <-time.After(10 * m.debounce):
+					quiet = true
+				}
+			}
 			writeProjectCfg(t, ws, "[edits]\nstrict = false\n")
 			awaitDispatch(t, sig, root)
 		})

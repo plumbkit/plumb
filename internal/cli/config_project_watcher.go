@@ -417,11 +417,14 @@ func (l *projectWatchLoop) onEvent(event fsnotify.Event, fromPlumbWatcher bool) 
 		// removing .plumb revokes what its config granted.
 		//
 		// Only plumbWatcher's report drops the latch. Its reader forgets its
-		// watch on the old inode before it delivers the event, so the re-Add
-		// that follows opens the new directory. The root watcher can report
-		// the removal first, and an Add made then would find plumbWatcher
-		// still holding the dead inode, keep it, and latch a watch that sees
-		// nothing.
+		// watch on the old directory before it delivers the event, so the
+		// re-Add that follows opens the new directory. The root watcher can
+		// report the removal first, and an Add made then would find
+		// plumbWatcher still holding the dead inode, keep it, and latch a
+		// watch that sees nothing. This covers the directory only: on kqueue,
+		// watches fsnotify made on files inside a .plumb that was renamed
+		// away, not deleted, outlive it and can hide a new config.toml of the
+		// same name. That is fsnotify state plumb cannot reset safely (#595).
 		if fromPlumbWatcher && event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
 			l.plumbWatched = false
 		}
