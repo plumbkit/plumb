@@ -81,10 +81,12 @@ func (e PolicyEntry) Warning(base Config) string {
 func historyEnabledWarning(v any, global bool) string {
 	on, ok := v.(bool)
 	switch {
-	case ok && !on:
-		return "switches write history off for this repository: plumb keeps no record of what agents write here"
-	case ok && global:
+	case !ok:
+		return "a [history] enabled value that is not a bool; plumb will refuse to load it"
+	case on == global:
 		return ""
+	case !on:
+		return "switches write history off for this repository: plumb keeps no record of what agents write here"
 	}
 	return "switches write history on for this repository, over your global setting: plumb records a diff of every write agents make here"
 }

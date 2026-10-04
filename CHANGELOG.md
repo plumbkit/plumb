@@ -222,6 +222,17 @@
   file deleted since plumb wrote it recorded, and showed, the replaced side as
   an existing empty file.
 
+- **`write_memory` and `delete_memory` no longer invent a side they could not
+  read.** When a memory file could not be read (unreadable permissions, or
+  removed in the window), the write was recorded as a create of an absent file,
+  or as a delete with no content, and the response rendered a diff from those
+  invented sides. The write still happens and is reported; no history row or
+  diff is made from content that was never read, as `agent_config` already did.
+
+- **`PLUMB_RELAY_WRITE_DIFF` turns the relay on only for `1`, `true` or `yes`.**
+  Now that the relay is off by default, any other value (`False`, `off`, a typo)
+  used to switch it on.
+
 - **A copy or rename between two projects is withheld the same way in history
   and in the write response.** The history store judged both paths by the
   destination project's `[history] sensitive_globs`, while the response judged

@@ -1787,10 +1787,10 @@ The knob is editable only by the user (e.g. the TUI Settings screen).
 ## Environment variables
 
 Environment variables are the highest-precedence layer. Booleans accept
-`1`/`true`/`yes`; `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_RELAY_WRITE_DIFF` and `PLUMB_GIT_ALLOW_WRITES`
-instead treat `0`/`false`/`no` as off, and keep their configured default when
-unset — on for `PLUMB_SHOW_WRITE_DIFF` and `PLUMB_GIT_ALLOW_WRITES`, off for
-`PLUMB_RELAY_WRITE_DIFF`.
+`1`/`true`/`yes`, and any other value means off. `PLUMB_SHOW_WRITE_DIFF` and
+`PLUMB_GIT_ALLOW_WRITES` instead treat only `0`/`false`/`no` as off; all three
+keep their configured default when unset (on for those two, off for
+`PLUMB_RELAY_WRITE_DIFF`).
 
 | Variable | Overrides |
 |---|---|

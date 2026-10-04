@@ -105,14 +105,19 @@ func (t *deleteMemoryTool) Execute(ctx context.Context, args json.RawMessage) (s
 	defer unlock()
 	// Read when EITHER the history row or the response diff wants the bytes, so
 	// the diff costs no extra read and neither consumer pays for the other.
+	// An unreadable side is unknown, not absent: the delete still happens and is
+	// reported, but no row or diff is fabricated from content nobody read.
 	before := history.Side{}
+	readable := true
 	if t.historyOn() || t.deps.showWriteDiff() {
-		if s, err := history.SideFromFile(path); err == nil {
-			before = s
-		}
+		s, err := history.SideFromFile(path)
+		before, readable = s, err == nil
 	}
 	if err := memory.DeleteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name); err != nil {
 		return "", err
+	}
+	if !readable {
+		return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws), nil
 	}
 	t.recordHistory(ctx, history.Change{Op: history.OpDelete, Tool: "delete_memory", Path: path, Before: before})
 	// An absent after-side renders every removed line, the same shape delete_file

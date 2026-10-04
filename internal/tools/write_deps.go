@@ -131,7 +131,7 @@ type WriteDeps struct {
 	// ShowWriteDiffFn, when set, overrides ShowWriteDiff at call time.
 	ShowWriteDiffFn func() bool
 	// RelayDiff, when true, appends one line asking the agent to show the diff
-	// to the user. Wired from [edits].relay_write_diff (default true). A bare
+	// to the user. Wired from [edits].relay_write_diff (default false). A bare
 	// WriteDeps{} leaves it off, exactly like ShowWriteDiff, so unit tests see
 	// the unchanged response unless they opt in.
 	RelayDiff bool

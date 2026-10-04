@@ -26,6 +26,10 @@ func TestRegistry_DenyListNeverWritable(t *testing.T) {
 		"agent_config_writes", // the enable knob — never self-writable
 		"edits.strict",
 		"edits.rate_limit_per_minute",
+		"edits.show_write_diff",
+		"edits.block_dirty_writes",
+		"history.enabled",
+		"history.sensitive_globs",
 		"git.allow_writes",
 		"git.allow_destructive",
 		"git.allow_push",

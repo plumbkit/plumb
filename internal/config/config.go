@@ -222,12 +222,11 @@ type EditsConfig struct {
 	// rename_file, copy_file, undo_edit, the semantic symbol edits
 	// (replace_symbol_body, insert_before_symbol, insert_after_symbol,
 	// safe_delete_symbol — in both dry-run preview and applied modes),
-	// find_replace, move_symbol and transaction_apply. The `.plumb/` writers
-	// (write_memory, delete_memory, agent_config, git_init) record history but
-	// return no diff, so this does not cover them. Defaults to true. Set to false
-	// (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification mode where only
-	// path, size, and mtime metadata are returned — useful when tokens matter
-	// more than inline confirmation. A path matching [history] sensitive_globs
+	// find_replace, move_symbol and transaction_apply, and the `.plumb/`
+	// writers (write_memory, delete_memory, agent_config, git_init). Defaults to
+	// true. Set to false (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification
+	// mode where only path, size, and mtime metadata are returned — useful when
+	// tokens matter more than inline confirmation. A path matching [history] sensitive_globs
 	// never shows content either way.
 	ShowWriteDiff bool `toml:"show_write_diff"`
 	// RelayWriteDiff appends one line to a write response that shows a diff,
