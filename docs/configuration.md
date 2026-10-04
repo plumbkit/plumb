@@ -202,20 +202,20 @@ server-side regardless of what the agent read. The dirty guard
 
 ## `[history]` — write diff history
 
-Plumb records every file change made on an agent's behalf as a timestamped unified diff in a SQLite WAL database (`~/.local/share/plumb/history.db`), linked to its MCP tool call. Sensitive files are recorded as metadata only (path, size, and SHA) with content withheld; other files have their diffs compressed with zstd and stored with automated redaction.
+Plumb records every file change made on an agent's behalf as a timestamped unified diff in a SQLite WAL database (`~/.local/share/plumb/history.db`), linked to its MCP tool call. A sensitive file is recorded as metadata only (path, size and SHA-256), with its content withheld. Every other diff is redacted, compressed with zstd and stored.
 
 | Field | Type | Default | Scope | Effect |
 |---|---|---|---|---|
-| `enabled` | bool | `true` | Global & Project | Whether write history is recorded. When `false`, write tools skip recording entirely. Applies live per call. |
-| `sensitive_globs` | list of string | `["**/.env*", "**/id_rsa*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.kdbx", "**/*token*", "**/*secret*", "**/*credential*"]` | Global & Project | File path patterns whose contents must never be recorded in `history.db`. Changes to matching files record path, timestamps, and hashes, but diff content is withheld (`[sensitive]`). Setting this in a project config replaces the global list. |
-| `max_content_bytes` | int | `8388608` (8 MiB) | Global | File size threshold beyond which file contents are not read into memory for diff calculation (`[too large]`). |
-| `max_diff_bytes` | int | `4194304` (4 MiB) | Global | Maximum compressed diff size stored in `history.db`. Diffs exceeding this are withheld (`[too large]`). |
+| `enabled` | bool | `true` | Global; a project's value needs `plumb trust` | Whether write history is recorded. When `false`, write tools skip recording entirely. Applies live per call. A project config's value is honoured only once you approve it with `plumb trust`: switching history off would leave no record of what agents wrote in that repository, and switching it on would override your own global choice. |
+| `sensitive_globs` | list of string | `[".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.*", "*.tfvars", "secrets.*"]` | Global; a project may only add | Paths whose contents are never recorded in `history.db` and never shown in a write response. A change to a matching file records the path, timestamps and hashes, with the content withheld (`withheld:sensitive`). Each glob is a `filepath.Match` pattern, tried against the file's base name and against its workspace-relative path, so `secrets/*` matches `secrets/prod.yaml`. `**` is not supported. A change matches when its path, its resolved path (through symlinks) or, for a copy or rename, its source matches. A project config's globs are ADDED to the global list; it cannot remove one. |
+| `max_content_bytes` | int | `8388608` (8 MiB) | Global | A side larger than this is not read into memory, and the change is recorded by size and hash (`withheld:too_large`). |
+| `max_diff_bytes` | int | `4194304` (4 MiB) | Global | The largest diff stored. The limit is on the rendered diff text before redaction and compression. A larger diff is withheld (`withheld:too_large`). |
 
 ### Privacy and secret redaction
 
-Diffs written to `history.db` pass through plumb's automated redaction pipeline (`internal/redact`), which masks passwords, API keys, and auth tokens across 13 secret-pattern families. However, redaction relies on patterns such as assignments (`password = ...`, `api_key: ...`). Secrets written in free-form prose without assignment syntax may not be caught.
+Diffs written to `history.db` pass through the same redaction plumb applies to generated memories (`internal/redact`), which replaces what it recognises as a secret with a labelled placeholder such as `[REDACTED:aws-key]`. The redaction relies on recognisable shapes: known key formats, and assignments such as `password = ...` or `api_key: ...`. A secret written in free-form prose can slip past it.
 
-For sensitive files such as credential stores, certificates, and private keys, `sensitive_globs` provides whole-file protection by withholding diff content entirely before it reaches the history queue.
+For files that are secrets as a whole (credential stores, certificates, private keys), `sensitive_globs` withholds the content entirely, before the change reaches the history queue.
 
 ## `[walk]` — filesystem-traversal safety
 
@@ -1787,10 +1787,10 @@ The knob is editable only by the user (e.g. the TUI Settings screen).
 ## Environment variables
 
 Environment variables are the highest-precedence layer. Booleans accept
-`1`/`true`/`yes`; `PLUMB_SHOW_WRITE_DIFF`, `PLUMB_RELAY_WRITE_DIFF` and `PLUMB_GIT_ALLOW_WRITES`
-instead treat `0`/`false`/`no` as off, and keep their configured default when
-unset — on for `PLUMB_SHOW_WRITE_DIFF` and `PLUMB_GIT_ALLOW_WRITES`, off for
-`PLUMB_RELAY_WRITE_DIFF`.
+`1`/`true`/`yes`, and any other value means off. `PLUMB_SHOW_WRITE_DIFF` and
+`PLUMB_GIT_ALLOW_WRITES` instead treat only `0`/`false`/`no` as off; all three
+keep their configured default when unset (on for those two, off for
+`PLUMB_RELAY_WRITE_DIFF`).
 
 | Variable | Overrides |
 |---|---|

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -19,6 +20,10 @@ type historyStore struct {
 	s        *history.Store
 	closed   bool
 	failedAt time.Time
+	// disabled is set for the daemon's life when history.db was written by a
+	// newer plumb: retrying cannot succeed until plumb is upgraded, so it is not
+	// retried (or re-logged) every minute.
+	disabled bool
 	maxDiff  func() int64
 }
 
@@ -30,10 +35,15 @@ func (h *historyStore) store() *history.Store {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.closed || h.s != nil || (!h.failedAt.IsZero() && time.Since(h.failedAt) < time.Minute) {
+	if h.closed || h.disabled || h.s != nil || (!h.failedAt.IsZero() && time.Since(h.failedAt) < time.Minute) {
 		return h.s
 	}
 	s, err := history.Open(history.DBPath(), history.Options{MaxDiffBytes: h.maxDiff})
+	if errors.Is(err, history.ErrNewerSchema) {
+		h.disabled = true
+		slog.Warn("history: history.db was written by a newer plumb; write history is off until plumb is upgraded", "err", err)
+		return nil
+	}
 	if err != nil {
 		h.failedAt = time.Now()
 		slog.Warn("history: cannot open history.db; recording disabled for now", "err", err)

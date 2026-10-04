@@ -147,7 +147,7 @@ func TestUndoRevertLinksByWrittenSHA(t *testing.T) {
 	w := item(OpUpdate, p, []byte("a\n"), []byte("b\n"))
 	s.Enqueue(w)
 	undo := item(OpRevert, p, []byte("DIVERGED\n"), []byte("a\n")) // force:true on a diverged file
-	undo.CallID, undo.RevertsSHA, undo.Reason = "C2", w.After.SHA, "undo_edit"
+	undo.CallID, undo.RevertsSHA, undo.Reason = "C2", w.After.SHA(), "undo_edit"
 	s.Enqueue(undo)
 	r := allRows(t, s)
 	if !r[1].reverts.Valid || r[1].reverts.Int64 != r[0].seq {

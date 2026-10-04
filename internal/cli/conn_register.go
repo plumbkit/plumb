@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
-	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -80,12 +79,11 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Contested:             s.pinContested,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
 		RelayDiffFn:           func() bool { return s.editsConfig().RelayWriteDiff },
-		// The response diff makes the store's own sensitive-glob decision, with
-		// the same matcher, so a path withheld from history.db is withheld from
-		// the transcript too (which leaves the machine; history.db does not).
-		SensitivePathFn: func(ctx context.Context, path string) bool {
-			return history.MatchSensitive(s.historyConfig().SensitiveGlobs, s.workspaceFor(ctx), path)
-		},
+		// The response diff takes the store's own sensitive-file decision
+		// (changeSensitive, which recordHistory also uses), so content withheld
+		// from history.db is withheld from the transcript too (which leaves the
+		// machine; history.db does not).
+		SensitivePathFn:   s.changeSensitive,
 		BlockDirtyFn:      func() bool { return s.editsConfig().BlockDirtyWrites },
 		PostWriteNotifyFn: s.javaPostWriteNotify,
 		QualityReport:     qualityReport,

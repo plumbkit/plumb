@@ -84,7 +84,7 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	for i, p := range plans {
 		res, err := safeWrite(p.path, p.after, p.mode)
 		if err != nil {
-			if rbErr := rollbackWorkspaceEdit(plans, modified, sink); rbErr != nil {
+			if rbErr := rollbackWorkspaceEdit(plans, modified, sink, tool); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
 			return modified, plans, withRevertNote(fmt.Errorf("writing %s: %w", p.path, err), workspaceEditReverted(plans, modified))
@@ -286,7 +286,10 @@ func workspaceEditReverted(plans []workspaceEditPlan, modified []string) []rever
 	return out
 }
 
-func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink) error {
+// rollbackWorkspaceEdit restores modified files to their pre-edit bytes. Each
+// restore is recorded under tool, the tool that rolled back, so a history
+// filter on that tool lists the revert beside the write it undid.
+func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink, tool string) error {
 	byPath := make(map[string]workspaceEditPlan, len(plans))
 	for _, p := range plans {
 		byPath[p.path] = p
@@ -298,7 +301,7 @@ func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink hi
 			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
 		} else {
 			sink.recordHistory(history.Change{
-				Op: history.OpRevert, Path: p.path, Tool: "rollback",
+				Op: history.OpRevert, Path: p.path, Tool: tool,
 				Before: history.SideFromBytes(p.after), After: history.SideFromBytes(p.before),
 				RevertsOwnCall: true, Reason: "edit_rollback",
 			})

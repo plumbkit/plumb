@@ -101,6 +101,11 @@ func TestWorkspaceEditRollbackRecordsReverts(t *testing.T) {
 	if cs[1].Op != history.OpRevert || cs[1].Path != p1 || !cs[1].RevertsOwnCall || cs[1].Reason != "edit_rollback" {
 		t.Errorf("expected second change to be OpRevert edit_rollback on p1, got %+v", cs[1])
 	}
+	// The revert is filed under the tool that rolled back, so `plumb history
+	// --tool rename_symbol` lists it beside the write it undid.
+	if cs[1].Tool != "rename_symbol" {
+		t.Errorf("revert Tool = %q, want the calling tool rename_symbol", cs[1].Tool)
+	}
 }
 
 func TestMoveRollbackRemovingACreatedFileRecordsRevert(t *testing.T) {

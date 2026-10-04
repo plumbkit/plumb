@@ -148,6 +148,8 @@ func TestOneWaySafeValue_CoversEveryOneWayBool(t *testing.T) {
 			continue
 		case "tools.profile": // a string, resolved by oneWayToolsProfile
 			continue
+		case "history.sensitive_globs": // a list, resolved by unionGlobs
+			continue
 		}
 		if _, ok := oneWaySafeValue[key]; !ok {
 			t.Errorf("%q is ClassOneWay but has no oneWaySafeValue entry, so applyOneWayBools "+

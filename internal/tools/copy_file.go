@@ -143,9 +143,10 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 func (t *CopyFile) formatCopyResult(ctx context.Context, from, to string, data []byte, destBefore history.Side) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "copied %s → %s (%d bytes)", from, to, len(data))
-	// Both paths go to the gate: a copy of a sensitive SOURCE to a destination
-	// whose name matches no glob would otherwise print the secret.
-	diff := t.deps.responseDiffAcross(ctx, []string{from, to}, to, sideOf(destBefore), bytesSide(data))
+	// The source goes to the gate with the destination, as one change: a copy of
+	// a sensitive SOURCE to a name matching no glob would otherwise print the
+	// secret.
+	diff := t.deps.responseDiffAcross(ctx, to, from, sideOf(destBefore), bytesSide(data))
 	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
 	return sb.String()
 }

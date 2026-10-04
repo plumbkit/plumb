@@ -127,6 +127,155 @@
   Without a marker (hook not installed, daemon restarted in between) or where
   other conversations share the connection, the new conversation is a newcomer
   with an identity of its own and the marker is left unconsumed.
+- **Write history no longer stores a sensitive file's contents when it is
+  reached by another name.** Sensitive-file matching (`[history]
+  sensitive_globs`) only looked at the destination path as the tool spelled it.
+  So `copy_file` from `.env` to `env.bak`, or a write through a symlink that
+  points at `.env`, stored the secret in plaintext in `history.db`. Matching now
+  also checks the resolved path, the copy source, and the workspace root under
+  its resolved spelling, so a root-relative glob still matches under a symlinked
+  checkout. Rows written before the fix keep whatever they stored; prune them
+  with `plumb history prune` if a secret may have been copied.
+
+- **Crash-recovery restores are recorded in write history again.** When a
+  workspace attaches and plumb rolls back a transaction a crash left
+  half-applied, the restore is meant to appear as a `revert` (reason
+  `crash_recovery`). It never did: recovery runs before the project config is
+  applied, and the connection did not yet carry `[history]` at that point, so
+  recording was off. The next write to the file then showed a spurious
+  "unrecorded change" gap.
+
+- **`plumb history prune` no longer slows to a crawl, and history never loses
+  a row without counting it.**
+  - **Prune.** It was quadratic: every deleted change scanned the whole table
+    for rows that referenced it (about 34 s for 20,000 rows). That held the
+    database lock against the daemon the whole time. The two referencing
+    columns are now indexed, which is added automatically to existing
+    `history.db` files with no schema-version change, and prune deletes in
+    bounded chunks.
+  - **Uncounted losses.** A batch the writer could not commit, for example
+    while a prune held the lock, dropped its rows without counting them. Those
+    rows, and the drop and error counts the batch was carrying, now reach
+    `dropped_rows` / `write_errors` (shown by `plumb doctor`) with the next
+    batch.
+  - **Reverts after a prune.** A revert whose original write had been pruned
+    was dropped. It is now stored, with no link to the pruned row.
+  - **Counting.** An overflow marker that failed to insert was counted twice.
+  - **Ordering.** Order is now strictly first-in, first-out across the queue's
+    overflow boundary.
+
+- **`plumb history` no longer reports an "unrecorded change" around
+  `rename_file`.** A rename continues its source file's history, and ends the
+  history of the path it left. The gap check compared the rename against the
+  destination's previous state, so every rename over an existing file was
+  flagged. Recreating a renamed-away file was flagged too. Both read as edits
+  made outside plumb.
+
+- **Write history applies the `[history]` settings of the project a file is
+  written in.** Previously it used the settings of the project the connection
+  was pinned to, so an agent working in another project (or writing an absolute
+  path into one) had that project's `sensitive_globs` ignored. Crash-recovery
+  restores of a file too large to carry are now recorded by size and hash.
+  Before, they were recorded as an existing empty file.
+
+- **`plumb history` and `plumb doctor` fixes.**
+  - **Paths.** `--workspace .`, a relative `--file`, and `--all` with an
+    absolute `--file` silently matched nothing; they now resolve as the shell
+    means them.
+  - **Time range.** A `--since` that is not before `--until` is refused rather
+    than returning nothing.
+  - **JSON (breaking).** The `call` object in `plumb history show --json` now
+    uses snake_case keys like the rest of the output (`tool`, `called_at`,
+    `duration_ms`, `success`, ...). 0.21.0 emitted `Tool`, `CalledAt`, and so
+    on.
+  - **Doctor.** A recent history drop or write error is now a warning, as
+    documented, not a failure that made `plumb doctor` exit non-zero. The check
+    also reports the schema version, `overflow_rows` and the last error's age.
+    For a `history.db` written by a newer plumb, it now says to upgrade instead
+    of suggesting deleting the file.
+  - **Newer schema.** The daemon no longer retries such a database, logging a
+    warning, every minute.
+
+- **`find_replace` no longer overwrites a change that lands while it runs.** It
+  scanned each file before taking that file's lock, then wrote the replacement
+  it had computed from those bytes. A write that landed in between (from
+  another agent, or an editor) was silently lost, and write history recorded
+  the older bytes as the file's previous state. The file is now re-read and
+  the replacement re-applied under the lock. That closes the gap for other
+  plumb writes, which take the same lock, and narrows it for an editor to the
+  write itself. A file that no longer matches is left alone, and the reported
+  counts and diffs are the ones actually written.
+
+- **`write_memory`, `delete_memory` and `agent_config` take the same per-file
+  lock as the other write tools.** An `edit_file` on `.plumb/config.toml`
+  could land between `agent_config` reading the file and writing it back, and
+  be lost. For all three, a concurrent write could also make the write-history
+  row pair a before and an after from two different writes. `agent_config`
+  also no longer reads `config.toml` for history when history is off.
+
+- **Write history files an edit rollback under the tool that rolled back.** A
+  failed `rename_symbol` or other workspace edit recorded its reverts under
+  the made-up tool name `rollback`, so `plumb history --tool rename_symbol`
+  missed them.
+
+- **A forced `undo_edit` of a deleted file records it as absent.** Restoring a
+  file deleted since plumb wrote it recorded, and showed, the replaced side as
+  an existing empty file.
+
+- **`write_memory` and `delete_memory` no longer invent a side they could not
+  read.** When a memory file could not be read (unreadable permissions, or
+  removed in the window), the write was recorded as a create of an absent file,
+  or as a delete with no content, and the response rendered a diff from those
+  invented sides. The write still happens and is reported; no history row or
+  diff is made from content that was never read, as `agent_config` already did.
+
+- **`PLUMB_RELAY_WRITE_DIFF` turns the relay on only for `1`, `true` or `yes`.**
+  Now that the relay is off by default, any other value (`False`, `off`, a typo)
+  used to switch it on.
+
+- **A copy or rename between two projects is withheld the same way in history
+  and in the write response.** The history store judged both paths by the
+  destination project's `[history] sensitive_globs`, while the response judged
+  each path by its own project's globs. With a glob declared in only one of the
+  two projects, one side leaked. A glob only in the source's project stored the
+  content in `history.db` in cleartext. A glob only in the destination's project
+  printed in the transcript what `history.db` withheld. Both now take one
+  decision for the change: it is sensitive if the destination project's globs
+  match either path, or the source project's globs match the source.
+
+- **A project config's `[history] enabled` now needs `plumb trust`, and it can no
+  longer narrow the sensitive globs (breaking for project configs).**
+  `[history] enabled` and `sensitive_globs` were ordinary preferences, so a
+  cloned repository could set `enabled = false` to leave no record of what
+  agents wrote there, `enabled = true` to switch recording on over a user who
+  had turned it off, or `sensitive_globs = []` to have its `.env` stored in
+  `history.db` and shown in write responses. A project's `enabled` is now
+  honoured only once approved with `plumb trust`, which lists it with what it
+  does. A project's `sensitive_globs` are now added to the global list
+  instead of replacing it. The `[history]` docs now give the real default globs
+  (base-name or workspace-relative `filepath.Match` patterns, no `**`), the
+  content markers `plumb history` actually prints (`[withheld:sensitive]`,
+  `[withheld:too_large]` and so on), and the fact that `max_diff_bytes` is
+  measured before compression.
+
+- **The write-history guard now checks every write, not every function.** The
+  architecture rule that a file write must be followed by a history record was
+  satisfied by any one record anywhere in the function, so a function with two
+  writes and one record passed. Each write now needs its own later record. The
+  rule also now covers plumb's generated-memory writes and prunes.
+
+- **`rename_file` no longer records a destination it did not destroy.** A
+  case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
+  `overwrite: true`, recorded a delete of the file itself and showed its content
+  in the response as lost. Renaming one hard link onto another reported success
+  and recorded a delete and a rename, although rename(2) leaves both names in
+  place; it is now refused with that explanation.
+
+- **Writes no longer hash file contents when write history is off.** Every
+  write built its history record, including a sha256 of the before and after
+  content, whether or not `[history] enabled` was set. The hash is now computed
+  only when the record is actually queued.
+
 - **Queued session-registry writes no longer each hold a descriptor on
   `.sessions.lock`.** (#583) While another process held the registry lock (a
   stuck Stop hook, a hung CLI, a test), every pending write in the daemon

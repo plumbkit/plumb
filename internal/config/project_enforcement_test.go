@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -44,6 +46,7 @@ func hardenedBase() Config {
 	// value would equal the global one and the assertion could never fail.
 	c.Tools.Profile = "full"
 	c.Tools.ClientProfiles = nil
+	c.History.Enabled = true
 	return c
 }
 
@@ -157,6 +160,78 @@ var enforcementCases = map[string]struct {
 		"[history]\nmax_diff_bytes = 1\n",
 		func(c Config) bool { return c.History.MaxDiffBytes == 1 },
 	},
+	// A repository switching history off for itself erases the record of what
+	// agents wrote there: evidence an auditor relies on.
+	"history.enabled": {
+		"[history]\nenabled = false\n",
+		func(c Config) bool { return !c.History.Enabled },
+	},
+	// An empty or narrowed list would let a repository's .env reach history.db
+	// and, through the write response, the transcript.
+	"history.sensitive_globs": {
+		"[history]\nsensitive_globs = []\n",
+		func(c Config) bool {
+			for _, g := range hardenedBase().History.SensitiveGlobs {
+				if !slices.Contains(c.History.SensitiveGlobs, g) {
+					return true
+				}
+			}
+			return false
+		},
+	},
+}
+
+// A project may add sensitive globs of its own, never remove one.
+func TestProjectHistoryGlobsMayOnlyGrow(t *testing.T) {
+	got := projectCfgBase(t, Defaults(), "[history]\nsensitive_globs = [\"config/prod.*\"]\n")
+	if !slices.Contains(got.History.SensitiveGlobs, "config/prod.*") {
+		t.Errorf("a project's own glob was dropped: %v", got.History.SensitiveGlobs)
+	}
+	for _, g := range Defaults().History.SensitiveGlobs {
+		if !slices.Contains(got.History.SensitiveGlobs, g) {
+			t.Errorf("adding a glob removed the global %q: %v", g, got.History.SensitiveGlobs)
+		}
+	}
+}
+
+// history.enabled is TRUST-GATED: a cloned repository may neither switch the
+// record of what agents wrote there off, nor switch recording on over a user who
+// turned it off globally. Either direction overrides the user's own choice, so
+// neither is a "safe" one-way value; `plumb trust` is how a project's value is
+// honoured, with the key disclosed and hashed into the grant.
+func TestLoadProject_HistoryEnabledNeedsTrust(t *testing.T) {
+	for _, tc := range []struct {
+		global, project bool
+	}{{true, false}, {false, true}} {
+		ws := t.TempDir()
+		writeProjectConfig(t, ws, fmt.Sprintf("[history]\nenabled = %v\n", tc.project))
+		store := tempTrustStore(t)
+		base := Defaults()
+		base.History.Enabled = tc.global
+
+		got, err := LoadProject(base, ws)
+		if err != nil {
+			t.Fatalf("LoadProject: %v", err)
+		}
+		if got.History.Enabled != tc.global {
+			t.Errorf("global %v: an untrusted project set history.enabled = %v", tc.global, got.History.Enabled)
+		}
+		spec, err := ProjectPolicySpecFor(ws)
+		if err != nil {
+			t.Fatalf("ProjectPolicySpecFor: %v", err)
+		}
+		if entry := findEntry(t, spec, "history.enabled"); entry.Warning(base) == "" {
+			t.Error("a gated key must carry a reason at trust time")
+		}
+		if !IsGatedProjectKey("history.enabled") || IsGatedProjectKey("history.sensitive_globs") {
+			t.Error("IsGatedProjectKey must gate history.enabled and only it")
+		}
+
+		trustWorkspace(t, store, ws)
+		if got, err = LoadProject(base, ws); err != nil || got.History.Enabled != tc.project {
+			t.Errorf("global %v: a trusted project's history.enabled = %v was not honoured (%v)", tc.global, tc.project, err)
+		}
+	}
 }
 
 // TestProjectRelayWriteDiffIsAPreference pins the classification, in BOTH

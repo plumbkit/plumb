@@ -16,6 +16,8 @@ package config
 //
 // Concurrency: the table is immutable package data, read-only after init.
 
+import "slices"
+
 // ProjectFieldClass says how a project's requested value for one field is
 // treated when the project is UNTRUSTED — which is the default, and the state a
 // cloned repository is always in.
@@ -106,12 +108,18 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	// durability contract for every other session.
 	"edits.fsync": ClassInert,
 
-	// --- History: enabled and sensitive_globs are ClassPreference (a project
-	// may opt out of history or declare additional sensitive globs for its own
-	// files). max_content_bytes and max_diff_bytes are ClassForcedGlobal (size caps
-	// protect the daemon from memory/disk exhaustion and are user/daemon-wide).
-	"history.enabled":           ClassPreference,
-	"history.sensitive_globs":   ClassPreference,
+	// --- History. enabled is TRUST-GATED. History is the record of what agents
+	// wrote, so a repository switching it off for itself hides evidence an
+	// auditor relies on; and switching it ON over a user who turned it off
+	// globally overrides a privacy choice. Neither direction is safe, so neither
+	// is a one-way value: `plumb trust` honours the project's choice.
+	// sensitive_globs is ONE-WAY, as a UNION: a project adds globs for its own
+	// files, and cannot narrow the user's list, which would let its .env reach
+	// history.db and the write response. max_content_bytes and max_diff_bytes
+	// are ClassForcedGlobal (size caps protect the daemon from memory/disk
+	// exhaustion and are user/daemon-wide).
+	"history.enabled":           ClassTrustGated,
+	"history.sensitive_globs":   ClassOneWay,
 	"history.max_content_bytes": ClassForcedGlobal,
 	"history.max_diff_bytes":    ClassForcedGlobal,
 
@@ -438,6 +446,20 @@ func applyOneWayBools(base Config, merged *Config) {
 		oneWaySafeValue["commands.require_sandbox"])
 	merged.Edits.RateLimitPerMinute = oneWayRateLimit(base.Edits.RateLimitPerMinute, merged.Edits.RateLimitPerMinute)
 	merged.Tools.Profile = oneWayToolsProfile(base.Tools.Profile, merged.Tools.Profile)
+	merged.History.SensitiveGlobs = unionGlobs(base.History.SensitiveGlobs, merged.History.SensitiveGlobs)
+}
+
+// unionGlobs returns global's globs followed by the project's that global does
+// not already hold: a project can add sensitive globs, never remove one. The
+// result is a fresh slice, never global's backing array.
+func unionGlobs(global, project []string) []string {
+	out := slices.Clone(global)
+	for _, g := range project {
+		if !slices.Contains(out, g) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // oneWayToolsProfile lets a project WIDEN the advertised tool set and nothing
