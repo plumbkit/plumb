@@ -24,7 +24,8 @@ import (
 
 // splitLogicalAgentArg removes ArgLogicalAgentKey and ArgLogicalAgentDeclaredKey
 // from a top-level arguments object and returns the identity they carry (the
-// reverse-DNS key first). Non-object arguments (an array, a scalar, null,
+// reverse-DNS key first). It also drops ArgHookProofKey, which carries no identity:
+// the proof is the serve's to verify, and a serve that predates it forwards it. Non-object arguments (an array, a scalar, null,
 // empty, malformed) pass through unchanged with no identity. A non-string
 // value under either key is removed but never becomes an identity: a malformed
 // stamp must neither attribute the call nor reach validation as an unknown
@@ -40,11 +41,13 @@ func splitLogicalAgentArg(raw json.RawMessage) (string, json.RawMessage) {
 	}
 	stamp, okStamp := obj[ArgLogicalAgentKey]
 	declared, okDeclared := obj[ArgLogicalAgentDeclaredKey]
-	if !okStamp && !okDeclared {
+	_, okProof := obj[ArgHookProofKey]
+	if !okStamp && !okDeclared && !okProof {
 		return "", raw
 	}
 	delete(obj, ArgLogicalAgentKey)
 	delete(obj, ArgLogicalAgentDeclaredKey)
+	delete(obj, ArgHookProofKey)
 	id := rawString(stamp)
 	if id == "" {
 		id = rawString(declared)

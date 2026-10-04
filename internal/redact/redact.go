@@ -40,6 +40,10 @@ var rules = []rule{
 	// hyphenated tokens like "sk-learn" out; Stripe's underscore form is caught
 	// above and does not match this hyphenated shape.
 	{regexp.MustCompile(`\bsk-(proj-)?[A-Za-z0-9_-]{20,}\b`), "[REDACTED:api-key]"},
+	// Resume credentials (rsk1- and 22 base64url characters, docs/identity-resume-credential-design.md).
+	// No trailing \b: the last base64url character may be '-', which has no word
+	// boundary after it, and over-matching is the bias here.
+	{regexp.MustCompile(`\brsk1-[A-Za-z0-9_-]{22}`), "[REDACTED:resume-credential]"},
 	// Credentials embedded in a URL (scheme://user:pass@host) — keep the scheme.
 	{regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]+:[^/\s:@]+@`), "${1}[REDACTED:url-credentials]@"},
 	// Authorization / bearer headers.

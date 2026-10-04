@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,6 +75,16 @@ type proxyDeps struct {
 	// session_start pins. Empty ⇒ frame untouched; identical across replays.
 	workspace string
 
+	// resumeStore is where the resume credentials the daemon discloses are kept, per
+	// conversation, for a replacement serve to present (serve_resume.go). nil: the
+	// proxy still announces that it strips the key and strips it, but persists and
+	// presents nothing.
+	resumeStore *resumeStore
+	// resumeProofKey reads the per-user key that verifies the identity hook's proof of a
+	// session_start's conversation (resume_proof.go). nil: no proof verifies, so the
+	// proxy presents no stored credential and files none under a conversation.
+	resumeProofKey func() ([]byte, error)
+
 	heartbeatInterval time.Duration // 0 disables hang detection
 	pingTimeout       time.Duration
 	maxReconnects     int
@@ -105,6 +114,10 @@ type reconnectingProxy struct {
 	// (PLAN-426) — who this connection is, and whether that identity was
 	// recovered. See serve_proxy_identity.go for the rules that guard it.
 	identity proxyIdentity
+	// rc is the resume-credential state (serve_resume.go): the credential the daemon
+	// last disclosed to this process, the conversation it is linked to, and the
+	// session_start requests awaiting an answer. Its own mutex; never nested with pinMu.
+	rc resumeCreds
 	// daemonInstance and prevDaemonInstance are the daemon PROCESS markers from
 	// the current and previous handshakes. Their comparison is the only evidence
 	// the proxy has for "did the daemon restart, or was this connection merely
@@ -190,6 +203,8 @@ func newReconnectingProxy(deps proxyDeps) *reconnectingProxy {
 		pongCh:       make(map[string]chan struct{}),
 		hbNonce:      newHeartbeatNonce(),
 	}
+	p.rc.store = deps.resumeStore
+	p.rc.proofKey = deps.resumeProofKey
 	p.daemonPID.Store(int64(readDaemonPID()))
 	return p
 }
@@ -264,7 +279,8 @@ func (p *reconnectingProxy) pumpClientToDaemon(ctx context.Context) error {
 			return nil // client closed stdin — normal end of session
 		}
 		frame = p.captureHandshake(frame)
-		p.observeClientRequest(frame) // remember a session_start re-pin for the next replay
+		frame = p.presentResumeCredential(frame) // a replacement serve presents its stored resume credential
+		p.observeClientRequest(frame)            // remember a session_start re-pin for the next replay
 		for {
 			gen, werr := p.writeDaemon(frame)
 			if werr == nil {
@@ -323,7 +339,11 @@ func (p *reconnectingProxy) writeDaemon(frame []byte) (uint64, error) {
 	return gen, nil
 }
 
+// writeClient is the one place a frame leaves for the client, which is why the resume
+// credential is stripped HERE and not at any one call site: a frame kind added later
+// cannot bypass it. See serve_resume_strip.go.
 func (p *reconnectingProxy) writeClient(frame []byte) {
+	frame = stripResumeCredential(frame)
 	p.outMu.Lock()
 	defer p.outMu.Unlock()
 	_ = writeFrame(p.out(), frame)
@@ -342,7 +362,9 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	switch {
 	case e.Method == "initialize" && e.hasID():
 		// Version is this PROXY's, not the daemon's (see mcp.MetaProxyVersionKey).
-		frame = injectInitMeta(frame, buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace, Version))
+		// The consumer announcement is what entitles this proxy to be disclosed a resume
+		// credential, and it is only honest because writeClient strips the key.
+		frame = injectInitMeta(frame, withResumeConsumer(buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace, Version)))
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)
@@ -355,57 +377,10 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 	return frame
 }
 
-// outstandingReq is one confirmed-sent, unanswered request: its wire id plus
-// the connection generation it was written under. The generation is what lets
-// a reconnect sweep distinguish requests sent to a dead daemon (gen < current)
-// from requests already re-issued on the fresh connection.
-type outstandingReq struct {
-	id  json.RawMessage
-	gen uint64
-}
-
-// trackOutstanding records a request id as in-flight — but only AFTER the frame
-// was successfully written to the daemon. Tracking before the write would let a
-// reconnect's sweep synthesise a -32000 for a request the pump then re-sends to
-// the fresh daemon: a double response, and an auto-replay of a write the "never
-// auto-replay" contract forbids. By tracking only confirmed-sent requests, a
-// request whose write failed is simply re-sent once (it never reached a
-// daemon), while a confirmed-sent request that the daemon dies before answering
-// gets exactly one synthesised retryable error. The initialize request is
-// excluded — it is resolved by replayHandshake, not the sweep.
-//
-// Track-after-write leaves one race: the daemon can die — and the reconnect
-// sweep run — in the gap between the successful write and the store below,
-// which would orphan the request forever (the client hangs until its own
-// timeout; reproduced as the proxy-test family's long-standing load flake).
-// The post-store generation check closes it: if the connection generation
-// advanced past writeGen while we were storing, the entry was written to a
-// dead daemon and a sweep may already have missed it — sweep again now.
-// Whichever of the two sweeps deletes the entry synthesises the error, so the
-// client gets exactly one response either way.
-func (p *reconnectingProxy) trackOutstanding(frame []byte, writeGen uint64) {
-	e := parseEnvelope(frame)
-	if !e.isRequest() {
-		return
-	}
-	key := idKey(e.ID)
-	p.hsMu.Lock()
-	isInit := key == p.initializeID
-	p.hsMu.Unlock()
-	if isInit {
-		return
-	}
-	p.reqMu.Lock()
-	p.outstanding[key] = outstandingReq{id: cloneBytes(e.ID), gen: writeGen}
-	p.reqMu.Unlock()
-	if gen := p.generation(); gen != writeGen {
-		p.failOutstandingBelow(gen)
-	}
-}
-
 func (p *reconnectingProxy) handleDaemonFrame(frame []byte) {
 	p.lastRecvNanos.Store(time.Now().UnixNano())
 	e := parseEnvelope(frame)
+	p.observeResumeFrame(e, frame) // before anything rewrites it, and before writeClient strips it
 	if e.isResponse() {
 		key := idKey(e.ID)
 		if p.deliverPong(key) {
@@ -541,59 +516,4 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 			backoff = defaultMaxBackoff
 		}
 	}
-}
-
-// failOutstandingBelow synthesises a retryable JSON-RPC error for every
-// in-flight request written under a connection generation older than gen, so
-// the client is never left waiting for a response a dead daemon will never
-// send. Requests written on the current connection (gen == current) are left
-// alone. The initialize request is excluded — it is resolved by
-// replayHandshake.
-func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
-	p.reqMu.Lock()
-	ids := make([]json.RawMessage, 0, len(p.outstanding))
-	for k, req := range p.outstanding {
-		if req.gen >= gen {
-			continue
-		}
-		ids = append(ids, req.id)
-		delete(p.outstanding, k)
-	}
-	p.reqMu.Unlock()
-	p.dropPendingStarts(ids)
-
-	for _, raw := range ids {
-		resp := fmt.Sprintf(
-			`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"plumb daemon restarted mid-request; this request's outcome is unconfirmed — for a write, re-read the file to check whether it landed before retrying"}}`,
-			raw)
-		p.writeClient([]byte(resp))
-	}
-}
-
-// dropPendingStarts forgets the in-flight session_start bookkeeping for requests
-// that have just been failed, so a call whose response will never arrive does
-// not leave an entry behind forever.
-//
-// It matters more now than it used to: `pending` records EVERY session_start (a
-// no-workspace call still carries the connection's identity), so the leak it
-// closes is per-orientation-call rather than per-re-pin. The entry is small, but
-// a long-lived proxy across many reconnects is exactly the shape that
-// accumulates them.
-func (p *reconnectingProxy) dropPendingStarts(ids []json.RawMessage) {
-	if len(ids) == 0 {
-		return
-	}
-	p.pinMu.Lock()
-	defer p.pinMu.Unlock()
-	for _, raw := range ids {
-		delete(p.pending, idKey(raw))
-	}
-}
-
-// failAllOutstanding synthesises the retryable error for EVERY in-flight
-// request, whatever its connection generation. Used when the fast reconnect
-// phase is exhausted and the proxy drops to slow background retry: the client
-// must not stay blocked on an in-flight call for the whole outage.
-func (p *reconnectingProxy) failAllOutstanding() {
-	p.failOutstandingBelow(p.generation() + 1)
 }

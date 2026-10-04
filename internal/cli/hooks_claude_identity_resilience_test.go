@@ -246,6 +246,26 @@ func TestParseIdentityKeysReply(t *testing.T) {
 	}
 }
 
+// The daemon lists the proof key it drops, and the hook reads it from the same reply an
+// older hook reads only the declared key from.
+func TestParseIdentityKeysReply_ReadsTheProofKey(t *testing.T) {
+	t.Parallel()
+	if !parseIdentityKeysReply(identityKeysReply()).proof {
+		t.Fatalf("the hook does not read the proof key in the daemon's own reply %q", identityKeysReply())
+	}
+	if !oldHookReadsDeclared(identityKeysReply()) {
+		t.Errorf("an older hook can no longer read the declared key in %q", identityKeysReply())
+	}
+	for _, line := range []string{
+		"ok " + mcp.ArgLogicalAgentKey + " " + mcp.ArgLogicalAgentDeclaredKey + " version=0.20.4\n",
+		"ok " + mcp.ArgLogicalAgentKey + "\n", `error: unknown command "identity-keys"` + "\n", "",
+	} {
+		if parseIdentityKeysReply(line).proof {
+			t.Errorf("%q read as listing the proof key", line)
+		}
+	}
+}
+
 // countingDaemon is fakeCtrlDaemon plus a count of connections.
 func countingDaemon(t *testing.T, reply func(net.Conn, string)) *atomic.Int32 {
 	t.Helper()

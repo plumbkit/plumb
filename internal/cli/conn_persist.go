@@ -155,7 +155,7 @@ func (s *connSession) persistIdentity() bool {
 		return false
 	}
 	proven := v.persistedIdentity.SessionID
-	if v.recovery == recoveryDegraded || (proven != "" && proven != s.sessionID()) {
+	if v.recovery.blocksDurableWrites() || (proven != "" && proven != s.sessionID()) {
 		// This connection is running under a TEMPORARY identity: a durable record
 		// exists and recovery could not fully apply it. Writing now records the
 		// stand-in over the proven identity — the fork the refusal paths exist to
@@ -533,7 +533,7 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 }
 
 // toolResultMeta contributes `_meta` to successful tool results. It carries two
-// facts, and they are gated differently on purpose.
+// facts, gated differently on purpose, and the resume credential when one is owed.
 //
 // The session ID (mcp.MetaSessionIDKey) rides EVERY successful session_start.
 // It used to ride only a call that carried a workspace argument, which coupled
@@ -574,10 +574,13 @@ func (s *connSession) dropPin(root string, source sessionstate.PinSource) {
 // front of an older proxy is the normal state after an upgrade. Given the
 // connection's root that proxy records what it did before the key existed.
 func (s *connSession) toolResultMeta(ctx context.Context, name string, args json.RawMessage) map[string]any {
+	meta := s.resumeCredentialMeta(ctx) // nil unless a credential is owed; see conn_resume_credential.go
 	if name != sessionStartTool {
-		return nil
+		return meta
 	}
-	meta := map[string]any{}
+	if meta == nil {
+		meta = map[string]any{}
+	}
 	if id := s.sessionID(); id != "" {
 		meta[mcp.MetaSessionIDKey] = id
 	}
@@ -593,8 +596,5 @@ func (s *connSession) toolResultMeta(ctx context.Context, name string, args json
 			meta[mcp.MetaResolvedWorkspaceKey] = ws
 		}
 	}
-	if len(meta) == 0 {
-		return nil
-	}
-	return meta
+	return nilIfEmpty(meta)
 }

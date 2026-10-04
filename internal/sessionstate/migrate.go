@@ -30,6 +30,7 @@ var migrationSteps = map[int]func(*sql.Tx) error{
 	8:  migrateV8,
 	9:  migrateV9,
 	10: migrateV10,
+	11: migrateV11,
 }
 
 // runMigrationStep applies one step and advances user_version to that step's
@@ -324,6 +325,40 @@ func migrateV10(tx *sql.Tx) error {
 		if _, err := tx.Exec(`ALTER TABLE logical_agent ADD COLUMN ` + col + ` TEXT NOT NULL DEFAULT ''`); err != nil { //nolint:gosec // G202: col is a constant from the list above
 			return fmt.Errorf("sessionstate: migrate v10 (logical_agent.%s): %w", col, err)
 		}
+	}
+	return nil
+}
+
+// migrateV11 adds the resume credential table (docs/identity-resume-credential-design.md).
+//
+// A table of its own rather than columns on session_names: an identity row keeps
+// at most two generations of a credential (the live one and the one a replay
+// presents) plus its state, and a row that was never issued one must stay exactly
+// what it was. Keyed by (proxy_session_id, generation) so a rotation inserts and a
+// supersession updates in place, and by a UNIQUE hash because a presented secret
+// is looked up by its hash alone.
+//
+// Additive and forward-only: no existing column is reinterpreted, so an older binary
+// reads the database it knows and ignores this table, and a newer binary against a
+// database without it finds every identity credential-less until each is
+// re-established, which is the whole migration. Idempotent in its own right (IF NOT
+// EXISTS), not only through the version stamp, and run inside the step's
+// transaction, so a failure part-way leaves neither the table nor the index.
+func migrateV11(tx *sql.Tx) error {
+	const addCredentials = `CREATE TABLE IF NOT EXISTS resume_credential (
+    proxy_session_id TEXT    NOT NULL,
+    generation       INTEGER NOT NULL,
+    hash             TEXT    NOT NULL,
+    state            TEXT    NOT NULL,
+    failures         INTEGER NOT NULL DEFAULT 0,
+    updated_at       INTEGER NOT NULL,
+    PRIMARY KEY (proxy_session_id, generation)
+) WITHOUT ROWID`
+	if _, err := tx.Exec(addCredentials); err != nil {
+		return fmt.Errorf("sessionstate: migrate v11 (resume_credential): %w", err)
+	}
+	if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_rc_hash ON resume_credential(hash)`); err != nil {
+		return fmt.Errorf("sessionstate: migrate v11 (idx_rc_hash): %w", err)
 	}
 	return nil
 }

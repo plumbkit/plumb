@@ -1497,6 +1497,16 @@ starting with `-` or a space (a bare `{run}` would otherwise put a flag such as
 `-exec=…` on the command line). It reaches the command as **one** argv element and
 no shell ever sees it, so `TestA|TestB` and `slow and not db` are inert text.
 
+A filter that opens with an inline flag is **refused** when `go test -run` would
+apply the flag to part of it only. Go splits a `-run` pattern at each top-level
+`|` and `/` and compiles every part separately, so `(?i)write|delete` is
+case-insensitive for `write` alone and silently skips the `Delete` tests
+(`go test -list` applies the flag to the whole pattern, so it looks right). The
+refusal suggests putting the flag on every part: `(?i)write|(?i)delete`, or
+`(?i)TestFoo/(?i)bar` for a subtest. Without a `/`, grouping works too:
+`(?i)(write|delete)`. This applies to `run_task`'s `run` and `mutation_test`'s
+`test_run`.
+
 A filter given to a command with no `{run}` is **refused**, as a target is — an
 unfiltered run would report a green over tests nobody asked about — and the
 refusal quotes the stored command and the placeholder to add. `verbose` on a

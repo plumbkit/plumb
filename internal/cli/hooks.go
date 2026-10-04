@@ -130,6 +130,11 @@ func runHooksInstall(args []string) error {
 	}
 
 	report := newHookReport()
+	if _, err := ensureResumeProofKey(); err != nil {
+		// Not fatal: the identity hook still stamps, and makes the key on its first
+		// run if it can. Without it a replacement serve resumes by name only.
+		report.note(fmt.Sprintf("Could not create the resume proof key (%v); a replacement serve will resume by name only.", err))
+	}
 	for _, t := range targets {
 		path, entries, before, err := hookPlan(t, plumbBin)
 		if err != nil {

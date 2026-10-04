@@ -214,6 +214,13 @@ type Server struct {
 	// not called.
 	OnProxySession func(ctx context.Context, id string)
 
+	// OnResumeCredentialConsumer is called once during the initialize exchange when
+	// the proxy announced, in _meta[MetaResumeCredentialConsumerKey], that it
+	// consumes and strips the resume credential. It fires BEFORE OnProxySession, so
+	// the application knows whether it may disclose before identity settles. A direct
+	// client and any proxy older than the key never fire it.
+	OnResumeCredentialConsumer func(ctx context.Context)
+
 	// OnProxyVersion is called once during the initialize exchange with the
 	// version of the `plumb serve` binary on the other end
 	// (_meta[MetaProxyVersionKey]). That is a different binary from this daemon's,

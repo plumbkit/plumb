@@ -40,6 +40,67 @@
   transaction is rolled back, the error names each reverted path with its
   added/removed counts and points at `plumb history` for the diffs. An error's
   first job is the remedy, and the diffs are already in the store.
+- **A resume credential: the daemon's half of letting a replacement `plumb serve`
+  resume the full identity, not only the name.** (part of #556,
+  `docs/identity-resume-credential-design.md`) A serve restart, an agent relaunch or
+  a reboot kills the proxy session ID, so the replacement recovered only the NAME,
+  and the internal session ID, the mail bound to it and the thread seats stayed
+  behind (symptoms 2 and 4). The daemon now mints a credential (`rsk1-` and 22
+  base64url characters, 128 bits from `crypto/rand`, derived from nothing) when an
+  initialize establishes or restores an identity under a proxy credential, and
+  discloses it once in the initialize result `_meta`
+  (`dev.plumbkit/resume-credential`); a connection that converges on the degraded
+  retry gets it in its next tool result. Only a proxy that announces
+  (`dev.plumbkit/resume-credential-consumer: 1`) that it strips the key before
+  forwarding a frame to its client is issued, disclosed or accepts one, because a
+  proxy forwards daemon frames verbatim and Claude Code persists a tool result's
+  `_meta` to disk where a model can read it. A degraded connection, an ordinary MCP
+  client and a session with `[session] persist_state` off are never issued one, and
+  only a SHA-256 hash is stored (`resume_credential`, session-state schema v11). A
+  `session_start` that presents the credential in its request `_meta` restores the
+  internal session ID, name, mail and thread seats, re-records the identity under
+  the new proxy credential, and is handed a successor in the same response; a
+  conversation ID, a stamp or a name still authorises nothing. Every accepted resume
+  rotates it, consuming only the credential presented; the first of two claimants of
+  one credential wins (the arbitration comes before any adoption or write, and the
+  loser is told it was superseded); a replay of a superseded generation is refused
+  and logged at Warn as a possible theft, and it is revoked when its conversation's
+  linkage is replaced or after three presentations that match no generation. It has
+  no TTL. No proxy announces the consumer key until the proxy half ships, so this
+  changes no behaviour yet, and `rsk1-` tokens are now scrubbed by
+  `internal/redact`. The threat model records the new authority and the accepted
+  griefing vector of the revocation counter.
+- **A replacement `plumb serve` now resumes the full identity: the proxy half of the
+  resume credential.** (#556, `docs/identity-resume-credential-design.md`) `plumb serve`
+  announces `dev.plumbkit/resume-credential-consumer: 1` in its initialize `_meta`,
+  removes `dev.plumbkit/resume-credential` from every `_meta` object in every frame it
+  forwards to its client (the initialize result, every tool result including a late C3
+  disclosure, a replayed handshake, a notification, at any depth in the frame; only the
+  key goes, so tool text that merely names it or holds a token-shaped fixture is left
+  as written, while a frame that does not parse, or repeats a member, has any token
+  redacted rather than forwarded), and keeps what it removed. Once a `session_start`
+  whose conversation the identity hook proved links it, the credential is stored in the proxy's own
+  state directory (`<state dir>/serve/resume-credentials/`, mode 0600, one atomically
+  written file per conversation, bound to the daemon whose session-state database
+  issued it, capped at 256 entries with the oldest evicted) and refreshed at every
+  rotation. A replacement serve whose daemon reports a fresh identity presents the
+  stored credential once, in the request `_meta` of the first `session_start` that
+  names that conversation, so the internal session ID, name, mail and thread seats
+  come back instead of the name alone (symptoms 2 and 4); a credential a client put
+  in the request `_meta` itself is never forwarded. A conversation id and a stamp are
+  strings a model can type, so neither entitles a presentation: the Claude Code
+  identity hook adds `plumb_hook_proof`, an HMAC of its stamp under a per-user key
+  (`<state dir>/serve/hook-proof.key`, mode 0600, made by `plumb hooks install` or the
+  hook's first run), and `plumb serve` presents only when that verifies and names the
+  conversation. A client with no hook, or a call whose proof does not verify, resumes
+  by name only and has nothing filed under the conversation it named. The proof is
+  removed before the request reaches the daemon, which also drops it and lists it in its
+  `identity-keys` answer, so the hook adds it only for a daemon that does. Against a daemon that predates the
+  credential the announcement is ignored and nothing is stored or presented. A
+  presentation that earns no successor leaves the stored entry in place, because the
+  daemon does not say whether it was refused or merely could not finish, and a retry
+  can still restore the predecessor. `TestSmoke_ServeReplacementResumesByName` now
+  asserts the full restore it used to assert could not happen.
 
 ### Fixed
 
@@ -75,6 +136,43 @@
   unrelated opens. A per-directory in-process mutex now sits in front of the
   file lock, so at most one descriptor waits on `flock` and the other writers
   wait in memory. The file lock still serialises writers across processes.
+- **Long `mutation_test` runs are no longer dropped at 30 minutes.** Claude
+  Code abandons a tool call that sends nothing for 30 minutes. A mutation run
+  on a large package takes longer, so its report was lost. The run then kept
+  going for up to an hour more, applying mutants and holding the daemon's
+  single run slot against every other agent. plumb now sends
+  `notifications/progress` against the call's `progressToken`, which Claude
+  Code always sends, and `mutation_test` reports one update at the start of
+  each compile and test step, resetting the idle window between steps. A
+  single step longer than 30 minutes, which needs a raised `timeout_seconds`,
+  can still be dropped. A run whose client asked for no progress, and that the
+  baseline shows would outlast 25 minutes, is refused before anything is
+  mutated, with a batch size that fits. The baseline can understate the cost,
+  because Go may serve the unmutated suite from its test cache, so such a run
+  is also stopped between mutants once their real cost shows it would outlast
+  the budget. The report then covers the mutants that ran and says why the
+  rest did not. A cycle's cost is only known once it has run, so a run can
+  still overshoot by one cycle: the first mutant runs on the baseline's
+  estimate alone. The 25-minute budget is fixed, not configurable: progress is
+  what keeps a long run alive, and the budget only protects a client that
+  asks for none.
+- **A cancelled `mutation_test` call now stops.** plumb now tracks
+  `notifications/cancelled`, which Claude Code sends when you interrupt a
+  tool, and `mutation_test` acts on it. Before, only a closed connection
+  stopped a run, and an interrupted call on a shared connection ran to the
+  end. Now the step in flight is stopped, the file restored and the slot
+  freed. The refusal a second caller gets no longer claims the slot frees
+  only when the holder's connection closes.
+- **A `run`/`test_run` filter like `(?i)write|delete` is refused.** `go test
+  -run` splits a pattern at each top-level `|` and `/` and matches every part
+  as a separate regex. The leading flag therefore covered only `write`, and the
+  run silently skipped the rest. A mutation run with that filter reported
+  every mutant SURVIVED, all falsely. `go test -list` applies the flag to the
+  whole pattern, so it looked right. The refusal suggests putting the flag on
+  every part, `(?i)write|(?i)delete`. This also refuses a pattern that
+  happened to work, such as `(?i)TestFoo/baz` with a lowercase subtest name:
+  write `(?i)TestFoo/(?i)baz`. A part that is empty or opens with its own
+  flag group is left alone.
 
 ### Tests
 

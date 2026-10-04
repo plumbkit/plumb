@@ -29,7 +29,7 @@ type deadlineWriter interface {
 //
 // Concurrency: enc/wd are written through wrMu; broken is read and written only
 // under wrMu. cancel is set once before any goroutine starts and only read
-// afterwards.
+// afterwards. inflight is guarded by inflightMu (request_cancel.go).
 type serveState struct {
 	s            *Server
 	enc          *json.Encoder
@@ -39,6 +39,11 @@ type serveState struct {
 	wrMu         sync.Mutex
 	broken       bool // a write failed; further writes are no-ops (guarded by wrMu)
 	wg           sync.WaitGroup
+
+	// inflight maps each running request's id (requestKey) to the channel its
+	// RequestCancelled signal closes, for notifications/cancelled to find.
+	inflightMu sync.Mutex
+	inflight   map[string]chan struct{}
 }
 
 func newServeState(s *Server, w io.Writer) *serveState {
@@ -94,8 +99,31 @@ func (ss *serveState) write(resp mcpResponse) {
 	}
 }
 
-// dispatchMessage handles one inbound message in a wg.Go goroutine.
-func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce *sync.Once) {
+// admit runs on the serve loop, BEFORE the message's goroutine starts, and
+// returns the method plus the ctx to dispatch it on and the func to run once it
+// is done. A request (a method and an id) is registered for
+// notifications/cancelled here rather than in dispatchMessage: messages are
+// handled concurrently, so a cancel the client writes straight after its
+// request could otherwise be serviced before the request is registered, and be
+// dropped as "not in flight". Registering in reading order closes that window.
+// A request can also send progress (withNotifier); a notification or a response
+// is neither.
+func (ss *serveState) admit(ctx context.Context, data []byte) (method string, _ context.Context, done func()) {
+	var peek struct {
+		Method string `json:"method"`
+		ID     any    `json:"id"`
+	}
+	_ = json.Unmarshal(data, &peek)
+	if peek.Method == "" || peek.ID == nil {
+		return peek.Method, ctx, func() {}
+	}
+	ctx, untrack := ss.trackRequest(ctx, peek.ID)
+	return peek.Method, withNotifier(ctx, ss.notify), untrack
+}
+
+// dispatchMessage handles one inbound message in a wg.Go goroutine. method is
+// the message's method as admit peeked it ("" for a response).
+func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, method string, initOnce *sync.Once) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("mcp: handler panic", "err", r)
@@ -108,22 +136,19 @@ func (ss *serveState) dispatchMessage(ctx context.Context, data []byte, initOnce
 		}
 	}()
 
-	// Peek at method before full handling (needed for post-init hook).
-	var peek struct {
-		Method string `json:"method"`
-	}
-	_ = json.Unmarshal(data, &peek)
-
 	resp, isRequest := ss.s.handle(ctx, data)
 	if !isRequest {
-		if peek.Method == "notifications/roots/list_changed" && ss.s.OnRootsChanged != nil {
+		switch {
+		case method == "notifications/cancelled":
+			ss.cancelRequest(data)
+		case method == "notifications/roots/list_changed" && ss.s.OnRootsChanged != nil:
 			go safeRun("OnRootsChanged", func() { ss.s.OnRootsChanged(ctx, ss.makeRequest) })
 		}
 		return
 	}
 	ss.write(resp)
 
-	if peek.Method == "initialize" && resp.Error == nil {
+	if method == "initialize" && resp.Error == nil {
 		initOnce.Do(func() {
 			// The negotiation hook fires inside the once-guard so a client that
 			// re-sends initialize cannot double-record (or double-log) it.
@@ -213,7 +238,11 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 				ss.wg.Wait()
 				return line.err
 			}
-			ss.wg.Go(func() { ss.dispatchMessage(reqCtx, data, &initOnce) })
+			method, msgCtx, done := ss.admit(reqCtx, data)
+			ss.wg.Go(func() {
+				defer done()
+				ss.dispatchMessage(msgCtx, data, method, &initOnce)
+			})
 		}
 	}
 }

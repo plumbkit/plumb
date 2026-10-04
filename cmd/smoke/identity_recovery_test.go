@@ -25,7 +25,9 @@ package smoke_test
 // harness stops only the daemon it spawned, by the pid file inside that tree.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -401,11 +403,53 @@ func fullSessionID(t *testing.T, meta map[string]any) string {
 // prove itself — which must never reach client-visible output.
 var uuidShape = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
 
+// resumeCredentialShape matches a resume credential: `rsk1-` and 22 base64url
+// characters (docs/identity-resume-credential-design.md). Unlike the proxy session
+// credential it is DISCLOSED by the daemon, in `_meta`, to a proxy that announced it
+// strips the key. The proxy forwards every other frame verbatim, and Claude Code
+// persists a tool result's `_meta` to disk where a model can read it, so NO frame
+// forwarded to the client may carry one (mcpClient.scanForwardedFrame checks every
+// frame, `_meta` included), and neither may any packet, CLI output or log.
+var resumeCredentialShape = regexp.MustCompile(`rsk1-[A-Za-z0-9_-]{22}`)
+
+// A scan that has never seen a credential proves nothing by finding none. The
+// positive control: the forwarded-frame scan fires on a credential in a tool result's
+// `_meta` and in an initialize result's `_meta`, and stays silent on the identity
+// snapshot that legitimately rides the same keys.
+func TestSmoke_ForwardedFrameScanSeesACredentialInMeta(t *testing.T) {
+	const secret = "rsk1-AAAAAAAAAAAAAAAAAAAAAA"
+	frames := map[string]string{
+		"a tool result":     `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"ok"}],"_meta":{"dev.plumbkit/resume-credential":"` + secret + `"}}}`,
+		"an initialize":     `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/resume-credential":"` + secret + `"}}}`,
+		"an unparseable":    `{"result":{"_meta":{"dev.plumbkit/resume-credential":"` + secret,
+		"a clean identity":  `{"jsonrpc":"2.0","id":1,"result":{"_meta":{"dev.plumbkit/session-identity":{"recovery":"established"}}}}`,
+		"another key shape": `{"jsonrpc":"2.0","id":2,"result":{"_meta":{"dev.plumbkit/session-id":"bd11d96cee90-a1b231df"}}}`,
+	}
+	wantHit := map[string]bool{"a tool result": true, "an initialize": true, "an unparseable": true}
+	for name, frame := range frames {
+		c := &mcpClient{}
+		c.scanForwardedFrame([]byte(frame + "\n"))
+		hit := len(c.credentialFrames) == 1
+		if hit != wantHit[name] {
+			t.Errorf("%s: scan hit = %v, want %v", name, hit, wantHit[name])
+		}
+		if hit && strings.Contains(c.credentialFrames[0], secret) {
+			t.Errorf("%s: the recorded frame still carries the secret", name)
+		}
+	}
+}
+
 // assertNoCredentialLeak fails when a UUID-shaped token appears in
 // client-visible output. Every identity scenario below funnels its tool
 // results, packets and CLI output through this.
 func assertNoCredentialLeak(t *testing.T, label, out string) {
 	t.Helper()
+	// The resume credential rides `_meta` and nowhere a model or an operator reads, so
+	// its shape (rsk1- and 22 base64url characters) is scanned for beside the UUID.
+	if leaked := resumeCredentialShape.FindString(out); leaked != "" {
+		t.Errorf("%s: client-visible output contains a resume-credential-shaped token (%q…); it must never "+
+			"appear in any tool result, packet, or CLI output:\n%s", label, leaked[:9], out)
+	}
 	if leaked := uuidShape.FindString(out); leaked != "" {
 		t.Errorf("%s: client-visible output contains a UUID-shaped token (%q…). The only UUID in "+
 			"play is the proxy session credential, and it must never appear in any tool result, "+
@@ -429,14 +473,57 @@ func retryCall(t *testing.T, c *mcpClient, tool string, args map[string]any, bud
 	}
 }
 
+// hookedSessionStart returns the arguments of a main-thread session_start of conversation
+// as Claude Code's identity hook leaves them, by running the real hook
+// (`plumb hooks run-claude`, PreToolUse) against the isolated daemon: the session_id and
+// the stamp both the conversation, and the proof of the stamp that is the only thing
+// entitling a replacement serve to present the credential its predecessor stored. A
+// client with no hook types the conversation and proves nothing, and is not presented for.
+func hookedSessionStart(t *testing.T, plumbBin, tmpHome, conversation string, args map[string]any) map[string]any {
+	t.Helper()
+	input, err := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse", "session_id": conversation, "tool_use_id": "smoke-hook",
+		"tool_name": "mcp__plumb__session_start", "tool_input": args,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(plumbBin, "hooks", "run-claude")
+	cmd.Env = isolatedEnv(tmpHome)
+	cmd.Stdin = bytes.NewReader(input)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("plumb hooks run-claude: %v\n%s", err, stderr.String())
+	}
+	var doc struct {
+		Hook struct {
+			UpdatedInput map[string]any `json:"updatedInput"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil || doc.Hook.UpdatedInput == nil {
+		t.Fatalf("the hook produced no updatedInput (%v): stdout %q, stderr %q", err, out, stderr.String())
+	}
+	if _, ok := doc.Hook.UpdatedInput["plumb_hook_proof"]; !ok {
+		t.Fatalf("the hook stamped the call but did not prove the stamp: %v (stderr %q)", doc.Hook.UpdatedInput, stderr.String())
+	}
+	return doc.Hook.UpdatedInput
+}
+
 // TestSmoke_ServeReplacementResumesByName is the machine-reboot case, and the
 // reason the two restart tests above are not the whole story: a reboot kills
 // the serve proxy TOO, so no proxy credential survives and the daemon-restart
-// restore cannot fire. Continuity then rests entirely on the external linkage:
-// the new serve process presents the same conversation ID and takes back the
-// NAME its predecessor answered to. The internal session ID does NOT come
-// back — that would mean the credential boundary leaked — and the packet must
-// say the caller resumed rather than silently handing back the name.
+// restore cannot fire. What carries the conversation across is the resume
+// credential (docs/identity-resume-credential-design.md): the first serve was
+// disclosed one, kept it in its own state directory, and the replacement serve
+// presents it at the session_start that names the conversation. So the
+// replacement is the SAME identity: the internal session ID comes back along
+// with the name, and the packet says the identity was restored. Before the
+// credential this test asserted the opposite (a name-only resume under a new
+// ID), which was correct while the proxy credential was the only authority;
+// TestSmoke_ServeReplacementWithoutLinkStartsAFreshIdentity still pins the case
+// where there is nothing to present.
 func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	plumbBin := buildPlumb(t)
 	fixture := makeMarkerFixture(t)
@@ -448,16 +535,14 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 	const externalID = "smoke-reboot-426"
 	first := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	first.initialize(t, fixture)
-	packet1, meta1 := first.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	waitForPID(t, tmpHome, 15*time.Second)
+	packet1, meta1 := first.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	want := parseSelfIdentity(packet1)
 	full1 := fullSessionID(t, meta1)
 	if want.name == "" || full1 == "" {
 		t.Fatalf("the first serve never established an identity; packet:\n%s", packet1)
 	}
-	waitForPID(t, tmpHome, 15*time.Second)
 
 	// Pre-restart sanity: the linkage must already resolve through the real CLI,
 	// so a resume failure below indicts the resume path, not the send.
@@ -476,10 +561,8 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 
 	second := newMCPClient(t, ctx, plumbBin, tmpHome, fixture)
 	second.initialize(t, fixture)
-	packet2, meta2 := second.callWithMeta(t, "session_start", map[string]any{
-		"workspace":  fixture,
-		"session_id": externalID,
-	}, sessionStartTimeout)
+	packet2, meta2 := second.callWithMeta(t, "session_start",
+		hookedSessionStart(t, plumbBin, tmpHome, externalID, map[string]any{"workspace": fixture}), sessionStartTimeout)
 	t.Logf("successor packet:\n%s", packet2)
 	got := parseSelfIdentity(packet2)
 	full2 := fullSessionID(t, meta2)
@@ -492,12 +575,12 @@ func TestSmoke_ServeReplacementResumesByName(t *testing.T) {
 		t.Errorf("the packet does not say the caller resumed; an agent handed its old name back "+
 			"without being told it is a continuation cannot tell that from coincidence:\n%s", packet2)
 	}
-	if !strings.Contains(packet2, "new internal identity — mail and threads bound to the predecessor ID are not inherited") {
-		t.Errorf("the replacement packet does not disclose the name-only recovery boundary:\n%s", packet2)
+	if !strings.Contains(packet2, "identity restored — mail and threads bound to your previous session followed you") {
+		t.Errorf("the replacement packet does not report the full restore:\n%s", packet2)
 	}
-	if full2 == full1 {
-		t.Fatalf("the replacement serve recovered the internal session ID %q — only the proxy "+
-			"credential may restore an ID, and no credential survived the replacement", full2)
+	if full2 != full1 {
+		t.Fatalf("the replacement serve came back as session %q, want the predecessor's %q — the "+
+			"credential its predecessor's serve stored was not presented, or the daemon did not accept it", full2, full1)
 	}
 
 	// And the linkage is resolvable by the real CLI, not only in-process.

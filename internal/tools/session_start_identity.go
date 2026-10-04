@@ -169,6 +169,9 @@ func (t *SessionStart) linkageNote(linked bool) string {
 			"under a temporary one. It is retried automatically (three bounded attempts); if they exhaust, a later " +
 			"reconnect restores it. Mail addressed to your previous name may not reach you until then.\n"
 	}
+	if st.Recovery == "superseded" {
+		return supersededRecoveryNote
+	}
 	if st.ExternalID == "" {
 		return unlinkedSessionNotice
 	}
