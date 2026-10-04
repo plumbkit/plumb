@@ -36,14 +36,18 @@ type progressCtxKey struct{}
 //
 // Concurrency: mu serialises every send with close, so once close returns no
 // notification for this token can still be in flight — none may follow the
-// response. last enforces the spec's strictly increasing progress.
+// response. last enforces the spec's strictly increasing progress. cancelled is
+// the request's RequestCancelled signal: once the client has cancelled, it has
+// dropped the token, and a further notification would only be logged there as
+// one for an unknown token.
 type progressReporter struct {
-	token  json.RawMessage
-	notify NotifyFn
-	mu     sync.Mutex
-	last   float64
-	sent   bool
-	closed bool
+	token     json.RawMessage
+	notify    NotifyFn
+	cancelled <-chan struct{}
+	mu        sync.Mutex
+	last      float64
+	sent      bool
+	closed    bool
 }
 
 // withProgress attaches a reporter when the call asked for progress (a non-null
@@ -55,8 +59,18 @@ func withProgress(ctx context.Context, meta map[string]json.RawMessage) (context
 	if len(token) == 0 || string(token) == "null" || notify == nil {
 		return ctx, func() {}
 	}
-	r := &progressReporter{token: token, notify: notify}
+	r := &progressReporter{token: token, notify: notify, cancelled: RequestCancelled(ctx)}
 	return context.WithValue(ctx, progressCtxKey{}, r), r.close
+}
+
+// isClosed reports whether ch has been closed; a nil channel never is.
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *progressReporter) close() {
@@ -75,9 +89,9 @@ func HasProgress(ctx context.Context) bool {
 // ReportProgress sends a notifications/progress for the current call: progress
 // so far, the total when known (0 omits it), and a short human-readable message
 // ("" omits it). It is a no-op when the client asked for no progress, after the
-// call has returned, and for a progress value that does not exceed the last one
-// sent. A failed send is logged, never returned: progress is advisory and must
-// not fail the work it describes.
+// call has returned or been cancelled, and for a progress value that does not
+// exceed the last one sent. A failed send is logged, never returned: progress
+// is advisory and must not fail the work it describes.
 func ReportProgress(ctx context.Context, progress, total float64, message string) {
 	r, _ := ctx.Value(progressCtxKey{}).(*progressReporter)
 	if r == nil {
@@ -85,7 +99,7 @@ func ReportProgress(ctx context.Context, progress, total float64, message string
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || (r.sent && progress <= r.last) {
+	if r.closed || (r.sent && progress <= r.last) || isClosed(r.cancelled) {
 		return
 	}
 	params := map[string]any{"progressToken": r.token, "progress": progress}

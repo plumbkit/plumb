@@ -24,11 +24,10 @@ var mutationSilentBudget = 25 * time.Minute
 // and before any mutant is written, so a refused run leaves every file untouched.
 //
 // A call carrying a progressToken is not refused here: enterStep reports each
-// step, and each report resets the client's idle window. That covers the gaps
-// BETWEEN steps only — a single step longer than the window can still be
-// dropped, which the per-step timeout (default 600 s) normally rules out.
-// Without a token the run would be dropped mid-way, its report lost, while it
-// went on holding the slot and writing mutants until it finished for nobody.
+// step at its start and on a heartbeat while it runs, and each report resets
+// the client's idle window. Without a token the run would be dropped mid-way,
+// its report lost, while it went on holding the slot and writing mutants until
+// it finished for nobody.
 //
 // The baseline is only an ESTIMATE of a mutant's cost, and it can be far too
 // low: the unmutated tree's `go test` result may come from Go's test cache, so

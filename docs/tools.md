@@ -1282,22 +1282,23 @@ A run its caller abandons is cancelled (the file is restored as on any
 cancellation) and the slot released, rather than holding it for a report nobody
 can receive. That covers a client that cancels the call
 (`notifications/cancelled`, which Claude Code sends when the user interrupts a
-tool, keeping the connection) and a connection that closes.
+tool, keeping the connection) and a connection that closes. No progress is sent
+after a cancel, and the write-budget slots charged for mutants that never ran
+are given back.
 
 A long run stays alive through progress. A client that asks for it (a
-`progressToken`, which Claude Code always sends) gets one
-`notifications/progress` at the start of each compile and test step, and each
-one resets an idle-timeout client's window. Claude Code drops a call that is
-silent for 30 minutes and sends no cancel when it does, so a single step longer
-than that (only possible with a raised `timeout_seconds`) can still be dropped.
-A client that asks for no progress hears nothing until the report, so a run the
-baseline says would take longer than 25 minutes is refused before anything is
-mutated, with a batch size that fits. The baseline can understate the cost,
-because Go may serve the unmutated suite from its test cache, so the run is
-also stopped between mutants once their real cost shows it would pass the
-budget. The report covers the mutants that ran and says why the rest did not.
-The budget is fixed at 25 minutes. A client that asks for progress is never
-refused or stopped by it.
+`progressToken`, which Claude Code always sends) gets a `notifications/progress`
+at the start of each compile and test step, and again every minute while a step
+runs. Each one resets an idle-timeout client's window. Claude Code drops a call
+that is silent for 30 minutes (5 for an http/sse server), checking every 30
+seconds, and sends no cancel when it does. A client that asks for no progress
+hears nothing until the report, so a run the baseline says would take longer
+than 25 minutes is refused before anything is mutated, with a batch size that
+fits. The baseline can understate the cost, because Go may serve the unmutated
+suite from its test cache, so the run is also stopped between mutants once
+their real cost shows it would pass the budget. The report covers the mutants
+that ran and says why the rest did not. The budget is fixed at 25 minutes. A
+client that asks for progress is never refused or stopped by it.
 
 The `test_run` filter refuses a leading inline flag that `go test -run` would
 apply to part of the pattern only (see `{run}` in

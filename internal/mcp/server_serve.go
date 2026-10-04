@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -108,7 +109,19 @@ func (ss *serveState) write(resp mcpResponse) {
 // dropped as "not in flight". Registering in reading order closes that window.
 // A request can also send progress (withNotifier); a notification or a response
 // is neither.
-func (ss *serveState) admit(ctx context.Context, data []byte) (method string, _ context.Context, done func()) {
+//
+// It runs on the serve loop, which has no recover of its own: a panic here would
+// end the whole connection, where one in dispatchMessage costs a single request.
+// Nothing below is known to panic — it is an Unmarshal whose error is ignored and
+// map bookkeeping — and the recover keeps a future change from turning one bad
+// message into a dropped connection: the message is then dispatched untracked.
+func (ss *serveState) admit(ctx context.Context, data []byte) (method string, msgCtx context.Context, done func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("mcp: panic while admitting a message — dispatching it untracked", "err", r, "stack", string(debug.Stack()))
+			msgCtx, done = ctx, func() {}
+		}
+	}()
 	var peek struct {
 		Method string `json:"method"`
 		ID     any    `json:"id"`
@@ -117,8 +130,8 @@ func (ss *serveState) admit(ctx context.Context, data []byte) (method string, _ 
 	if peek.Method == "" || peek.ID == nil {
 		return peek.Method, ctx, func() {}
 	}
-	ctx, untrack := ss.trackRequest(ctx, peek.ID)
-	return peek.Method, withNotifier(ctx, ss.notify), untrack
+	tracked, untrack := ss.trackRequest(ctx, peek.ID)
+	return peek.Method, withNotifier(tracked, ss.notify), untrack
 }
 
 // dispatchMessage handles one inbound message in a wg.Go goroutine. method is

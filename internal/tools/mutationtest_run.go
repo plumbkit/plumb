@@ -179,12 +179,10 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	// Sequenced, not evaluated as two arguments: a mutant that does not compile
 	// has nothing to learn from running the suite against a tree that will not
 	// build, and doing so burns a full test timeout per broken mutant.
-	enterStep(ctx, stepCompile)
-	compile := t.runStep(ctx, plan.compile, plan.timeout)
+	compile := t.runReportedStep(ctx, stepCompile, plan.compile, plan.timeout)
 	var test stepOutcome
 	if !compile.failed() {
-		enterStep(ctx, stepTest)
-		test = t.runStep(ctx, plan.test, plan.timeout)
+		test = t.runReportedStep(ctx, stepTest, plan.test, plan.timeout)
 	}
 	res.classify(compile, test)
 	return res, nil
@@ -252,6 +250,15 @@ func mutateContent(content string, spec mutantSpec) (mutated, reason string) {
 		return "", fmt.Sprintf("%s (%d occurrences)", reasonAmbiguous, n)
 	}
 	return strings.Replace(content, old, newStr, 1), ""
+}
+
+// runReportedStep runs one compile or test step under enterStep: the slot's
+// holder record names it, and a client that asked for progress hears it start
+// and, while it runs, its heartbeat.
+func (t *MutationTest) runReportedStep(ctx context.Context, step string, cmd TaskCommand, timeout time.Duration) stepOutcome {
+	done := enterStep(ctx, step)
+	defer done()
+	return t.runStep(ctx, cmd, timeout)
 }
 
 // runStep executes every argv of a resolved task command in sequence, stopping

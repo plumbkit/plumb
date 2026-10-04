@@ -155,6 +155,27 @@ func (r *RateLimiter) release() {
 	r.mu.Unlock()
 }
 
+// refund gives back one slot that a successful Allow recorded, for an operation
+// that was then never performed. Allow records locally only while local limiting
+// is enabled, and in the parent only then and while the parent's is, so refund
+// releases exactly where a slot was taken. Like release it restores the count,
+// not the particular stamp.
+func (r *RateLimiter) refund() {
+	if r == nil || !r.enabled() {
+		return
+	}
+	r.release()
+	if p := r.parent.Load(); p != nil && p.enabled() {
+		p.release()
+	}
+}
+
+func (r *RateLimiter) enabled() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.limit > 0
+}
+
 // SetLimit updates the limit (operations per current window). Setting limit
 // to 0 disables limiting. Called by the daemon when a project-local config
 // resolves and the rate limit changes from the global default.
