@@ -7,6 +7,7 @@ package cli
 // (#568).
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,23 +88,27 @@ func descriptorsOn(t *testing.T, path string) int {
 	return n
 }
 
-// attached reports whether the .plumb watcher holds a watch on the CURRENT
-// plumbDir. Its WatchList alone cannot say: fsnotify keeps listing a user
-// watch until its reader handles the directory's removal, so while that is
-// pending it still names the old, deleted directory. Where each watch holds a
-// descriptor (kqueue), the attach is the second descriptor on the new inode,
-// after the root watcher reader's own registration. Elsewhere the WatchList is
-// all there is to see.
+// perWatchDescriptors reports whether fsnotify's backend here holds an open
+// descriptor per watch (kqueue). Only there can the churn test see a watch by
+// its descriptor, and only there does it need to.
+var perWatchDescriptors = slices.Contains([]string{"darwin", "ios", "freebsd", "openbsd", "netbsd", "dragonfly"}, runtime.GOOS)
+
+// attached reports whether the .plumb watcher holds a completed watch on the
+// CURRENT plumbDir. Its WatchList alone cannot say: fsnotify keeps listing a
+// user watch until its reader handles the directory's removal, so for a moment
+// it still names the old, deleted directory. On kqueue the descriptor count
+// settles it, provided the root watcher's reader has finished its own
+// registration (rootRegistered), so that it holds exactly one descriptor on
+// the new inode: a second is the .plumb watcher's. The count is read before
+// WatchList on purpose. fsnotify records a user watch only after registering
+// it, so a WatchList naming plumbDir, read after a second descriptor appeared,
+// is the new watch and is complete, not the old one or one half made.
 func attached(t *testing.T, plumbWatcher *fsnotify.Watcher, plumbDir string) bool {
 	t.Helper()
-	if !slices.Equal(plumbWatcher.WatchList(), []string{plumbDir}) {
+	if perWatchDescriptors && descriptorsOn(t, plumbDir) < 2 {
 		return false
 	}
-	switch runtime.GOOS {
-	case "darwin", "ios", "freebsd", "openbsd", "netbsd", "dragonfly":
-		return descriptorsOn(t, plumbDir) >= 2
-	}
-	return true
+	return slices.Equal(plumbWatcher.WatchList(), []string{plumbDir})
 }
 
 // TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs pins #568. On kqueue
@@ -123,13 +128,16 @@ func attached(t *testing.T, plumbWatcher *fsnotify.Watcher, plumbDir string) boo
 // near 50. Where descriptors are not per-watch (Linux inotify) both bounds
 // hold trivially.
 //
-// The churn creates nothing inside .plumb. A file created there and removed
-// moments later trips a different kqueue race in fsnotify: its reader opens
-// the new file and only then registers it, and an unlink that lands between
-// the two is never reported, so fsnotify keeps a dead watch that marks the
-// name as seen and hides every later file of that name. That race is not this
-// test's subject and plumb cannot close it, so each cycle checks the attach
-// directly, on the .plumb watcher, instead of through a config write.
+// A path removed moments after it appears trips a different kqueue race in
+// fsnotify (#595): the reader opens the new path and only then registers it,
+// and a removal that lands between the two is never reported, so fsnotify
+// keeps a dead watch that marks the name as seen and hides every later path of
+// that name. That race is not this test's subject and plumb cannot close it,
+// so the churn keeps out of it. It creates nothing inside .plumb, and checks
+// the attach on the .plumb watcher instead of through a config write. And on
+// kqueue it removes .plumb only once the root watcher's reader has finished
+// registering it (rootRegistered): removed in that gap, .plumb is left as a
+// dead watch in the root watcher, and the next .plumb is never reported.
 func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 	const (
 		cycles = 50
@@ -171,6 +179,35 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 
 	plumbDir := filepath.Join(paths.Canonical(ws), ".plumb")
 
+	// rootRegistered waits until the root watcher's reader has finished
+	// registering the .plumb that just appeared. That registration is not
+	// observable directly, so it is ordered against one that is. The reader
+	// handles kevents one at a time, and lists a directory in name order, so
+	// it opens a file created in the root after .plumb only once it is done
+	// with .plumb: a descriptor on that file proves the .plumb registration
+	// complete. Each cycle's probe has its own name, because the probe can
+	// fall into the same gap, and is removed a cycle later, so it rarely does;
+	// a probe that does costs one descriptor, which the slack absorbs.
+	var lastProbe string
+	removeProbe := func() {
+		if lastProbe != "" {
+			mustDo(os.Remove(lastProbe))
+			lastProbe = ""
+		}
+	}
+	rootRegistered := func(cycle int) {
+		t.Helper()
+		removeProbe()
+		lastProbe = filepath.Join(ws, fmt.Sprintf("probe-%d", cycle))
+		mustDo(os.WriteFile(lastProbe, nil, 0o600))
+		for deadline := time.Now().Add(10 * time.Second); descriptorsOn(t, lastProbe) < 1; {
+			if time.Now().After(deadline) {
+				t.Fatalf("cycle %d: the root watcher's reader did not open %s within 10s", cycle, lastProbe)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
 	// Positive control for descriptorsOn: a bound it cannot exceed proves
 	// nothing unless it does see a descriptor that is open.
 	probe := filepath.Join(t.TempDir(), "probe")
@@ -184,6 +221,9 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 	before := openFDCount(t)
 	for i := range cycles {
 		await(func() { mustDo(os.Mkdir(plumbDir, 0o755)) })
+		if perWatchDescriptors {
+			rootRegistered(i)
+		}
 		// The attach can trail that dispatch: when the .plumb watcher reports
 		// the previous directory's removal only after the new one appeared,
 		// the dispatch finds the latch still set, and the re-attach follows
@@ -195,13 +235,12 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 			}
 			time.Sleep(2 * time.Millisecond)
 		}
-		// Sampled once: the root watcher's reader may register .plumb after
-		// this, which can only raise the count later, never lower it now.
 		if held := descriptorsOn(t, plumbDir); held > 2 {
 			t.Fatalf("cycle %d: %d descriptors held for the new .plumb directory, want at most 2 (one per watcher): it was registered twice", i, held)
 		}
 		await(func() { mustDo(os.Remove(plumbDir)) })
 	}
+	removeProbe()
 
 	// Descriptors a healthy watcher releases go as its reader handles the
 	// removals, a moment after the loop catches up, so poll until the count
