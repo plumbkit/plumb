@@ -206,6 +206,13 @@
   write itself. A file that no longer matches is left alone, and the reported
   counts and diffs are the ones actually written.
 
+- **`write_memory`, `delete_memory` and `agent_config` take the same per-file
+  lock as the other write tools.** An `edit_file` on `.plumb/config.toml`
+  could land between `agent_config` reading the file and writing it back, and
+  be lost. For all three, a concurrent write could also make the write-history
+  row pair a before and an after from two different writes. `agent_config`
+  also no longer reads `config.toml` for history when history is off.
+
 - **`rename_file` no longer records a destination it did not destroy.** A
   case-only rename (`file.txt` to `FILE.txt`) on a case-insensitive volume, with
   `overwrite: true`, recorded a delete of the file itself and showed its content

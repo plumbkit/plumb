@@ -99,6 +99,10 @@ func (t *deleteMemoryTool) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("delete_memory: %w", err)
 	}
 	path, _ := memory.Path(ws, a.Name)
+	// Under the path lock, so no other plumb writer lands between the Before
+	// read and the delete.
+	unlock := lockPath(path)
+	defer unlock()
 	// Read when EITHER the history row or the response diff wants the bytes, so
 	// the diff costs no extra read and neither consumer pays for the other.
 	before := history.Side{}

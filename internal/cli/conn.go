@@ -572,27 +572,6 @@ func (s *connSession) workspace() string {
 	return s.view().acquiredRoot
 }
 
-// markBoundaryViolation records the violation on the session record and is
-// deliberately sticky-not-terminating: each offending tool call already gets a
-// WorkspaceBoundaryError back, which is the per-call enforcement contract.
-// "Health: blocked" + HealthMessage is observability — the TUI dashboard alert
-// and the session detail pane both render this message directly (issue #358),
-// so every caller of this method must name its own remedy rather than leaving
-// the reader with no next step, while legitimate calls inside the pinned
-// workspace keep working. We do not
-// cancel s.ctx here: a single confused tool call (e.g. an agent fumbling a
-// path) should not tear down an otherwise-working session, and the boundary
-// error is informative enough for the caller to course-correct.
-func (s *connSession) markBoundaryViolation(message string) {
-	if message == "" {
-		return
-	}
-	session.Patch(s.sessionID(), func(info *session.Info) {
-		info.Health = "blocked"
-		info.HealthMessage = message
-	})
-}
-
 // setClientRequest stores the latest MCP RequestFn for subsequent rootsFn calls.
 func (s *connSession) setClientRequest(req mcp.RequestFn) {
 	s.requestMu.Lock()
