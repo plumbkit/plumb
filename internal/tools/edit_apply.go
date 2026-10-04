@@ -87,7 +87,7 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 			if rbErr := rollbackWorkspaceEdit(plans, modified, sink); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
-			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
+			return modified, plans, withRevertNote(fmt.Errorf("writing %s: %w", p.path, err), workspaceEditReverted(plans, modified))
 		}
 		plans[i].written = res.written
 		sink.recordHistory(history.Change{
@@ -267,6 +267,23 @@ func unlockAll(unlocks []func()) {
 	for i := len(unlocks) - 1; i >= 0; i-- {
 		unlocks[i]()
 	}
+}
+
+// workspaceEditReverted lists the paths a workspace-edit rollback put back, for
+// the failed call's revert summary. modified is the set written before the
+// failure, which is exactly the set the rollback walks.
+func workspaceEditReverted(plans []workspaceEditPlan, modified []string) []revertedPath {
+	byPath := make(map[string]workspaceEditPlan, len(plans))
+	for _, p := range plans {
+		byPath[p.path] = p
+	}
+	out := make([]revertedPath, 0, len(modified))
+	for _, path := range modified {
+		if p, ok := byPath[path]; ok {
+			out = append(out, revertedPath{path: p.path, before: string(p.before), after: string(p.after)})
+		}
+	}
+	return out
 }
 
 func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink) error {

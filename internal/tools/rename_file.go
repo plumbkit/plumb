@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -60,6 +61,8 @@ func (*RenameFile) Description() string {
 		"Refuses to overwrite an existing destination unless overwrite=true. The LSP server " +
 		"is notified with FileDeleted (source) and FileCreated (destination) so symbol " +
 		"indexes and diagnostics update immediately. " +
+		"A rename changes no content, so the response shows a diff only when the move destroyed an " +
+		"existing destination (that destination's content), gated by [edits].show_write_diff. " +
 		"To duplicate a file without removing the source, use copy_file instead. " +
 		"For LSP-semantic identifier renames across files, use rename_symbol instead."
 }
@@ -130,8 +133,12 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// A source this snapshot cannot read leaves the version unknown, which records
 	// no read state rather than a guessed one.
 	moved, _ := readSnapshot(from, func(io.Reader) error { return nil })
+	// contentSide for the DESTINATION only: its bytes are what the response diff
+	// shows when this move destroys it. The source side feeds the history row
+	// alone, so it stays on historySide — reading up to 8 MiB for a diff that
+	// never renders it would be waste on every rename with history off.
 	src := t.deps.historySide(from)
-	dest := t.deps.historySide(to)
+	dest := t.deps.contentSide(to)
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
@@ -159,7 +166,23 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		syncDirBestEffort("rename_file", filepath.Dir(to))
 	}
 	t.renameFilePostRename(ctx, from, to, moved)
-	return fmt.Sprintf("renamed %s → %s", from, to), nil
+	return t.formatRenameResult(ctx, from, to, dest), nil
+}
+
+// formatRenameResult renders the response. A rename does not change content, so
+// there is nothing for a diff to show unless the move DESTROYED an existing
+// destination — and that destination's content appears nowhere else in the
+// transcript, which is what makes it worth showing.
+func (t *RenameFile) formatRenameResult(ctx context.Context, from, to string, dest history.Side) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "renamed %s → %s", from, to)
+	if !dest.Exists {
+		return sb.String()
+	}
+	// Both paths go to the gate, matching the store's own From-side check.
+	diff := t.deps.responseDiffAcross(ctx, []string{from, to}, to, sideOf(dest), absentSide())
+	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
+	return sb.String()
 }
 
 func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {

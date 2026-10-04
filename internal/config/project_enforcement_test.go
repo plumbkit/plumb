@@ -159,6 +159,36 @@ var enforcementCases = map[string]struct {
 	},
 }
 
+// TestProjectRelayWriteDiffIsAPreference pins the classification, in BOTH
+// directions. relay_write_diff is not a safety knob: the diff itself stays in
+// the tool result whatever it is set to, so the only thing at stake is whether
+// the agent is asked to repeat it — and a repository that could force that on
+// over a user who turned it off would be spending that user's output tokens
+// against their choice.
+func TestProjectRelayWriteDiffIsAPreference(t *testing.T) {
+	// Off by default: the diff is already in the tool result, so asking the agent
+	// to repeat it is opt-in.
+	if Defaults().Edits.RelayWriteDiff {
+		t.Fatal("relay_write_diff should default off")
+	}
+
+	// Both directions, each starting from the OPPOSITE global value, so neither
+	// half can pass just because it matches the default.
+	onBase := Defaults()
+	onBase.Edits.RelayWriteDiff = false
+	on := projectCfgBase(t, onBase, "[edits]\nrelay_write_diff = true\n")
+	if !on.Edits.RelayWriteDiff {
+		t.Fatal("a project could not turn relay_write_diff on; it is not behaving as a preference")
+	}
+
+	offBase := Defaults()
+	offBase.Edits.RelayWriteDiff = true
+	off := projectCfgBase(t, offBase, "[edits]\nrelay_write_diff = false\n")
+	if off.Edits.RelayWriteDiff {
+		t.Fatal("a project could not turn relay_write_diff off; it is not behaving as a preference")
+	}
+}
+
 func TestLoadProject_HostileValuesAreRefused(t *testing.T) {
 	for key, tc := range enforcementCases {
 		t.Run(key, func(t *testing.T) {

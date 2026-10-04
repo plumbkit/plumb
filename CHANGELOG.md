@@ -4,6 +4,42 @@
 
 ### Added
 
+- **More write responses carry the diff, and can ask the agent to show it to
+  you.** `[edits].show_write_diff` (default on) covered `edit_file`,
+  `write_file`, `find_replace`, the symbol edits and `transaction_apply`; it now
+  covers every write plumb records: `delete_file` (every line removed, per file
+  in a batch), `copy_file` (what landed, plus the destination it replaced),
+  `rename_file` (only when the move destroyed an existing destination),
+  `move_symbol`, `undo_edit`'s removal of a file its write created, and the
+  `.plumb/` writers — `write_memory`, `delete_memory`, `agent_config` and
+  `git_init`. A response reports `… (diff withheld: …)` instead of content when a
+  side was not read (a file past the 200 KiB response-diff cap), when a side is
+  binary, or — see below — when the path matches `[history] sensitive_globs`.
+- **`[edits].relay_write_diff`** (default **off**, `PLUMB_RELAY_WRITE_DIFF`) asks
+  the agent to include each write response's diff in its reply to you, once per
+  response and only when a diff was shown. It is off by default because the diff
+  is already in the tool result, where the transcript shows it, and asking the
+  agent to repeat it costs output tokens the diff itself does not. Turn it on
+  globally, or for one project, to have the agent surface changes in its own
+  words.
+
+### Changed
+
+- **A sensitive path no longer renders its content in a write response that
+  shows a diff.** `edit_file`/`write_file` showed a diff of whatever they
+  edited, including `.env`, `*.pem` and the rest of
+  `[history] sensitive_globs`, while the history store withheld that same
+  content. The transcript leaves the machine and history.db does not, so the
+  response now reaches the store's own decision — through the same matcher — and
+  reports the withholding instead. One residual is unchanged: a FAILED
+  `edit_file` still prints near-match context lines from the target file to make
+  the retry possible, sensitive or not.
+- **A truncated diff now points at `plumb history`, not `file_diff`.** The old
+  note could not help for a deleted file, whose content `file_diff` cannot show.
+- **Automatic reverts report counts, not diffs.** When a failed write, move or
+  transaction is rolled back, the error names each reverted path with its
+  added/removed counts and points at `plumb history` for the diffs. An error's
+  first job is the remedy, and the diffs are already in the store.
 - **A resume credential: the daemon's half of letting a replacement `plumb serve`
   resume the full identity, not only the name.** (part of #556,
   `docs/identity-resume-credential-design.md`) A serve restart, an agent relaunch or

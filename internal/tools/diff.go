@@ -55,7 +55,7 @@ func renderUnifiedDiff(path string, script editScript) string {
 		total += len(lines)
 	}
 	if truncated {
-		out = append(out, "… (diff truncated; use file_diff for the full view)")
+		out = append(out, diffTruncatedNote)
 	}
 	return strings.Join(out, "\n")
 }

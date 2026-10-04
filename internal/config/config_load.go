@@ -185,6 +185,9 @@ func applyEditsEnv(cfg *Config) {
 	if v, ok := envBoolNeg("PLUMB_SHOW_WRITE_DIFF"); ok {
 		cfg.Edits.ShowWriteDiff = v
 	}
+	if v, ok := envBoolNeg("PLUMB_RELAY_WRITE_DIFF"); ok {
+		cfg.Edits.RelayWriteDiff = v
+	}
 	if v, ok := envBoolNeg("PLUMB_BLOCK_DIRTY_WRITES"); ok {
 		cfg.Edits.BlockDirtyWrites = v
 	}

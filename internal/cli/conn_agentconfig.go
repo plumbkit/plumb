@@ -72,6 +72,7 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 	if err != nil {
 		return "", err
 	}
+	suffix := ""
 	if after, aerr := history.SideFromFile(cfgPath); aerr == nil {
 		op := history.OpUpdate
 		if !before.Exists {
@@ -86,6 +87,12 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 			Before: before,
 			After:  after,
 		})
+		// The config change is a file change like any other, so it reports what it
+		// did with the same policy: the .plumb/ writer had no response rendering of
+		// its own, and a config file is exactly the sort of path a sensitive glob
+		// names. buildWriteDeps is cheap here — this runs on an agent_config set,
+		// not on a hot path.
+		suffix = tools.ResponseDiffSuffix(ctx, s.buildWriteDeps(), cfgPath, before, after)
 	}
 	// Live before the tool returns. The connection's own project is cached in its
 	// view and is re-applied; any other root is read per call (projectViewFor), so
@@ -102,5 +109,5 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 	s.log().Info("daemon: agent wrote project config", "workspace", ws, "keys", changed)
 	return fmt.Sprintf(
 		"applied %d key(s) to %s/.plumb/config.toml (provenance=agent): %s\nrevert any with: plumb config unset <key> --workspace .",
-		len(changed), ws, strings.Join(changed, ", ")), nil
+		len(changed), ws, strings.Join(changed, ", ")) + suffix, nil
 }

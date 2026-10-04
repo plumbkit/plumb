@@ -52,7 +52,11 @@ var registryData = []Field{
 	},
 	{
 		Key: "edits.show_write_diff", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Append a unified diff to edit_file/write_file responses.",
+		Description: "Append a diff to every content-changing write response (create, update, delete, rename, copy, revert).",
+	},
+	{
+		Key: "edits.relay_write_diff", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Ask the agent to show each write response's diff to the user in its reply.",
 	},
 	{
 		Key: "edits.block_dirty_writes", Type: FieldBool, ReloadTier: ReloadLive,

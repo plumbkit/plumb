@@ -65,7 +65,9 @@ func (*DeleteFile) Description() string {
 		"directories go last, deepest first, so they are empty by the time their turn comes. The LSP server " +
 		"is notified with FileDeleted so symbol indexes and diagnostics update immediately. Per-path locking " +
 		"serialises against any concurrent write_file/edit_file targeting the same path. The response reports " +
-		"the line and byte count removed (bytes only for a binary or oversized file)."
+		"the line and byte count removed (bytes only for a binary or oversized file), then the diff of what " +
+		"was deleted, gated by [edits].show_write_diff; a path matching [history] sensitive_globs reports " +
+		"the withholding instead of its content."
 }
 
 type deleteFileArgs struct {
@@ -122,19 +124,19 @@ func (t *DeleteFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		return "", err
 	}
 
-	var removed []string
+	var removed []deleteResult
 	for _, tgt := range targets {
-		line, err := t.removeTarget(ctx, tgt)
+		res, err := t.removeTarget(ctx, tgt)
 		if err != nil {
 			// Report what already went, so a partial batch is never silent.
 			if len(removed) > 0 {
-				return deleteReport(removed), fmt.Errorf("%w (stopped after %d successful deletion(s))", err, len(removed))
+				return deleteReport(removed, t.deps), fmt.Errorf("%w (stopped after %d successful deletion(s))", err, len(removed))
 			}
 			return "", err
 		}
-		removed = append(removed, line)
+		removed = append(removed, res)
 	}
-	return deleteReport(removed), nil
+	return deleteReport(removed, t.deps), nil
 }
 
 // deleteRequestedPaths reads the requested paths from either shape, rejecting
@@ -228,10 +230,10 @@ func (t *DeleteFile) classifyDeleteTargets(ctx context.Context, a deleteFileArgs
 // removeTarget deletes one already-validated path and runs the post-delete
 // notifications. The caller holds every path's lock for the whole batch, so the
 // state checked in classifyDeleteTargets still holds here.
-func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string, error) {
+func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (deleteResult, error) {
 	if tgt.isDir {
 		if err := os.Remove(tgt.path); err != nil {
-			return "", fmt.Errorf("delete_file: %w (directory must be empty)", err)
+			return deleteResult{}, fmt.Errorf("delete_file: %w (directory must be empty)", err)
 		}
 		syncDirBestEffort("delete_file", filepath.Dir(tgt.path))
 		t.deps.recordHistory(ctx, history.Change{
@@ -241,7 +243,8 @@ func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string
 			Path: tgt.path,
 		})
 		t.deps.notifyTopology(tgt.path)
-		return "deleted directory " + tgt.path, nil
+		// A directory has no content, so there is no diff even to withhold.
+		return deleteResult{line: "deleted directory " + tgt.path}, nil
 	}
 
 	// Summarise what is about to be removed (line + byte count) before deleting,
@@ -252,11 +255,11 @@ func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string
 	if data != nil || tgt.size == 0 {
 		before = history.SideFromBytes(data)
 	} else {
-		before = t.deps.historySide(tgt.path)
+		before = t.deps.contentSide(tgt.path)
 	}
 
 	if err := os.Remove(tgt.path); err != nil {
-		return "", fmt.Errorf("delete_file: %w", err)
+		return deleteResult{}, fmt.Errorf("delete_file: %w", err)
 	}
 	syncDirBestEffort("delete_file", filepath.Dir(tgt.path))
 	t.deps.recordHistory(ctx, history.Change{
@@ -273,16 +276,57 @@ func (t *DeleteFile) removeTarget(ctx context.Context, tgt deleteTarget) (string
 	// processUpsert detects the missing file and routes to processDelete automatically.
 	t.deps.notifyTopology(tgt.path)
 
-	return fmt.Sprintf("deleted %s — %s", tgt.path, summary), nil
+	// The response diff is rendered from the bytes deleteSummary already read,
+	// so a delete pays no second read for it. A file past the read cap (or one
+	// that could not be read) reports the withholding instead of a short diff
+	// against nothing — the difference between "the file was empty" and "we did
+	// not look".
+	beforeContent := sideOf(before)
+	if data != nil {
+		beforeContent = presentSide(string(data))
+	}
+	return deleteResult{
+		line: fmt.Sprintf("deleted %s — %s", tgt.path, summary),
+		diff: t.deps.responseDiff(ctx, tgt.path, beforeContent, absentSide()),
+	}, nil
 }
 
-// deleteReport renders one line per removal, keeping the single-path response
-// byte-identical to what it was before batching existed.
-func deleteReport(removed []string) string {
-	if len(removed) == 1 {
-		return removed[0]
+// deleteResult is one removed path: its one-line summary, and the diff section
+// to show beneath it ("" when there is nothing to show).
+type deleteResult struct{ line, diff string }
+
+// deleteReport renders the response: one summary line per removal, the relay
+// instruction once, then the per-file diff sections. The instruction sits ahead
+// of the diffs so a client that truncates a long response cannot hide it behind
+// the content it is about.
+func deleteReport(results []deleteResult, deps WriteDeps) string {
+	if len(results) == 0 {
+		return ""
 	}
-	return fmt.Sprintf("deleted %d path(s):\n  ", len(removed)) + strings.Join(removed, "\n  ")
+	var sb strings.Builder
+	if len(results) == 1 {
+		sb.WriteString(results[0].line)
+	} else {
+		lines := make([]string, len(results))
+		for i, r := range results {
+			lines[i] = r.line
+		}
+		fmt.Fprintf(&sb, "deleted %d path(s):\n  ", len(results))
+		sb.WriteString(strings.Join(lines, "\n  "))
+	}
+	sections := make([]string, len(results))
+	for i, r := range results {
+		sections[i] = r.diff
+	}
+	// Both the rendered sections and the relay decision come from diffSections,
+	// so the instruction cannot outlive the diff it is about (see its doc).
+	shown := diffSections(sections)
+	if relay := deps.relayNoteFor(shown...); relay != "" {
+		sb.WriteString("\n")
+		sb.WriteString(relay)
+	}
+	appendSections(&sb, shown...)
+	return sb.String()
 }
 
 // deleteSummary describes the content removed by a delete: a line + byte count

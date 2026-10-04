@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -78,12 +79,19 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		Boundary:              s.writeBoundaryGuardFor,
 		Contested:             s.pinContested,
 		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
-		BlockDirtyFn:          func() bool { return s.editsConfig().BlockDirtyWrites },
-		PostWriteNotifyFn:     s.javaPostWriteNotify,
-		QualityReport:         qualityReport,
-		TopologyNotify:        topologyNotify,
-		HistoryFn:             s.recordHistory,
-		HistoryEnabledFn:      func() bool { return s.historyConfig().Enabled },
+		RelayDiffFn:           func() bool { return s.editsConfig().RelayWriteDiff },
+		// The response diff makes the store's own sensitive-glob decision, with
+		// the same matcher, so a path withheld from history.db is withheld from
+		// the transcript too (which leaves the machine; history.db does not).
+		SensitivePathFn: func(ctx context.Context, path string) bool {
+			return history.MatchSensitive(s.historyConfig().SensitiveGlobs, s.workspaceFor(ctx), path)
+		},
+		BlockDirtyFn:      func() bool { return s.editsConfig().BlockDirtyWrites },
+		PostWriteNotifyFn: s.javaPostWriteNotify,
+		QualityReport:     qualityReport,
+		TopologyNotify:    topologyNotify,
+		HistoryFn:         s.recordHistory,
+		HistoryEnabledFn:  func() bool { return s.historyConfig().Enabled },
 	}
 }
 
@@ -295,8 +303,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewMoveSymbol(s.sessionProxy, lspTimeout).WithTopologyFallback(topoFn).WithLSPWarmup(warmupFn).WithWorkspace(s.workspaceFor).WithCache(s.sessionCache).WithShowWriteDiff(showDiffFn).WithWriteDeps(wd).WithContested(s.pinContested))
 	srv.Register(tools.NewListMemories(s.workspaceFor).WithBoundary(readBoundaryFor))
 	srv.Register(tools.NewReadMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithTopology(topoFn))
-	srv.Register(tools.NewWriteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithHistory(s.recordHistory, func() bool { return s.historyConfig().Enabled }))
-	srv.Register(tools.NewDeleteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithHistory(s.recordHistory, func() bool { return s.historyConfig().Enabled }))
+	srv.Register(tools.NewWriteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithHistory(s.recordHistory, func() bool { return s.historyConfig().Enabled }).WithWriteDeps(wd))
+	srv.Register(tools.NewDeleteMemory(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor).WithHistory(s.recordHistory, func() bool { return s.historyConfig().Enabled }).WithWriteDeps(wd))
 	srv.Register(tools.NewSearchMemories(s.workspaceFor).WithIndex(s.memoryIndexLive).WithBoundary(readBoundaryFor))
 	srv.Register(tools.NewRelevantMemories(s.workspaceFor).WithBoundary(readBoundaryFor))
 	srv.Resources = memory.NewResourceProvider(s.workspace)
