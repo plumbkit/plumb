@@ -215,6 +215,14 @@ func TestRunFilter_AdviceFitsTheLengthLimit(t *testing.T) {
 	if err = validateRunFilter("run", run); err == nil || !strings.Contains(err.Error(), "shorten or split the filter") {
 		t.Errorf("with no spelling that fits, the refusal must say to shorten or split it: %v", err)
 	}
+
+	// 84 alternatives, no /: the run is 255 characters, so even the grouped
+	// form (257) is over the limit and must not be offered.
+	run = "(?i)" + parts("ab", 84)
+	err = validateRunFilter("run", run)
+	if err == nil || strings.Contains(err.Error(), "roup the alternatives") || !strings.Contains(err.Error(), "shorten or split the filter") {
+		t.Errorf("a grouped spelling over the limit must not be offered: %v", err)
+	}
 }
 
 func TestRunFilter_Validation(t *testing.T) {
