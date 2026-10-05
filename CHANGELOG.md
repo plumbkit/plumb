@@ -374,8 +374,9 @@
   and subtests run and pass, none removed or loosened. Measured with the old
   and the new test binary started at the same instant on a machine at load
   average 70 to 150, so both saw the same competing load: 467 s before and
-  381 s after, then 430 s before and 301 s after (18% and 30% faster). The
-  parallel phase on its own takes about 15 s. `go test -race -count=3
+  381 s after, then 430 s before and 301 s after (18% and 30% faster). On a
+  quieter machine, run one after the other: 227 s before, 159 s after (30%).
+  The parallel phase on its own takes about 15 s. `go test -race -count=3
   ./internal/tools/` passes twice, and the 70 tests pass 20 consecutive
   `-race` iterations. No behaviour change.
 
