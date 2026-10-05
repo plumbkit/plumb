@@ -2,21 +2,38 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"testing"
 )
 
-func cancelFrame(id string) []byte {
-	return []byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` + id + `}}`)
+// TestReportProgress_SilentOnceCancelled: a client that has cancelled a call
+// has dropped its progress token, so a later notification would only be logged
+// there as one for an unknown token. Progress before the cancel still goes out
+// (the control).
+func TestReportProgress_SilentOnceCancelled(t *testing.T) {
+	ss := newServeState(New(ServerInfo{Name: "t", Version: "0"}), io.Discard)
+	var sent []string
+	notify := func(method string, params any) error {
+		m, _ := params.(map[string]any)["message"].(string)
+		sent = append(sent, m)
+		return nil
+	}
+	ctx, untrack := ss.trackRequest(context.Background(), float64(5))
+	defer untrack()
+	ctx, closeProgress := withProgress(withNotifier(ctx, notify), map[string]json.RawMessage{"progressToken": json.RawMessage(`"t"`)})
+	defer closeProgress()
+
+	ReportProgress(ctx, 1, 2, "before")
+	ss.cancelRequest(cancelFrame("5"))
+	ReportProgress(ctx, 2, 2, "after")
+	if len(sent) != 1 || sent[0] != "before" {
+		t.Fatalf("sent %v, want only the notification from before the cancel", sent)
+	}
 }
 
-func isClosed(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	default:
-		return false
-	}
+func cancelFrame(id string) []byte {
+	return []byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":` + id + `}}`)
 }
 
 // TestCancelRequest_DuplicateCancelIsHarmless: a client may send the same

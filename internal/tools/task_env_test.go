@@ -190,6 +190,41 @@ func TestRunFilter_FlagOverAlternationIsRefused(t *testing.T) {
 	}
 }
 
+// TestRunFilter_AdviceFitsTheLengthLimit: putting the flag on every part
+// lengthens a filter, and a suggestion past the 256-character limit would only
+// be refused in its turn. Only spellings the validator accepts are offered.
+func TestRunFilter_AdviceFitsTheLengthLimit(t *testing.T) {
+	parts := func(p string, n int) string { return strings.TrimSuffix(strings.Repeat(p+"|", n), "|") }
+
+	// 60 alternatives: the run fits (183 chars), the per-part form does not
+	// (419), the grouped form does (185).
+	run := "(?i)" + parts("ab", 60)
+	err := validateRunFilter("run", run)
+	if err == nil {
+		t.Fatal("must be refused")
+	}
+	if msg := err.Error(); strings.Contains(msg, "put the flag on every part:") || strings.Contains(msg, "Put the flag on every part:") {
+		t.Errorf("the per-part spelling is over the limit and must not be offered:\n%v", err)
+	}
+	if want := "Group the alternatives: (?i)(" + parts("ab", 60) + ")"; !strings.Contains(err.Error(), want) {
+		t.Errorf("the grouped spelling fits and must be offered:\n%v", err)
+	}
+
+	// With a / there is no grouped form either, so neither spelling fits.
+	run = "(?i)" + parts("ab/cd", 40)
+	if err = validateRunFilter("run", run); err == nil || !strings.Contains(err.Error(), "shorten or split the filter") {
+		t.Errorf("with no spelling that fits, the refusal must say to shorten or split it: %v", err)
+	}
+
+	// 84 alternatives, no /: the run is 255 characters, so even the grouped
+	// form (257) is over the limit and must not be offered.
+	run = "(?i)" + parts("ab", 84)
+	err = validateRunFilter("run", run)
+	if err == nil || strings.Contains(err.Error(), "roup the alternatives") || !strings.Contains(err.Error(), "shorten or split the filter") {
+		t.Errorf("a grouped spelling over the limit must not be offered: %v", err)
+	}
+}
+
 func TestRunFilter_Validation(t *testing.T) {
 	for _, ok := range []string{"TestA|TestB", "^TestX$", "TestFoo/sub_case", "slow and not db", "Test(A|B)[0-9]+.*", "a@b"} {
 		if err := validateRunFilter("run", ok); err != nil {

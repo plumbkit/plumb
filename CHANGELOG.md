@@ -303,10 +303,11 @@
   going for up to an hour more, applying mutants and holding the daemon's
   single run slot against every other agent. plumb now sends
   `notifications/progress` against the call's `progressToken`, which Claude
-  Code always sends, and `mutation_test` reports one update at the start of
-  each compile and test step, resetting the idle window between steps. A
-  single step longer than 30 minutes, which needs a raised `timeout_seconds`,
-  can still be dropped. A run whose client asked for no progress, and that the
+  Code always sends. `mutation_test` reports one update at the start of each
+  compile and test step, and a step still running repeats it every minute, so
+  neither a long run nor a single long step goes quiet. This was verified
+  against Claude Code 2.1.287: a run longer than its idle window completed. A
+  run whose client asked for no progress, and that the
   baseline shows would outlast 25 minutes, is refused before anything is
   mutated, with a batch size that fits. The baseline can understate the cost,
   because Go may serve the unmutated suite from its test cache, so such a run
@@ -322,8 +323,10 @@
   tool, and `mutation_test` acts on it. Before, only a closed connection
   stopped a run, and an interrupted call on a shared connection ran to the
   end. Now the step in flight is stopped, the file restored and the slot
-  freed. The refusal a second caller gets no longer claims the slot frees
-  only when the holder's connection closes.
+  freed, and no further progress is sent for the call. The write-budget slots
+  charged for mutants that never ran are given back, as they are for a run the
+  baseline or the silent-call budget refuses. The refusal a second caller gets
+  no longer claims the slot frees only when the holder's connection closes.
 - **A `run`/`test_run` filter like `(?i)write|delete` is refused.** `go test
   -run` splits a pattern at each top-level `|` and `/` and matches every part
   as a separate regex. The leading flag therefore covered only `write`, and the
@@ -333,7 +336,8 @@
   every part, `(?i)write|(?i)delete`. This also refuses a pattern that
   happened to work, such as `(?i)TestFoo/baz` with a lowercase subtest name:
   write `(?i)TestFoo/(?i)baz`. A part that is empty or opens with its own
-  flag group is left alone.
+  flag group is left alone. Only spellings the filter check itself accepts are
+  suggested; one that would pass the 256-character limit is not.
 
 ### Tests
 
