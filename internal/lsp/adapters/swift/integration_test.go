@@ -49,8 +49,9 @@ func repoRoot(t *testing.T) string {
 //
 // Background indexing is turned off. With it on, sourcekit-lsp prepares the
 // package by spawning swift-build, which writes into ws/.build/index-build and
-// runs in a process group of its own: killing sourcekit-lsp orphans it, and a
-// graceful shutdown/exit does not reliably reap it either. Under load the
+// runs in a process group of its own, so killing sourcekit-lsp orphans it. A
+// graceful shutdown/exit is no guarantee either: in one of a handful of trials
+// it still left an orphaned swift-driver behind. Under load the
 // orphan was still writing when t.TempDir's RemoveAll ran, failing the test
 // with "unlinkat …/.build/index-build/…: directory not empty". Nothing here
 // needs the index: document symbols and an open file's diagnostics come from
