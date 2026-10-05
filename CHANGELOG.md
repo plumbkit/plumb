@@ -379,6 +379,16 @@
   The parallel phase on its own takes about 15 s. `go test -race -count=3
   ./internal/tools/` passes twice, and the 70 tests pass 20 consecutive
   `-race` iterations. No behaviour change.
+- **The swift integration tests no longer flake on TempDir cleanup under
+  load.** (#597) `TestIntegration_DidChangeWatchedFiles` failed during a full
+  `make verify-full` with `TempDir RemoveAll cleanup: unlinkat
+  …/.build/index-build/…: directory not empty`. sourcekit-lsp's background
+  indexing spawns `swift-build` into `<ws>/.build/index-build` in a process
+  group of its own, so killing the server orphaned a build that kept writing
+  while the workspace was removed. A graceful `shutdown`/`exit` is no
+  guarantee either: in one of a handful of trials it still left an orphaned
+  `swift-driver` behind. The tests now start sourcekit-lsp with
+  `backgroundIndexing: false`, which they never needed. No behaviour change.
 
 ## 0.21.0 (2026-10-02)
 
