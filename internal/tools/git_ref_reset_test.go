@@ -280,6 +280,7 @@ func TestRefResetForm_NamesTheRefItWouldReset(t *testing.T) {
 // reset flag works, and resetting an existing one is refused as destructive.
 // A forced `branch` is refused either way: it is never lowered.
 func TestGit_ForceCreateTierFollowsTheRef(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	runGitDirect(t, repo, "tag", "v1")
 	tool := writesOnlyGit(repo)
@@ -312,6 +313,7 @@ func TestGit_ForceCreateTierFollowsTheRef(t *testing.T) {
 // refuses these spellings, so this test is what keeps git's own name check
 // honest if the allowlist is ever widened.
 func TestGitRefProbe_ReadsNamesAsGit(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	for _, s := range [][]string{
 		{"switch", "-q", "side"},
@@ -405,6 +407,7 @@ func refSnapshot(t *testing.T, repo string) string {
 // The forced `branch` rows at the end create or move a branch that need not
 // exist: branch is not lowered, so they are refused for a new name too.
 func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
+	t.Parallel()
 	previous := [][]string{{"switch", "-q", "side"}, {"switch", "-q", "main"}} // @{-1} is side
 	detour := [][]string{{"switch", "-q", "side"}, {"switch", "-q", "-c", "third"}}
 	renamed := [][]string{
@@ -464,6 +467,7 @@ func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			repo := mergeFixture(t)
 			for _, s := range c.setup {
 				runGitDirect(t, repo, s...)
@@ -485,6 +489,7 @@ func TestGit_ForceCreateOfASpelledDifferentlyRefStaysDestructive(t *testing.T) {
 // yet are routine creation and run at the write tier, once given, and so do the
 // unforced `branch` forms (create, rename, copy).
 func TestGit_ForceCreateOfANewPlainNameStillRuns(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		sub  string
@@ -499,6 +504,7 @@ func TestGit_ForceCreateOfANewPlainNameStillRuns(t *testing.T) {
 		{"branch --copy main copied", "branch", []string{"--copy", "main", "copied"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			repo := mergeFixture(t)
 			if _, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": c.sub, "args": c.args}); err != nil {
 				t.Errorf("%s %v on a new name: %v", c.sub, c.args, err)

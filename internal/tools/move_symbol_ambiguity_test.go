@@ -59,6 +59,7 @@ func readFileText(t *testing.T, path string) string {
 }
 
 func TestMoveSymbol_SlowLSPStillRefusesAnAmbiguousBareName(t *testing.T) {
+	t.Parallel()
 	const srcBefore = ambiguousMoveSrc
 	const dstBefore = "package demo\n\nfunc Keep() {}\n"
 
@@ -81,6 +82,7 @@ func TestMoveSymbol_SlowLSPStillRefusesAnAmbiguousBareName(t *testing.T) {
 }
 
 func TestMoveSymbol_SlowLSPStillMovesAnUnambiguousBareName(t *testing.T) {
+	t.Parallel()
 	// The other direction, in the same build: a guard that refuses everything
 	// would pass the test above and break every real fallback move.
 	out, srcAfter, dstAfter, err := moveViaFallback(t, moveSrc, "Foo")

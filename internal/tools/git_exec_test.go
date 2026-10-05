@@ -218,6 +218,7 @@ func TestTailGitErrStdout(t *testing.T) {
 // stderr, so both hook lines arrive on the stderr stream here; the separate
 // stdout label is pinned by the unit tests above.)
 func TestGit_CommitFailingHookReportsStreams(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 	hook := "#!/bin/sh\necho 'hook stdout: 0 issues. file-size: OK'\necho 'hook stderr: lint failed' >&2\nexit 1\n"

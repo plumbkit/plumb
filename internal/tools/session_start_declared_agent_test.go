@@ -95,6 +95,7 @@ func TestSessionStart_LinkageNotCommittedOnARefusedCall(t *testing.T) {
 // channel must not fire at all (a synthesised identity would mark an ordinary
 // connection shared and switch on per-agent keying nobody asked for).
 func TestSessionStart_DeclaredAgentSkippedWithoutSessionID(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	called := false
 	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).

@@ -218,6 +218,7 @@ func TestTopologyAffected_TestsInDirs(t *testing.T) {
 // active, the Claude Code guidance leads with topology (the Map) and names
 // topology_affected as the headline post-change tool.
 func TestSessionStart_TopologyLedGuidance(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module demo\n\ngo 1.22\n"), 0o644); err != nil {
 		t.Fatal(err)

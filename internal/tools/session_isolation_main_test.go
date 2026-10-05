@@ -23,6 +23,15 @@ import (
 // the registry is where fixed session names, and the random draws that avoid
 // them, are made unique, so one directory shared by every test lets a session
 // another test left live hold a name this one asks for.
+//
+// Parallel tests: a test may call t.Parallel only when it touches nothing
+// process-wide. That rules out t.Setenv, t.Chdir, a test that overrides a
+// package variable or hook (syncFileHook, budgetWaitHook, mutationSilentBudget,
+// gitWriteDraining), a test that asserts on the shared pathLocks, repoLocks or
+// gitRefStates maps, and every mutation_test run, because mutationRun admits one
+// run per process. Each parallel test needs its own t.TempDir repository, store
+// and tool. Go holds a parallel test until every serial test has finished, so a
+// parallel test never overlaps a serial one, only other parallel tests.
 func TestMain(m *testing.M) {
 	os.Exit(runWithIsolatedData(m))
 }

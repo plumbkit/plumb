@@ -15,7 +15,9 @@ import (
 // identity block — the one section every agent reads. A linked session (raw
 // input carrying a non-empty session_id) must stay byte-quiet on the subject.
 func TestSessionStart_UnlinkedNotice(t *testing.T) {
+	t.Parallel()
 	t.Run("no session_id", func(t *testing.T) {
+		t.Parallel()
 		tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 		if err != nil {
@@ -27,6 +29,7 @@ func TestSessionStart_UnlinkedNotice(t *testing.T) {
 	})
 
 	t.Run("empty session_id", func(t *testing.T) {
+		t.Parallel()
 		tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":""}`))
 		if err != nil {
@@ -38,6 +41,7 @@ func TestSessionStart_UnlinkedNotice(t *testing.T) {
 	})
 
 	t.Run("session_id present, trivial externalIDFn", func(t *testing.T) {
+		t.Parallel()
 		tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil).
 			WithExternalID(func(string) string { return "" })
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"session_id":"abc-123"}`))
@@ -50,6 +54,7 @@ func TestSessionStart_UnlinkedNotice(t *testing.T) {
 	})
 
 	t.Run("session_id present, externalIDFn returns name", func(t *testing.T) {
+		t.Parallel()
 		tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil).
 			WithExternalID(func(string) string { return "alice" })
 		// An inherited name is exactly the auto-brief signal (PLAN-356), so this

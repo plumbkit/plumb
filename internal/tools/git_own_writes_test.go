@@ -55,6 +55,7 @@ func readWarns(t *testing.T, tracker *WriteTracker, path string) bool {
 // TestGit_OwnSwitchIsNotReportedAsAPeerEdit is the reported case: a switch
 // through the tool rewrites a file plumb wrote, and the next read blamed a peer.
 func TestGit_OwnSwitchIsNotReportedAsAPeerEdit(t *testing.T) {
+	t.Parallel()
 	repo, tracker, tool := ownWritesFixture(t)
 	path := filepath.Join(repo, "init.txt")
 	if _, err := callGit(t, tool, map[string]any{"subcommand": "switch", "args": []string{"other"}}); err != nil {
@@ -81,6 +82,7 @@ func TestGit_OwnSwitchIsNotReportedAsAPeerEdit(t *testing.T) {
 // git operation, and which the operation did not touch, keeps its warning — the
 // refresh must not launder an edit plumb did not make.
 func TestGit_PeerEditBeforeTheOpStillWarns(t *testing.T) {
+	t.Parallel()
 	repo, tracker, tool := ownWritesFixture(t)
 	notes := filepath.Join(repo, "notes.txt") // untracked by git, so no switch touches it
 	if err := os.WriteFile(notes, []byte("plumb\n"), 0o644); err != nil {
@@ -103,6 +105,7 @@ func TestGit_PeerEditBeforeTheOpStillWarns(t *testing.T) {
 // conflicts FAILS, and still rewrote the conflicted file (conflict markers). That
 // is plumb's own change too, so the failure path must refresh as well.
 func TestGit_OwnConflictedMergeIsNotReportedAsAPeerEdit(t *testing.T) {
+	t.Parallel()
 	repo, tracker, tool := ownWritesFixture(t)
 	path := filepath.Join(repo, "init.txt")
 	commitFileDirect(t, repo, "main", "init.txt", "main's version\n")
@@ -125,6 +128,7 @@ func TestGit_OwnConflictedMergeIsNotReportedAsAPeerEdit(t *testing.T) {
 // git did not produce keeps its warning; the file git did produce — init.txt,
 // rewritten from the other branch — is still re-recorded.
 func TestGit_HookWritesDuringOwnOpStillWarn(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		hook string
 		args map[string]any
@@ -133,6 +137,7 @@ func TestGit_HookWritesDuringOwnOpStillWarn(t *testing.T) {
 		{"post-checkout", map[string]any{"subcommand": "switch", "args": []string{"other"}}},
 	} {
 		t.Run(c.hook, func(t *testing.T) {
+			t.Parallel()
 			repo, tracker, tool := ownWritesFixture(t)
 			tracked := filepath.Join(repo, "main.txt") // committed; the op leaves it alone
 			untracked := filepath.Join(repo, "notes.txt")

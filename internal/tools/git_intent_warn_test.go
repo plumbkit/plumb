@@ -55,6 +55,7 @@ func putPeerIntent(t *testing.T, store *collab.Store, id, name, body string, glo
 // their responses with a warning naming the peer and the claim, while reads,
 // index-only writes, and a no-intent baseline never warn.
 func TestGitPeerIntentWarning_StateVerbsWarn(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	store := openIntentStore(t, repo)
@@ -108,6 +109,7 @@ func TestGitPeerIntentWarning_StateVerbsWarn(t *testing.T) {
 // TestGitPeerIntentWarning_OwnIntentExcluded: a session never warns about its
 // own intent.
 func TestGitPeerIntentWarning_OwnIntentExcluded(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	store := openIntentStore(t, repo)
@@ -128,6 +130,7 @@ func TestGitPeerIntentWarning_OwnIntentExcluded(t *testing.T) {
 // with the [collab] intents flag off) a state verb stays silent even with a
 // peer intent stored.
 func TestGitPeerIntentWarning_UnwiredAndDisabled(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	store := openIntentStore(t, repo)
@@ -158,6 +161,7 @@ func TestGitPeerIntentWarning_UnwiredAndDisabled(t *testing.T) {
 // workspace, a scoped intent warns only when a glob covers the repo's
 // workspace-relative path; an unscoped broadcast always covers it.
 func TestGitPeerIntentWarning_NestedRepoGlobs(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	ws := t.TempDir()
 	runGitDirect(t, ws, "init", "sub")
@@ -200,6 +204,7 @@ func TestGitPeerIntentWarning_NestedRepoGlobs(t *testing.T) {
 // write-tier repo-state op (commit) but must still warn on a destructive-tier
 // op (reset), while an unscoped broadcast warns on both.
 func TestGitPeerIntentWarning_TierAwareCoverage(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	store := openIntentStore(t, repo)
@@ -245,6 +250,7 @@ func TestGitPeerIntentWarning_TierAwareCoverage(t *testing.T) {
 // pinned to one service). A scoped intent can now match, tier-aware the same
 // as the repo == workspace case.
 func TestGitPeerIntentWarning_AncestorRepoLayout(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repoRoot := t.TempDir()
 	runGitDirect(t, repoRoot, "init")

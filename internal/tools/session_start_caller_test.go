@@ -80,6 +80,7 @@ func TestSessionStart_AnAgentWithNoIdentityIsNotNamedAsSomeoneElse(t *testing.T)
 // The linker is told who is calling, and what it answers reaches the packet: the
 // resume wording, and nothing more than the linker established.
 func TestSessionStart_LinkageIsAnsweredPerCaller(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		link     LinkResult
@@ -105,6 +106,7 @@ func TestSessionStart_LinkageIsAnsweredPerCaller(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			var gotCtx context.Context
 			tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return "" }, nil).
 				WithCallerIdentity(func(context.Context) string { return "wise-cobra" }, func(context.Context) string { return "ad50278a-rest" }).

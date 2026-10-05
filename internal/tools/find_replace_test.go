@@ -250,6 +250,7 @@ func TestFindReplace_InvalidRegex(t *testing.T) {
 // TestFindReplace_ManyFiles_ParallelCorrectness writes many matching files and
 // verifies every one is replaced exactly once under the parallel worker pool.
 func TestFindReplace_ManyFiles_ParallelCorrectness(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	const n = 200
 	for i := range n {

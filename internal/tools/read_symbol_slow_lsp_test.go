@@ -30,6 +30,7 @@ import (
 // patience is the budget (an MCP client configured at the [lsp_query] timeout)
 // must still see the fallback rather than a transport timeout.
 func TestReadSymbol_SlowLSPFallsBackInsideBudget(t *testing.T) {
+	t.Parallel()
 	store, _, uri := fallbackFixture(t)
 	// A server that accepts the request and simply never answers — the limit
 	// case of "cold and still indexing".
@@ -65,6 +66,7 @@ func TestReadSymbol_SlowLSPFallsBackInsideBudget(t *testing.T) {
 // not the full [lsp_query] timeout, or the operator is told to expect a wait
 // twice as long as the one that happened.
 func TestReadSymbol_SlowLSPErrorNamesTheAttempt(t *testing.T) {
+	t.Parallel()
 	_, _, uri := fallbackFixture(t)
 	const budget = 2 * time.Second
 	tool := tools.NewReadSymbol(&mockLSP{block: true}, nil, 0, budget, tools.NewReadTracker())
