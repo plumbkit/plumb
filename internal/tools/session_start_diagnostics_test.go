@@ -23,6 +23,7 @@ func makeDiag(line, col uint32, msg string, sev protocol.DiagnosticSeverity) pro
 }
 
 func TestSessionStart_ColdCacheGoModDiagnostics(t *testing.T) {
+	t.Parallel()
 	coldMsg := func(pkg string) protocol.Diagnostic {
 		return makeDiag(0, 0, pkg+" is not in your go.mod file", protocol.SevError)
 	}
@@ -78,6 +79,7 @@ func TestSessionStart_ColdCacheGoModDiagnostics(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tool := NewSessionStart(
 				func(context.Context) string { return t.TempDir() },
 				&stubDiagnostics{all: tc.diags},

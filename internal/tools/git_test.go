@@ -472,6 +472,7 @@ func TestGit_DefaultRepoBoundaryEnforced(t *testing.T) {
 // --- read subcommands against the live repo ---
 
 func TestGit_ReadSubcommands(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	tool := NewGit(WriteDeps{}, nil)
 	for _, c := range []struct {

@@ -141,6 +141,7 @@ func TestCheckMessages_CrossProjectGatedByRecipient(t *testing.T) {
 // TestCheckMessages_WaitTimesOutAndExplainsSilence: an expired wait must not
 // leave the agent believing the peer refused.
 func TestCheckMessages_WaitTimesOutAndExplains(t *testing.T) {
+	t.Parallel()
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 1}, "alice")
 	start := time.Now()
 	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":1}`))
@@ -158,6 +159,7 @@ func TestCheckMessages_WaitTimesOutAndExplains(t *testing.T) {
 // TestCheckMessages_WaitIsCappedByPolicy: a caller asking for an hour must not
 // be able to park past the client's own call timeout.
 func TestCheckMessages_WaitIsCappedByPolicy(t *testing.T) {
+	t.Parallel()
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 1}, "alice")
 	start := time.Now()
 	if _, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":3600}`)); err != nil {

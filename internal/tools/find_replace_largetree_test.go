@@ -42,6 +42,7 @@ import (
 // rewritten and nothing outside the glob is touched. The duration is logged as
 // a canary, deliberately with no power to fail the job.
 func TestFindReplace_LargeTreeProcessesEveryFile(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping large-tree test in -short mode")
 	}

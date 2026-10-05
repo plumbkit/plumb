@@ -27,8 +27,10 @@ import (
 const midDeclLine = 4
 
 func TestCallHierarchy_SlowLSPAnswersFromTopologyInsideBudget(t *testing.T) {
+	t.Parallel()
 	for _, parent := range parentContexts() {
 		t.Run(parent.name, func(t *testing.T) {
+			t.Parallel()
 			store, uri := newCallGraphStore(t)
 			tool := tools.NewCallHierarchy(slowLSP(), slowFallbackBudget).
 				WithTopologyFallback(func() *topology.Store { return store })

@@ -83,6 +83,7 @@ func installHook(t *testing.T, repo, name, body string) {
 // the base branch into a work branch with --no-ff is the non-rewriting update,
 // and it must run with only allow_writes — the tier commit needs.
 func TestGit_MergeNoFFRunsAtTheWriteTier(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	before := gitHeadSHA(t, repo)
 	out, err := callGit(t, writesOnlyGit(repo), map[string]any{
@@ -105,6 +106,7 @@ func TestGit_MergeNoFFRunsAtTheWriteTier(t *testing.T) {
 // TestGit_MergeFFOnly: --ff-only fast-forwards when it can and refuses (git's
 // own refusal, surfaced as a failure) when it cannot, leaving HEAD alone.
 func TestGit_MergeFFOnly(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	tool := writesOnlyGit(repo)
 	before := gitHeadSHA(t, repo)
@@ -128,6 +130,7 @@ func TestGit_MergeFFOnly(t *testing.T) {
 // --quit strands a half-done merge, so both need allow_destructive and confirm,
 // exactly like cherry-pick's and rebase's state flags.
 func TestGit_MergeStateFlagsAreDestructive(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	for _, flag := range []string{"--abort", "--quit"} {
 		_, err := callGit(t, writesOnlyGit(repo), map[string]any{"subcommand": "merge", "args": []string{flag}})
@@ -149,6 +152,7 @@ func TestGit_MergeStateFlagsAreDestructive(t *testing.T) {
 // Abbreviations are refused too, because git accepts any unambiguous prefix of
 // a long option.
 func TestGit_MergeRefusesFlagsThatEscapeTheToolsContract(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	before := gitHeadSHA(t, repo)
 	cases := []struct {
@@ -232,6 +236,7 @@ func TestCheckMergeArgs_ValuesAreNotFlags(t *testing.T) {
 // commit-msg, as commit runs pre-commit and commit-msg. A failing hook fails the
 // merge through the tool and leaves HEAD where it was.
 func TestGit_MergeRunsItsHooks(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	seen := filepath.Join(t.TempDir(), "commit-msg.ran")
 	installHook(t, repo, "commit-msg", "touch '"+seen+"'\n")
@@ -260,6 +265,7 @@ func TestGit_MergeRunsItsHooks(t *testing.T) {
 // conflicts is reported as such, naming every conflicted file and the two ways
 // on, and git's merging state (MERGE_HEAD) is left for the caller to resolve.
 func TestGit_MergeConflictNamesTheFilesAndKeepsMergingState(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	commitFileDirect(t, repo, "side", "init.txt", "side's version\n")
 	commitFileDirect(t, repo, "side", "clean.txt", "merges cleanly\n")
@@ -283,6 +289,7 @@ func TestGit_MergeConflictNamesTheFilesAndKeepsMergingState(t *testing.T) {
 // TestGit_MergeHonoursExpectedHead: merge is a write-tier op, so expected_head
 // refuses it before git runs when HEAD is elsewhere.
 func TestGit_MergeHonoursExpectedHead(t *testing.T) {
+	t.Parallel()
 	repo := mergeFixture(t)
 	before := gitHeadSHA(t, repo)
 	_, err := callGit(t, writesOnlyGit(repo), map[string]any{

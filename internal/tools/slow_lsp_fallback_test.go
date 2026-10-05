@@ -251,9 +251,11 @@ func parentContexts() []struct {
 // agent rather than only to CI: a symbol-edit whose server never answers must
 // still land on disk, from tree-sitter, inside the tool's budget.
 func TestSymbolWriteTools_SlowLSPWritesViaFallback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range writeToolCases() {
 		for _, parent := range parentContexts() {
 			t.Run(tc.name+"/"+parent.name, func(t *testing.T) {
+				t.Parallel()
 				exec, checks := tc.setup(t, slowLSP())
 				// The caller's deadline starts AFTER the fixture is built, so
 				// the case runs the budget it names rather than what setup left.
@@ -295,9 +297,11 @@ func TestSymbolWriteTools_SlowLSPWritesViaFallback(t *testing.T) {
 // two read tools: their fallbacks were already handed a live context, but only
 // ever reached it after the server had spent the caller's entire budget.
 func TestSymbolReadTools_SlowLSPAnswersInsideBudget(t *testing.T) {
+	t.Parallel()
 	for _, tc := range readToolCases() {
 		for _, parent := range parentContexts() {
 			t.Run(tc.name+"/"+parent.name, func(t *testing.T) {
+				t.Parallel()
 				exec, _ := tc.setup(t, slowLSP())
 				parentCtx := parent.ctx(t)
 
@@ -417,6 +421,7 @@ func TestSymbolTools_WarmLSPUnchanged(t *testing.T) {
 // to, so the tool must still give up inside its budget rather than hang, and
 // must not have written anything.
 func TestSymbolWriteTools_NoTopologyStillBounded(t *testing.T) {
+	t.Parallel()
 	_, fpath, uri := fallbackFixture(t)
 	before, err := os.ReadFile(fpath)
 	if err != nil {

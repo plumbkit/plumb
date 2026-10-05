@@ -191,6 +191,7 @@ func TestCheckMessages_ReportsElapsedWaitInSeconds(t *testing.T) {
 // TestCheckMessages_SaysWhenTheWaitWasClamped exercises the notice through the
 // real reply, for the same reason as above.
 func TestCheckMessages_SaysWhenTheWaitWasClamped(t *testing.T) {
+	t.Parallel()
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 1}, "alice")
 
 	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":3600}`))
@@ -208,6 +209,7 @@ func TestCheckMessages_SaysWhenTheWaitWasClamped(t *testing.T) {
 // fire for a wait that was honoured, or every ordinary call carries a warning
 // about a limit it never touched.
 func TestCheckMessages_SilentWhenTheWaitFitsUnderTheCeiling(t *testing.T) {
+	t.Parallel()
 	deps, _, _ := chatTestDeps(t, CollabPolicy{Mailbox: true, MaxWaitSeconds: 5}, "alice")
 
 	out, err := NewCheckMessages(deps).Execute(context.Background(), json.RawMessage(`{"wait_seconds":1}`))

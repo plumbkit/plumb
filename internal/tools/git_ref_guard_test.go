@@ -61,6 +61,7 @@ func runGitDirect(t *testing.T, repo string, args ...string) {
 // refused until confirmed, and the refusal/warning names the peer and the
 // old→new refs.
 func TestGitRefGuard_PeerCommitRequiresConfirm(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -113,6 +114,7 @@ func TestGitRefGuard_PeerCommitRequiresConfirm(t *testing.T) {
 }
 
 func TestGitRefGuard_ExpectedHead(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -166,6 +168,7 @@ func TestGitRefGuard_ExpectedHead(t *testing.T) {
 // TestGitRefGuard_ExpectedHeadWithoutSession: expected_head is enforced even
 // for a tool with no session identity wired (the ledger stays out of it).
 func TestGitRefGuard_ExpectedHeadWithoutSession(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	tool := NewGit(
@@ -190,6 +193,7 @@ func TestGitRefGuard_ExpectedHeadWithoutSession(t *testing.T) {
 // TestGitRefGuard_SelfMoveNoFriction: a session's own commits and branch
 // switches never trigger the guard — single-session use sees zero new friction.
 func TestGitRefGuard_SelfMoveNoFriction(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -220,6 +224,7 @@ func TestGitRefGuard_SelfMoveNoFriction(t *testing.T) {
 // read that observes the peer's new HEAD re-baselines the session, so the
 // following write needs no confirm.
 func TestGitRefGuard_ReadsNeverWarnAndRebaseline(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -261,6 +266,7 @@ func TestGitRefGuard_ReadsNeverWarnAndRebaseline(t *testing.T) {
 // TestGitRefGuard_ExternalMoveNoFriction: a HEAD move plumb cannot attribute
 // (no plumb session's operation produced this state) adds no friction.
 func TestGitRefGuard_ExternalMoveNoFriction(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -288,6 +294,7 @@ func TestGitRefGuard_ExternalMoveNoFriction(t *testing.T) {
 // TestGitRefGuard_PeerBranchSwitchDetected: the guard compares branch as well
 // as HEAD — a peer's branch switch at the SAME commit still trips it.
 func TestGitRefGuard_PeerBranchSwitchDetected(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	sessA := sessionGitTool(repo, "sess-a", "amber-fox")
@@ -406,6 +413,7 @@ func TestArmRefGuard_ArmsNetworkTier(t *testing.T) {
 // and the fetch reached git — the exact gap a force-push (the highest
 // blast-radius op the tool mediates) leaves open.
 func TestGitRefGuard_ExpectedHeadNetworkTier(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	repo := initTestRepo(t)
 	initial := gitHeadSHA(t, repo)

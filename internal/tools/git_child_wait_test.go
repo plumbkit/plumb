@@ -46,6 +46,7 @@ func runBounded(t *testing.T, limit time.Duration, what string, fn func()) {
 // session. The context deadline does not help: it kills the direct child, which
 // is not what holds the pipe.
 func TestExecGitCmd_BoundsWaitWhenDescendantHoldsPipes(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	// The child exits at once; the grandchild inherits stdout and lives 30s.
 	cmd := exec.CommandContext(context.Background(), "sh", "-c", "sleep 30 & echo started; exit 0")
@@ -111,6 +112,7 @@ func TestExecGitCmd_KillsProcessGroupOnCancel(t *testing.T) {
 // silently succeeding), and it must explain WHAT happened: exec's bare
 // "WaitDelay expired before I/O complete" tells a caller nothing about the hook.
 func TestGit_CommitWithBackgroundingHookStaysBounded(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 	hook := "#!/bin/sh\nsleep 30 &\nexit 0\n"

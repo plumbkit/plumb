@@ -160,6 +160,7 @@ func TestSweepRepoLocks_EvictsIdleKeepsHeld(t *testing.T) {
 // committing to one shared worktree at once both succeed, serialised, and never
 // fail with "index.lock: File exists".
 func TestGit_ConcurrentCommitsSerialise(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 

@@ -16,6 +16,7 @@ import (
 // grandchild would survive and the marker would appear. With group-kill it dies
 // first and the marker never appears.
 func TestRunArgv_KillsProcessGroupOnTimeout(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "grandchild-ran")
 	// Background a delayed touch, then block so the group is still alive at timeout.

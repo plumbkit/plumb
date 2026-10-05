@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -103,6 +102,7 @@ func TestWriteSessionStats_IncludesP95(t *testing.T) {
 // server is not attached. Must never claim "LSP is ready" and must name
 // the concrete next step (opt-in knob or binary-path guidance).
 func TestSessionStart_NoLSPGuidance(t *testing.T) {
+	t.Parallel()
 	// run creates a workspace with one marker file and asserts the output
 	// contains wantStr and does not claim LSP is available.
 	run := func(t *testing.T, markerFile, markerContent, wantStr string) {
@@ -126,22 +126,28 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 	}
 
 	t.Run("java/maven names opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		run(t, "pom.xml", "<project/>", "[lsp.java]")
 	})
 	t.Run("swift names opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		run(t, "Package.swift", "// swift-tools-version:5.9", "[lsp.swift]")
 	})
 	t.Run("zig names opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		run(t, "build.zig", "const std = @import(\"std\");", "[lsp.zig]")
 	})
 	t.Run("kotlin/settings.gradle.kts names opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		run(t, "settings.gradle.kts", "rootProject.name = \"app\"", "[lsp.kotlin]")
 	})
 	t.Run("typescript/tsconfig names opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		run(t, "tsconfig.json", "{}", "[lsp.typescript]")
 	})
 	// Go adapter ships on-by-default: the message explains the binary is likely not installed.
 	t.Run("go names binary-path guidance not opt-in knob", func(t *testing.T) {
+		t.Parallel()
 		ws := t.TempDir()
 		if err := os.WriteFile(filepath.Join(ws, "go.mod"), []byte("module test\ngo 1.21\n"), 0o644); err != nil {
 			t.Fatalf("write go.mod: %v", err)
@@ -165,6 +171,7 @@ func TestSessionStart_NoLSPGuidance(t *testing.T) {
 }
 
 func TestSessionStart_RecommendedFirstStep(t *testing.T) {
+	t.Parallel()
 	// writes a minimal go.mod so detectLanguage returns "Go" for the temp workspace.
 	makeGoWorkspace := func(t *testing.T) string {
 		t.Helper()
@@ -176,6 +183,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	}
 
 	t.Run("active errors suggest diagnostics", func(t *testing.T) {
+		t.Parallel()
 		ws := makeGoWorkspace(t)
 		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
 			"file:///ws/main.go": {makeDiag(0, 0, "undefined: foo", protocol.SevError)},
@@ -191,6 +199,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	})
 
 	t.Run("LSP available no errors suggests workspace_symbols", func(t *testing.T) {
+		t.Parallel()
 		ws := makeGoWorkspace(t)
 		diag := &stubDiagnostics{all: nil}
 		tool := NewSessionStart(func(context.Context) string { return ws }, diag, nil, nil, func() string { return "" }, nil).
@@ -205,6 +214,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	})
 
 	t.Run("no LSP with Go language names binary path guidance", func(t *testing.T) {
+		t.Parallel()
 		ws := makeGoWorkspace(t)
 		// No LSP attached, no topology — topology is wired but returns nil store.
 		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
@@ -230,6 +240,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	// — while per-file routing was answering its queries. Believing it, the agent
 	// stopped asking.
 	t.Run("no primary but routed names the LSP tools", func(t *testing.T) {
+		t.Parallel()
 		ws := t.TempDir()
 		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "" }).
@@ -249,6 +260,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	})
 
 	t.Run("an attached primary outranks the routed advisory", func(t *testing.T) {
+		t.Parallel()
 		ws := makeGoWorkspace(t)
 		tool := NewSessionStart(func(context.Context) string { return ws }, &stubDiagnostics{}, nil, nil, func() string { return "" }, nil).
 			WithLSPLanguage(func() string { return "go" }).
@@ -263,6 +275,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	})
 
 	t.Run("no LSP no language uses default", func(t *testing.T) {
+		t.Parallel()
 		ws := t.TempDir()
 		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
@@ -275,6 +288,7 @@ func TestSessionStart_RecommendedFirstStep(t *testing.T) {
 	})
 
 	t.Run("warning-only diags still suggest workspace_symbols", func(t *testing.T) {
+		t.Parallel()
 		ws := makeGoWorkspace(t)
 		diag := &stubDiagnostics{all: map[string][]protocol.Diagnostic{
 			"file:///ws/main.go": {makeDiag(1, 0, "unused variable", protocol.SevWarning)},
@@ -321,6 +335,7 @@ func TestSessionStart_WorkspaceScale(t *testing.T) {
 }
 
 func TestSessionStart_ClientNameGuidance(t *testing.T) {
+	t.Parallel()
 	// Verifies that Claude Code tool guidance is emitted for exact "claude-code"
 	// and version-qualified "claude-code/<ver>" matches (case-insensitive),
 	// but NOT for names that merely share the prefix (e.g. "claude-codegen").
@@ -344,6 +359,7 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			name := tc.clientName
 			tool := NewSessionStart(
 				func(context.Context) string { return t.TempDir() },
@@ -372,8 +388,10 @@ func TestSessionStart_ClientNameGuidance(t *testing.T) {
 // real Claude Desktop client name ("claude-ai", not "claude-desktop") and
 // leads with the workspace-pinning instruction.
 func TestSessionStart_DesktopGuidance(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"claude-ai", "claude-ai/0.1.0", "claude-desktop"} {
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			tool := NewSessionStart(func(context.Context) string { return t.TempDir() }, nil, nil, nil, func() string { return name }, nil)
 			out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 			if err != nil {
@@ -425,7 +443,9 @@ func TestSessionStart_LanguageOverride(t *testing.T) {
 // arg is honoured only when nothing is attached, and nothing-resolves errors
 // (no daemon-cwd guess).
 func TestSessionStart_WorkspaceResolution(t *testing.T) {
+	t.Parallel()
 	t.Run("mismatch without repin callback falls back to error", func(t *testing.T) {
+		t.Parallel()
 		attached := t.TempDir()
 		var conflict string
 		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil).
@@ -443,6 +463,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 
 	t.Run("explicit arg re-pins when repin callback wired", func(t *testing.T) {
+		t.Parallel()
 		attached := t.TempDir()
 		target := t.TempDir()
 		var got string
@@ -467,6 +488,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 
 	t.Run("attached root returned when explicit arg matches", func(t *testing.T) {
+		t.Parallel()
 		attached := t.TempDir()
 		tool := NewSessionStart(func(context.Context) string { return attached }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+attached+`"}`))
@@ -479,6 +501,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 
 	t.Run("explicit arg used when nothing attached", func(t *testing.T) {
+		t.Parallel()
 		explicit := t.TempDir()
 		tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil)
 		out, err := tool.Execute(context.Background(), json.RawMessage(`{"workspace":"`+explicit+`"}`))
@@ -491,6 +514,7 @@ func TestSessionStart_WorkspaceResolution(t *testing.T) {
 	})
 
 	t.Run("nothing resolves errors (no cwd guess)", func(t *testing.T) {
+		t.Parallel()
 		tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil)
 		if _, err := tool.Execute(context.Background(), json.RawMessage(`{}`)); err == nil {
 			t.Fatal("want noWorkspaceError when nothing resolves, got nil")
@@ -529,131 +553,6 @@ func TestSameDir_SymlinkAlias(t *testing.T) {
 	if !strings.Contains(out, "# Workspace: "+realDir) {
 		t.Errorf("expected realDir %q in output; got:\n%s", realDir, out)
 	}
-}
-
-// TestFormatGitPolicy covers the pure policy formatter: the shell-avoidance
-// steer appears only when writes are enabled, and the "trust it over any cached
-// note" line is always present (it is the line that contradicts a stale
-// "git is read-only" memory at the point of orientation).
-func TestFormatGitPolicy(t *testing.T) {
-	const trust = "trust it over any cached note"
-	const steer = "commit through the `git` tool, not the shell"
-	tests := []struct {
-		name        string
-		policy      GitPolicy
-		wantContain []string
-		wantAbsent  []string
-	}{
-		{
-			name:   "default: writes on, destructive/push off",
-			policy: GitPolicy{AllowWrites: true, ProtectedBranches: []string{"main", "master"}},
-			wantContain: []string{
-				"Commits & staging ENABLED", steer,
-				"Destructive (reset/checkout/rebase): off.",
-				"Push/fetch/pull: off.",
-				"Protected branches: main, master.",
-				trust,
-			},
-		},
-		{
-			name:   "all gates on",
-			policy: GitPolicy{AllowWrites: true, AllowDestructive: true, AllowPush: true, ProtectedBranches: []string{"main"}},
-			wantContain: []string{
-				"Destructive (reset/checkout/rebase): on.",
-				"Push/fetch/pull: on.",
-				"Protected branches: main.",
-				trust,
-			},
-		},
-		{
-			name:        "writes disabled",
-			policy:      GitPolicy{AllowWrites: false},
-			wantContain: []string{"Read-only", "`[git] allow_writes = false`", trust},
-			wantAbsent:  []string{"Commits & staging ENABLED", steer},
-		},
-		{
-			name:        "writes on, no protected branches",
-			policy:      GitPolicy{AllowWrites: true},
-			wantContain: []string{"Commits & staging ENABLED", trust},
-			wantAbsent:  []string{"Protected branches:"},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := formatGitPolicy(tc.policy)
-			for _, want := range tc.wantContain {
-				if !strings.Contains(got, want) {
-					t.Errorf("want %q in:\n%s", want, got)
-				}
-			}
-			for _, absent := range tc.wantAbsent {
-				if strings.Contains(got, absent) {
-					t.Errorf("did not want %q in:\n%s", absent, got)
-				}
-			}
-		})
-	}
-}
-
-// TestSessionStart_GitPolicySection verifies the section is wired into Execute:
-// rendered inside a git repo when the policy is wired, and omitted both when
-// gitPolicyFn is nil and when the workspace is not a git repo.
-func TestSessionStart_GitPolicySection(t *testing.T) {
-	const header = "## Git (via the `git` tool"
-	writesOn := func() GitPolicy {
-		return GitPolicy{AllowWrites: true, ProtectedBranches: []string{"main", "master"}}
-	}
-	gitInit := func(t *testing.T) string {
-		t.Helper()
-		ws := t.TempDir()
-		if out, err := exec.Command("git", "init", ws).CombinedOutput(); err != nil {
-			t.Skipf("git init unavailable: %v (%s)", err, out)
-		}
-		return ws
-	}
-
-	t.Run("rendered in a git repo when policy wired", func(t *testing.T) {
-		ws := gitInit(t)
-		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		if !strings.Contains(out, header) {
-			t.Errorf("want git policy section in a git repo\n%s", out)
-		}
-		if !strings.Contains(out, "Commits & staging ENABLED") {
-			t.Errorf("want ENABLED policy body\n%s", out)
-		}
-	})
-
-	t.Run("omitted when gitPolicyFn is nil", func(t *testing.T) {
-		ws := gitInit(t)
-		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil)
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		if strings.Contains(out, header) {
-			t.Errorf("git policy section should be omitted when gitPolicyFn is nil\n%s", out)
-		}
-	})
-
-	t.Run("omitted outside a git repo", func(t *testing.T) {
-		// A path with no git repo above it: `git -C <missing> branch` errors, so
-		// gitBranch returns "" and the section is gated off. t.TempDir() alone
-		// won't do — in this repo the test temp root lives inside the worktree,
-		// so git would resolve the enclosing plumb repo and report a branch.
-		ws := filepath.Join(t.TempDir(), "no-such-dir")
-		tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, writesOn)
-		out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
-		if err != nil {
-			t.Fatalf("Execute: %v", err)
-		}
-		if strings.Contains(out, header) {
-			t.Errorf("git policy section should be omitted outside a git repo\n%s", out)
-		}
-	})
 }
 
 // TestSessionStart_LeanProfileNote checks the lean note is emitted (with the
@@ -719,6 +618,7 @@ func TestSessionStart_UnwiredProfileSilent(t *testing.T) {
 }
 
 func TestSessionStart_PurposeValidAndPersisted(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	var got string
 	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
@@ -749,6 +649,7 @@ func TestSessionStart_PurposeInvalidRejected(t *testing.T) {
 }
 
 func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	called := false
 	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
@@ -770,6 +671,7 @@ func TestSessionStart_EmptyPurposeIsNoOp(t *testing.T) {
 // Execute call (twice total across the two calls), not accumulating extra
 // invocations from the earlier call.
 func TestSessionStart_Idempotent(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	var purposeCalls, externalIDCalls int
 	tool := NewSessionStart(func(context.Context) string { return ws }, nil, nil, nil, func() string { return "" }, nil).
@@ -805,6 +707,7 @@ func TestSessionStart_Idempotent(t *testing.T) {
 // re-pin callback: absent it arrives false, present it arrives true. The guard
 // itself lives daemon-side (conn_stickypin_test.go); the tool only threads it.
 func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
+	t.Parallel()
 	attached := t.TempDir()
 	target := t.TempDir()
 	var gotForce []bool
@@ -829,6 +732,7 @@ func TestSessionStart_ForceThreadedToRepin(t *testing.T) {
 // cannot fire there today (no pin is held), but the caller's force must still
 // arrive rather than being silently dropped.
 func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
+	t.Parallel()
 	target := t.TempDir()
 	var gotForce bool
 	tool := NewSessionStart(func(context.Context) string { return "" }, nil, nil, nil, func() string { return "" }, nil).
@@ -852,6 +756,7 @@ func TestSessionStart_ForceThreadedOnUnattachedLanguagePin(t *testing.T) {
 // root marker at $HOME must not read as "a server is attached". Unwired (or
 // empty) must render nothing, preserving legacy callers' packets.
 func TestSessionStart_LSPSkipNoteInIdentity(t *testing.T) {
+	t.Parallel()
 	ws := t.TempDir()
 	const note = "LSP skipped: the workspace root is the home directory"
 

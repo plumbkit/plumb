@@ -349,6 +349,35 @@
   errors, or the directory or lock file cannot be opened. Stale comments in
   `workspace_sessions` that said no Go mutex sits in front of the
   session-directory flock were corrected. No behaviour change.
+- **The `internal/tools` test package no longer runs its slow, independent tests
+  one at a time.** (PLAN-452) The package ran all 1,850 top-level tests
+  serially, with zero `t.Parallel()` calls, and most of its wall time was
+  tests waiting on a timer or a child process. Seventy of them now run in
+  parallel, with their table subtests wherever each subtest builds its own
+  repository, store or tool: the slow-LSP budget guards (`slow_lsp_fallback`,
+  `read_symbol_slow_lsp`, `call_hierarchy_slow_lsp`, `move_symbol_ambiguity`,
+  `post_write_diag_label`), the real-git fixtures (`git_ref_reset`,
+  `git_merge`, `git_ref_guard`, `git_intent_warn`, `git_own_writes`,
+  `git_write_timeout`, `git_child_wait`), the `session_start` packet tests, and
+  a few `check_messages` and `find_replace` waits. Go holds a parallel test
+  until every serial test has finished, so none of them overlaps a test that
+  calls `t.Setenv` or `t.Chdir`, stubs a package hook (`syncFileHook`,
+  `budgetWaitHook`, `mutationSilentBudget`, `gitWriteDraining`), or sweeps the
+  shared `pathLocks`, `repoLocks` and `gitRefStates` maps; those stay serial,
+  as does every `mutation_test` run, because `mutationRun` admits one run per
+  process. The detached-git tests in `git_background_test.go` also stay
+  serial: their 1 s foreground deadline is a wall-clock window, and run in
+  parallel under load they failed 6 times in 70 runs, either a `git add`
+  outliving the deadline and detaching, or a queued write reaching a commit
+  that had already detached, so the write was refused. The `TestMain`
+  comment now states the rule for a new parallel test. The same 6,579 tests
+  and subtests run and pass, none removed or loosened. Measured with the old
+  and the new test binary started at the same instant on a machine at load
+  average 70 to 150, so both saw the same competing load: 467 s before and
+  381 s after, then 430 s before and 301 s after (18% and 30% faster). The
+  parallel phase on its own takes about 15 s. `go test -race -count=3
+  ./internal/tools/` passes twice, and the 70 tests pass 20 consecutive
+  `-race` iterations. No behaviour change.
 
 ## 0.21.0 (2026-10-02)
 

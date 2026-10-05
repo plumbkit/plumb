@@ -93,7 +93,9 @@ func TestPostWriteDiagLabel_FreshCleanPassCarriesAuthoritativeLabel(t *testing.T
 // TestPostWriteDiagLabel_StaleEmptyNeverLabelled covers the case where the
 // wait times out AND there is nothing cached to (mis)report.
 func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
+	t.Parallel()
 	t.Run("awaitFresh=false: nothing to report renders nothing", func(t *testing.T) {
+		t.Parallel()
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
 		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{}, nil).text
@@ -108,6 +110,7 @@ func TestPostWriteDiagLabel_StaleEmptyNeverLabelled(t *testing.T) {
 	// answer" rather than "not confirmed". The wait timing out with an empty
 	// cache still gets the snapshot label plus an explicit not-confirmed line.
 	t.Run("awaitFresh=true: timeout still surfaces the labelled snapshot line", func(t *testing.T) {
+		t.Parallel()
 		src := newStubDiag() // never set — nothing cached
 		d := WriteDeps{Diag: src, PostWriteDiagWindow: 10 * time.Millisecond}
 		out := d.postWriteDiagnostics(context.Background(), "file:///foo.go", "before", "after", postWriteDiagOpts{awaitFresh: true}, nil).text

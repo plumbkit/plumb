@@ -40,6 +40,7 @@ import (
 // the half of the assertion that quotes the hook's output deterministic: the
 // bound has to expire after the hook started for there to be output to quote.
 func TestGit_WriteTimeoutIsReportedAsPlumbs(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 	head0 := gitRevParse(t, dir, "HEAD")
@@ -195,6 +196,7 @@ func lockFilesUnder(t *testing.T, dir string) []string {
 // bound must be shown to LET a hook of realistic length finish — and to report
 // that as an ordinary success, not as a timeout.
 func TestGit_CommitWithinTheBoundStillSucceeds(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 	hook := "#!/bin/sh\nsleep 0.2\nexit 0\n"
@@ -251,6 +253,7 @@ func TestGit_CommitWithinTheBoundStillSucceeds(t *testing.T) {
 // deadline — deterministic and network-free (nothing is actually dialed;
 // GIT_SSH_COMMAND replaces the ssh binary git would otherwise exec).
 func TestGit_NetworkTierExpiredContextIsNotAWriteTimeout(t *testing.T) {
+	t.Parallel()
 	requireGit(t)
 	dir := initTestRepo(t)
 
