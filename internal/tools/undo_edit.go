@@ -52,7 +52,9 @@ func (*UndoEdit) Description() string {
 	return "Revert plumb's most recent write to a file — the safe alternative to `git checkout <file>`, which discards EVERY uncommitted change in the file. " +
 		"undo_edit restores only what plumb's last edit_file/write_file changed, and refuses by default if the file was modified since (an external or peer edit), so it never silently clobbers someone else's work (pass force:true to override). " +
 		"If the last write created the file, undo removes it. Single-level per file: it undoes the last write; a fresh write re-arms it. Undo history is per session and cleared on a workspace switch. " +
-		"Very large files (pre-write content over 1 MiB) are not snapshotted, so undo is unavailable for them."
+		"Very large files (pre-write content over 1 MiB) are not snapshotted, so undo is unavailable for them. " +
+		"Both the restore and the removal of a file the write created return a diff of what the undo changed, " +
+		"gated by [edits].show_write_diff."
 }
 
 type undoEditArgs struct {
@@ -138,7 +140,9 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 	uri := "file://" + path
 	wrote, _ := hex.DecodeString(snap.afterSHA)
 	if !snap.existedBefore {
-		cur := t.deps.historySide(path)
+		// contentSide, not historySide: the removed bytes are the response diff
+		// as well as the history row (see wantContent).
+		cur := t.deps.contentSide(path)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return "", fmt.Errorf("undo_edit: removing %q: %w", path, err)
 		}
@@ -151,10 +155,19 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 			Reason:     "undo_edit",
 		})
 		t.notifyUndo(ctx, path, uri, protocol.FileDeleted)
-		return fmt.Sprintf("undid %s: removed %s (it had been newly created)", snap.tool, path), nil
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "undid %s: removed %s (it had been newly created)", snap.tool, path)
+		// The removal is a real change to the file's content, so it gets the same
+		// diff treatment as a delete_file: every line the undo took away.
+		diff := t.deps.responseDiff(ctx, path, sideOf(cur), absentSide())
+		appendSections(&sb, t.deps.relayNoteFor(diff), diff)
+		return sb.String(), nil
 	}
 
-	current, _ := os.ReadFile(path) // best-effort, for the diff only
+	// contentSide, not a bare ReadFile: a force undo of a file deleted since
+	// plumb wrote it must record and show an ABSENT before-side, not an existing
+	// empty file.
+	current := t.deps.contentSide(path)
 	perm := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil && info.Mode().Perm() != 0 {
 		perm = info.Mode().Perm()
@@ -167,7 +180,7 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 		Op:         history.OpRevert,
 		Tool:       "undo_edit",
 		Path:       path,
-		Before:     history.SideFromBytes(current),
+		Before:     current,
 		After:      history.SideFromBytes([]byte(snap.before)),
 		RevertsSHA: wrote,
 		Reason:     "undo_edit",
@@ -175,7 +188,7 @@ func (t *UndoEdit) applyUndo(ctx context.Context, path string, snap undoSnapshot
 	t.notifyUndo(ctx, path, uri, protocol.FileChanged)
 	t.deps.recordWritten(ctx, path, res.written)
 	t.deps.notifyTopology(path)
-	return t.formatUndoRestore(path, string(current), snap), nil
+	return t.formatUndoRestore(ctx, path, current, snap), nil
 }
 
 // notifyUndo mirrors the post-write notification the write tools perform, so the
@@ -192,14 +205,12 @@ func (t *UndoEdit) notifyUndo(ctx context.Context, path, uri string, ct protocol
 	invalidateCache(t.deps.Cache, uri)
 }
 
-func (t *UndoEdit) formatUndoRestore(path, current string, snap undoSnapshot) string {
+func (t *UndoEdit) formatUndoRestore(ctx context.Context, path string, current history.Side, snap undoSnapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "undid %s: restored %s %s", snap.tool, path, sizeSummary(snap.before))
-	if t.deps.showWriteDiff() {
-		if d := unifiedDiff(path, current, snap.before); d != "" {
-			sb.WriteString("\n")
-			sb.WriteString(d)
-		}
-	}
+	// The restored side is in hand; the replaced side is whatever contentSide
+	// read, absent when the file had been deleted.
+	diff := t.deps.responseDiff(ctx, path, sideOf(current), presentSide(snap.before))
+	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
 	return sb.String()
 }

@@ -22,9 +22,7 @@ func (s *Store) run() {
 	defer tick.Stop()
 	var batch []Item
 	flushAll := func() {
-		batch = s.drainChannel(batch)
-		batch = append(batch, s.takeOverflow()...)
-		s.writeBatch(batch)
+		s.writeBatch(s.takeQueued(batch))
 		batch = nil
 	}
 	for {
@@ -45,22 +43,6 @@ func (s *Store) run() {
 		case reply := <-s.syncReq:
 			flushAll()
 			close(reply)
-		}
-	}
-}
-
-// drainChannel appends every item already buffered in the channel, without
-// waiting — channel items are older than any overflow item.
-func (s *Store) drainChannel(batch []Item) []Item {
-	for {
-		select {
-		case it, ok := <-s.ch:
-			if !ok {
-				return batch
-			}
-			batch = append(batch, it)
-		default:
-			return batch
 		}
 	}
 }
@@ -104,75 +86,125 @@ func (s *Store) render(it Item, maxDiff int64) rendered {
 	return r
 }
 
+// landedRow is one landed row's (call, path) → seq entry, remembered only once the
+// batch commits: a rolled-back seq is reused by AUTOINCREMENT, so remembering it
+// early would link a later revert to another call's row.
+type landedRow struct {
+	key string
+	seq int64
+}
+
+// batchTally is what one batch must persist to meta.
+type batchTally struct {
+	drops, errs, overflow int64
+	dropAt                time.Time
+	lastErr               error
+}
+
 // writeBatch commits items in one transaction. Each row runs under a SAVEPOINT:
 // a failing row is retried as a marker; a marker that fails too is dropped and
 // counted — never retried, so a poison item cannot wedge the writer.
+//
+// No count is ever cleared without reaching meta: the carried-over counts are
+// taken only once the transaction has begun, and a batch that cannot persist
+// them (or loses its rows outright) gives them back, with its own losses, for
+// the next batch to write.
 func (s *Store) writeBatch(items []Item) {
-	drops, dropAt := s.takeDrops()
-	if len(items) == 0 && drops == 0 {
+	if len(items) == 0 && !s.hasPendingCounts() {
 		return
 	}
 	defer s.release(items)
 	tx, err := s.db.Begin()
 	if err != nil {
 		slog.Warn("history: begin batch", "err", err, "rows", len(items))
+		s.giveBack(int64(len(items)), time.Now(), 0)
 		return
 	}
-	var errs int64
-	var overflow int64
-	var lastErr error
-	maxDiff := s.opts.MaxDiffBytes()
-	for _, it := range items {
-		r := s.render(it, maxDiff)
-		if r.content == ContentOverflow {
-			overflow++
-		}
-		if err := s.insertSavepoint(tx, it, r); err != nil {
-			if err2 := s.insertSavepoint(tx, marker(it), rendered{content: ContentOverflow}); err2 != nil {
-				drops++
-				dropAt = time.Now()
-			} else {
-				overflow++
-			}
-			errs++
-			lastErr = err
-		}
-	}
-	s.persistMeta(tx, drops, dropAt, errs, lastErr, overflow)
+	var t batchTally
+	t.drops, t.dropAt, t.errs = s.takeCounts()
+	links := s.insertAll(tx, items, &t)
+	// A failed meta write does not sink the rows: they still commit, and the
+	// counts go back (exactly once, below) for the next batch to persist.
+	metaErr := s.persistMeta(tx, t)
 	if err := tx.Commit(); err != nil {
 		slog.Warn("history: commit batch", "err", err, "rows", len(items))
+		_ = tx.Rollback()
+		// Lost: every row that had landed (t.drops already holds the ones that
+		// never did) — so each item is counted once.
+		s.giveBack(t.drops+int64(len(links)), time.Now(), t.errs)
+		return
+	}
+	if metaErr != nil {
+		slog.Warn("history: persist meta", "err", metaErr)
+		s.giveBack(t.drops, t.dropAt, t.errs)
+	}
+	for _, l := range links {
+		s.remember(l.key, l.seq)
 	}
 }
 
-func (s *Store) insertSavepoint(tx *sql.Tx, it Item, r rendered) error {
-	if _, err := tx.Exec(`SAVEPOINT row`); err != nil {
-		return err
+// insertAll inserts each item (retrying a failure as a marker) and tallies what
+// meta must record. An overflow row is counted only once it has landed.
+func (s *Store) insertAll(tx *sql.Tx, items []Item, t *batchTally) []landedRow {
+	maxDiff := s.opts.MaxDiffBytes()
+	var links []landedRow
+	for _, it := range items {
+		r := s.render(it, maxDiff)
+		l, err := s.insertSavepoint(tx, it, r)
+		if err == nil {
+			if r.content == ContentOverflow {
+				t.overflow++
+			}
+			links = append(links, l)
+			continue
+		}
+		t.errs++
+		t.lastErr = err
+		// The retry is metadata only, and drops the revert link too: a link
+		// that failed its foreign key the first time fails it again.
+		m := marker(it)
+		m.RevertsOwnCall, m.RevertsSHA = false, nil
+		if l, err := s.insertSavepoint(tx, m, rendered{content: ContentOverflow}); err == nil {
+			t.overflow++
+			links = append(links, l)
+		} else {
+			t.drops++
+			t.dropAt = time.Now()
+		}
 	}
-	if err := s.insert(tx, it, r); err != nil {
+	return links
+}
+
+func (s *Store) insertSavepoint(tx *sql.Tx, it Item, r rendered) (landedRow, error) {
+	if _, err := tx.Exec(`SAVEPOINT row`); err != nil {
+		return landedRow{}, err
+	}
+	l, err := s.insert(tx, it, r)
+	if err != nil {
 		_, _ = tx.Exec(`ROLLBACK TO row`)
 		_, _ = tx.Exec(`RELEASE row`)
-		return err
+		return landedRow{}, err
 	}
-	_, err := tx.Exec(`RELEASE row`)
-	return err
+	_, err = tx.Exec(`RELEASE row`)
+	return l, err
 }
 
-func (s *Store) insert(tx *sql.Tx, it Item, r rendered) error {
+func (s *Store) insert(tx *sql.Tx, it Item, r rendered) (landedRow, error) {
 	root := paths.Canonical(it.Workspace)
 	wsID, err := internWorkspace(tx, root)
 	if err != nil {
-		return err
+		return landedRow{}, err
 	}
 	path := paths.Canonical(it.Path)
 	pathID, err := internPath(tx, wsID, relTo(root, path))
 	if err != nil {
-		return err
+		return landedRow{}, err
 	}
 	var fromID sql.NullInt64
 	if it.From != "" {
 		id, err := internPath(tx, wsID, relTo(root, paths.Canonical(it.From)))
 		if err != nil {
-			return err
+			return landedRow{}, err
 		}
 		fromID = sql.NullInt64{Int64: id, Valid: true}
 	}
@@ -186,14 +218,13 @@ func (s *Store) insert(tx *sql.Tx, it Item, r rendered) error {
 		shaOrNil(it.Before), shaOrNil(it.After), sizeOrNil(it.Before), sizeOrNil(it.After),
 		r.added, r.removed, string(r.content), r.redactions, r.diff, reverts, it.Reason)
 	if err != nil {
-		return err
+		return landedRow{}, err
 	}
 	seq, err := res.LastInsertId()
 	if err != nil {
-		return err
+		return landedRow{}, err
 	}
-	s.remember(it.CallID+"\x00"+path, seq)
-	return nil
+	return landedRow{key: it.CallID + "\x00" + path, seq: seq}, nil
 }
 
 // revertTarget resolves reverts_seq on the writer (spec §5.1): own-call reverts
@@ -204,8 +235,13 @@ func (s *Store) revertTarget(tx *sql.Tx, it Item, path string, pathID int64) sql
 	var err error
 	switch {
 	case it.RevertsOwnCall:
+		// A remembered seq may since have been pruned; trust it only if the
+		// row is still there, else fall back to the query below.
 		if v, ok := s.link[it.CallID+"\x00"+path]; ok {
-			return sql.NullInt64{Int64: v, Valid: true}
+			var one int
+			if tx.QueryRow(`SELECT 1 FROM changes WHERE seq=?`, v).Scan(&one) == nil {
+				return sql.NullInt64{Int64: v, Valid: true}
+			}
 		}
 		err = tx.QueryRow(`SELECT seq FROM changes WHERE call_id=? AND path_id=? ORDER BY seq DESC LIMIT 1`, it.CallID, pathID).Scan(&seq)
 	case len(it.RevertsSHA) > 0:
@@ -269,7 +305,7 @@ func shaOrNil(s Side) any {
 	if !s.Exists {
 		return nil
 	}
-	return s.SHA
+	return s.SHA()
 }
 
 func sizeOrNil(s Side) any {
@@ -279,26 +315,37 @@ func sizeOrNil(s Side) any {
 	return s.Size
 }
 
-func (s *Store) persistMeta(tx *sql.Tx, drops int64, dropAt time.Time, errs int64, lastErr error, overflow int64) {
+// persistMeta writes the batch's tally and reports the first failure, so the
+// caller can give the counts back rather than lose them.
+func (s *Store) persistMeta(tx *sql.Tx, t batchTally) error {
+	var first error
+	keep := func(err error) {
+		if err != nil && first == nil {
+			first = err
+		}
+	}
 	bump := func(key string, n int64) {
 		if n == 0 {
 			return
 		}
-		_, _ = tx.Exec(`INSERT INTO meta(key, value) VALUES (?, ?)
+		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES (?, ?)
 			ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + ?`, key, strconv.FormatInt(n, 10), n)
+		keep(err)
 	}
 	set := func(key, v string) {
-		_, _ = tx.Exec(`INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, v)
+		_, err := tx.Exec(`INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, v)
+		keep(err)
 	}
-	bump("dropped_rows", drops)
-	if drops > 0 {
-		set("last_drop_at_ms", strconv.FormatInt(dropAt.UnixMilli(), 10))
+	bump("dropped_rows", t.drops)
+	if t.drops > 0 {
+		set("last_drop_at_ms", strconv.FormatInt(t.dropAt.UnixMilli(), 10))
 	}
-	bump("overflow_rows", overflow)
-	bump("write_errors", errs)
-	if lastErr != nil {
-		slog.Warn("history: row insert failed", "err", lastErr, "count", errs)
-		set("last_error", lastErr.Error())
+	bump("overflow_rows", t.overflow)
+	bump("write_errors", t.errs)
+	if t.lastErr != nil {
+		slog.Warn("history: row insert failed", "err", t.lastErr, "count", t.errs)
+		set("last_error", t.lastErr.Error())
 		set("last_error_at_ms", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	}
+	return first
 }

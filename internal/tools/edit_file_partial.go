@@ -45,7 +45,7 @@ func (t *EditFile) executePartial(
 	// both replies face the same window and one regression test pins both to
 	// the written version (#528). The output order is unchanged.
 	var sb strings.Builder
-	sb.WriteString(t.formatPartialHeader(path, original, content, applied, len(edits), writeErr, res.written))
+	sb.WriteString(t.formatPartialHeader(ctx, path, original, content, applied, len(edits), writeErr, res.written))
 	sb.WriteString(formatPartialEditsResults(results))
 	sb.WriteString(post.String())
 	return sb.String()
@@ -61,14 +61,14 @@ func countApplied(results []partialEditResult) int {
 	return n
 }
 
-func (t *EditFile) formatPartialHeader(path, original, content string, applied, total int, writeErr error, written fileSnapshot) string {
+func (t *EditFile) formatPartialHeader(ctx context.Context, path, original, content string, applied, total int, writeErr error, written fileSnapshot) string {
 	switch {
 	case writeErr != nil:
 		return fmt.Sprintf("partial apply: write failed after %d successful edit(s): %v\n\n", applied, writeErr)
 	case applied == 0:
 		return "partial apply: all edits failed — file not modified\n\n"
 	default:
-		return t.formatPartialAppliedHeader(path, original, content, applied, total, written)
+		return t.formatPartialAppliedHeader(ctx, path, original, content, applied, total, written)
 	}
 }
 
@@ -77,7 +77,7 @@ func (t *EditFile) formatPartialHeader(path, original, content string, applied, 
 // line-change summary, and (when enabled) the diff. The mtime is the version the
 // write published, not a re-stat of the path, for the reason formatEditFileSuccess
 // gives (#528).
-func (t *EditFile) formatPartialAppliedHeader(path, original, content string, applied, total int, written fileSnapshot) string {
+func (t *EditFile) formatPartialAppliedHeader(ctx context.Context, path, original, content string, applied, total int, written fileSnapshot) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "partial apply: applied %d of %d edit(s) to %s (%d bytes)\n",
 		applied, total, path, len(content))
@@ -88,8 +88,8 @@ func (t *EditFile) formatPartialAppliedHeader(path, original, content string, ap
 		fmt.Fprintf(&sb, "%s\n", s)
 	}
 	if t.deps.showWriteDiff() {
-		if d := unifiedDiff(path, original, content); d != "" {
-			sb.WriteString(d)
+		if d := t.deps.gatedDiff(ctx, path, unifiedDiff(path, original, content)); d != "" {
+			appendSections(&sb, t.deps.relayNoteFor(d), d)
 		}
 	}
 	sb.WriteString("\n")

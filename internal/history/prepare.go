@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"path/filepath"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/textdiff"
 )
 
@@ -11,6 +12,10 @@ import (
 type Policy struct {
 	SensitiveGlobs  []string
 	MaxContentBytes int64
+	// Sensitive is the caller's own verdict for the change, for a rule this
+	// package cannot see: the daemon also asks the SOURCE project's globs about a
+	// cross-project copy or rename. It only ever adds withholding.
+	Sensitive bool
 }
 
 // binarySniffBytes matches internal/tools/walk.go (the ripgrep/git heuristic).
@@ -21,12 +26,15 @@ const binarySniffBytes = 8000
 // renames need no diff; sensitive paths keep counts and shas only; oversized
 // sides are stripped. Everything else is left for the writer.
 func Prepare(it Item, p Policy) Item {
+	// Fix the hashes first: every branch below may strip the content they are
+	// computed from.
+	it.Before, it.After = settled(it.Before), settled(it.After)
 	switch {
 	case it.Kind == KindDir:
 		it.Content = ContentNone
-	case it.Op == OpRename && bytes.Equal(it.Before.SHA, it.After.SHA):
+	case it.Op == OpRename && bytes.Equal(it.Before.SHA(), it.After.SHA()):
 		it.Content = ContentNone
-	case MatchSensitive(p.SensitiveGlobs, it.Workspace, it.Path):
+	case p.Sensitive || IsSensitiveChange(p.SensitiveGlobs, it.Workspace, it.Path, it.From):
 		if carried(it.Before) && carried(it.After) {
 			it.Added, it.Removed = textdiff.Counts(textdiff.ComputeExact(string(it.Before.Content), string(it.After.Content)))
 		}
@@ -50,8 +58,47 @@ func limit(p Policy) int64 {
 func carried(s Side) bool                { return !s.Exists || s.Content != nil }
 func tooBig(s Side, maxBytes int64) bool { return s.Exists && (s.Content == nil || s.Size > maxBytes) }
 
+// IsSensitiveChange reports whether a change to path (with source from, "" if
+// none) under workspace root touches a sensitive file under ANY spelling the row
+// could end up filed under or the content could come from. It is the ONE rule:
+// the history store and anything that shows a write's content (a response diff)
+// must both ask it, or they disagree about what may be seen.
+//
+// It checks:
+//
+//   - the path as the tool resolved it AND as the writer will store it
+//     (paths.Canonical follows symlinks, so a write through `notes.txt -> .env`
+//     is filed under .env and must be classified as .env);
+//   - the copy/rename SOURCE (From): a copy of .env carries .env's content to
+//     a destination whose own name matches nothing;
+//   - against the root as given and as canonicalised, so a workspace-relative
+//     glob still matches when the root and the path disagree on an alias
+//     (/var vs /private/var, a symlinked checkout).
+//
+// Classification runs before the queue, so a miss here stores plaintext.
+func IsSensitiveChange(globs []string, root, path, from string) bool {
+	if len(globs) == 0 {
+		return false
+	}
+	roots := []string{root, paths.Canonical(root)}
+	cands := []string{path, paths.Canonical(path)}
+	if from != "" {
+		cands = append(cands, from, paths.Canonical(from))
+	}
+	for _, c := range cands {
+		for _, r := range roots {
+			if MatchSensitive(globs, r, c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // MatchSensitive reports whether path matches any glob by base name or by its
-// path relative to root ("/"-separated).
+// path relative to root ("/"-separated). It matches the one spelling it is
+// given; IsSensitiveChange is what tries every spelling a change can carry, and
+// is what callers deciding whether to show content must use.
 func MatchSensitive(globs []string, root, path string) bool {
 	base := filepath.Base(path)
 	rel, err := filepath.Rel(root, path)

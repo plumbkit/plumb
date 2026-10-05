@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -60,6 +61,8 @@ func (*CopyFile) Description() string {
 		"Refuses to overwrite an existing destination unless overwrite=true. " +
 		"Cross-device copies are supported. " +
 		"Notifies the LSP server with FileCreated so diagnostics update immediately. " +
+		"The response shows the diff of what landed at the destination — every line added, plus the " +
+		"destination it replaced when overwrite=true — gated by [edits].show_write_diff. " +
 		"To move or rename a file, use rename_file instead."
 }
 
@@ -112,7 +115,10 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	if err != nil {
 		return "", err
 	}
-	destBefore := t.deps.historySide(to)
+	// contentSide, not historySide: the destination's bytes feed the response
+	// diff as well as the history row, so the read must happen when EITHER wants
+	// them (see wantContent).
+	destBefore := t.deps.contentSide(to)
 	res, err := safeWrite(to, data, perm)
 	if err != nil {
 		return "", fmt.Errorf("copy_file: writing destination: %w", err)
@@ -126,7 +132,23 @@ func (t *CopyFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		After:  history.SideFromBytes(data),
 	})
 	t.copyFilePostWrite(ctx, to, res.written)
-	return fmt.Sprintf("copied %s → %s (%d bytes)", from, to, len(data)), nil
+	return t.formatCopyResult(ctx, from, to, data, destBefore), nil
+}
+
+// formatCopyResult renders the response: the summary, the relay instruction when
+// there is content to relay, then the diff of what landed at the destination. A
+// copy onto a free path renders every line added; an overwrite additionally
+// renders the destination it replaced, which is the part nothing else in the
+// transcript shows.
+func (t *CopyFile) formatCopyResult(ctx context.Context, from, to string, data []byte, destBefore history.Side) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "copied %s → %s (%d bytes)", from, to, len(data))
+	// The source goes to the gate with the destination, as one change: a copy of
+	// a sensitive SOURCE to a name matching no glob would otherwise print the
+	// secret.
+	diff := t.deps.responseDiffAcross(ctx, to, from, sideOf(destBefore), bytesSide(data))
+	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
+	return sb.String()
 }
 
 func parseCopyFileArgs(raw json.RawMessage) (copyFileArgs, error) {

@@ -64,6 +64,14 @@ is **on**. For `[memory] generated_summaries` it is **off** — fewer files writ
 into the workspace. Getting that backwards would silently invert the protection,
 so each is stated in `oneWaySafeValue` rather than left to a convention.
 
+Some switches have no safe direction. `[history] enabled` is one: off leaves no
+record of what agents wrote in the repository, and on overrides a user who
+turned history off globally. It is therefore trust-gated, not one-way.
+
+`[history] sensitive_globs` is a list, so its rule is a union: a project's globs
+are added to the user's, and none of the user's can be removed. A narrower list
+would let a repository's own `.env` reach `history.db` and the write response.
+
 `[edits] rate_limit_per_minute` needs its own rule again: `0` means *unlimited*,
 so it is the weakest value, not the strongest, and a plain `min()` would let a
 project remove the user's cap by asking for zero.

@@ -112,10 +112,11 @@ func (d WriteDeps) rollbackNewErrors(ctx context.Context, req rollbackRequest) e
 	if !req.existedBefore {
 		outcome = req.path + " was removed (it did not exist before this call)"
 	}
-	return fmt.Errorf("%s: refused — %s, so the write was ROLLED BACK and %s (fail_on_new_errors).\n"+
+	return withRevertNote(fmt.Errorf("%s: refused — %s, so the write was ROLLED BACK and %s (fail_on_new_errors).\n"+
 		"%sFix the cause and retry, or drop fail_on_new_errors to land the change anyway.%s",
 		req.tool, newErrorsPhrase(req.diag.delta), outcome,
-		renderNewErrorList(req.diag.delta), req.diag.text)
+		renderNewErrorList(req.diag.delta), req.diag.text),
+		[]revertedPath{{path: req.path, before: req.before, after: req.wrote}})
 }
 
 // revertWrite restores the file, or explains why it would not. A write that

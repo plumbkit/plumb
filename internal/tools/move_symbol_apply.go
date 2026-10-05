@@ -42,7 +42,7 @@ func applyMovePlans(plans []movePlan, onApplied func(), sink historySink) ([]str
 			if rbErr := rollbackMove(written, sink); rbErr != nil {
 				return nil, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
-			return nil, fmt.Errorf("writing %s: %w", p.path, err)
+			return nil, withRevertNote(fmt.Errorf("writing %s: %w", p.path, err), moveReverted(written))
 		}
 		plans[i].written = res.written
 		op := history.OpUpdate
@@ -66,6 +66,16 @@ func applyMovePlans(plans []movePlan, onApplied func(), sink historySink) ([]str
 		out[i] = p.path
 	}
 	return out, nil
+}
+
+// moveReverted lists the paths a move rollback put back, for the failed call's
+// revert summary.
+func moveReverted(written []movePlan) []revertedPath {
+	out := make([]revertedPath, 0, len(written))
+	for _, p := range written {
+		out = append(out, revertedPath{path: p.path, before: string(p.before), after: string(p.after)})
+	}
+	return out
 }
 
 func rollbackMove(written []movePlan, sink historySink) error {

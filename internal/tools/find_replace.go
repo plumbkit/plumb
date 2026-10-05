@@ -39,14 +39,14 @@ type fileChange struct {
 	newData []byte
 }
 
-// maxFindReplaceDiffFiles caps how many per-file unified diffs are rendered in
-// a find_replace response. Beyond it, a "+N more file(s)" summary is appended.
-const maxFindReplaceDiffFiles = 20
-
-// maxFindReplaceDiffBytes bounds the pre-replacement content captured for the
-// diff, mirroring write_file's 200 KiB cap. A larger file still gets replaced;
-// only its inline diff is skipped.
-const maxFindReplaceDiffBytes = 200 * 1024
+// find_replace's two diff caps are the shared response-diff caps
+// (write_diff_response.go), kept as local aliases so a reader of this file still
+// sees which knobs bound it. They are not separate policy: the capture decision
+// below and the render cap in every other write tool move together.
+const (
+	maxFindReplaceDiffFiles = maxResponseDiffFiles
+	maxFindReplaceDiffBytes = maxResponseDiffBytes
+)
 
 func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
 	var d WriteDeps
@@ -143,7 +143,7 @@ func (t *findReplaceTool) Execute(ctx context.Context, args json.RawMessage) (st
 		formatted, formatErrs = runFormatterOnFiles(ctx, changes)
 	}
 
-	out := formatFindReplaceOutput(changes, a, totalReplacements, formatted, formatErrs, wantDiff, truncated)
+	out := formatFindReplaceOutput(ctx, &t.deps, changes, a, totalReplacements, formatted, formatErrs, wantDiff, truncated)
 	if len(writeErrs) > 0 {
 		return out, errors.Join(writeErrs...)
 	}
@@ -310,21 +310,29 @@ func applyFindReplace(data []byte, a findReplaceArgs, re *regexp.Regexp) (int, [
 	}
 }
 
-// findReplaceProcessFile writes newData to path, checking the rate limiter,
-// dirty state, and notifying the LSP after a successful write.
-func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, oldData, newData []byte, a findReplaceArgs) error {
+// findReplaceProcessFile re-scans path under its lock and writes the result,
+// checking the rate limiter and dirty state and notifying the LSP afterwards.
+// The worker's scan ran unlocked, so a write that landed in between would
+// otherwise be overwritten by a replacement computed from the older bytes, and
+// history would record those older bytes as Before. It returns the count and
+// both sides actually written; a count of 0 means the file no longer matches
+// and nothing was written.
+func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp) (int, []byte, []byte, error) {
 	if !t.deps.limiter(ctx).Allow() {
-		return rateLimitError("find_replace", t.deps.limiter(ctx))
+		return 0, nil, nil, rateLimitError("find_replace", t.deps.limiter(ctx))
 	}
 	unlock := lockPath(path)
 	if !a.DirtyOk && dirtyBlocksWrite(ctx, t.deps, path) {
 		unlock()
-		return fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
+		return 0, nil, nil, fmt.Errorf("find_replace: %q has uncommitted changes; review and commit first, or pass dirty_ok: true to proceed", path)
+	}
+	count, oldData, newData := findReplaceScanFile(path, a, re, false, true)
+	if count == 0 {
+		unlock()
+		return 0, nil, nil, nil
 	}
 	res, writeErr := safeWrite(path, newData, 0o644)
 	if writeErr == nil {
-		// before was read outside the lock (find_replace's existing design).
-		// If another writer intervened, the gap shows as "unrecorded change", which is accurate.
 		t.deps.recordHistory(ctx, history.Change{
 			Op:     history.OpUpdate,
 			Tool:   "find_replace",
@@ -335,14 +343,14 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 	}
 	unlock()
 	if writeErr != nil {
-		return fmt.Errorf("find_replace: writing %s: %w", path, writeErr)
+		return 0, nil, nil, fmt.Errorf("find_replace: writing %s: %w", path, writeErr)
 	}
 	if err := notifyLSP(ctx, t.deps.Client, path, protocol.FileChanged); err != nil {
 		slog.Warn("find_replace: LSP notification failed", "path", path, "err", err)
 	}
 	invalidateCache(t.deps.Cache, "file://"+path)
 	t.deps.recordWritten(ctx, path, res.written)
-	return nil
+	return count, oldData, newData, nil
 }
 
 // findReplaceWorkerStep scans one file and, when it changed and is within the
@@ -350,7 +358,7 @@ func (t *findReplaceTool) findReplaceProcessFile(ctx context.Context, path strin
 // The second return is false when the file should be skipped (no match, over
 // budget). On a write error or over-budget claim it cancels the shared context.
 func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path string, a findReplaceArgs, re *regexp.Regexp, wantDiff bool, claimed *atomic.Int64, maxFiles int64, truncated *atomic.Bool, cancel context.CancelFunc) (fileChange, bool) {
-	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff, t.deps.historyOn())
+	count, oldData, newData := findReplaceScanFile(path, a, re, wantDiff, false)
 	if count == 0 {
 		return fileChange{}, false
 	}
@@ -360,9 +368,18 @@ func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path strin
 		return fileChange{}, false
 	}
 	if !a.dryRun {
-		if err := t.findReplaceProcessFile(wctx, path, oldData, newData, a); err != nil {
+		n, before, after, err := t.findReplaceProcessFile(wctx, path, a, re)
+		if err != nil {
 			cancel()
 			return fileChange{path: path, count: count, err: err}, true
+		}
+		if n == 0 {
+			return fileChange{}, false
+		}
+		// Report what was written, not what the unlocked scan predicted.
+		count, oldData, newData = n, before, after
+		if len(oldData) > maxFindReplaceDiffBytes {
+			oldData = nil
 		}
 	}
 	fc := fileChange{path: path, count: count}
@@ -442,7 +459,7 @@ func (t *findReplaceTool) findReplaceRunWorkers(ctx context.Context, files []str
 	return changes, writeErrs, totalReplacements, truncated.Load()
 }
 
-func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff, truncated bool) string {
+func formatFindReplaceOutput(ctx context.Context, deps *WriteDeps, changes []fileChange, a findReplaceArgs, totalReplacements, formatted int, formatErrs []error, wantDiff, truncated bool) string {
 	var sb strings.Builder
 	if a.dryRun {
 		sb.WriteString("DRY RUN — no files modified.\n\n")
@@ -459,7 +476,7 @@ func formatFindReplaceOutput(changes []fileChange, a findReplaceArgs, totalRepla
 		fmt.Fprintf(&sb, "  %s  (%d)\n", findReplaceRelPath(a.Path, c.path), c.count)
 	}
 	if wantDiff {
-		appendFindReplaceDiffs(&sb, changes, a.Path)
+		appendFindReplaceDiffs(ctx, &sb, deps, changes, a.Path)
 	}
 	if a.dryRun && len(changes) > 0 {
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
@@ -488,28 +505,43 @@ func findReplaceRelPath(root, path string) string {
 }
 
 // appendFindReplaceDiffs writes a per-file unified diff for up to
-// maxFindReplaceDiffFiles changes, then a "+N more file(s)" summary when the
-// set is larger. Files captured without diff content (oversized or unchanged
-// rendering) are skipped silently.
-func appendFindReplaceDiffs(sb *strings.Builder, changes []fileChange, root string) {
-	shown := 0
+// maxResponseDiffFiles changes, then a "+N more file(s)" summary when the set is
+// larger. The relay instruction is emitted once, above the diffs.
+//
+// A file whose captured content exceeds maxResponseDiffBytes is skipped (its
+// diff was never captured); a sensitive path renders the withholding marker
+// instead of its content. Both are silent about nothing: a skipped file still
+// has its summary line above.
+func appendFindReplaceDiffs(ctx context.Context, sb *strings.Builder, deps *WriteDeps, changes []fileChange, root string) {
+	var sections []string
 	for _, c := range changes {
-		if shown >= maxFindReplaceDiffFiles {
+		if len(sections) >= maxResponseDiffFiles {
 			break
 		}
-		if c.oldData == nil || len(c.oldData) > maxFindReplaceDiffBytes {
+		if c.oldData == nil || len(c.oldData) > maxResponseDiffBytes {
 			continue
 		}
-		d := unifiedDiff(findReplaceRelPath(root, c.path), string(c.oldData), string(c.newData))
-		if d == "" {
-			continue
+		// The gate gets the ABSOLUTE path, not rel. MatchSensitive resolves its
+		// globs against the workspace root, and handing it a path relative to the
+		// SEARCH root makes that filepath.Rel fail — which degrades every
+		// path-shaped glob ("config/secrets.*") to a base-name match and silently
+		// un-withholds the file. rel is for the diff header only.
+		rel := findReplaceRelPath(root, c.path)
+		if d := deps.gatedDiff(ctx, c.path, unifiedDiff(rel, string(c.oldData), string(c.newData))); d != "" {
+			sections = append(sections, d)
 		}
+	}
+	if relay := deps.relayNoteFor(sections...); relay != "" {
+		sb.WriteString("\n")
+		sb.WriteString(relay)
+		sb.WriteString("\n")
+	}
+	for _, d := range sections {
 		sb.WriteString("\n")
 		sb.WriteString(d)
 		sb.WriteString("\n")
-		shown++
 	}
-	if remaining := len(changes) - maxFindReplaceDiffFiles; shown >= maxFindReplaceDiffFiles && remaining > 0 {
+	if remaining := len(changes) - maxResponseDiffFiles; len(sections) >= maxResponseDiffFiles && remaining > 0 {
 		fmt.Fprintf(sb, "\n… +%d more file(s) (diffs omitted)\n", remaining)
 	}
 }

@@ -122,3 +122,38 @@ func (t *T) Execute() {
 		t.Errorf("case 3: expected p.T.Execute to be allowed")
 	}
 }
+
+// Each trigger needs its OWN later Requires call. A function that records one
+// of its two writes used to pass, because any one Requires call anywhere in
+// the body satisfied the rule (reviewer mutation: drop the dir branch's record
+// in delete_file's removeTarget, and the guard stayed green).
+func TestCoCallMatchesEachTrigger(t *testing.T) {
+	rule := CoCallRule{Triggers: []string{"safeWrite", "os.Remove"}, Requires: "recordHistory"}
+	cases := []struct {
+		name, body string
+		want       bool
+		wantPos    string
+	}{
+		{"one write, one record", "safeWrite(p, nil)\n\trecordHistory(c)", true, ""},
+		{"both branches record", "if dir {\n\t\tos.Remove(p)\n\t\trecordHistory(c)\n\t} else {\n\t\tsafeWrite(p, nil)\n\t\trecordHistory(c)\n\t}", true, ""},
+		{"one branch forgets", "if dir {\n\t\tos.Remove(p)\n\t} else {\n\t\tsafeWrite(p, nil)\n\t\trecordHistory(c)\n\t}", false, "src.go:4"},
+		{"second write after the only record", "safeWrite(p, nil)\n\trecordHistory(c)\n\tos.Remove(q)", false, "src.go:5"},
+		{"record before the write", "recordHistory(c)\n\tsafeWrite(p, nil)", false, "src.go:4"},
+		{"two records for one write", "safeWrite(p, nil)\n\trecordHistory(c)\n\trecordHistory(d)", true, ""},
+	}
+	for _, tc := range cases {
+		src := "package p\nfunc F() {\n\t" + tc.body + "\n}"
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, "src.go", src, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		s := InspectFuncDecl(fset, "p", "src.go", f.Decls[0].(*ast.FuncDecl), rule)
+		if !s.Triggered || s.Satisfied != tc.want {
+			t.Errorf("%s: triggered=%v satisfied=%v, want satisfied=%v", tc.name, s.Triggered, s.Satisfied, tc.want)
+		}
+		if !tc.want && s.Pos != tc.wantPos {
+			t.Errorf("%s: reported at %s, want the unrecorded write at %s", tc.name, s.Pos, tc.wantPos)
+		}
+	}
+}
