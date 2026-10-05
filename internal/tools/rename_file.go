@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
@@ -60,6 +61,8 @@ func (*RenameFile) Description() string {
 		"Refuses to overwrite an existing destination unless overwrite=true. The LSP server " +
 		"is notified with FileDeleted (source) and FileCreated (destination) so symbol " +
 		"indexes and diagnostics update immediately. " +
+		"A rename changes no content, so the response shows a diff only when the move destroyed an " +
+		"existing destination (that destination's content), gated by [edits].show_write_diff. " +
 		"To duplicate a file without removing the source, use copy_file instead. " +
 		"For LSP-semantic identifier renames across files, use rename_symbol instead."
 }
@@ -122,6 +125,15 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	if err := renameFilePreconditions(ctx, t.deps, from, to, a); err != nil {
 		return "", err
 	}
+	// `to` may already name the source itself: a case-only rename on a
+	// case-insensitive volume, or a second hard link. Neither destroys a
+	// destination. Between two hard links rename(2) does nothing at all, so
+	// reporting success would record a move that never happened.
+	same := sameFileEntry(from, to)
+	if same && !strings.EqualFold(from, to) {
+		return "", fmt.Errorf("rename_file: %q and %q are hard links to the same file, and "+
+			"renaming one onto the other leaves both in place; delete_file the name you no longer want", from, to)
+	}
 	// The version the move publishes at `to`, read from the source through one
 	// descriptor BEFORE the rename: a rename moves the inode — bytes and mtime
 	// intact — so this is what `to` holds when it lands. rename_file writes no
@@ -130,8 +142,15 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 	// A source this snapshot cannot read leaves the version unknown, which records
 	// no read state rather than a guessed one.
 	moved, _ := readSnapshot(from, func(io.Reader) error { return nil })
+	// contentSide for the DESTINATION only: its bytes are what the response diff
+	// shows when this move destroys it. The source side feeds the history row
+	// alone, so it stays on historySide — reading up to 8 MiB for a diff that
+	// never renders it would be waste on every rename with history off.
 	src := t.deps.historySide(from)
-	dest := t.deps.historySide(to)
+	var dest history.Side
+	if !same {
+		dest = t.deps.contentSide(to)
+	}
 	if err := os.Rename(from, to); err != nil {
 		return "", fmt.Errorf("rename_file: %w", err)
 	}
@@ -159,7 +178,35 @@ func (t *RenameFile) Execute(ctx context.Context, raw json.RawMessage) (string, 
 		syncDirBestEffort("rename_file", filepath.Dir(to))
 	}
 	t.renameFilePostRename(ctx, from, to, moved)
-	return fmt.Sprintf("renamed %s → %s", from, to), nil
+	return t.formatRenameResult(ctx, from, to, dest), nil
+}
+
+// formatRenameResult renders the response. A rename does not change content, so
+// there is nothing for a diff to show unless the move DESTROYED an existing
+// destination — and that destination's content appears nowhere else in the
+// transcript, which is what makes it worth showing.
+func (t *RenameFile) formatRenameResult(ctx context.Context, from, to string, dest history.Side) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "renamed %s → %s", from, to)
+	if !dest.Exists {
+		return sb.String()
+	}
+	// The pair goes to the gate as one change, as the store classifies it.
+	diff := t.deps.responseDiffAcross(ctx, to, from, sideOf(dest), absentSide())
+	appendSections(&sb, t.deps.relayNoteFor(diff), diff)
+	return sb.String()
+}
+
+// sameFileEntry reports whether from and to are one file. Lstat, not Stat: a
+// symlink at `to` pointing at the source is a separate entry that the rename
+// really does replace.
+func sameFileEntry(from, to string) bool {
+	fi, err := os.Lstat(from)
+	if err != nil {
+		return false
+	}
+	ti, err := os.Lstat(to)
+	return err == nil && os.SameFile(fi, ti)
 }
 
 func parseRenameFileArgs(raw json.RawMessage) (renameFileArgs, error) {

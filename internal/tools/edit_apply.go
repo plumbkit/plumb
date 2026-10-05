@@ -84,10 +84,10 @@ func applyWorkspaceEditDetailed(we *protocol.WorkspaceEdit, onApplied func([]wor
 	for i, p := range plans {
 		res, err := safeWrite(p.path, p.after, p.mode)
 		if err != nil {
-			if rbErr := rollbackWorkspaceEdit(plans, modified, sink); rbErr != nil {
+			if rbErr := rollbackWorkspaceEdit(plans, modified, sink, tool); rbErr != nil {
 				return modified, plans, fmt.Errorf("writing %s: %w; rollback failed: %w", p.path, err, rbErr)
 			}
-			return modified, plans, fmt.Errorf("writing %s: %w", p.path, err)
+			return modified, plans, withRevertNote(fmt.Errorf("writing %s: %w", p.path, err), workspaceEditReverted(plans, modified))
 		}
 		plans[i].written = res.written
 		sink.recordHistory(history.Change{
@@ -269,7 +269,27 @@ func unlockAll(unlocks []func()) {
 	}
 }
 
-func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink) error {
+// workspaceEditReverted lists the paths a workspace-edit rollback put back, for
+// the failed call's revert summary. modified is the set written before the
+// failure, which is exactly the set the rollback walks.
+func workspaceEditReverted(plans []workspaceEditPlan, modified []string) []revertedPath {
+	byPath := make(map[string]workspaceEditPlan, len(plans))
+	for _, p := range plans {
+		byPath[p.path] = p
+	}
+	out := make([]revertedPath, 0, len(modified))
+	for _, path := range modified {
+		if p, ok := byPath[path]; ok {
+			out = append(out, revertedPath{path: p.path, before: string(p.before), after: string(p.after)})
+		}
+	}
+	return out
+}
+
+// rollbackWorkspaceEdit restores modified files to their pre-edit bytes. Each
+// restore is recorded under tool, the tool that rolled back, so a history
+// filter on that tool lists the revert beside the write it undid.
+func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink historySink, tool string) error {
 	byPath := make(map[string]workspaceEditPlan, len(plans))
 	for _, p := range plans {
 		byPath[p.path] = p
@@ -281,7 +301,7 @@ func rollbackWorkspaceEdit(plans []workspaceEditPlan, modified []string, sink hi
 			errs = append(errs, fmt.Sprintf("%s: %v", p.path, err))
 		} else {
 			sink.recordHistory(history.Change{
-				Op: history.OpRevert, Path: p.path, Tool: "rollback",
+				Op: history.OpRevert, Path: p.path, Tool: tool,
 				Before: history.SideFromBytes(p.after), After: history.SideFromBytes(p.before),
 				RevertsOwnCall: true, Reason: "edit_rollback",
 			})

@@ -17,6 +17,10 @@ type deleteMemoryTool struct {
 	indexFn func() *memory.Index
 	histFn  func(context.Context, history.Change)
 	histOn  func() bool
+	// deps carries the response policy for the diff this tool now appends. A zero
+	// WriteDeps renders nothing, which is what a tool constructed without it
+	// should do.
+	deps WriteDeps
 }
 
 func NewDeleteMemory(ws WorkspaceFn) *deleteMemoryTool { return &deleteMemoryTool{ws: ws} }
@@ -35,6 +39,13 @@ func (t *deleteMemoryTool) WithIndex(fn func() *memory.Index) *deleteMemoryTool 
 func (t *deleteMemoryTool) WithHistory(fn func(context.Context, history.Change), on func() bool) *deleteMemoryTool {
 	t.histFn = fn
 	t.histOn = on
+	return t
+}
+
+// WithWriteDeps wires the response-diff policy, so a memory deletion reports what
+// it removed the same way delete_file does.
+func (t *deleteMemoryTool) WithWriteDeps(deps WriteDeps) *deleteMemoryTool {
+	t.deps = deps
 	return t
 }
 
@@ -88,17 +99,29 @@ func (t *deleteMemoryTool) Execute(ctx context.Context, args json.RawMessage) (s
 		return "", fmt.Errorf("delete_memory: %w", err)
 	}
 	path, _ := memory.Path(ws, a.Name)
+	// Under the path lock, so no other plumb writer lands between the Before
+	// read and the delete.
+	unlock := lockPath(path)
+	defer unlock()
+	// Read when EITHER the history row or the response diff wants the bytes, so
+	// the diff costs no extra read and neither consumer pays for the other.
+	// An unreadable side is unknown, not absent: the delete still happens and is
+	// reported, but no row or diff is fabricated from content nobody read.
 	before := history.Side{}
-	if t.historyOn() {
-		if s, err := history.SideFromFile(path); err == nil {
-			before = s
-		}
+	readable := true
+	if t.historyOn() || t.deps.showWriteDiff() {
+		s, err := history.SideFromFile(path)
+		before, readable = s, err == nil
 	}
 	if err := memory.DeleteIndexed(resolveMemoryIndex(t.indexFn, ws), ws, a.Name); err != nil {
 		return "", err
 	}
-	if t.historyOn() {
-		t.recordHistory(ctx, history.Change{Op: history.OpDelete, Tool: "delete_memory", Path: path, Before: before})
+	if !readable {
+		return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws), nil
 	}
-	return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws), nil
+	t.recordHistory(ctx, history.Change{Op: history.OpDelete, Tool: "delete_memory", Path: path, Before: before})
+	// An absent after-side renders every removed line, the same shape delete_file
+	// uses for a deleted file.
+	return fmt.Sprintf("Memory %q deleted from %s/.plumb/memories/", a.Name, ws) +
+		ResponseDiffSuffix(ctx, t.deps, path, before, history.Side{}), nil
 }

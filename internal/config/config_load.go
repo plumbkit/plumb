@@ -185,6 +185,11 @@ func applyEditsEnv(cfg *Config) {
 	if v, ok := envBoolNeg("PLUMB_SHOW_WRITE_DIFF"); ok {
 		cfg.Edits.ShowWriteDiff = v
 	}
+	// envBool, not envBoolNeg: the relay is off by default, so only an explicit
+	// yes may turn it on; an unrecognised value must not.
+	if v, ok := envBool("PLUMB_RELAY_WRITE_DIFF"); ok {
+		cfg.Edits.RelayWriteDiff = v
+	}
 	if v, ok := envBoolNeg("PLUMB_BLOCK_DIRTY_WRITES"); ok {
 		cfg.Edits.BlockDirtyWrites = v
 	}

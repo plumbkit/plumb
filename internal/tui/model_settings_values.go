@@ -294,6 +294,8 @@ func boolField(c *config.Config, key settingKey) *bool {
 		return &c.Edits.Strict
 	case skShowWriteDiff:
 		return &c.Edits.ShowWriteDiff
+	case skRelayWriteDiff:
+		return &c.Edits.RelayWriteDiff
 	case skBlockDirtyWrites:
 		return &c.Edits.BlockDirtyWrites
 	case skFsync:
@@ -488,6 +490,8 @@ func toggleLabel(key settingKey) string {
 		return "strict edits"
 	case skShowWriteDiff:
 		return "show write diff"
+	case skRelayWriteDiff:
+		return "relay write diff"
 	case skTopology:
 		return "topology"
 	case skTopoResyncOnAttach:

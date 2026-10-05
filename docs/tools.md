@@ -777,7 +777,12 @@ rewriting a block whose interior changes but whose boundary lines are stable.
 ### `delete_file`
 Delete files and empty directories (refuses directories unless `allow_dir`, and
 even then only when empty — there is no recursive delete). The response reports
-the line and byte count removed (bytes only for a binary or oversized file).
+the line and byte count removed (bytes only for a binary or oversized file), then
+the diff of what was deleted — every line removed — for up to 20 paths in a batch
+(`… (+N more file(s))` beyond that), gated by `[edits].show_write_diff`. A path
+matching `[history] sensitive_globs` reports `… (diff withheld: sensitive path)`
+instead of its content, and one too large to read reports the withholding rather
+than a diff against nothing.
 **Inputs:** `file_path` **or** `paths` (array, max 100 — not both), `dirty_ok`,
 `allow_dir`.
 
@@ -793,9 +798,18 @@ rate-limit token. To clear a tree: `find_files` its contents, then one
 **Primary move tool.** Atomic move/rename. **Inputs:** `from`, `to` (required),
 `overwrite` (bool — required to clobber an existing target), `dirty_ok`.
 
+A rename does not change content, so its response carries no diff — with one
+exception that matters: when the move **destroys an existing destination**, that
+destination's content is rendered as removed lines, because nothing else in the
+transcript shows it. Gated by `[edits].show_write_diff`.
+
 ### `copy_file`
-Duplicate a file, preserving permissions; cross-device safe. **Inputs:**
-`from`, `to` (required), `overwrite`, `dirty_ok`.
+Duplicate a file, preserving permissions; cross-device safe. The response shows
+the diff of what landed at the destination (every line added when the path was
+free; a real before/after diff when it replaced an existing file, which is the
+part nothing else in the transcript shows). Gated by
+`[edits].show_write_diff`. **Inputs:** `from`, `to` (required), `overwrite`,
+`dirty_ok`.
 
 ### `transaction_apply`
 Multi-file atomic edits with rollback (up to 50 ops). Validates everything in
@@ -811,7 +825,9 @@ that write created it), and **refuses by default** when the file has changed sin
 plumb wrote it (an external or peer edit), so it never silently clobbers someone
 else's work. Single-level per file (a fresh write re-arms it); undo history is
 per session and cleared on a workspace switch. Pre-write content over 1 MiB is
-not snapshotted, so undo is unavailable for very large files. **Inputs:**
+not snapshotted, so undo is unavailable for very large files. Both branches — the
+restore and the removal of a file the write created — return a diff of what the
+undo changed, gated by `[edits].show_write_diff`. **Inputs:**
 `file_path`, `force` (override the changed-since-write guard).
 
 ---

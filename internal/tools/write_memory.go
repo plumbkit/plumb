@@ -17,6 +17,11 @@ type writeMemoryTool struct {
 	indexFn func() *memory.Index
 	histFn  func(context.Context, history.Change)
 	histOn  func() bool
+	// deps carries the response policy (the show-diff and relay knobs, and the
+	// sensitive-path resolver) for the diff this tool now appends. A zero
+	// WriteDeps renders nothing, which is what a tool constructed without it
+	// should do.
+	deps WriteDeps
 }
 
 func NewWriteMemory(ws WorkspaceFn) *writeMemoryTool { return &writeMemoryTool{ws: ws} }
@@ -35,6 +40,13 @@ func (t *writeMemoryTool) WithIndex(fn func() *memory.Index) *writeMemoryTool {
 func (t *writeMemoryTool) WithHistory(fn func(context.Context, history.Change), on func() bool) *writeMemoryTool {
 	t.histFn = fn
 	t.histOn = on
+	return t
+}
+
+// WithWriteDeps wires the response-diff policy, so a memory write reports what it
+// changed the same way the file tools do.
+func (t *writeMemoryTool) WithWriteDeps(deps WriteDeps) *writeMemoryTool {
+	t.deps = deps
 	return t
 }
 
@@ -99,25 +111,39 @@ func (t *writeMemoryTool) Execute(ctx context.Context, args json.RawMessage) (st
 		return "", fmt.Errorf("write_memory: %w", err)
 	}
 	path, _ := memory.Path(ws, a.Name)
+	// The path lock every plumb writer takes: an edit_file on the memory file, or
+	// a second write_memory, cannot land between the Before read, the write and
+	// the After read, so the history row pairs sides of one write.
+	unlock := lockPath(path)
+	defer unlock()
+	// The file's bytes feed the history row AND the response diff, so they are
+	// read when EITHER wants them — the same union gate the file tools use. With
+	// both off, nothing is read at all.
+	want := t.historyOn() || t.deps.showWriteDiff()
+	// A side that cannot be read is unknown, not absent: recording it as absent
+	// would fabricate history and render content nobody saw, so an unreadable
+	// side records and shows nothing (writeAgentConfig does the same).
 	before := history.Side{}
-	if t.historyOn() {
-		if s, err := history.SideFromFile(path); err == nil {
-			before = s
-		}
+	readable := true
+	if want {
+		s, err := history.SideFromFile(path)
+		before, readable = s, err == nil
 	}
 	if err := memory.WriteIndexedWithOptions(resolveMemoryIndex(t.indexFn, ws), ws, a.Name, a.Content, memory.WriteOptions{Description: a.Description, Paths: a.Paths}); err != nil {
 		return "", err
 	}
-	// Memory writes have no per-path lock. Two concurrent write_memory calls
-	// to one name are ordered by their ts_ms only.
-	if t.historyOn() {
-		if after, err := history.SideFromFile(path); err == nil {
-			op := history.OpUpdate
-			if !before.Exists {
-				op = history.OpCreate
-			}
-			t.recordHistory(ctx, history.Change{Op: op, Tool: "write_memory", Path: path, Before: before, After: after})
+	after := history.Side{}
+	op := history.OpUpdate
+	if want && readable {
+		s, err := history.SideFromFile(path)
+		after, readable = s, err == nil
+		if !before.Exists {
+			op = history.OpCreate
 		}
 	}
-	return "Memory saved to " + path, nil
+	if !readable {
+		return "Memory saved to " + path, nil
+	}
+	t.recordHistory(ctx, history.Change{Op: op, Tool: "write_memory", Path: path, Before: before, After: after})
+	return "Memory saved to " + path + ResponseDiffSuffix(ctx, t.deps, path, before, after), nil
 }

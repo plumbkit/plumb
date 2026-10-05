@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/fsync"
+	"github.com/plumbkit/plumb/internal/history"
 )
 
 const (
@@ -67,12 +68,13 @@ type txManifest struct {
 
 // Restored records the pre- and post-restoration content of one file rolled
 // back by crash recovery, along with the call ID of the manifest that owned it.
+// Before is the file as recovery found it: absent, carried, or — when it is
+// too large to carry — hashed by streaming, never mistaken for an empty file.
 type Restored struct {
-	Path          string
-	Before        []byte
-	After         []byte
-	BeforeExisted bool
-	CallID        string
+	Path   string
+	Before history.Side
+	After  []byte
+	CallID string
 }
 
 // RestoreSink receives crash recovery restores as they happen.
@@ -226,26 +228,21 @@ func restoreOp(dir string, op opMeta, perm os.FileMode, target string, sink Rest
 		slog.Error("txlog: rollback: cannot read snapshot", "snap", snapPath, "err", err)
 		return
 	}
-	var (
-		cur    []byte
-		curErr error
-	)
-	if info, statErr := os.Stat(target); statErr == nil && info.Size() <= maxSnapSize {
-		cur, curErr = os.ReadFile(target)
-	} else if statErr != nil {
-		curErr = statErr
+	// The current content is read only when something records it: Rollback
+	// passes a nil sink, and a restore nobody records must not pay for a read
+	// of up to the whole file.
+	var before history.Side
+	if sink != nil {
+		var err error
+		if before, err = history.SideFromFile(target); err != nil {
+			slog.Debug("txlog: rollback: cannot capture the pre-restore side", "path", target, "err", err)
+		}
 	}
 	if err := fsync.AtomicWrite(target, content, fsync.Options{Mode: perm, Label: "txlog"}); err != nil {
 		slog.Error("txlog: rollback: cannot restore file", "path", target, "err", err)
 		return
 	}
-	sink.recordHistory(Restored{
-		Path:          target,
-		Before:        cur,
-		BeforeExisted: curErr == nil,
-		After:         content,
-		CallID:        callID,
-	})
+	sink.recordHistory(Restored{Path: target, Before: before, After: content, CallID: callID})
 	slog.Info("txlog: rollback: restored", "path", target)
 }
 

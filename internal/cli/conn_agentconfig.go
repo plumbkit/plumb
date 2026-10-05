@@ -67,25 +67,19 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 		Timestamp: time.Now(),
 	}
 	cfgPath := config.ProjectConfigPath(ws)
-	before, _ := history.SideFromFile(cfgPath)
-	changed, err := config.AgentApplyBatch(s.store.Current(), ws, pairs, prov)
+	changed, before, after, err := s.writeAgentConfig(ctx, ws, cfgPath, pairs, prov)
 	if err != nil {
 		return "", err
 	}
-	if after, aerr := history.SideFromFile(cfgPath); aerr == nil {
-		op := history.OpUpdate
-		if !before.Exists {
-			op = history.OpCreate
-		}
-		s.recordHistory(ctx, history.Change{
-			At:     time.Now(),
-			Op:     op,
-			Kind:   history.KindFile,
-			Tool:   "agent_config",
-			Path:   cfgPath,
-			Before: before,
-			After:  after,
-		})
+	// The config change is a file change like any other, so it reports what it
+	// did with the same policy: the .plumb/ writer had no response rendering of
+	// its own, and a config file is exactly the sort of path a sensitive glob
+	// names. buildWriteDeps is cheap here — this runs on an agent_config set,
+	// not on a hot path. An after side that was not read (both history and the
+	// diff off, or the read failed) renders nothing.
+	suffix := ""
+	if after.Exists {
+		suffix = tools.ResponseDiffSuffix(ctx, s.buildWriteDeps(), cfgPath, before, after)
 	}
 	// Live before the tool returns. The connection's own project is cached in its
 	// view and is re-applied; any other root is read per call (projectViewFor), so
@@ -102,5 +96,46 @@ func (s *connSession) applyAgentConfig(ctx context.Context, pairs map[string]any
 	s.log().Info("daemon: agent wrote project config", "workspace", ws, "keys", changed)
 	return fmt.Sprintf(
 		"applied %d key(s) to %s/.plumb/config.toml (provenance=agent): %s\nrevert any with: plumb config unset <key> --workspace .",
-		len(changed), ws, strings.Join(changed, ", ")), nil
+		len(changed), ws, strings.Join(changed, ", ")) + suffix, nil
+}
+
+// writeAgentConfig applies the batch under config.toml's path lock, the one
+// edit_file and write_file take, so no other plumb write lands between the
+// Before read, the write and the After read. The sides are read when history
+// would record them OR the response diff wants them (the union gate the file
+// tools use), so with both off nothing is read; the history row is recorded
+// only when history is on. Both sides are returned for the response diff.
+func (s *connSession) writeAgentConfig(ctx context.Context, ws, cfgPath string, pairs map[string]any, prov config.ProvenanceEntry) ([]string, history.Side, history.Side, error) {
+	unlock := tools.LockPath(cfgPath)
+	defer unlock()
+	record := s.historyOnFor(ctx, cfgPath)
+	want := record || s.editsConfig().ShowWriteDiff
+	var before history.Side
+	if want {
+		before, _ = history.SideFromFile(cfgPath)
+	}
+	changed, err := config.AgentApplyBatch(s.store.Current(), ws, pairs, prov)
+	if err != nil || !want {
+		return changed, before, history.Side{}, err
+	}
+	after, aerr := history.SideFromFile(cfgPath)
+	if aerr != nil {
+		return changed, before, history.Side{}, nil
+	}
+	if record {
+		op := history.OpUpdate
+		if !before.Exists {
+			op = history.OpCreate
+		}
+		s.recordHistory(ctx, history.Change{
+			At:     time.Now(),
+			Op:     op,
+			Kind:   history.KindFile,
+			Tool:   "agent_config",
+			Path:   cfgPath,
+			Before: before,
+			After:  after,
+		})
+	}
+	return changed, before, after, nil
 }

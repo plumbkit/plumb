@@ -221,7 +221,7 @@ func (t *TransactionApply) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 
 	var result strings.Builder
-	result.WriteString(formatTransactionResult(written, t.deps.showWriteDiff()))
+	result.WriteString(formatTransactionResult(ctx, t.deps, written))
 	for _, w := range written {
 		t.deps.notifyTopology(w.path)
 		result.WriteString(t.deps.reportQuality(ctx, w.path))
@@ -442,12 +442,12 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 	for _, p := range prepared {
 		if info, err := os.Stat(p.path); err == nil {
 			if !info.ModTime().Equal(p.preMtime) {
-				rollback(written, t.deps.historySink(ctx))
+				restored := rollback(written, t.deps.historySink(ctx))
 				txl.Rollback()
-				return nil, nil, fmt.Errorf(
+				return nil, nil, withRevertNote(fmt.Errorf(
 					"transaction_apply: %q changed during transaction (mtime moved); rolled back %d writes",
 					p.path, len(written),
-				)
+				), restored)
 			}
 		}
 		if err := txl.Record(p.path, []byte(p.before), p.perm); err != nil {
@@ -456,10 +456,10 @@ func (t *TransactionApply) txPhase2Write(ctx context.Context, prepared []txPrepa
 		}
 		res, err := safeWrite(p.path, []byte(p.after), p.perm)
 		if err != nil {
-			rollback(written, t.deps.historySink(ctx))
+			restored := rollback(written, t.deps.historySink(ctx))
 			txl.Rollback()
-			return nil, nil, fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
-				p.path, err, len(written))
+			return nil, nil, withRevertNote(fmt.Errorf("transaction_apply: write %q failed: %w; rolled back %d writes",
+				p.path, err, len(written)), restored)
 		}
 		p.written = res.written
 		t.deps.recordHistory(ctx, history.Change{
@@ -503,25 +503,38 @@ func (t *TransactionApply) txPhase3Notify(ctx context.Context, written []txPrepa
 	return failed
 }
 
-func formatTransactionResult(written []txPrepared, showDiff bool) string {
+// formatTransactionResult renders the response: the header, the relay
+// instruction once when any file's diff rendered, then each file as a summary
+// line with its own diff beneath. The diffs are computed first so the
+// instruction can sit above them — a truncated response must not lose it —
+// while each file's diff still follows that file's summary.
+func formatTransactionResult(ctx context.Context, deps WriteDeps, written []txPrepared) string {
+	diffs := make([]string, len(written))
+	if deps.showWriteDiff() {
+		for i, p := range written {
+			diffs[i] = deps.gatedDiff(ctx, p.path, unifiedDiff(p.path, p.before, p.after))
+		}
+	}
 	var sb strings.Builder
 	totalBytes := 0
 	for _, p := range written {
 		totalBytes += len(p.after)
 	}
 	fmt.Fprintf(&sb, "transaction applied: %d files updated (%d bytes total)\n", len(written), totalBytes)
-	for _, p := range written {
+	if relay := deps.relayNoteFor(diffs...); relay != "" {
+		sb.WriteString(relay)
+		sb.WriteByte('\n')
+	}
+	for i, p := range written {
 		summary := summariseLineChanges(p.before, p.after)
 		fmt.Fprintf(&sb, "  %s", p.path)
 		if summary != "" {
 			fmt.Fprintf(&sb, " — %s", summary)
 		}
 		sb.WriteByte('\n')
-		if showDiff {
-			if d := unifiedDiff(p.path, p.before, p.after); d != "" {
-				sb.WriteString(d)
-				sb.WriteByte('\n')
-			}
+		if diffs[i] != "" {
+			sb.WriteString(diffs[i])
+			sb.WriteByte('\n')
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
@@ -541,25 +554,32 @@ func txBeforeSide(p txPrepared) history.Side {
 	return history.SideFromBytes([]byte(p.before))
 }
 
-// rollback restores each entry in written to its pre-transaction content.
-// Best-effort: failures are logged and proceed. If a rollback write itself
-// fails, the file is left in the post-write state and the caller has lost
-// atomicity — but a partial application is the only outcome possible at
-// that point.
-func rollback(written []txPrepared, sink historySink) {
+// rollback restores each written file to its pre-transaction content and returns
+// the paths it ACTUALLY restored. The return value is what the failed call's
+// revert summary is built from: a restore that failed is logged and skipped, and
+// listing it as reverted would tell the caller a file came back when it did not.
+//
+// Best-effort by design. If a rollback write itself fails, the file is left in
+// the post-write state and the caller has lost atomicity — but a partial
+// application is the only outcome possible at that point, and the returned slice
+// is what keeps the report honest about it.
+func rollback(written []txPrepared, sink historySink) []revertedPath {
+	restored := make([]revertedPath, 0, len(written))
 	for _, p := range written {
 		if _, err := safeWrite(p.path, []byte(p.before), p.perm); err != nil {
 			slog.Error("transaction_apply: rollback failed", "path", p.path, "err", err)
-		} else {
-			sink.recordHistory(history.Change{
-				Op:             history.OpRevert,
-				Tool:           "transaction_apply",
-				Path:           p.path,
-				Before:         history.SideFromBytes([]byte(p.after)),
-				After:          history.SideFromBytes([]byte(p.before)),
-				RevertsOwnCall: true,
-				Reason:         "tx_rollback",
-			})
+			continue
 		}
+		sink.recordHistory(history.Change{
+			Op:             history.OpRevert,
+			Tool:           "transaction_apply",
+			Path:           p.path,
+			Before:         history.SideFromBytes([]byte(p.after)),
+			After:          history.SideFromBytes([]byte(p.before)),
+			RevertsOwnCall: true,
+			Reason:         "tx_rollback",
+		})
+		restored = append(restored, revertedPath{path: p.path, before: p.before, after: p.after})
 	}
+	return restored
 }

@@ -138,7 +138,20 @@ func (t *TransactionApply) txRollbackNewErrors(ctx context.Context, written []tx
 	}
 	sb.WriteString("Fix the cause and retry, or drop fail_on_new_errors to land the change anyway.")
 	sb.WriteString(rep.text())
-	return &editLogicErr{fmt.Errorf("%s", sb.String())}
+	return &editLogicErr{withRevertNote(fmt.Errorf("%s", sb.String()), txRestoredReverted(written, restored))}
+}
+
+// txRestoredReverted lists the subset of written that rollbackVerified actually
+// restored — the file it deliberately SKIPPED (changed outside plumb) is not
+// reported as reverted, because it was not.
+func txRestoredReverted(written []txPrepared, restored map[string]fileSnapshot) []revertedPath {
+	out := make([]revertedPath, 0, len(restored))
+	for _, p := range written {
+		if _, ok := restored[p.path]; ok {
+			out = append(out, revertedPath{path: p.path, before: p.before, after: p.after})
+		}
+	}
+	return out
 }
 
 func txFilesWithNewErrors(rep txDiagReport) int {

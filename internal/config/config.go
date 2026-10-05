@@ -217,15 +217,26 @@ type EditsConfig struct {
 	// file's mtime must be newer than tempWrittenAt+skew to trigger a retry.
 	// Increase on slow filesystems (network mounts, FUSE). Defaults to 100.
 	ConcurrentWriteSkewMs int `toml:"concurrent_write_skew_ms"`
-	// ShowWriteDiff controls whether the content-modifying tools append a
-	// unified diff of the change to their response: edit_file, write_file,
-	// undo_edit, the semantic symbol edits (replace_symbol_body,
-	// insert_before_symbol, insert_after_symbol, safe_delete_symbol — in both
-	// dry-run preview and applied modes), and transaction_apply. Defaults to
+	// ShowWriteDiff controls whether the content-modifying tools append a diff
+	// of the change to their response: edit_file, write_file, delete_file,
+	// rename_file, copy_file, undo_edit, the semantic symbol edits
+	// (replace_symbol_body, insert_before_symbol, insert_after_symbol,
+	// safe_delete_symbol — in both dry-run preview and applied modes),
+	// find_replace, move_symbol and transaction_apply, and the `.plumb/`
+	// writers (write_memory, delete_memory, agent_config, git_init). Defaults to
 	// true. Set to false (or PLUMB_SHOW_WRITE_DIFF=0) for implicit-verification
 	// mode where only path, size, and mtime metadata are returned — useful when
-	// tokens matter more than inline confirmation.
+	// tokens matter more than inline confirmation. A path matching [history] sensitive_globs
+	// never shows content either way.
 	ShowWriteDiff bool `toml:"show_write_diff"`
+	// RelayWriteDiff appends one line to a write response that shows a diff,
+	// asking the agent to include that diff in its reply to the user. Defaults
+	// to false: the diff is already in the tool result, where the transcript
+	// shows it, and asking the agent to repeat it costs output tokens the diff
+	// itself does not. Set true (or PLUMB_RELAY_WRITE_DIFF=1) to have the agent
+	// surface it in its own reply. An ordinary setting, not a one-way knob, so it
+	// can be turned on globally or for one project.
+	RelayWriteDiff bool `toml:"relay_write_diff"`
 	// BlockDirtyWrites controls the dirty-guard on the destructive write tools
 	// (write_file, edit_file, delete_file, find_replace, rename_file, copy_file,
 	// transaction_apply). When true (the default), a write to a file that has

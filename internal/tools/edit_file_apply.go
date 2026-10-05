@@ -69,7 +69,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 				before: before, existedBefore: true, wrote: content, diag: diag,
 			})
 		}
-		return t.formatEditFileSuccess(path, attempt, a.Edits, before, content, notes, diag, result.written), nil
+		return t.formatEditFileSuccess(ctx, path, attempt, a.Edits, before, content, notes, diag, result.written), nil
 	}
 	return "", fmt.Errorf("edit_file: failed after %d attempts: %w", maxEditRetries, lastErr)
 }
@@ -81,7 +81,7 @@ func (t *EditFile) editFileApply(ctx context.Context, path string, a editFileArg
 // the caller ITS mtime. Passed back as expected_mtime, that matched the file,
 // and changedAtSameMtime could not second-guess it (the recorded read is at
 // plumb's mtime), so the next write went over a change it never saw (#528).
-func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEdit, before, content string, notes []string, diag postWriteDiagResult, written fileSnapshot) string {
+func (t *EditFile) formatEditFileSuccess(ctx context.Context, path string, attempt int, edits []strEdit, before, content string, notes []string, diag postWriteDiagResult, written fileSnapshot) string {
 	noun := "edit"
 	if len(edits) > 1 {
 		noun = "edits"
@@ -106,9 +106,10 @@ func (t *EditFile) formatEditFileSuccess(path string, attempt int, edits []strEd
 		sb.WriteString(summary)
 	}
 	if t.deps.showWriteDiff() {
-		if d := renderUnifiedDiff(path, script); d != "" {
-			sb.WriteString("\n")
-			sb.WriteString(d)
+		// gatedDiff: a sensitive path shows the withholding marker instead, so
+		// the transcript and history.db agree about what may be seen.
+		if d := t.deps.gatedDiff(ctx, path, renderUnifiedDiff(path, script)); d != "" {
+			appendSections(&sb, t.deps.relayNoteFor(d), d)
 		}
 	}
 	sb.WriteString(diag.text)

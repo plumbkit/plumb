@@ -190,6 +190,11 @@ func lockPath(path string) func() {
 	}
 }
 
+// LockPath takes path's write lock for a writer outside this package (the
+// agent_config seam in internal/cli), so it serialises with every plumb tool
+// writing the same file. Call the returned function to release it.
+func LockPath(path string) func() { return lockPath(path) }
+
 // lockPathKey is the key every per-path bookkeeping agrees on: the write lock
 // (pathLocks), the concurrent-change write tracker, the undo store, and
 // edit_apply's lock-ordering dedup. It routes through paths.CanonicalKey —

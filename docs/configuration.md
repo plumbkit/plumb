@@ -176,7 +176,8 @@ config. `plumb web --port` overrides it for a single launch.
 | `post_write_cross_file` | bool | `true` | `PLUMB_POST_WRITE_CROSS_FILE` | After a write, compare workspace diagnostics against a pre-write baseline and flag NEW errors the edit introduced in OTHER files (the "edit A silently breaks B" case). The edited file's own diagnostics block keeps priority. |
 | `post_write_cross_file_settle_ms` | int | `200` | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | Bounded grace the cross-file sweep waits, after the edited file's own diagnostics land, for dependent-file re-publishes before comparing. `0` compares immediately. |
 | `concurrent_write_skew_ms` | int | `100` | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | Clock-skew allowance for `edit_file`'s concurrent-write detector. Raise on slow/network filesystems. |
-| `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a unified diff to `edit_file`/`write_file` responses. Set false to return only metadata. |
+| `show_write_diff` | bool | `true` | `PLUMB_SHOW_WRITE_DIFF` | Append a diff of the change to every content-changing write response — `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `undo_edit`, `find_replace`, the symbol edits, `move_symbol`, `transaction_apply` and the `.plumb/` writers (`write_memory`, `delete_memory`, `agent_config`, `git_init`). A create renders every line added, a delete every line removed; a rename renders nothing unless it destroyed an existing destination. Set false to return only metadata. A path matching `[history] sensitive_globs` never shows content — it reports `… (diff withheld: sensitive path)` instead. |
+| `relay_write_diff` | bool | `false` | `PLUMB_RELAY_WRITE_DIFF` | When a write response shows a diff, append one line asking the agent to include that diff in its reply to the user. Emitted once per response, only when content was actually shown (never for a withheld or empty diff). Off by default: the diff is already in the tool result, where the transcript shows it, and asking the agent to repeat it costs output tokens the diff itself does not. Turn it on globally, or for one project, to have the agent surface changes in its own words. An ordinary setting rather than a one-way safety knob. |
 | `block_dirty_writes` | bool | `true` | `PLUMB_BLOCK_DIRTY_WRITES` | Refuse a destructive write (`write_file`, `edit_file`, `delete_file`, `find_replace`, `rename_file`, `copy_file`, `transaction_apply`) to a file with uncommitted git changes that plumb did not write this session, unless `dirty_ok: true`. Set false to disable the guard — for a workflow that iterates on uncommitted WIP. Re-editing a file plumb wrote this session is never blocked either way. |
 | `fsync` | bool | `true` | `PLUMB_FSYNC` | Fsync-before-ack: fsync the staged temp file before the atomic rename and the parent directory after it, so an acknowledged write (and plumb's own state files) survive a hard crash or power cut. Set false to skip both fsyncs — restores the old behaviour for benchmarks and exotic filesystems that refuse fsync. **Daemon-global** (the only `[edits]` key that is): it gates write primitives shared by every session, so it is resolved from global config (or `PLUMB_FSYNC`) once at daemon start and re-read live on a global reload; a per-project `.plumb/config.toml` override is ignored, because honouring it would let the last workspace to attach set the durability contract for every other live session. |
 
@@ -201,20 +202,20 @@ server-side regardless of what the agent read. The dirty guard
 
 ## `[history]` — write diff history
 
-Plumb records every file change made on an agent's behalf as a timestamped unified diff in a SQLite WAL database (`~/.local/share/plumb/history.db`), linked to its MCP tool call. Sensitive files are recorded as metadata only (path, size, and SHA) with content withheld; other files have their diffs compressed with zstd and stored with automated redaction.
+Plumb records every file change made on an agent's behalf as a timestamped unified diff in a SQLite WAL database (`~/.local/share/plumb/history.db`), linked to its MCP tool call. A sensitive file is recorded as metadata only (path, size and SHA-256), with its content withheld. Every other diff is redacted, compressed with zstd and stored.
 
 | Field | Type | Default | Scope | Effect |
 |---|---|---|---|---|
-| `enabled` | bool | `true` | Global & Project | Whether write history is recorded. When `false`, write tools skip recording entirely. Applies live per call. |
-| `sensitive_globs` | list of string | `["**/.env*", "**/id_rsa*", "**/*.pem", "**/*.key", "**/*.p12", "**/*.pfx", "**/*.kdbx", "**/*token*", "**/*secret*", "**/*credential*"]` | Global & Project | File path patterns whose contents must never be recorded in `history.db`. Changes to matching files record path, timestamps, and hashes, but diff content is withheld (`[sensitive]`). Setting this in a project config replaces the global list. |
-| `max_content_bytes` | int | `8388608` (8 MiB) | Global | File size threshold beyond which file contents are not read into memory for diff calculation (`[too large]`). |
-| `max_diff_bytes` | int | `4194304` (4 MiB) | Global | Maximum compressed diff size stored in `history.db`. Diffs exceeding this are withheld (`[too large]`). |
+| `enabled` | bool | `true` | Global; a project's value needs `plumb trust` | Whether write history is recorded. When `false`, write tools skip recording entirely. Applies live per call. A project config's value is honoured only once you approve it with `plumb trust`: switching history off would leave no record of what agents wrote in that repository, and switching it on would override your own global choice. |
+| `sensitive_globs` | list of string | `[".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore", "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", ".netrc", ".npmrc", ".pypirc", "credentials", "credentials.*", "*.tfvars", "secrets.*"]` | Global; a project may only add | Paths whose contents are never recorded in `history.db` and never shown in a write response. A change to a matching file records the path, timestamps and hashes, with the content withheld (`withheld:sensitive`). Each glob is a `filepath.Match` pattern, tried against the file's base name and against its workspace-relative path, so `secrets/*` matches `secrets/prod.yaml`. `**` is not supported. A change matches when its path, its resolved path (through symlinks) or, for a copy or rename, its source matches. A project config's globs are ADDED to the global list; it cannot remove one. |
+| `max_content_bytes` | int | `8388608` (8 MiB) | Global | A side larger than this is not read into memory, and the change is recorded by size and hash (`withheld:too_large`). |
+| `max_diff_bytes` | int | `4194304` (4 MiB) | Global | The largest diff stored. The limit is on the rendered diff text before redaction and compression. A larger diff is withheld (`withheld:too_large`). |
 
 ### Privacy and secret redaction
 
-Diffs written to `history.db` pass through plumb's automated redaction pipeline (`internal/redact`), which masks passwords, API keys, and auth tokens across 13 secret-pattern families. However, redaction relies on patterns such as assignments (`password = ...`, `api_key: ...`). Secrets written in free-form prose without assignment syntax may not be caught.
+Diffs written to `history.db` pass through the same redaction plumb applies to generated memories (`internal/redact`), which replaces what it recognises as a secret with a labelled placeholder such as `[REDACTED:aws-key]`. The redaction relies on recognisable shapes: known key formats, and assignments such as `password = ...` or `api_key: ...`. A secret written in free-form prose can slip past it.
 
-For sensitive files such as credential stores, certificates, and private keys, `sensitive_globs` provides whole-file protection by withholding diff content entirely before it reaches the history queue.
+For files that are secrets as a whole (credential stores, certificates, private keys), `sensitive_globs` withholds the content entirely, before the change reaches the history queue.
 
 ## `[walk]` — filesystem-traversal safety
 
@@ -1786,8 +1787,10 @@ The knob is editable only by the user (e.g. the TUI Settings screen).
 ## Environment variables
 
 Environment variables are the highest-precedence layer. Booleans accept
-`1`/`true`/`yes`; `PLUMB_SHOW_WRITE_DIFF` and `PLUMB_GIT_ALLOW_WRITES` instead
-treat `0`/`false`/`no` as off (default on otherwise).
+`1`/`true`/`yes`, and any other value means off. `PLUMB_SHOW_WRITE_DIFF` and
+`PLUMB_GIT_ALLOW_WRITES` instead treat only `0`/`false`/`no` as off; all three
+keep their configured default when unset (on for those two, off for
+`PLUMB_RELAY_WRITE_DIFF`).
 
 | Variable | Overrides |
 |---|---|
@@ -1801,6 +1804,7 @@ treat `0`/`false`/`no` as off (default on otherwise).
 | `PLUMB_POST_WRITE_CROSS_FILE_SETTLE_MS` | `edits.post_write_cross_file_settle_ms` |
 | `PLUMB_CONCURRENT_WRITE_SKEW_MS` | `edits.concurrent_write_skew_ms` |
 | `PLUMB_SHOW_WRITE_DIFF` | `edits.show_write_diff` |
+| `PLUMB_RELAY_WRITE_DIFF` | `edits.relay_write_diff` |
 | `PLUMB_BLOCK_DIRTY_WRITES` | `edits.block_dirty_writes` |
 | `PLUMB_FSYNC` | `edits.fsync` |
 | `PLUMB_REFUSE_HOME_ROOTS` | `walk.refuse_home_roots` |
@@ -1856,7 +1860,8 @@ post_write_diagnostics_ms = 300     # ceiling; effective wait adapts down to obs
 post_write_cross_file          = true  # flag NEW errors the edit introduced in OTHER files (edit A breaks B)
 post_write_cross_file_settle_ms = 200  # bounded grace for dependent-file re-publishes; 0 compares immediately
 concurrent_write_skew_ms  = 100     # clock-skew allowance for concurrent-write detection
-show_write_diff           = true    # append a unified diff to write/edit responses
+show_write_diff           = true    # append a diff to every content-changing write response
+relay_write_diff          = false   # ask the agent to show that diff to the user in its reply
 
 [walk]
 refuse_home_roots = true            # macOS TCC guard; no-op elsewhere

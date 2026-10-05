@@ -659,7 +659,7 @@ func TestRollbackWorkspaceEdit_ReportsUnrestorableFiles(t *testing.T) {
 		{path: good, before: []byte("good\n"), after: []byte("GOOD\n"), mode: 0o644},
 		{path: stuck, before: []byte("stuck\n"), after: []byte("STUCK\n"), mode: 0o644},
 	}
-	err := rollbackWorkspaceEdit(plans, []string{good, stuck}, nil)
+	err := rollbackWorkspaceEdit(plans, []string{good, stuck}, nil, "rename_symbol")
 	if err == nil {
 		t.Fatal("expected the unrestorable file to be reported")
 	}

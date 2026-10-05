@@ -88,6 +88,7 @@ func symbolEditFallbackNote(reason symbolFallbackReason, fn LSPWarmupFn, uri str
 // hook, cache invalidation, write/read tracker refresh, undo, topology, quality,
 // and differential diagnostics. client/cache remain nil-safe for unit tests.
 func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, deps *WriteDeps, uri string, dryRun, showDiff bool, summary, toolName string, dirtyOK bool, resolve symbolEditResolver) (string, error) {
+	deps = writeDepsOrZero(deps)
 	path := paths.URIToPath(uri)
 	if err := semanticWritePreflight(ctx, deps, toolName, path, dryRun, dirtyOK); err != nil {
 		return "", err
@@ -103,7 +104,8 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 		}
 		diff := ""
 		if showDiff {
-			diff = symbolEditDiff(path, edit)
+			// gatedDiff: a sensitive path shows the withholding marker instead.
+			diff = deps.gatedDiff(ctx, path, symbolEditDiff(path, edit))
 		}
 		sb.WriteString(fallbackNote)
 		sb.WriteString("DRY RUN — file not modified.\n\n")
@@ -112,8 +114,7 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 			edit.Range.Start.Line, edit.Range.Start.Character,
 			edit.Range.End.Line, edit.Range.End.Character)
 		if diff != "" {
-			sb.WriteString("\n")
-			sb.WriteString(diff)
+			appendSections(&sb, deps.relayNoteFor(diff), diff)
 		}
 		sb.WriteString("\nTo apply, re-run with dry_run=false.")
 		return sb.String(), nil
@@ -149,13 +150,12 @@ func applySingleEdit(ctx context.Context, client lsp.Client, c *cache.Cache, dep
 	}
 	diff := ""
 	if showDiff {
-		diff = unifiedDiff(path, string(before), string(after))
+		diff = deps.gatedDiff(ctx, path, unifiedDiff(path, string(before), string(after)))
 	}
 	sb.WriteString(fallbackNote)
 	fmt.Fprintf(&sb, "%s symbol %q in %s\n", capitalise(summary), sym.Name, path)
 	if diff != "" {
-		sb.WriteString("\n")
-		sb.WriteString(diff)
+		appendSections(&sb, deps.relayNoteFor(diff), diff)
 	}
 	sb.WriteString(semanticPostWrite(ctx, deps, client, c, path, uri, string(before), string(after), toolName, baseline, res.written))
 	return sb.String(), nil

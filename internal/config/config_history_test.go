@@ -17,7 +17,9 @@ func TestHistoryDefaults(t *testing.T) {
 	}
 }
 
-func TestProjectHistoryGlobsReplaceTheGlobalList(t *testing.T) {
+// A project's sensitive_globs ADD to the global list; replacing it would let a
+// repository drop .env from its own protection.
+func TestProjectHistoryGlobsAddToTheGlobalList(t *testing.T) {
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
 		t.Fatal(err)
@@ -27,8 +29,9 @@ func TestProjectHistoryGlobsReplaceTheGlobalList(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := loadProjectForTest(t, ws)
-	if !slices.Equal(got.History.SensitiveGlobs, []string{"*.secret"}) {
-		t.Fatalf("project globs = %v, want replacement", got.History.SensitiveGlobs)
+	want := slices.Concat(Defaults().History.SensitiveGlobs, []string{"*.secret"})
+	if !slices.Equal(got.History.SensitiveGlobs, want) {
+		t.Fatalf("project globs = %v, want the global list plus *.secret", got.History.SensitiveGlobs)
 	}
 	if got.History.MaxDiffBytes != 4<<20 {
 		t.Fatalf("max_diff_bytes is forced-global; project value leaked: %d", got.History.MaxDiffBytes)

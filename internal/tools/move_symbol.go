@@ -190,14 +190,14 @@ func (t *MoveSymbol) moveOrPreview(ctx, lspCtx context.Context, waited time.Dura
 		if err != nil {
 			return "", err
 		}
-		return t.formatMove(plans, name, note, srcPath, dstPath, true, ""), nil
+		return t.formatMove(ctx, plans, name, note, srcPath, dstPath, true, ""), nil
 	}
 	plans, name, note, baselines, err := t.applyMove(ctx, lspCtx, waited, deps, a, src, srcPath, dstPath, includeDoc)
 	if err != nil {
 		return "", err
 	}
 	report := t.postWriteMove(ctx, deps, plans, baselines)
-	return t.formatMove(plans, name, note, srcPath, dstPath, false, report), nil
+	return t.formatMove(ctx, plans, name, note, srcPath, dstPath, false, report), nil
 }
 
 // preflight gates a move before any resolve or write: the workspace boundary for
@@ -459,7 +459,17 @@ func fileModeOr(path string, def os.FileMode) os.FileMode {
 	return def
 }
 
-func (t *MoveSymbol) formatMove(plans []movePlan, name, note, srcPath, dstPath string, dryRun bool, report string) string {
+func (t *MoveSymbol) formatMove(ctx context.Context, plans []movePlan, name, note, srcPath, dstPath string, dryRun bool, report string) string {
+	// Render the per-file diffs first so the relay instruction can sit above
+	// them, while each diff keeps its place after the summary.
+	var sections []string
+	if resolveShowDiff(t.showDiff) {
+		for _, p := range plans {
+			if d := t.deps.gatedDiff(ctx, p.path, unifiedDiff(p.path, string(p.before), string(p.after))); d != "" {
+				sections = append(sections, d)
+			}
+		}
+	}
 	var sb strings.Builder
 	sb.WriteString(note)
 	if dryRun {
@@ -468,16 +478,14 @@ func (t *MoveSymbol) formatMove(plans []movePlan, name, note, srcPath, dstPath s
 	} else {
 		fmt.Fprintf(&sb, "Moved %q from %s to %s\n", name, srcPath, dstPath)
 	}
-	if resolveShowDiff(t.showDiff) {
-		for _, p := range plans {
-			d := unifiedDiff(p.path, string(p.before), string(p.after))
-			if d == "" {
-				continue
-			}
-			sb.WriteString("\n")
-			sb.WriteString(d)
-			sb.WriteString("\n")
-		}
+	if relay := t.deps.relayNoteFor(sections...); relay != "" {
+		sb.WriteString(relay)
+		sb.WriteString("\n")
+	}
+	for _, d := range sections {
+		sb.WriteString("\n")
+		sb.WriteString(d)
+		sb.WriteString("\n")
 	}
 	if report != "" {
 		sb.WriteString(report)
