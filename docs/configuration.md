@@ -954,7 +954,7 @@ pointer keeps every tool reachable regardless of tools/list advertisement —
 review found `internal/clientcaps` carries only 7 registry rows against the
 ~20 setup targets `docs/cli-reference.md` documents, so "unrecognised" meant
 overwhelmingly *documented* clients (cursor, opencode, goose, crush, qwen,
-augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~37/58 tools with
+augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~38/59 tools with
 zero evidence any of them can invoke a hidden one — exactly the tool-removal
 the card's Do-NOT forbids. That idea needs registry rows with positive
 deferral evidence before it can ship, not an absence of a row; the four

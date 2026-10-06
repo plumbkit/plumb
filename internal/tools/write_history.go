@@ -503,9 +503,6 @@ func formatShowResult(res writeHistoryResult) string {
 		} else {
 			fmt.Fprintf(&sb, "[%s]\n", e.Content)
 		}
-		if e.GapBefore {
-			sb.WriteString("  ⋯ unrecorded change before this edit\n")
-		}
 		if i < len(res.Entries)-1 {
 			sb.WriteByte('\n')
 		}

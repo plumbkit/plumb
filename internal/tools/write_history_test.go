@@ -258,6 +258,24 @@ func TestWriteHistory_List(t *testing.T) {
 		t.Errorf("expected 2 changes for tool=write_file, got:\n%s", outTool)
 	}
 
+	// Filter agent="peer-agent" (should match 1: i2)
+	outAgent, err := tool.Execute(context.Background(), json.RawMessage(`{"agent": "peer-agent"}`))
+	if err != nil {
+		t.Fatalf("Execute agent=peer-agent: %v", err)
+	}
+	if !strings.Contains(outAgent, "Write history (1 change(s), offset 0):") {
+		t.Errorf("expected 1 change for agent=peer-agent, got:\n%s", outAgent)
+	}
+
+	// Filter file="file1.txt" (should match 3: i1, i2, i3)
+	outFile, err := tool.Execute(context.Background(), json.RawMessage(`{"file": "file1.txt"}`))
+	if err != nil {
+		t.Fatalf("Execute file=file1.txt: %v", err)
+	}
+	if !strings.Contains(outFile, "Write history (3 change(s), offset 0):") {
+		t.Errorf("expected 3 changes for file=file1.txt, got:\n%s", outFile)
+	}
+
 	// Paging: limit=2, offset=1
 	outPaged, err := tool.Execute(context.Background(), json.RawMessage(`{"limit": 2, "offset": 1}`))
 	if err != nil {
