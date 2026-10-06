@@ -67,6 +67,7 @@ func nonLeanToolSet() []describable {
 		NewGitInit(WriteDeps{}),
 		NewAgentConfig(AgentConfigDeps{}),
 		NewFileDiff(),
+		NewWriteHistory(),
 		NewFindReplace(),
 		NewDaemonInfoFunc(nil, nil, "", time.Time{}),
 		NewRenameSession(nil),

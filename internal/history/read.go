@@ -27,6 +27,7 @@ type Filter struct {
 	Since     time.Time
 	Until     time.Time
 	Limit     int
+	Offset    int
 }
 
 // Entry is one change record retrieved from history.db.
@@ -212,6 +213,10 @@ func buildListQuery(f Filter) (string, []any) {
 		limit = 50
 	}
 	args = append(args, limit)
+	if f.Offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
 	return query, args
 }
 

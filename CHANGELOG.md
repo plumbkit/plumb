@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.1 (unreleased)
+
+### Added
+
+- **`write_history`: an MCP tool for agents to review recorded file writes.**
+  Adds read-only inspection of write-diff history across sessions and peers in the
+  same workspace. Supports timeline listing with session, agent, tool, and file
+  filters, and full diff display with stats call metadata by sequence number or
+  call ID. Truncates large diffs at `max_diff_bytes` with an expansion hint,
+  renders gap lines for unrecorded modifications outside plumb, and strictly displays
+  markers for withheld rows (`[withheld:sensitive]`, `[withheld:binary]`, etc.)
+  without leaking content (#606).
+
 ## 0.22.0 (2026-10-05)
 
 ### Added

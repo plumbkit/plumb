@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **58** structured tools to AI assistants. Every write tool is
+Plumb exposes **59** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -1111,6 +1111,9 @@ summary beyond that.
 
 ### `file_diff`
 Unified diff between two files (system `diff -U`). **Inputs:** two file paths.
+
+### `write_history`
+Reviews file write history recorded across plumb write tools. Supports listing recent changes with session, agent, tool, and file filters, and showing full diffs and tool-call metadata by sequence number or call ID. Withheld content (sensitive, binary, too large, overflow) displays markers rather than file content. **Inputs:** `mode` (`list` (default) or `show`), `seq` (integer, show mode), `call_id` (string, show mode), `session` (string, or `"self"` for the caller's session), `agent` (string), `tool` (string), `file` (string), `limit` (integer, default 20), `offset` (integer, default 0), `max_diff_bytes` (integer, default 32768), `workspace` (string, optional).
 
 ### `minimal_diff_review`
 **Advisory** review of a git diff for signs of over-building — findings **never
