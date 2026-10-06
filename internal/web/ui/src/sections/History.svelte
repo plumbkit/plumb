@@ -8,7 +8,7 @@
   import Chart from "../lib/Chart.svelte";
 
   let model = $state({ workspace: "", workspaces: [], changes: [] });
-  let selectedWs = $state("");
+  let selectedWs = $state("__all__");
   let sessionFilter = $state("");
   let agentFilter = $state("");
   let toolFilter = $state("");
@@ -31,9 +31,9 @@
 
     for (const c of model.changes) {
       const cid = c.callId || `single_${c.seq}`;
-      if (!current || current.id !== cid) {
+      if (!current || current.callId !== c.callId || !c.callId) {
         current = {
-          id: cid,
+          id: `${cid}_${groups.length}`,
           callId: c.callId,
           tool: c.tool,
           call: c.call,
@@ -51,10 +51,10 @@
     loadingList = true;
     try {
       const params = new URLSearchParams();
-      if (selectedWs === "__all__") {
-        params.set("all", "true");
-      } else if (selectedWs) {
+      if (selectedWs && selectedWs !== "__all__") {
         params.set("workspace", selectedWs);
+      } else if (selectedWs === "__all__") {
+        params.set("all", "true");
       }
       if (sessionFilter.trim()) params.set("session", sessionFilter.trim());
       if (agentFilter.trim()) params.set("agent", agentFilter.trim());
@@ -64,8 +64,8 @@
 
       const q = params.toString() ? "?" + params.toString() : "";
       model = await getJSON("/api/history" + q);
-      if (selectedWs === "") {
-        selectedWs = model.workspace || "";
+      if (selectedWs === "" && model.workspace) {
+        selectedWs = model.workspace;
       }
 
       if (model.changes.length > 0 && !selectedSeq && !selectedCallId) {
@@ -251,8 +251,10 @@
         >
           <!-- Call Header -->
           <div
-            class="px-3 py-2 border-b flex items-center gap-2 text-[12px]"
-            style="border-color:var(--rule);background:var(--card2)"
+            class="px-3 py-2 border-b flex items-center gap-2 text-[12px] transition-colors"
+            style={selectedCallId === grp.callId && grp.callId
+              ? "border-color:var(--acc);background:color-mix(in srgb,var(--acc) 10%,var(--card2))"
+              : "border-color:var(--rule);background:var(--card2)"}
           >
             <span class="font-semibold font-mono" style="color:var(--acc)">{grp.tool}</span>
             {#if grp.call}
@@ -340,7 +342,7 @@
   <div class="lg:col-span-7">
     <Card
       title={detail ? (detail.callId && !detail.entry ? `Call ${detail.callId}` : `Diff #${detail.seq || detail.entry?.seq}`) : "Diff Viewer"}
-      desc={detail?.entry ? detail.entry.path : "Select a change row or tool call to inspect diff"}
+      desc={detail?.entry ? detail.entry.path : (detail?.entries?.length > 1 ? `${detail.entries.length} files changed in tool call` : "Select a change row or tool call to inspect diff")}
     >
       {#if loadingDetail}
         <div class="text-[12px] py-12 text-center" style="color:var(--faint)">Loading diff…</div>
@@ -398,7 +400,7 @@
                 </div>
                 {#if entry.content !== "diff" && entry.content !== ""}
                   <div class="p-4 text-[12px] italic text-center" style="color:var(--faint)">
-                    [Content withheld: {entry.content}]
+                    [Content: {entry.content}]
                   </div>
                 {:else if detail.diffs && detail.diffs[i]}
                   <pre class="diff-block font-mono text-[11.5px] leading-relaxed p-3 overflow-x-auto m-0">{#each detail.diffs[i].split("\n") as line}<span class="diff-line {line.startsWith('+') && !line.startsWith('+++') ? 'diff-add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-del' : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx'}">{line}
@@ -420,7 +422,9 @@
                 [{detail.entry.content}]
               </div>
               <div class="text-[12px]" style="color:var(--faint)">
-                Content withheld from history database per project safety policy.
+                {detail.entry.content.startsWith("withheld:")
+                  ? "Content withheld from history database per project safety policy."
+                  : "No content change (metadata only)."}
               </div>
             </div>
           {:else if detail.diff}
