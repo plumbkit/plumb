@@ -38,7 +38,7 @@ func (m Model) render() string {
 	bodyHeight := max(m.height-6, 1)
 
 	var sb strings.Builder
-	isOverlay := m.showPopup || m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.renameModal != nil
+	isOverlay := m.isAnyOverlayOpen()
 
 	sepStyle := SepStyle
 	if isOverlay {
@@ -66,17 +66,20 @@ func (m Model) render() string {
 	if m.showPopup {
 		final = m.renderPopup(final, bodyHeight-1)
 	}
-	final = m.applyOverlays(final)
-	if m.renameModal != nil {
-		final = m.renameModal.renderModal(final, m.width, m.height)
-	}
-	return final
+	return m.applyOverlays(final)
+}
+
+func (m Model) isAnyOverlayOpen() bool {
+	return m.showPopup || m.showHelp || m.sectionMenuOpen || m.showThemePicker || m.renameModal != nil || m.diffDetailOpen
 }
 
 // applyOverlays composites the help, section-menu, and theme-picker overlays
 // (in that order) onto an already-rendered section. Shared by every full-width
 // section renderer so the theme picker (global ^t) appears over all of them.
 func (m Model) applyOverlays(final string) string {
+	if m.diffDetailOpen {
+		final = m.renderDiffDetail(final)
+	}
 	if m.showHelp {
 		final = m.renderHelp(final)
 	}
@@ -85,6 +88,9 @@ func (m Model) applyOverlays(final string) string {
 	}
 	if m.showThemePicker {
 		final = m.renderThemePicker(final)
+	}
+	if m.renameModal != nil {
+		final = m.renameModal.renderModal(final, m.width, m.height)
 	}
 	return final
 }

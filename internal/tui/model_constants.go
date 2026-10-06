@@ -28,6 +28,7 @@ const (
 	focusSessions    panelFocus = iota // j/k moves the session cursor (default); in Memory it moves the memories list
 	focusToolStats                     // j/k moves the Tool Statistics cursor
 	focusStats                         // j/k moves the Recent calls cursor
+	focusDiffs                         // j/k moves the write-diff history cursor
 	focusDetails                       // j/k scrolls the Details panel
 	focusDiagnostics                   // j/k scrolls the Diagnostics panel
 	focusLogs                          // j/k scrolls the log viewer (Logs section)

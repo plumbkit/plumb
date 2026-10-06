@@ -97,6 +97,9 @@ func (m Model) handlePasteMsg(msg tea.PasteMsg) Model {
 		m.settingsTextEditor.paste(text)
 	case m.showPopup || m.showThemePicker || m.showHelp || m.sectionMenuOpen:
 		// no text input in these overlays
+	case m.currentSection == 1 && m.diffFilterActive:
+		m.diffFilter += text
+		m.diffCursor = 0
 	case m.currentSection == 2 && m.memoryFilterActive:
 		m.memoryFilter += text
 		m.resetMemoryFilterView()
@@ -259,8 +262,11 @@ func (m *Model) handleTabBarClick(x int) {
 	} else if relX < 35 {
 		m.rightTab = 2
 		m.focusPanel = focusStats
-	} else if relX < 51 {
+	} else if relX < 45 {
 		m.rightTab = 3
+		m.focusPanel = focusDiffs
+	} else if relX < 61 {
+		m.rightTab = 4
 		m.focusPanel = focusDiagnostics
 	}
 }
@@ -299,6 +305,9 @@ func (m Model) handleOverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 		return u, c, true
 	case m.settingsTextEditor != nil:
 		u, c := m.handleTextEditorKey(msg)
+		return u, c, true
+	case m.diffDetailOpen:
+		u, c := m.handleDiffDetailKey(msg)
 		return u, c, true
 	case m.showPopup:
 		u, c := m.handlePopupKey(msg)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
@@ -76,7 +77,7 @@ type Model struct {
 	sectionMenuOpen   bool
 	sectionMenuCursor int
 	currentSection    int
-	rightTab          int // 0=Details 1=Tools 2=History 3=Diagnostics
+	rightTab          int // 0=Details 1=Tools 2=History 3=Diffs 4=Diagnostics
 
 	popupTool         string
 	popupCalls        []stats.RecentCall
@@ -89,7 +90,22 @@ type Model struct {
 
 	statsTableBodyRow     int
 	recentTableBodyRow    int
+	diffTableBodyRow      int
 	lastDiagnosticsOutput string
+
+	// Write-diff history tab (Diffs, index 3).
+	historyReader      *history.Reader
+	historyErr         string
+	diffEntries        []history.Entry
+	diffCursor         int
+	diffFilter         string
+	diffFilterActive   bool
+	diffDetailOpen     bool
+	diffDetailScroll   int
+	diffDetailEntry    history.Entry
+	diffDetailText     string
+	diffDetailCall     stats.CallSummary
+	diffDetailHaveCall bool
 
 	// Control socket path for live daemon queries.
 	ctrlPath string

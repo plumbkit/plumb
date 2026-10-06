@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.1 (unreleased)
+
+### Added
+
+- **A dedicated write-history tab in the TUI.** (#604) The Sessions panel
+  now includes a "Diffs" tab alongside Details, Tools, History (tool calls)
+  and Diagnostics. It displays a chronological timeline of changes made in
+  the current workspace (newest first), with tool names, operations, writers,
+  diff stats, withheld content markers, and unrecorded-change gap indicators.
+  Pressing Enter on any change opens a full-screen diff overlay showing the
+  unified diff and the linked tool call metadata from stats.db. Changes can be
+  filtered live by session, agent, or tool with `f`.
+
 ## 0.22.0 (2026-10-05)
 
 ### Added

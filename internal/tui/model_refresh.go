@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -31,6 +32,7 @@ func (m *Model) refresh() {
 	m.refreshTopology()
 	m.refreshDashboard()
 	m.refreshMemories()
+	m.refreshDiffs()
 }
 
 func (m *Model) refreshDaemonMetrics() {
@@ -333,4 +335,45 @@ func (m *Model) ensureGlobalDB() {
 		m.statsErr = ""
 	}
 	m.globalDB = db
+}
+
+func (m *Model) refreshDiffs() {
+	if m.currentSection != 1 || m.rightTab != 3 {
+		return
+	}
+	m.ensureHistoryReader()
+	if m.historyReader == nil {
+		m.diffEntries = nil
+		return
+	}
+	ws := ""
+	if len(m.sessions) > 0 && m.cursor < len(m.sessions) {
+		ws = m.sessions[m.cursor].Folder
+	}
+	if ws == "" {
+		ws = m.dashProjectFolder
+	}
+	entries, err := m.historyReader.List(history.Filter{Workspace: ws, Limit: 100})
+	if err != nil {
+		m.historyErr = err.Error()
+		return
+	}
+	m.historyErr = ""
+	m.diffEntries = entries
+	if m.diffCursor >= len(m.diffEntries) && len(m.diffEntries) > 0 {
+		m.diffCursor = len(m.diffEntries) - 1
+	}
+}
+
+func (m *Model) ensureHistoryReader() {
+	if m.historyReader != nil {
+		return
+	}
+	r, err := history.OpenReadOnly()
+	if err != nil {
+		m.historyErr = err.Error()
+	} else {
+		m.historyErr = ""
+	}
+	m.historyReader = r
 }
