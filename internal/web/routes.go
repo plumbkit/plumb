@@ -16,6 +16,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/dashboard", s.handleDashboard)
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("GET /api/history/{target}", s.handleHistoryDetail)
 	mux.HandleFunc("GET /api/topology", s.handleTopology)
 	mux.HandleFunc("GET /api/memory", s.handleMemoryList)
 	mux.HandleFunc("GET /api/memory/{name}", s.handleMemoryRead)

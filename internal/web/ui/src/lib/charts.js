@@ -288,6 +288,63 @@ export function topologyForce(P, langs, nodes, links) {
   };
 }
 
+// --- History --------------------------------------------------------------
+
+// historyTimeline — timeline chart of write activity showing changes over time,
+// sized by lines changed, coloured by operation (create: grn, delete: warn, update: acc).
+export function historyTimeline(P, changes) {
+  const data = (changes || []).map((c) => {
+    const lines = (c.added || 0) + (c.removed || 0);
+    const ts = new Date(c.at).getTime();
+    return [ts, lines, c.tool, c.op, c.path, c.seq];
+  });
+
+  return {
+    tooltip: {
+      ...tip(P),
+      trigger: "item",
+      formatter: (p) => {
+        const d = p.data;
+        return `<b>#${d[5]} · ${d[2]}</b> (${d[3]})<br/><span style="color:${P.soft}">${d[4]}</span><br/>Lines changed: <b>${d[1]}</b>`;
+      },
+    },
+    grid: { left: 40, right: 24, top: 20, bottom: 28 },
+    xAxis: {
+      type: "time",
+      axisLine: { lineStyle: { color: P.rule } },
+      axisLabel: { color: P.faint, fontSize: 10 },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: "value",
+      name: "Lines",
+      nameTextStyle: { color: P.faint, fontSize: 10 },
+      axisLine: { lineStyle: { color: P.rule } },
+      axisLabel: { color: P.faint, fontSize: 10 },
+      splitLine: { lineStyle: { color: rgba(P.rule, 0.4) } },
+    },
+    series: [
+      {
+        type: "scatter",
+        data,
+        symbolSize: (v) => Math.max(10, Math.min(36, Math.sqrt(Math.max(1, v[1])) * 4)),
+        itemStyle: {
+          color: (p) => {
+            const op = p.data[3];
+            if (op === "create") return P.grn;
+            if (op === "delete") return P.warn;
+            return P.acc;
+          },
+          opacity: 0.85,
+        },
+        emphasis: {
+          itemStyle: { opacity: 1, borderColor: P.text },
+        },
+      },
+    ],
+  };
+}
+
 // --- helpers --------------------------------------------------------------
 
 function rgba(hex, a) {

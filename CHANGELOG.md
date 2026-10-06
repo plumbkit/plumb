@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.1 (unreleased)
+
+### Added
+
+- **A write-diff history timeline and unified-diff viewer in `plumb web`.**
+  Adds `GET /api/history` and `GET /api/history/{seq|call_id}` endpoints in the
+  daemon's web server, backed by `internal/history.Reader` and `internal/stats`.
+  A new History tab in the web UI renders an interactive ECharts write-activity
+  timeline, grouped tool calls with execution durations and error/success badges,
+  gap markers (`⋯ unrecorded change`), and a syntax-highlighted unified-diff viewer
+  with withheld markers for sensitive and binary files (#605).
+
 ## 0.22.0 (2026-10-05)
 
 ### Added
