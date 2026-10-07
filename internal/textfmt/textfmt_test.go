@@ -275,12 +275,16 @@ func TestTerminalSafe(t *testing.T) {
 		{"crlf\r\n", "crlf^M\n"},
 		{"del\x7f", "del^?"},
 		{"c1\u009b31m", "c1�31m"},
+		// A raw 0x9B byte (8-bit CSI), alone so no other control trips the
+		// scrub: Go decodes it as U+FFFD, a terminal may read it as CSI.
+		{"a\x9b2Jb", "a�2Jb"},
+		{"literal � stays", "literal � stays"},
 	}
 	for _, c := range cases {
 		if got := TerminalSafe(c.in); got != c.want {
 			t.Errorf("TerminalSafe(%q) = %q, want %q", c.in, got, c.want)
 		}
-		if strings.ContainsAny(TerminalSafe(c.in), "\x1b\x07\r\x7f\u009b") {
+		if got := TerminalSafe(c.in); strings.ContainsAny(got, "\x1b\x07\r\x7f\u009b") || !utf8.ValidString(got) {
 			t.Errorf("TerminalSafe(%q) still holds a control", c.in)
 		}
 	}
