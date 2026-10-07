@@ -41,6 +41,16 @@
   characters in caret notation (`^[`) and replaces C1 controls and invalid
   UTF-8 with U+FFFD. `plumb history` scrubs only when stdout is a terminal,
   so piped output stays byte-exact.
+- **A write-diff history timeline and unified-diff viewer in `plumb web`.**
+  Adds `GET /api/history` and `GET /api/history/{seq|call_id}` endpoints in the
+  daemon's web server, backed by `internal/history.Reader` and `internal/stats`.
+  A new History tab in the web UI renders an interactive ECharts write-activity
+  timeline, grouped tool calls with execution durations and error/success badges,
+  gap markers (`⋯ unrecorded change`), and a unified-diff viewer (added, removed
+  and hunk lines coloured) with withheld markers for sensitive and binary
+  files. With no workspace given and none active, `/api/history` lists nothing
+  rather than every workspace; `all=true` asks for all. The UI's unit tests now
+  run in CI (`npm test` in the web ui job) (#605).
 
 ## 0.22.0 (2026-10-05)
 

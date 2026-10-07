@@ -64,6 +64,7 @@ func TestReadEndpoints_RejectUnknownWorkspace(t *testing.T) {
 	}{
 		{"topology", s.handleTopology},
 		{"memoryList", s.handleMemoryList},
+		{"history", s.handleHistory},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
