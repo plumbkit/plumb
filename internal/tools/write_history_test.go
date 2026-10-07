@@ -584,7 +584,9 @@ func openHistoryAt(t *testing.T, items ...history.Item) string {
 // transcript: the tool re-asks the sensitivity decision at read time.
 func TestWriteHistory_ReadTimeSensitivity(t *testing.T) {
 	ws := paths.Canonical(t.TempDir())
-	secret := filepath.Join(ws, "secrets.txt")
+	// A DIRECTORY glob, decided by the real matcher: history.db stores the path
+	// relative to its root, and a relative path would match by base name only.
+	secret := filepath.Join(ws, "secrets", "prod.yaml")
 	dbPath := openHistoryAt(t, history.Item{
 		Change: history.Change{
 			At: time.UnixMilli(1000), Op: history.OpCreate, Kind: history.KindFile, Tool: "write_file",
@@ -610,7 +612,9 @@ func TestWriteHistory_ReadTimeSensitivity(t *testing.T) {
 		t.Fatalf("control: expected the stored diff, got err=%v out:\n%s", err, out)
 	}
 
-	sensitive := newTool(func(_ context.Context, path, _ string) bool { return filepath.Base(path) == "secrets.txt" })
+	sensitive := newTool(func(_ context.Context, path, from string) bool {
+		return history.IsSensitiveChange([]string{"secrets/*"}, ws, path, from)
+	})
 	for _, args := range []string{`{"seq": 1}`, `{"call_id": "CALL_SECRET"}`, `{}`} {
 		out, err := sensitive.Execute(context.Background(), json.RawMessage(args))
 		if err != nil {
@@ -705,5 +709,38 @@ func TestWriteHistory_ListPagingAndMaxCapNotice(t *testing.T) {
 	}
 	if !strings.Contains(out, "diff truncated at the 131072-byte maximum; `plumb history show 1` prints it in full") {
 		t.Fatalf("expected the at-maximum notice, got tail:\n%s", out[max(0, len(out)-300):])
+	}
+}
+
+// A call of thousands of withheld rows spends no diff bytes, so the diff budget
+// alone would let its headers run to megabytes; the whole response is capped.
+func TestWriteHistory_CallHeadersBounded(t *testing.T) {
+	ws := paths.Canonical(t.TempDir())
+	longDir := strings.Repeat("deep-directory-name/", 8)
+	items := make([]history.Item, 0, 1500)
+	for i := range 1500 {
+		items = append(items, history.Item{
+			Change: history.Change{
+				At: time.UnixMilli(int64(1000 + i)), Op: history.OpUpdate, Kind: history.KindFile, Tool: "find_replace",
+				Path:   filepath.Join(ws, longDir, fmt.Sprintf("blob_%04d.bin", i)),
+				Before: history.SideFromBytes([]byte("a")), After: history.SideFromBytes([]byte("b")),
+			},
+			Workspace: ws, CallID: "CALL_WIDE", Content: history.ContentBinary,
+		})
+	}
+	dbPath := openHistoryAt(t, items...)
+	tool := NewWriteHistory().
+		WithWorkspace(func(context.Context) string { return ws }).
+		withOpeners(func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) }, nil)
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"call_id": "CALL_WIDE"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) > maxShowOutputBytes+4096 {
+		t.Fatalf("call output %d bytes exceeds the %d-byte response cap", len(out), maxShowOutputBytes)
+	}
+	if !strings.Contains(out, "omitted to stay within the response budget; continue with offset=") {
+		t.Fatalf("expected the omission notice, got tail:\n%s", out[max(0, len(out)-300):])
 	}
 }

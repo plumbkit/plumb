@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -70,6 +71,7 @@ const (
 	defaultMaxDiffBytes = 32 * 1024  // 32 KiB
 	maxAllowedDiffBytes = 128 * 1024 // 128 KiB
 	maxTotalShowBytes   = 128 * 1024 // 128 KiB aggregate budget for call diff output
+	maxShowOutputBytes  = 192 * 1024 // whole show response, headers and markers included
 )
 
 // WriteHistory enables read-only inspection of recorded write-diff history.
@@ -306,15 +308,29 @@ func (t *WriteHistory) run(ctx context.Context, a writeHistoryArgs) (string, err
 // withholdIfSensitive downgrades a row recorded as a diff to the sensitive
 // marker when the change is sensitive under the CURRENT globs (WithSensitive).
 // It reports whether the row's diff may be shown.
+//
+// history.db stores each path relative to its row's workspace root, and the
+// decision matches globs against the path relative to the project root it
+// resolves for an ABSOLUTE path: a relative one matches only by base name, so
+// a directory glob ("secrets/*") would never withhold. Both paths are joined
+// to the row's own root first.
 func (t *WriteHistory) withholdIfSensitive(ctx context.Context, e *history.Entry) bool {
 	if e.Content != history.ContentDiff {
 		return false
 	}
-	if t.sensitive != nil && t.sensitive(ctx, e.Path, e.From) {
+	if t.sensitive != nil && t.sensitive(ctx, rowAbs(e.Workspace, e.Path), rowAbs(e.Workspace, e.From)) {
 		e.Content = history.ContentSensitive
 		return false
 	}
 	return true
+}
+
+// rowAbs makes a stored row path absolute against the row's workspace root.
+func rowAbs(root, p string) string {
+	if p == "" || filepath.IsAbs(p) || root == "" {
+		return p
+	}
+	return filepath.Join(root, p)
 }
 
 func (t *WriteHistory) resolveSessionFilter(filterSession string) (string, error) {

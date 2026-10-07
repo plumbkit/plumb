@@ -102,12 +102,14 @@ func formatShowResult(res writeHistoryResult) string {
 		fmt.Fprintf(&sb, "Call %s: changes %d–%d of %d\n\n", res.CallID, res.Offset+1, res.Offset+len(res.Entries), res.Total)
 	}
 
-	// The budget counts diff bytes only, so one change always gets its full
-	// max_diff_bytes (which never exceeds the budget) and headers do not eat it.
+	// The diff budget counts diff bytes only, so one change always gets its
+	// full max_diff_bytes (which never exceeds the budget) and headers do not
+	// eat it. The whole response is capped too: a call of thousands of withheld
+	// or binary rows spends no diff bytes but prints a header for each.
 	diffSpent := 0
 
 	for i, e := range res.Entries {
-		if diffSpent >= maxTotalShowBytes {
+		if diffSpent >= maxTotalShowBytes || sb.Len() >= maxShowOutputBytes {
 			omitted := len(res.Entries) - i
 			fmt.Fprintf(&sb, "… (%d change(s) omitted to stay within the response budget; continue with offset=%d, or show one with seq)\n", omitted, res.Offset+i)
 			break
