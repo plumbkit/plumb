@@ -9,6 +9,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
@@ -29,6 +30,7 @@ type scrollBounds struct {
 	maxPopupLeft   int
 	maxPopupDetail int
 	maxLogDetail   int
+	maxDiffDetail  int
 }
 
 // Model is the root Bubble Tea model for the sessions dashboard.
@@ -76,7 +78,7 @@ type Model struct {
 	sectionMenuOpen   bool
 	sectionMenuCursor int
 	currentSection    int
-	rightTab          int // 0=Details 1=Tools 2=History 3=Diagnostics
+	rightTab          int // 0=Details 1=Tools 2=History 3=Diffs 4=Diagnostics
 
 	popupTool         string
 	popupCalls        []stats.RecentCall
@@ -90,6 +92,22 @@ type Model struct {
 	statsTableBodyRow     int
 	recentTableBodyRow    int
 	lastDiagnosticsOutput string
+
+	// Write-diff history tab (Diffs, index 3).
+	historyReader      *history.Reader
+	historyErr         string
+	diffEntries        []history.Entry
+	diffCursor         int
+	diffFilter         string
+	diffFilterActive   bool
+	diffDetailOpen     bool
+	diffDetailScroll   int
+	diffDetailEntry    history.Entry
+	diffDetailText     string // terminal-safe (textfmt.TerminalSafe), as shown and copied
+	diffDetailErr      string // why the diff could not be read; never copied as the diff
+	diffDetailCall     stats.CallSummary
+	diffDetailHaveCall bool
+	diffNoWorkspace    bool // no session or project folder to scope the Diffs tab to
 
 	// Control socket path for live daemon queries.
 	ctrlPath string

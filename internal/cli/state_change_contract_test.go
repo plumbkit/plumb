@@ -44,6 +44,7 @@ var stateChanging = map[string]string{
 	"read_memory": readOnly, "list_memories": readOnly, "search_memories": readOnly,
 	"relevant_memories": readOnly,
 	"file_outline":      readOnly, "file_status": readOnly, "file_diff": readOnly,
+	"write_history":       readOnly,
 	"minimal_diff_review": readOnly,
 	"find_files":          readOnly, "search_in_files": readOnly, "find_references": readOnly,
 	"get_definition": readOnly, "explain_symbol": readOnly,

@@ -33,20 +33,30 @@ func sessionAdapterRow(s session.Info) (label, value string) {
 func (m *Model) handleRightPanelClick(bodyRow int) {
 	switch m.rightTab {
 	case 1: // Tools tab
-		if m.statsTableBodyRow >= 0 && len(m.toolStats) > 0 {
-			idx := bodyRow - m.statsTableBodyRow
-			if idx >= 0 && idx < len(m.toolStats) {
-				m.toolStatsCursor, m.focusPanel = idx, focusToolStats
-			}
+		if idx := tableRowClick(bodyRow, m.statsTableBodyRow, len(m.toolStats)); idx >= 0 {
+			m.toolStatsCursor, m.focusPanel = idx, focusToolStats
 		}
 	case 2: // History tab
-		if m.recentTableBodyRow >= 0 && len(m.recentCalls) > 0 {
-			idx := bodyRow - m.recentTableBodyRow
-			if idx >= 0 && idx < len(m.recentCalls) {
-				m.statsCursor, m.focusPanel = idx, focusStats
-			}
+		if idx := tableRowClick(bodyRow, m.recentTableBodyRow, len(m.recentCalls)); idx >= 0 {
+			m.statsCursor, m.focusPanel = idx, focusStats
+		}
+	case 3: // Diffs tab
+		if idx := m.diffEntryAtLine(bodyRow); idx >= 0 {
+			m.diffCursor, m.focusPanel = idx, focusDiffs
+			m.ensureDiffCursorVisible()
 		}
 	}
+}
+
+func tableRowClick(bodyRow, startRow, count int) int {
+	if startRow < 0 || count <= 0 {
+		return -1
+	}
+	idx := bodyRow - startRow
+	if idx >= 0 && idx < count {
+		return idx
+	}
+	return -1
 }
 
 // rightTabFocusPanel returns the panelFocus that corresponds to the current rightTab.
@@ -57,6 +67,8 @@ func (m Model) rightTabFocusPanel() panelFocus {
 	case 2:
 		return focusStats
 	case 3:
+		return focusDiffs
+	case 4:
 		return focusDiagnostics
 	default:
 		return focusDetails
@@ -68,7 +80,7 @@ func (m Model) rightTabFocusPanel() panelFocus {
 func (m Model) rightTabBar(_ int) string {
 	rightFocused := m.focusPanel != focusSessions
 
-	tabs := []string{"Details", "Tools", "History", "Diagnostics"}
+	tabs := []string{"Details", "Tools", "History", "Diffs", "Diagnostics"}
 	var sb strings.Builder
 	sb.WriteString(" ")
 	for i, name := range tabs {
@@ -93,7 +105,7 @@ func (m *Model) rightLines(rw int) []string {
 		return m.memoryRightLines(rw)
 	}
 	lines := []string{m.rightTabBar(rw), ""}
-	if len(m.sessions) == 0 {
+	if len(m.sessions) == 0 && m.rightTab != 3 {
 		lines = append(lines, "  "+MutedStyle.Render("Select a session to view details."))
 		return lines
 	}
@@ -103,6 +115,8 @@ func (m *Model) rightLines(rw int) []string {
 	case 2:
 		lines = append(lines, m.rightLinesHistory(rw)...)
 	case 3:
+		lines = append(lines, m.rightLinesDiffs(rw)...)
+	case 4:
 		lines = append(lines, m.rightLinesDiagnostics(rw)...)
 	default:
 		lines = append(lines, m.rightLinesDetails(rw)...)

@@ -426,3 +426,26 @@ func TestHistoryPruneVacuumRefusedWhileDaemonRuns(t *testing.T) {
 		t.Fatalf("expected vacuum refusal error, got %v", err)
 	}
 }
+
+// To a terminal, recorded paths and diffs are display text and an escape
+// sequence in them must not run; piped, the output stays byte-exact.
+func TestHistoryDisplay_ScrubsOnlyForATerminal(t *testing.T) {
+	in := "+boom\x1b[2J\tx"
+	if got := historyDisplay(true, in); got != "+boom^[[2J\tx" {
+		t.Errorf("terminal: got %q", got)
+	}
+	if got := historyDisplay(false, in); got != in {
+		t.Errorf("piped: got %q, want it unchanged", got)
+	}
+}
+
+// A newline in a recorded path must not forge another list row on a terminal.
+func TestHistoryDisplayLine_KeepsOneLine(t *testing.T) {
+	in := "#1  a.go\n#2  forged.go"
+	if got := historyDisplayLine(true, in); strings.Contains(got, "\n") {
+		t.Errorf("terminal: a newline survived: %q", got)
+	}
+	if got := historyDisplayLine(false, in); got != in {
+		t.Errorf("piped: got %q, want it unchanged", got)
+	}
+}

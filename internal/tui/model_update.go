@@ -97,6 +97,9 @@ func (m Model) handlePasteMsg(msg tea.PasteMsg) Model {
 		m.settingsTextEditor.paste(text)
 	case m.showPopup || m.showThemePicker || m.showHelp || m.sectionMenuOpen:
 		// no text input in these overlays
+	case m.currentSection == 1 && m.diffFilterActive:
+		m.diffFilter += text
+		m.diffCursor = 0
 	case m.currentSection == 2 && m.memoryFilterActive:
 		m.memoryFilter += text
 		m.resetMemoryFilterView()
@@ -161,7 +164,8 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 	if mouse.Button != tea.MouseLeft {
 		return
 	}
-	if m.logDetailOpen {
+	// A click while an overlay is open must not act on the panels behind it.
+	if m.logDetailOpen || m.diffDetailOpen {
 		return
 	}
 	if m.sectionMenuOpen {
@@ -259,10 +263,14 @@ func (m *Model) handleTabBarClick(x int) {
 	} else if relX < 35 {
 		m.rightTab = 2
 		m.focusPanel = focusStats
-	} else if relX < 51 {
+	} else if relX < 45 {
 		m.rightTab = 3
+		m.focusPanel = focusDiffs
+	} else if relX < 61 {
+		m.rightTab = 4
 		m.focusPanel = focusDiagnostics
 	}
+	m.refreshDiffs() // no-op unless the Diffs tab is now showing
 }
 
 func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -300,6 +308,9 @@ func (m Model) handleOverlayKey(msg tea.KeyPressMsg) (Model, tea.Cmd, bool) {
 	case m.settingsTextEditor != nil:
 		u, c := m.handleTextEditorKey(msg)
 		return u, c, true
+	case m.diffDetailOpen:
+		u, c := m.handleDiffDetailKey(msg)
+		return u, c, true
 	case m.showPopup:
 		u, c := m.handlePopupKey(msg)
 		return u, c, true
@@ -327,46 +338,21 @@ func (m Model) handleRenameModalKey(msg tea.KeyPressMsg) Model {
 	return m
 }
 
+func clampScroll(val, maxVal int) int {
+	return min(max(val, 0), maxVal)
+}
+
 func (m *Model) enforceScrollBounds() {
 	if m.scrollBounds == nil {
 		return
 	}
-	if m.dashScroll > m.scrollBounds.maxDash {
-		m.dashScroll = m.scrollBounds.maxDash
-	}
-	if m.dashScroll < 0 {
-		m.dashScroll = 0
-	}
-	if m.leftScroll > m.scrollBounds.maxLeft {
-		m.leftScroll = m.scrollBounds.maxLeft
-	}
-	if m.leftScroll < 0 {
-		m.leftScroll = 0
-	}
-	if m.rightScroll > m.scrollBounds.maxRight {
-		m.rightScroll = m.scrollBounds.maxRight
-	}
-	if m.rightScroll < 0 {
-		m.rightScroll = 0
-	}
-	if m.popupLeftScroll > m.scrollBounds.maxPopupLeft {
-		m.popupLeftScroll = m.scrollBounds.maxPopupLeft
-	}
-	if m.popupLeftScroll < 0 {
-		m.popupLeftScroll = 0
-	}
-	if m.popupDetailScroll > m.scrollBounds.maxPopupDetail {
-		m.popupDetailScroll = m.scrollBounds.maxPopupDetail
-	}
-	if m.popupDetailScroll < 0 {
-		m.popupDetailScroll = 0
-	}
-	if m.logDetailScroll > m.scrollBounds.maxLogDetail {
-		m.logDetailScroll = m.scrollBounds.maxLogDetail
-	}
-	if m.logDetailScroll < 0 {
-		m.logDetailScroll = 0
-	}
+	m.dashScroll = clampScroll(m.dashScroll, m.scrollBounds.maxDash)
+	m.leftScroll = clampScroll(m.leftScroll, m.scrollBounds.maxLeft)
+	m.rightScroll = clampScroll(m.rightScroll, m.scrollBounds.maxRight)
+	m.popupLeftScroll = clampScroll(m.popupLeftScroll, m.scrollBounds.maxPopupLeft)
+	m.popupDetailScroll = clampScroll(m.popupDetailScroll, m.scrollBounds.maxPopupDetail)
+	m.logDetailScroll = clampScroll(m.logDetailScroll, m.scrollBounds.maxLogDetail)
+	m.diffDetailScroll = clampScroll(m.diffDetailScroll, m.scrollBounds.maxDiffDetail)
 }
 
 func (m Model) logBodyHeight() int {
@@ -480,6 +466,10 @@ func (m *Model) handleMouseWheelDash(delta int) bool {
 }
 
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
+	if m.diffDetailOpen {
+		m.diffDetailScroll = min(max(m.diffDetailScroll+delta, 0), m.diffDetailMaxScroll())
+		return
+	}
 	if m.showPopup {
 		m.handleMouseWheelPopup(mouse, delta)
 		return

@@ -116,13 +116,19 @@ func (m Model) popupKeyPageUp() Model {
 	return m
 }
 
-func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+func (m Model) handleActiveFilterKey(msg tea.KeyPressMsg) (Model, bool) {
+	if m.currentSection == 1 && m.diffFilterActive {
+		return m.handleDiffFilterKey(msg.String())
+	}
 	if m.currentSection == 2 && m.memoryFilterActive {
-		// Raw key: the filter edits literal text, so it must see the pressed key,
-		// not the rebound action it may map to.
-		if next, handled := m.handleMemoryFilterKey(msg.String()); handled {
-			return next, nil
-		}
+		return m.handleMemoryFilterKey(msg.String())
+	}
+	return m, false
+}
+
+func (m Model) handleMainKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
+	if next, handled := m.handleActiveFilterKey(msg); handled {
+		return next, nil
 	}
 	key := m.keys.normalise(msg.String())
 	switch key {
@@ -215,6 +221,11 @@ func (m Model) mainKeyEnter() Model {
 			rc := m.recentCalls[m.statsCursor]
 			m.openPopup(rc.Tool, rc.CalledAt)
 		}
+	case focusDiffs:
+		entries := m.filteredDiffEntries()
+		if len(entries) > 0 && m.diffCursor < len(entries) {
+			m.openDiffDetail(entries[m.diffCursor])
+		}
 	}
 	return m
 }
@@ -234,7 +245,7 @@ func (m Model) mainKeyTab() Model {
 	}
 	if m.focusPanel == focusSessions {
 		m.focusPanel = m.rightTabFocusPanel()
-	} else if m.rightTab < 3 {
+	} else if m.rightTab < 4 {
 		m.rightTab++
 		m.focusPanel = m.rightTabFocusPanel()
 		m.rightScroll = 0
@@ -242,6 +253,7 @@ func (m Model) mainKeyTab() Model {
 		m.rightTab = 0
 		m.focusPanel = focusSessions
 	}
+	m.refreshDiffs() // load on entry, not on the next poll; no-op on other tabs
 	return m
 }
 
@@ -259,7 +271,7 @@ func (m Model) mainKeyShiftTab() Model {
 		return m
 	}
 	if m.focusPanel == focusSessions {
-		m.rightTab = 3
+		m.rightTab = 4
 		m.focusPanel = m.rightTabFocusPanel()
 	} else if m.rightTab > 0 {
 		m.rightTab--
@@ -268,6 +280,7 @@ func (m Model) mainKeyShiftTab() Model {
 	} else {
 		m.focusPanel = focusSessions
 	}
+	m.refreshDiffs() // load on entry, not on the next poll; no-op on other tabs
 	return m
 }
 
@@ -292,25 +305,35 @@ func (m Model) mainKeyUp() Model {
 		if m.statsCursor > 0 {
 			m.statsCursor--
 		}
+	case focusDiffs:
+		if m.diffCursor > 0 {
+			m.diffCursor--
+			m.ensureDiffCursorVisible()
+		}
 	case focusDetails, focusDiagnostics:
 		if m.rightScroll > 0 {
 			m.rightScroll--
 		}
 	default:
-		if m.currentSection == 2 {
-			if m.memoryCursor > 0 {
-				m.memoryCursor--
-				m.rightScroll = 0
-				m.memoryBodyCache = ""
-				m.memoryBodyCacheName = ""
-				m.ensureLeftCursorVisible()
-			}
-		} else if m.cursor > 0 {
-			m.cursor--
+		return m.mainKeyUpDefault()
+	}
+	return m
+}
+
+func (m Model) mainKeyUpDefault() Model {
+	if m.currentSection == 2 {
+		if m.memoryCursor > 0 {
+			m.memoryCursor--
 			m.rightScroll = 0
-			m.refreshStats()
+			m.memoryBodyCache = ""
+			m.memoryBodyCacheName = ""
 			m.ensureLeftCursorVisible()
 		}
+	} else if m.cursor > 0 {
+		m.cursor--
+		m.rightScroll = 0
+		m.refreshStats()
+		m.ensureLeftCursorVisible()
 	}
 	return m
 }
@@ -335,6 +358,12 @@ func (m Model) mainKeyDown() Model {
 	case focusStats:
 		if m.statsCursor < len(m.recentCalls)-1 {
 			m.statsCursor++
+		}
+	case focusDiffs:
+		entries := m.filteredDiffEntries()
+		if m.diffCursor < len(entries)-1 {
+			m.diffCursor++
+			m.ensureDiffCursorVisible()
 		}
 	case focusDetails, focusDiagnostics:
 		m.rightScroll++
@@ -373,6 +402,13 @@ func (m Model) mainKeyPageDown() Model {
 		if m.statsCursor >= len(m.recentCalls) {
 			m.statsCursor = len(m.recentCalls) - 1
 		}
+	case focusDiffs:
+		entries := m.filteredDiffEntries()
+		m.diffCursor += pageSize
+		if m.diffCursor >= len(entries) {
+			m.diffCursor = max(len(entries)-1, 0)
+		}
+		m.ensureDiffCursorVisible()
 	case focusDetails, focusDiagnostics:
 		m.rightScroll += pageSize
 	default:
@@ -414,6 +450,12 @@ func (m Model) mainKeyPageUp() Model {
 		if m.statsCursor < 0 {
 			m.statsCursor = 0
 		}
+	case focusDiffs:
+		m.diffCursor -= pageSize
+		if m.diffCursor < 0 {
+			m.diffCursor = 0
+		}
+		m.ensureDiffCursorVisible()
 	case focusDetails, focusDiagnostics:
 		m.rightScroll -= pageSize
 		if m.rightScroll < 0 {
@@ -466,7 +508,7 @@ func (m Model) handleMainKeySimple(key string) Model {
 	case "a":
 		m.refresh()
 	case "f":
-		m = m.mainKeyOpenMemoryFilter()
+		m = m.mainKeyOpenFilter()
 	case "[":
 		m.resizeFocusedColumn(-2)
 	case "]":
@@ -483,6 +525,9 @@ func (m Model) mainKeyEsc() Model {
 	case m.sectionMenuOpen || m.showHelp:
 		m.sectionMenuOpen = false
 		m.showHelp = false
+	case m.currentSection == 1 && m.diffFilter != "":
+		m.diffFilter = ""
+		m.diffCursor = 0
 	case m.currentSection == 2 && m.memoryFilter != "":
 		m.memoryFilter = ""
 		m.resetMemoryFilterView()
@@ -492,11 +537,13 @@ func (m Model) mainKeyEsc() Model {
 	return m
 }
 
-// mainKeyOpenMemoryFilter opens the memory filter when the Memories list has
-// focus; a no-op elsewhere.
-func (m Model) mainKeyOpenMemoryFilter() Model {
+// mainKeyOpenFilter opens the active filter for the focused panel:
+// Memories list in section 2, Diffs list in section 1.
+func (m Model) mainKeyOpenFilter() Model {
 	if m.currentSection == 2 && m.focusPanel == focusSessions {
 		m.memoryFilterActive = true
+	} else if m.currentSection == 1 && m.focusPanel == focusDiffs {
+		m.diffFilterActive = true
 	}
 	return m
 }

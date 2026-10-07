@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.23.0 (unreleased)
+
+### Added
+
+- **`write_history`: an MCP tool for agents to review recorded file writes.**
+  Adds read-only inspection of write-diff history across sessions and peers in the
+  same workspace. Supports timeline listing with session, agent, tool, and file
+  filters, and full diff display with stats call metadata by sequence number or
+  call ID. Output is bounded: diffs are cut at `max_diff_bytes` and a call's
+  diffs share a 128 KiB budget, with notices that say which cap applied and
+  how to page on; a call's diffs are read only as far as the budget prints
+  them. It renders gap lines for unrecorded modifications outside plumb, and
+  withheld rows (`[withheld:sensitive]`, `[withheld:binary]`, etc.) show only
+  their marker. A row recorded as a diff is re-checked against the current
+  sensitive globs before it is shown, because `history.db` can hold diffs of
+  files that are sensitive now (globs added later, or a pre-0.22.0 project
+  config that emptied the list). `session: "self"` is the caller's own writes:
+  on a connection shared by several agents, only this agent's (rows written
+  before the connection became shared carry no agent, so they are not
+  included). A call's response is capped at 192 KiB in all (#606).
+- **A dedicated write-history tab in the TUI.** (#604) The Sessions panel
+  now includes a "Diffs" tab alongside Details, Tools, History (tool calls)
+  and Diagnostics. It displays a chronological timeline of changes made in
+  the current workspace (newest first), with tool names, operations, writers,
+  diff stats, withheld content markers, and unrecorded-change gap indicators.
+  Pressing Enter on any change opens a full-screen diff overlay showing the
+  unified diff and the linked tool call metadata from stats.db. Changes can be
+  filtered live by session, agent, or tool with `f`. With no session or
+  project folder selected the tab says so rather than listing every
+  workspace.
+
+- **A write-diff history timeline and unified-diff viewer in `plumb web`.**
+  Adds `GET /api/history` and `GET /api/history/{seq|call_id}` endpoints in the
+  daemon's web server, backed by `internal/history.Reader` and `internal/stats`.
+  A new History tab in the web UI renders an interactive ECharts write-activity
+  timeline, grouped tool calls with execution durations and error/success badges,
+  gap markers (`⋯ unrecorded change`), and a unified-diff viewer (added, removed
+  and hunk lines coloured) with withheld markers for sensitive and binary
+  files. With no workspace given and none active, `/api/history` lists nothing
+  rather than every workspace; `all=true` asks for all. The UI's unit tests now
+  run in CI (`npm test` in the web ui job) (#605).
+
+### Security
+
+- **Recorded paths and diffs can no longer drive the terminal.** (#604)
+  History stores file content and paths from the repository, so a file named
+  or filled with an escape sequence (a CSI screen clear, an OSC 52 clipboard
+  write) reached the terminal raw. The TUI Diffs tab and `plumb history`
+  list/show now render that text through a scrubber that shows control
+  characters in caret notation (`^[`) and replaces C1 controls and invalid
+  UTF-8 with U+FFFD. `plumb history` scrubs only when stdout is a terminal,
+  so piped output stays byte-exact.
+
 ## 0.22.0 (2026-10-05)
 
 ### Added

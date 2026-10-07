@@ -27,6 +27,7 @@ type Filter struct {
 	Since     time.Time
 	Until     time.Time
 	Limit     int
+	Offset    int
 }
 
 // Entry is one change record retrieved from history.db.
@@ -212,6 +213,10 @@ func buildListQuery(f Filter) (string, []any) {
 		limit = 50
 	}
 	args = append(args, limit)
+	if f.Offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
 	return query, args
 }
 
@@ -410,13 +415,30 @@ func (r *Reader) Get(seq int64) (Entry, string, error) {
 
 // ByCall returns all entries and decompressed diffs for a given call ID in seq order.
 func (r *Reader) ByCall(callID string) ([]Entry, []string, error) {
+	return r.byCall(callID, true)
+}
+
+// CallEntries is ByCall without the diffs: the call's entries in seq order,
+// nothing read or decompressed, for a caller that pages or budgets its output
+// and fetches only the diffs it shows (Get). A call can touch thousands of
+// files, each diff up to the 4 MiB cap.
+func (r *Reader) CallEntries(callID string) ([]Entry, error) {
+	entries, _, err := r.byCall(callID, false)
+	return entries, err
+}
+
+func (r *Reader) byCall(callID string, withDiffs bool) ([]Entry, []string, error) {
 	if r == nil || r.v == 0 {
 		return nil, nil, nil
+	}
+	diffCol := "NULL"
+	if withDiffs {
+		diffCol = "c.diff"
 	}
 	rows, err := r.db.Query(`SELECT c.seq, c.ts_ms, c.call_id, w.root, p.path, COALESCE(fp.path,''), c.kind, c.op, c.tool,
 		session_id, c.session_name, c.logical_agent, c.client_name, c.before_sha, c.after_sha,
 		before_size, c.after_size, c.added, c.removed, c.redactions, c.content,
-		COALESCE(c.reverts_seq,0), c.reason, c.diff
+		COALESCE(c.reverts_seq,0), c.reason, `+diffCol+`
 	FROM changes c JOIN workspaces w ON w.id=c.workspace_id JOIN paths p ON p.id=c.path_id
 	LEFT JOIN paths fp ON fp.id=c.from_path_id
 	WHERE c.call_id = ? ORDER BY c.seq ASC`, callID)

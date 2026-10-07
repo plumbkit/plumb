@@ -5,6 +5,7 @@
   import { setGraphic } from "./lib/charts.js";
   import Dashboard from "./sections/Dashboard.svelte";
   import Sessions from "./sections/Sessions.svelte";
+  import History from "./sections/History.svelte";
   import Memory from "./sections/Memory.svelte";
   import Logs from "./sections/Logs.svelte";
   import Settings from "./sections/Settings.svelte";
@@ -12,6 +13,7 @@
   const sections = [
     { id: "dashboard", label: "Dashboard", component: Dashboard },
     { id: "sessions", label: "Sessions", component: Sessions },
+    { id: "history", label: "History", component: History },
     { id: "memory", label: "Memory", component: Memory },
     { id: "logs", label: "Logs", component: Logs },
     { id: "settings", label: "Settings", component: Settings },
