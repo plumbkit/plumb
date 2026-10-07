@@ -288,6 +288,16 @@ export function topologyForce(P, langs, nodes, links) {
   };
 }
 
+export function escapeHTML(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // --- History --------------------------------------------------------------
 
 // historyTimeline — timeline chart of write activity showing changes over time,
@@ -305,7 +315,12 @@ export function historyTimeline(P, changes) {
       trigger: "item",
       formatter: (p) => {
         const d = p.data;
-        return `<b>#${d[5]} · ${d[2]}</b> (${d[3]})<br/><span style="color:${P.soft}">${d[4]}</span><br/>Lines changed: <b>${d[1]}</b>`;
+        const seq = escapeHTML(d[5]);
+        const tool = escapeHTML(d[2]);
+        const op = escapeHTML(d[3]);
+        const path = escapeHTML(d[4]);
+        const lines = escapeHTML(d[1]);
+        return `<b>#${seq} · ${tool}</b> (${op})<br/><span style="color:${P.soft}">${path}</span><br/>Lines changed: <b>${lines}</b>`;
       },
     },
     grid: { left: 40, right: 24, top: 20, bottom: 28 },

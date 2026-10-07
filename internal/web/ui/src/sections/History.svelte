@@ -47,8 +47,14 @@
     return groups;
   });
 
+  let detailReqId = 0;
+  let listReqId = 0;
+
   async function load() {
     loadingList = true;
+    const reqId = ++listReqId;
+    // Invalidate pending detail requests when changing scope
+    detailReqId++;
     try {
       const params = new URLSearchParams();
       if (selectedWs && selectedWs !== "__all__") {
@@ -63,32 +69,60 @@
       if (limit) params.set("limit", String(limit));
 
       const q = params.toString() ? "?" + params.toString() : "";
-      model = await getJSON("/api/history" + q);
+      const res = await getJSON("/api/history" + q);
+      if (reqId !== listReqId) return;
+      model = res;
       if (selectedWs === "" && model.workspace) {
         selectedWs = model.workspace;
       }
 
-      if (model.changes.length > 0 && !selectedSeq && !selectedCallId) {
-        await selectSeq(model.changes[0].seq);
+      // Reconcile selection: retain only if it belongs to the accepted result set
+      const changes = model.changes || [];
+      const hasSelectedSeq = selectedSeq != null && changes.some((c) => c.seq === selectedSeq);
+      const hasSelectedCall = selectedCallId != null && changes.some((c) => c.callId === selectedCallId);
+
+      if (hasSelectedSeq || hasSelectedCall) {
+        // Selection remains valid in the current result set
+      } else if (changes.length > 0) {
+        // Selection is no longer present; select first matching change
+        selectedSeq = null;
+        selectedCallId = null;
+        await selectSeq(changes[0].seq);
+      } else {
+        // No matching changes; clear selection and detail
+        selectedSeq = null;
+        selectedCallId = null;
+        detail = null;
+        loadingDetail = false;
       }
     } catch (err) {
-      console.error("load history error:", err);
+      if (reqId === listReqId) {
+        console.error("load history error:", err);
+      }
     } finally {
-      loadingList = false;
+      if (reqId === listReqId) {
+        loadingList = false;
+      }
     }
   }
 
   async function selectSeq(seq) {
     selectedSeq = seq;
     selectedCallId = null;
+    const reqId = ++detailReqId;
     loadingDetail = true;
     try {
-      detail = await getJSON(`/api/history/${seq}`);
+      const res = await getJSON(`/api/history/${seq}`);
+      if (reqId !== detailReqId) return;
+      detail = res;
     } catch (err) {
+      if (reqId !== detailReqId) return;
       console.error("load seq detail error:", err);
       detail = null;
     } finally {
-      loadingDetail = false;
+      if (reqId === detailReqId) {
+        loadingDetail = false;
+      }
     }
   }
 
@@ -96,14 +130,20 @@
     if (!callId) return;
     selectedCallId = callId;
     selectedSeq = null;
+    const reqId = ++detailReqId;
     loadingDetail = true;
     try {
-      detail = await getJSON(`/api/history/${encodeURIComponent(callId)}`);
+      const res = await getJSON(`/api/history/${encodeURIComponent(callId)}`);
+      if (reqId !== detailReqId) return;
+      detail = res;
     } catch (err) {
+      if (reqId !== detailReqId) return;
       console.error("load call detail error:", err);
       detail = null;
     } finally {
-      loadingDetail = false;
+      if (reqId === detailReqId) {
+        loadingDetail = false;
+      }
     }
   }
 
