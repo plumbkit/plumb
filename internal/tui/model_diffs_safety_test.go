@@ -144,10 +144,17 @@ func TestDiffDetailOverlayQuitKeysAndMouse(t *testing.T) {
 	if m.diffDetailScroll != 0 {
 		t.Fatalf("wheel up past the top should clamp to 0, got %d", m.diffDetailScroll)
 	}
-	// A click on the tab bar behind the overlay does nothing.
-	m.handleLeftMouseClick(tea.Mouse{X: m.leftWidth + 3 + 5, Y: 1, Button: tea.MouseLeft})
+	// A click on the tab bar behind the overlay does nothing. Control: the
+	// same click with the overlay closed does switch the tab.
+	click := tea.Mouse{X: m.leftWidth + 3 + 5, Y: bodyStartRow, Button: tea.MouseLeft}
+	m.handleLeftMouseClick(click)
 	if m.rightTab != 3 {
 		t.Fatalf("a click behind the overlay switched the tab to %d", m.rightTab)
+	}
+	m.diffDetailOpen = false
+	m.handleLeftMouseClick(click)
+	if m.rightTab != 0 {
+		t.Fatalf("control: the tab-bar click should select tab 0 with the overlay closed, got %d", m.rightTab)
 	}
 }
 
