@@ -1,5 +1,6 @@
 // Package textfmt provides the stdlib-only text primitives shared across every
-// layer: pluralisation, truncation, and byte-size formatting.
+// layer: pluralisation, truncation, byte-size formatting, and making untrusted
+// text safe to print to a terminal.
 //
 // It exists as its own Foundation package rather than living in internal/render
 // because render imports lipgloss. These helpers are wanted by internal/memory
@@ -14,6 +15,7 @@ package textfmt
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -150,4 +152,65 @@ func HumanBytesCompact[T ByteCount](b T) string {
 	default:
 		return fmt.Sprintf("%d B", b)
 	}
+}
+
+// TerminalSafe makes untrusted text safe to print to a terminal. Every C0
+// control except newline and tab, plus DEL, is shown in caret notation (ESC as
+// "^[", BEL as "^G", CR as "^M"), so no escape sequence can run: a file or path
+// with a CSI clear screen or an OSC 52 clipboard write is displayed, not
+// executed, and a lone CR cannot rewrite the line. C1 controls (U+0080–U+009F,
+// which some terminals also honour) become U+FFFD, and so does every byte that
+// is not valid UTF-8: a raw 0x9B is CSI to a terminal reading 8-bit controls,
+// though a Go range loop sees only U+FFFD, so the output must not keep it. Text
+// without any of these is returned unchanged, unallocated. It is for display
+// only: output meant for another program (a patch, JSON) should not be
+// scrubbed.
+func TerminalSafe(s string) string {
+	clean := true
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if needsTerminalScrub(r, size) {
+			clean = false
+			break
+		}
+		i += size
+	}
+	if clean {
+		return s
+	}
+	b := make([]byte, 0, len(s)+8)
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+		switch {
+		case !needsTerminalScrub(r, size):
+			b = utf8.AppendRune(b, r)
+		case r == 0x7f:
+			b = append(b, '^', '?')
+		case r < 0x20:
+			b = utf8.AppendRune(append(b, '^'), r+'@')
+		default: // C1, or a byte that is not valid UTF-8
+			b = utf8.AppendRune(b, utf8.RuneError)
+		}
+	}
+	return string(b)
+}
+
+// TerminalSafeLine is TerminalSafe for a single-line field (a path, a name):
+// a newline is shown as "^J" too, so a hostile file name cannot forge an extra
+// row of a listing, and a tab becomes a space.
+func TerminalSafeLine(s string) string {
+	s = TerminalSafe(s)
+	if !strings.ContainsAny(s, "\n\t") {
+		return s
+	}
+	return strings.NewReplacer("\n", "^J", "\t", " ").Replace(s)
+}
+
+// needsTerminalScrub reports whether the rune decoded from size bytes must be
+// rewritten. An invalid byte decodes as RuneError with size 1; a literal
+// U+FFFD in the text (size 3) is fine as it is.
+func needsTerminalScrub(r rune, size int) bool {
+	return (r < 0x20 && r != '\n' && r != '\t') || r == 0x7f || (r >= 0x80 && r <= 0x9f) ||
+		(r == utf8.RuneError && size == 1)
 }

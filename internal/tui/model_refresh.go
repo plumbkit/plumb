@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
@@ -31,6 +32,7 @@ func (m *Model) refresh() {
 	m.refreshTopology()
 	m.refreshDashboard()
 	m.refreshMemories()
+	m.refreshDiffs()
 }
 
 func (m *Model) refreshDaemonMetrics() {
@@ -333,4 +335,57 @@ func (m *Model) ensureGlobalDB() {
 		m.statsErr = ""
 	}
 	m.globalDB = db
+}
+
+func (m *Model) refreshDiffs() {
+	if m.currentSection != 1 || m.rightTab != 3 {
+		return
+	}
+	m.ensureHistoryReader()
+	if m.historyReader == nil {
+		m.diffEntries = nil
+		return
+	}
+	ws := ""
+	if len(m.sessions) > 0 && m.cursor < len(m.sessions) {
+		ws = m.sessions[m.cursor].Folder
+	}
+	if ws == "" {
+		ws = m.dashProjectFolder
+	}
+	// An empty Workspace filter means every workspace; the tab is "this
+	// workspace", so with none resolved it shows nothing rather than all.
+	m.diffNoWorkspace = ws == ""
+	if m.diffNoWorkspace {
+		m.diffEntries = nil
+		m.diffCursor = 0
+		return
+	}
+	entries, err := m.historyReader.List(history.Filter{Workspace: ws, Limit: 100})
+	if err != nil {
+		m.historyErr = err.Error()
+		return
+	}
+	m.historyErr = ""
+	for i := range entries {
+		terminalSafeEntry(&entries[i])
+	}
+	m.diffEntries = entries
+	// Clamp against what the tab shows: with a filter active that is fewer rows.
+	if n := len(m.filteredDiffEntries()); m.diffCursor >= n {
+		m.diffCursor = max(n-1, 0)
+	}
+}
+
+func (m *Model) ensureHistoryReader() {
+	if m.historyReader != nil {
+		return
+	}
+	r, err := history.OpenReadOnly()
+	if err != nil {
+		m.historyErr = err.Error()
+	} else {
+		m.historyErr = ""
+	}
+	m.historyReader = r
 }

@@ -20,6 +20,27 @@
   on a connection shared by several agents, only this agent's (rows written
   before the connection became shared carry no agent, so they are not
   included). A call's response is capped at 192 KiB in all (#606).
+- **A dedicated write-history tab in the TUI.** (#604) The Sessions panel
+  now includes a "Diffs" tab alongside Details, Tools, History (tool calls)
+  and Diagnostics. It displays a chronological timeline of changes made in
+  the current workspace (newest first), with tool names, operations, writers,
+  diff stats, withheld content markers, and unrecorded-change gap indicators.
+  Pressing Enter on any change opens a full-screen diff overlay showing the
+  unified diff and the linked tool call metadata from stats.db. Changes can be
+  filtered live by session, agent, or tool with `f`. With no session or
+  project folder selected the tab says so rather than listing every
+  workspace.
+
+### Security
+
+- **Recorded paths and diffs can no longer drive the terminal.** (#604)
+  History stores file content and paths from the repository, so a file named
+  or filled with an escape sequence (a CSI screen clear, an OSC 52 clipboard
+  write) reached the terminal raw. The TUI Diffs tab and `plumb history`
+  list/show now render that text through a scrubber that shows control
+  characters in caret notation (`^[`) and replaces C1 controls and invalid
+  UTF-8 with U+FFFD. `plumb history` scrubs only when stdout is a terminal,
+  so piped output stays byte-exact.
 
 ## 0.22.0 (2026-10-05)
 
