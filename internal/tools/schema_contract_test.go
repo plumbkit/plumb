@@ -141,6 +141,7 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*WorkspaceSessions)(nil).Name():    (*WorkspaceSessions)(nil).InputSchema(),
 		(*WorkspaceSymbols)(nil).Name():     (*WorkspaceSymbols)(nil).InputSchema(),
 		(*WriteFile)(nil).Name():            (*WriteFile)(nil).InputSchema(),
+		(*WriteHistory)(nil).Name():         (*WriteHistory)(nil).InputSchema(),
 		(*writeMemoryTool)(nil).Name():      (*writeMemoryTool)(nil).InputSchema(),
 	}
 }

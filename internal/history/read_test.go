@@ -49,6 +49,11 @@ func TestListNewestFirstWithGap(t *testing.T) {
 	if err != nil || diff == "" {
 		t.Fatalf("Get diff = %q, %v", diff, err)
 	}
+
+	paged, err := r.List(Filter{Workspace: ws, Limit: 1, Offset: 1})
+	if err != nil || len(paged) != 1 || paged[0].Seq != es[1].Seq {
+		t.Fatalf("List with Offset = %v, %v", paged, err)
+	}
 }
 
 func TestOverflowMarkerDoesNotFabricateAGap(t *testing.T) {

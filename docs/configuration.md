@@ -903,7 +903,7 @@ excluded so an authoritative empty answer is never supplanted.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (37 tools today). Project-overridable.
+the non-lean remainder (38 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability
@@ -954,7 +954,7 @@ pointer keeps every tool reachable regardless of tools/list advertisement —
 review found `internal/clientcaps` carries only 7 registry rows against the
 ~20 setup targets `docs/cli-reference.md` documents, so "unrecognised" meant
 overwhelmingly *documented* clients (cursor, opencode, goose, crush, qwen,
-augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~37/58 tools with
+augment, antigravity, hermes, dsh, zed, windsurf, …) losing ~38/59 tools with
 zero evidence any of them can invoke a hidden one — exactly the tool-removal
 the card's Do-NOT forbids. That idea needs registry rows with positive
 deferral evidence before it can ship, not an absence of a row; the four

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.22.1 (unreleased)
+
+### Added
+
+- **`write_history`: an MCP tool for agents to review recorded file writes.**
+  Adds read-only inspection of write-diff history across sessions and peers in the
+  same workspace. Supports timeline listing with session, agent, tool, and file
+  filters, and full diff display with stats call metadata by sequence number or
+  call ID. Output is bounded: diffs are cut at `max_diff_bytes` and a call's
+  diffs share a 128 KiB budget, with notices that say which cap applied and
+  how to page on; a call's diffs are read only as far as the budget prints
+  them. It renders gap lines for unrecorded modifications outside plumb, and
+  withheld rows (`[withheld:sensitive]`, `[withheld:binary]`, etc.) show only
+  their marker. A row recorded as a diff is re-checked against the current
+  sensitive globs before it is shown, because `history.db` can hold diffs of
+  files that are sensitive now (globs added later, or a pre-0.22.0 project
+  config that emptied the list). `session: "self"` is the caller's own writes:
+  on a connection shared by several agents, only this agent's (rows written
+  before the connection became shared carry no agent, so they are not
+  included). A call's response is capped at 192 KiB in all (#606).
+
 ## 0.22.0 (2026-10-05)
 
 ### Added
