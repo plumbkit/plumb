@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.1 (unreleased)
+## 0.23.0 (unreleased)
 
 ### Added
 
@@ -31,16 +31,6 @@
   project folder selected the tab says so rather than listing every
   workspace.
 
-### Security
-
-- **Recorded paths and diffs can no longer drive the terminal.** (#604)
-  History stores file content and paths from the repository, so a file named
-  or filled with an escape sequence (a CSI screen clear, an OSC 52 clipboard
-  write) reached the terminal raw. The TUI Diffs tab and `plumb history`
-  list/show now render that text through a scrubber that shows control
-  characters in caret notation (`^[`) and replaces C1 controls and invalid
-  UTF-8 with U+FFFD. `plumb history` scrubs only when stdout is a terminal,
-  so piped output stays byte-exact.
 - **A write-diff history timeline and unified-diff viewer in `plumb web`.**
   Adds `GET /api/history` and `GET /api/history/{seq|call_id}` endpoints in the
   daemon's web server, backed by `internal/history.Reader` and `internal/stats`.
@@ -51,6 +41,17 @@
   files. With no workspace given and none active, `/api/history` lists nothing
   rather than every workspace; `all=true` asks for all. The UI's unit tests now
   run in CI (`npm test` in the web ui job) (#605).
+
+### Security
+
+- **Recorded paths and diffs can no longer drive the terminal.** (#604)
+  History stores file content and paths from the repository, so a file named
+  or filled with an escape sequence (a CSI screen clear, an OSC 52 clipboard
+  write) reached the terminal raw. The TUI Diffs tab and `plumb history`
+  list/show now render that text through a scrubber that shows control
+  characters in caret notation (`^[`) and replaces C1 controls and invalid
+  UTF-8 with U+FFFD. `plumb history` scrubs only when stdout is a terminal,
+  so piped output stays byte-exact.
 
 ## 0.22.0 (2026-10-05)
 
