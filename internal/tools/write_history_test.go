@@ -374,8 +374,8 @@ func TestWriteHistory_DiffTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute with max_diff_bytes: %v", err)
 	}
-	if !strings.Contains(out, "… (diff truncated; use max_diff_bytes to expand)") {
-		t.Errorf("expected truncation notice in output, got:\n%s", out)
+	if !strings.Contains(out, "diff truncated at max_diff_bytes=100; raise it, up to 131072") {
+		t.Errorf("expected truncation notice naming max_diff_bytes in output, got:\n%s", out)
 	}
 }
 
@@ -395,6 +395,18 @@ func TestWriteHistory_IsolationAndErrors(t *testing.T) {
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"seq": 1}`))
 	if err == nil || !strings.Contains(err.Error(), "belongs to a different workspace") {
 		t.Fatalf("expected cross-workspace error, got %v", err)
+	}
+	// The same for a call_id, and a list from the other workspace sees nothing.
+	_, err = tool.Execute(context.Background(), json.RawMessage(`{"call_id": "CALL_02"}`))
+	if err == nil || !strings.Contains(err.Error(), "belong to a different workspace") {
+		t.Fatalf("expected cross-workspace error for call_id, got %v", err)
+	}
+	listOut, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("list from other workspace: %v", err)
+	}
+	if !strings.Contains(listOut, "No write history found") || strings.Contains(listOut, "file1.txt") {
+		t.Fatalf("list from another workspace showed rows:\n%s", listOut)
 	}
 
 	// Boundary guard refusal
@@ -516,8 +528,24 @@ func TestWriteHistory_BoundedCallOutput(t *testing.T) {
 		t.Fatalf("output size %d exceeded maxTotalShowBytes budget %d", len(out), maxTotalShowBytes)
 	}
 
-	if !strings.Contains(out, "omitted to stay within response budget") {
-		t.Fatalf("expected omitted entries notice in output, got tail:\n%s", out[max(0, len(out)-300):])
+	if !strings.Contains(out, "Call CALL_MANY_FILES: changes 1–20 of 20") {
+		t.Fatalf("expected call paging header, got head:\n%s", out[:min(len(out), 300)])
+	}
+	// 32 KiB per diff fits whole; the change that crosses the 128 KiB budget is
+	// cut there, says so, and the rest are omitted with the offset to resume at.
+	if !strings.Contains(out, "diff truncated: response budget reached; show this change alone with seq=") {
+		t.Fatalf("expected budget truncation notice, got tail:\n%s", out[max(0, len(out)-600):])
+	}
+	if !strings.Contains(out, "omitted to stay within the response budget; continue with offset=") {
+		t.Fatalf("expected omitted entries notice with an offset, got tail:\n%s", out[max(0, len(out)-300):])
+	}
+
+	past, err := tool.Execute(context.Background(), json.RawMessage(`{"call_id": "CALL_MANY_FILES", "offset": 50}`))
+	if err != nil {
+		t.Fatalf("Execute past the end: %v", err)
+	}
+	if !strings.Contains(past, "Offset 50 is past the end of call CALL_MANY_FILES (20 change(s))") {
+		t.Fatalf("expected past-the-end notice, got:\n%s", past)
 	}
 
 	// Paging with offset and limit should work
@@ -531,5 +559,151 @@ func TestWriteHistory_BoundedCallOutput(t *testing.T) {
 	}
 	if strings.Contains(pagedOut, "file_01.txt") || strings.Contains(pagedOut, "file_04.txt") {
 		t.Fatalf("paged output contained out-of-range files, got:\n%s", pagedOut)
+	}
+}
+
+// openHistoryAt builds a history.db from items and returns its path.
+func openHistoryAt(t *testing.T, items ...history.Item) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "history.db")
+	s, err := history.Open(dbPath, history.Options{})
+	if err != nil {
+		t.Fatalf("history.Open: %v", err)
+	}
+	for _, it := range items {
+		s.Enqueue(it)
+	}
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("history.Close: %v", err)
+	}
+	return dbPath
+}
+
+// A row stored as a diff before its file became sensitive (globs added later,
+// or a pre-0.22.0 project config that emptied the list) must not reach the
+// transcript: the tool re-asks the sensitivity decision at read time.
+func TestWriteHistory_ReadTimeSensitivity(t *testing.T) {
+	ws := paths.Canonical(t.TempDir())
+	secret := filepath.Join(ws, "secrets.txt")
+	dbPath := openHistoryAt(t, history.Item{
+		Change: history.Change{
+			At: time.UnixMilli(1000), Op: history.OpCreate, Kind: history.KindFile, Tool: "write_file",
+			Path: secret, After: history.SideFromBytes([]byte("launch plan: ship on friday\n")),
+		},
+		Workspace: ws, CallID: "CALL_SECRET",
+	})
+	newTool := func(sensitive func(context.Context, string, string) bool) *WriteHistory {
+		tool := NewWriteHistory().
+			WithWorkspace(func(context.Context) string { return ws }).
+			withOpeners(func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) }, nil)
+		if sensitive != nil {
+			tool = tool.WithSensitive(sensitive)
+		}
+		return tool
+	}
+
+	// Positive control: without the read-time check the stored diff IS shown,
+	// so the assertions below are about the check, not an empty row. (The
+	// content must not look like a secret: the recorder redacts those.)
+	out, err := newTool(nil).Execute(context.Background(), json.RawMessage(`{"seq": 1}`))
+	if err != nil || !strings.Contains(out, "launch plan: ship on friday") {
+		t.Fatalf("control: expected the stored diff, got err=%v out:\n%s", err, out)
+	}
+
+	sensitive := newTool(func(_ context.Context, path, _ string) bool { return filepath.Base(path) == "secrets.txt" })
+	for _, args := range []string{`{"seq": 1}`, `{"call_id": "CALL_SECRET"}`, `{}`} {
+		out, err := sensitive.Execute(context.Background(), json.RawMessage(args))
+		if err != nil {
+			t.Fatalf("%s: %v", args, err)
+		}
+		if strings.Contains(out, "launch plan: ship on friday") {
+			t.Fatalf("%s: now-sensitive content reached the output:\n%s", args, out)
+		}
+		if !strings.Contains(out, string(history.ContentSensitive)) {
+			t.Fatalf("%s: expected the %s marker, got:\n%s", args, history.ContentSensitive, out)
+		}
+	}
+}
+
+// On a shared connection one session carries several agents; "self" narrows to
+// the caller's agent as the recorder attributed it.
+func TestWriteHistory_SelfNarrowsToCallerAgent(t *testing.T) {
+	ws := paths.Canonical(t.TempDir())
+	item := func(seq int64, agent, file string) history.Item {
+		return history.Item{
+			Change: history.Change{
+				At: time.UnixMilli(seq * 1000), Op: history.OpCreate, Kind: history.KindFile, Tool: "write_file",
+				Path: filepath.Join(ws, file), After: history.SideFromBytes([]byte("x\n")),
+			},
+			Workspace: ws, CallID: fmt.Sprintf("CALL_%d", seq), SessionID: "sess-shared", LogicalAgent: agent,
+		}
+	}
+	dbPath := openHistoryAt(t, item(1, "agent-a", "mine.txt"), item(2, "agent-b", "theirs.txt"))
+	newTool := func(agent string) *WriteHistory {
+		return NewWriteHistory().
+			WithWorkspace(func(context.Context) string { return ws }).
+			WithSelfSession(func() string { return "sess-shared" }).
+			WithSelfAgent(func(context.Context) string { return agent }).
+			withOpeners(func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) }, nil)
+	}
+
+	out, err := newTool("agent-a").Execute(context.Background(), json.RawMessage(`{"session": "self"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "mine.txt") || strings.Contains(out, "theirs.txt") {
+		t.Fatalf("self on a shared connection should show only agent-a's rows:\n%s", out)
+	}
+	// Unshared connection (no attributed agent): self is the whole session.
+	out, err = newTool("").Execute(context.Background(), json.RawMessage(`{"session": "self"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "mine.txt") || !strings.Contains(out, "theirs.txt") {
+		t.Fatalf("self without an attributed agent should show the whole session:\n%s", out)
+	}
+}
+
+func TestWriteHistory_ListPagingAndMaxCapNotice(t *testing.T) {
+	ws := paths.Canonical(t.TempDir())
+	dbPath := setupTestHistoryDB(t, ws)
+	tool := NewWriteHistory().
+		WithWorkspace(func(context.Context) string { return ws }).
+		withOpeners(func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) }, nil)
+
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"limit": 2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "more may exist: next page offset=2") {
+		t.Fatalf("expected a next-page notice on a full page:\n%s", out)
+	}
+	out, err = tool.Execute(context.Background(), json.RawMessage(`{"limit": 10}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "more may exist") {
+		t.Fatalf("a short page must not claim more rows:\n%s", out)
+	}
+
+	// A diff over the 128 KiB maximum: raising max_diff_bytes cannot help, so
+	// the notice points at the CLI instead.
+	bigWS := paths.Canonical(t.TempDir())
+	bigDB := openHistoryAt(t, history.Item{
+		Change: history.Change{
+			At: time.UnixMilli(1000), Op: history.OpCreate, Kind: history.KindFile, Tool: "write_file",
+			Path: filepath.Join(bigWS, "huge.txt"), After: history.SideFromBytes([]byte(strings.Repeat("y\n", maxAllowedDiffBytes))),
+		},
+		Workspace: bigWS, CallID: "CALL_HUGE",
+	})
+	big := NewWriteHistory().
+		WithWorkspace(func(context.Context) string { return bigWS }).
+		withOpeners(func() (*history.Reader, error) { return history.OpenReadOnlyAt(bigDB) }, nil)
+	out, err = big.Execute(context.Background(), json.RawMessage(`{"seq": 1, "max_diff_bytes": 131072}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "diff truncated at the 131072-byte maximum; `plumb history show 1` prints it in full") {
+		t.Fatalf("expected the at-maximum notice, got tail:\n%s", out[max(0, len(out)-300):])
 	}
 }

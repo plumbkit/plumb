@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/paths"
@@ -31,7 +30,7 @@ var writeHistorySchema = json.RawMessage(`{
     },
     "session": {
       "type": "string",
-      "description": "Filter by session ID, or 'self' to restrict to the calling session's writes (list mode)."
+      "description": "Filter by session ID, or 'self' for the caller's own writes: this session, and on a connection shared by several agents only this agent's (list mode)."
     },
     "agent": {
       "type": "string",
@@ -47,7 +46,7 @@ var writeHistorySchema = json.RawMessage(`{
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum changes to list or show (default 20 for list mode, max 100)."
+      "description": "Maximum changes to list (default 20) or to show for a call_id (default all), max 100."
     },
     "offset": {
       "type": "integer",
@@ -71,7 +70,6 @@ const (
 	defaultMaxDiffBytes = 32 * 1024  // 32 KiB
 	maxAllowedDiffBytes = 128 * 1024 // 128 KiB
 	maxTotalShowBytes   = 128 * 1024 // 128 KiB aggregate budget for call diff output
-	diffTruncatedNotice = "\n… (diff truncated; use max_diff_bytes to expand)"
 )
 
 // WriteHistory enables read-only inspection of recorded write-diff history.
@@ -79,6 +77,8 @@ const (
 type WriteHistory struct {
 	ws         WorkspaceFn
 	selfSessID func() string
+	selfAgent  func(ctx context.Context) string
+	sensitive  func(ctx context.Context, path, from string) bool
 	guard      BoundaryGuard
 	contested  ContestedFn
 	openReader func() (*history.Reader, error)
@@ -102,6 +102,26 @@ func (t *WriteHistory) WithWorkspace(ws WorkspaceFn) *WriteHistory {
 // WithSelfSession wires the current session ID accessor. Nil-safe.
 func (t *WriteHistory) WithSelfSession(fn func() string) *WriteHistory {
 	t.selfSessID = fn
+	return t
+}
+
+// WithSelfAgent wires the caller's logical agent exactly as history attributes
+// it (empty unless the connection is shared by several agents), so
+// session:"self" on a shared connection means this agent, not every agent on
+// it. Nil-safe.
+func (t *WriteHistory) WithSelfAgent(fn func(ctx context.Context) string) *WriteHistory {
+	t.selfAgent = fn
+	return t
+}
+
+// WithSensitive wires the connection's sensitive-change decision (the one the
+// write tools' response diffs and the recorder use). A row recorded as a diff
+// is re-asked at read time: the globs may have grown since it was written, and
+// before 0.22.0 a project config could empty the global list, so history.db can
+// hold a diff of a file that is sensitive now. This tool's output is a
+// transcript, which leaves the machine; history.db does not. Nil-safe.
+func (t *WriteHistory) WithSensitive(fn func(ctx context.Context, path, from string) bool) *WriteHistory {
+	t.sensitive = fn
 	return t
 }
 
@@ -206,16 +226,21 @@ func (a *writeHistoryArgs) validateLimits() error {
 }
 
 type writeHistoryResult struct {
-	Mode         string
-	Workspace    string
-	Entries      []history.Entry
+	Mode      string
+	Workspace string
+	Entries   []history.Entry
+	// Diffs holds one diff per entry (seq mode). DiffFor, when set, fetches the
+	// i-th entry's diff instead (call_id mode), so only the diffs the response
+	// budget will actually print are read and decompressed.
 	Diffs        []string
+	DiffFor      func(i int) (string, error)
+	CallID       string
 	CallSummary  stats.CallSummary
 	HaveCall     bool
 	Offset       int
+	Limit        int
+	Total        int // call_id mode: the call's changes in this workspace
 	MaxDiffBytes int
-	Empty        bool
-	EmptyMsg     string
 }
 
 // Execute performs the write_history request according to the thin-orchestrator pattern.
@@ -227,11 +252,11 @@ func (t *WriteHistory) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := args.validate(); err != nil {
 		return "", fmt.Errorf("write_history: %w", err)
 	}
-	res, err := t.run(ctx, args)
+	out, err := t.run(ctx, args)
 	if err != nil {
 		return "", fmt.Errorf("write_history: %w", err)
 	}
-	return formatWriteHistoryResult(res), nil
+	return out, nil
 }
 
 func (t *WriteHistory) resolveAndCheckWorkspace(ctx context.Context, explicit string) (string, error) {
@@ -245,10 +270,12 @@ func (t *WriteHistory) resolveAndCheckWorkspace(ctx context.Context, explicit st
 	return paths.Canonical(ws), nil
 }
 
-func (t *WriteHistory) run(ctx context.Context, a writeHistoryArgs) (writeHistoryResult, error) {
+// run formats the result before it returns: in call_id mode the formatter
+// fetches diffs through the reader (DiffFor), which must still be open.
+func (t *WriteHistory) run(ctx context.Context, a writeHistoryArgs) (string, error) {
 	ws, err := t.resolveAndCheckWorkspace(ctx, a.Workspace)
 	if err != nil {
-		return writeHistoryResult{}, err
+		return "", err
 	}
 
 	readerFn := t.openReader
@@ -257,22 +284,37 @@ func (t *WriteHistory) run(ctx context.Context, a writeHistoryArgs) (writeHistor
 	}
 	rdr, err := readerFn()
 	if err != nil {
-		return writeHistoryResult{}, fmt.Errorf("opening history database: %w", err)
+		return "", fmt.Errorf("opening history database: %w", err)
 	}
 	if rdr == nil {
-		return writeHistoryResult{
-			Mode:      a.Mode,
-			Workspace: ws,
-			Empty:     true,
-			EmptyMsg:  "No write history recorded yet. Make file writes through plumb first.",
-		}, nil
+		return "No write history recorded yet. Make file writes through plumb first.", nil
 	}
 	defer rdr.Close()
 
+	var res writeHistoryResult
 	if a.Mode == "show" {
-		return t.runShow(rdr, ws, a)
+		res, err = t.runShow(ctx, rdr, ws, a)
+	} else {
+		res, err = t.runList(ctx, rdr, ws, a)
 	}
-	return t.runList(ctx, rdr, ws, a)
+	if err != nil {
+		return "", err
+	}
+	return formatWriteHistoryResult(res), nil
+}
+
+// withholdIfSensitive downgrades a row recorded as a diff to the sensitive
+// marker when the change is sensitive under the CURRENT globs (WithSensitive).
+// It reports whether the row's diff may be shown.
+func (t *WriteHistory) withholdIfSensitive(ctx context.Context, e *history.Entry) bool {
+	if e.Content != history.ContentDiff {
+		return false
+	}
+	if t.sensitive != nil && t.sensitive(ctx, e.Path, e.From) {
+		e.Content = history.ContentSensitive
+		return false
+	}
+	return true
 }
 
 func (t *WriteHistory) resolveSessionFilter(filterSession string) (string, error) {
@@ -308,6 +350,13 @@ func (t *WriteHistory) runList(ctx context.Context, rdr *history.Reader, ws stri
 	if err != nil {
 		return writeHistoryResult{}, err
 	}
+	agent := a.Agent
+	if a.Session == "self" && agent == "" && t.selfAgent != nil {
+		// One connection session carries every agent on a shared connection;
+		// the recorder attributes each row to its logical agent, so "self"
+		// narrows to that agent's rows too.
+		agent = t.selfAgent(ctx)
+	}
 	filePath, err := t.resolveFileFilter(ctx, ws, a.File)
 	if err != nil {
 		return writeHistoryResult{}, err
@@ -316,7 +365,7 @@ func (t *WriteHistory) runList(ctx context.Context, rdr *history.Reader, ws stri
 	filter := history.Filter{
 		Workspace: ws,
 		SessionID: sess,
-		Agent:     a.Agent,
+		Agent:     agent,
 		Tool:      a.Tool,
 		File:      filePath,
 		Limit:     a.Limit,
@@ -327,23 +376,27 @@ func (t *WriteHistory) runList(ctx context.Context, rdr *history.Reader, ws stri
 	if err != nil {
 		return writeHistoryResult{}, fmt.Errorf("listing history: %w", err)
 	}
+	for i := range entries {
+		t.withholdIfSensitive(ctx, &entries[i])
+	}
 
 	return writeHistoryResult{
 		Mode:      "list",
 		Workspace: ws,
 		Entries:   entries,
 		Offset:    a.Offset,
+		Limit:     a.Limit,
 	}, nil
 }
 
-func (t *WriteHistory) runShow(rdr *history.Reader, ws string, a writeHistoryArgs) (writeHistoryResult, error) {
+func (t *WriteHistory) runShow(ctx context.Context, rdr *history.Reader, ws string, a writeHistoryArgs) (writeHistoryResult, error) {
 	if a.Seq != 0 {
-		return t.runShowSeq(rdr, ws, a.Seq, a.MaxDiffBytes)
+		return t.runShowSeq(ctx, rdr, ws, a.Seq, a.MaxDiffBytes)
 	}
-	return t.runShowCall(rdr, ws, a.CallID, a.MaxDiffBytes, a.Limit, a.Offset)
+	return t.runShowCall(ctx, rdr, ws, a.CallID, a.MaxDiffBytes, a.Limit, a.Offset)
 }
 
-func (t *WriteHistory) runShowSeq(rdr *history.Reader, ws string, seq int64, maxDiffBytes int) (writeHistoryResult, error) {
+func (t *WriteHistory) runShowSeq(ctx context.Context, rdr *history.Reader, ws string, seq int64, maxDiffBytes int) (writeHistoryResult, error) {
 	e, diff, err := rdr.Get(seq)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -353,6 +406,9 @@ func (t *WriteHistory) runShowSeq(rdr *history.Reader, ws string, seq int64, max
 	}
 	if ws != "" && paths.Canonical(e.Workspace) != ws {
 		return writeHistoryResult{}, fmt.Errorf("history entry %d belongs to a different workspace", seq)
+	}
+	if !t.withholdIfSensitive(ctx, &e) {
+		diff = ""
 	}
 
 	summary, haveCall := t.lookupStatsCall(e.CallID)
@@ -367,8 +423,8 @@ func (t *WriteHistory) runShowSeq(rdr *history.Reader, ws string, seq int64, max
 	}, nil
 }
 
-func (t *WriteHistory) runShowCall(rdr *history.Reader, ws string, callID string, maxDiffBytes int, limit int, offset int) (writeHistoryResult, error) {
-	entries, diffs, err := rdr.ByCall(callID)
+func (t *WriteHistory) runShowCall(ctx context.Context, rdr *history.Reader, ws string, callID string, maxDiffBytes int, limit int, offset int) (writeHistoryResult, error) {
+	entries, err := rdr.CallEntries(callID)
 	if err != nil {
 		return writeHistoryResult{}, fmt.Errorf("history by call %s: %w", callID, err)
 	}
@@ -381,24 +437,31 @@ func (t *WriteHistory) runShowCall(rdr *history.Reader, ws string, callID string
 		}
 	}
 
-	if offset > 0 || limit > 0 {
-		start := min(offset, len(entries))
-		end := len(entries)
-		if limit > 0 && start+limit < end {
-			end = start + limit
-		}
-		entries = entries[start:end]
-		diffs = diffs[start:end]
+	total := len(entries)
+	start := min(offset, total)
+	end := total
+	if limit > 0 && start+limit < end {
+		end = start + limit
+	}
+	entries = entries[start:end]
+	for i := range entries {
+		t.withholdIfSensitive(ctx, &entries[i])
 	}
 
 	summary, haveCall := t.lookupStatsCall(callID)
 	return writeHistoryResult{
-		Mode:         "show",
+		Mode:    "show",
+		Entries: entries,
+		DiffFor: func(i int) (string, error) {
+			_, diff, err := rdr.Get(entries[i].Seq)
+			return diff, err
+		},
 		Workspace:    ws,
-		Entries:      entries,
-		Diffs:        diffs,
+		CallID:       callID,
 		CallSummary:  summary,
 		HaveCall:     haveCall,
+		Offset:       offset, // == start unless past the end, where it is what was asked
+		Total:        total,
 		MaxDiffBytes: maxDiffBytes,
 	}, nil
 }
@@ -421,132 +484,4 @@ func (t *WriteHistory) lookupStatsCall(callID string) (stats.CallSummary, bool) 
 		return stats.CallSummary{}, false
 	}
 	return s, true
-}
-
-func formatWriteHistoryResult(res writeHistoryResult) string {
-	if res.Empty {
-		return res.EmptyMsg
-	}
-	if res.Mode == "show" {
-		return formatShowResult(res)
-	}
-	return formatListResult(res)
-}
-
-func formatListResult(res writeHistoryResult) string {
-	if len(res.Entries) == 0 {
-		return fmt.Sprintf("No write history found matching query in workspace %s.", res.Workspace)
-	}
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Write history (%d change(s), offset %d):\n\n", len(res.Entries), res.Offset)
-	for _, e := range res.Entries {
-		sb.WriteString(formatHistoryLine(e))
-		sb.WriteByte('\n')
-		if e.GapBefore {
-			gap := "  ⋯ unrecorded change (outside plumb's write tools)"
-			if e.GapDropped {
-				gap += "; history dropped rows in this interval"
-			}
-			sb.WriteString(gap)
-			sb.WriteByte('\n')
-		}
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-func formatHistoryLine(e history.Entry) string {
-	ts := e.At.Local().Format("2006-01-02 15:04:05.000")
-	op := string(e.Op)
-	if e.Kind == history.KindDir {
-		op += " dir"
-	}
-	sess := e.SessionName
-	if sess == "" {
-		if len(e.SessionID) > 8 {
-			sess = e.SessionID[:8]
-		} else {
-			sess = e.SessionID
-		}
-	}
-	if sess == "" {
-		sess = "-"
-	}
-	if e.LogicalAgent != "" {
-		sess += "/" + e.LogicalAgent
-	}
-	p := e.Path
-	if e.From != "" {
-		p = e.From + " → " + e.Path
-	}
-	diffStats := fmt.Sprintf("+%d -%d", e.Added, e.Removed)
-	content := ""
-	if e.Content != history.ContentDiff && e.Content != "" {
-		content = fmt.Sprintf("  [%s]", e.Content)
-	}
-	return fmt.Sprintf("#%d  %s  %-10s  %-17s  %-15s  %s  %s%s",
-		e.Seq, ts, op, e.Tool, sess, p, diffStats, content)
-}
-
-func formatShowResult(res writeHistoryResult) string {
-	var sb strings.Builder
-	if res.HaveCall {
-		status := "success"
-		if !res.CallSummary.Success {
-			status = "failed: " + res.CallSummary.ErrorMsg
-		}
-		sess := ""
-		if res.CallSummary.SessionName != "" {
-			sess = "  session " + res.CallSummary.SessionName
-		}
-		fmt.Fprintf(&sb, "%s (%dms, %s)%s\n\n", res.CallSummary.Tool, res.CallSummary.DurationMs, status, sess)
-	} else {
-		sb.WriteString("(call metadata unavailable)\n\n")
-	}
-
-	maxOutput := max(res.MaxDiffBytes, maxTotalShowBytes)
-
-	for i, e := range res.Entries {
-		if sb.Len() >= maxOutput {
-			omitted := len(res.Entries) - i
-			fmt.Fprintf(&sb, "… (%d change(s) in this call omitted to stay within response budget; inspect individually using seq or page with offset/limit)\n", omitted)
-			break
-		}
-
-		fromPath := e.Path
-		if e.From != "" {
-			fromPath = e.From
-		}
-		fmt.Fprintf(&sb, "#%d %s %s\n", e.Seq, e.Op, e.Path)
-		fmt.Fprintf(&sb, "--- a/%s\n", fromPath)
-		fmt.Fprintf(&sb, "+++ b/%s\n", e.Path)
-		if e.Content == history.ContentDiff {
-			diff := ""
-			if i < len(res.Diffs) {
-				diff = res.Diffs[i]
-			}
-			avail := max(maxOutput-sb.Len(), 0)
-			diffCap := min(res.MaxDiffBytes, avail)
-			formatShowDiff(&sb, diff, diffCap)
-		} else {
-			fmt.Fprintf(&sb, "[%s]\n", e.Content)
-		}
-		if i < len(res.Entries)-1 {
-			sb.WriteByte('\n')
-		}
-	}
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-func formatShowDiff(sb *strings.Builder, diff string, maxBytes int) {
-	if len(diff) > maxBytes {
-		diff = diff[:maxBytes] + diffTruncatedNotice
-	}
-	if diff == "" {
-		return
-	}
-	sb.WriteString(diff)
-	if !strings.HasSuffix(diff, "\n") {
-		sb.WriteByte('\n')
-	}
 }

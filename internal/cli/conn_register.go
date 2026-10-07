@@ -181,7 +181,13 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewRunCommand(s.commandResolver))
 	srv.Register(tools.NewAgentConfig(s.agentConfigDeps()))
 	srv.Register(tools.NewFileDiff().WithBoundary(readBoundaryFor).WithWorkspace(s.workspaceFor).WithContested(s.pinContested))
-	srv.Register(tools.NewWriteHistory().WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSelfSession(s.sessionID))
+	// write_history re-asks changeSensitive at read time (the same decision the
+	// write responses and the recorder use), and narrows session:"self" to the
+	// caller's agent exactly as the recorder attributed it.
+	srv.Register(tools.NewWriteHistory().WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).
+		WithSelfSession(s.sessionID).
+		WithSelfAgent(func(ctx context.Context) string { return s.attributedAgent(mcp.LogicalAgentFromCtx(ctx)) }).
+		WithSensitive(s.changeSensitive))
 	srv.Register(tools.NewFindReplace(wd))
 	prov := Provenance()
 	srv.Register(tools.NewDaemonInfoFunc(s.sessionID, s.sessionName, Version, daemonStartedAt).
