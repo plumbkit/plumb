@@ -289,3 +289,14 @@ func TestTerminalSafe(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalSafeLine(t *testing.T) {
+	in := "a.go\n  ∙ forged.go\tx\x1b[2J"
+	got := TerminalSafeLine(in)
+	if want := "a.go^J  ∙ forged.go x^[[2J"; got != want {
+		t.Fatalf("TerminalSafeLine(%q) = %q, want %q", in, got, want)
+	}
+	if got := TerminalSafeLine("plain"); got != "plain" {
+		t.Fatalf("plain text changed: %q", got)
+	}
+}

@@ -290,10 +290,20 @@ func historyDisplay(tty bool, s string) string {
 	return s
 }
 
+// historyDisplayLine is historyDisplay for a line that must stay one line (a
+// list row, a ---/+++ path header): a newline in a recorded path would
+// otherwise forge another row.
+func historyDisplayLine(tty bool, s string) string {
+	if tty {
+		return textfmt.TerminalSafeLine(s)
+	}
+	return s
+}
+
 func renderListText(entries []history.Entry) {
 	tty := stdoutIsTerminal()
 	for _, e := range entries {
-		fmt.Println(historyDisplay(tty, formatListEntry(e)))
+		fmt.Println(historyDisplayLine(tty, formatListEntry(e)))
 		if e.GapBefore {
 			gapLine := "  ⋯ unrecorded change (outside plumb's write tools)"
 			if e.GapDropped {
@@ -445,8 +455,8 @@ func renderShowText(entries []history.Entry, diffs []string, haveCall bool, call
 		if e.From != "" {
 			fromPath = e.From
 		}
-		fmt.Println(historyDisplay(tty, "--- a/"+fromPath))
-		fmt.Println(historyDisplay(tty, "+++ b/"+path))
+		fmt.Println(historyDisplayLine(tty, "--- a/"+fromPath))
+		fmt.Println(historyDisplayLine(tty, "+++ b/"+path))
 		if e.Content == history.ContentDiff {
 			if diffs[i] != "" {
 				fmt.Println(historyDisplay(tty, diffs[i]))

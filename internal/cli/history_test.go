@@ -438,3 +438,14 @@ func TestHistoryDisplay_ScrubsOnlyForATerminal(t *testing.T) {
 		t.Errorf("piped: got %q, want it unchanged", got)
 	}
 }
+
+// A newline in a recorded path must not forge another list row on a terminal.
+func TestHistoryDisplayLine_KeepsOneLine(t *testing.T) {
+	in := "#1  a.go\n#2  forged.go"
+	if got := historyDisplayLine(true, in); strings.Contains(got, "\n") {
+		t.Errorf("terminal: a newline survived: %q", got)
+	}
+	if got := historyDisplayLine(false, in); got != in {
+		t.Errorf("piped: got %q, want it unchanged", got)
+	}
+}

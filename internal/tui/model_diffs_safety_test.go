@@ -202,3 +202,21 @@ func TestDiffsTabEntryLoadsAndCursorClampsToFilter(t *testing.T) {
 		t.Fatalf("cursor should clamp to the 1-row filtered list, got %d", m.diffCursor)
 	}
 }
+
+// A newline in a recorded path must not forge a second row in the tab.
+func TestDiffsNewlineInPathDoesNotForgeARow(t *testing.T) {
+	ws := t.TempDir()
+	r := diffsHistoryReader(t, diffsItem(ws, "a.go\n  \u2219 forged.go", "a\n", "b\n", 1000))
+	m := diffsModel(ws, r)
+	m.refreshDiffs()
+	lines := m.rightLinesDiffs(160)
+	// Header, separator, one row: a forged row would add a line.
+	if len(lines) != 3 {
+		t.Fatalf("expected header, separator and 1 row, got %d lines:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "\n") {
+			t.Fatalf("a row holds a newline: %q", l)
+		}
+	}
+}

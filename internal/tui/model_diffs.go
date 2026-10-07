@@ -17,15 +17,15 @@ import (
 // session and agent labels come from history.db, and a repository can name a
 // file with an escape sequence in it (see textfmt.TerminalSafe).
 func terminalSafeEntry(e *history.Entry) {
-	e.Path = textfmt.TerminalSafe(e.Path)
-	e.From = textfmt.TerminalSafe(e.From)
-	e.Tool = textfmt.TerminalSafe(e.Tool)
-	e.SessionName = textfmt.TerminalSafe(e.SessionName)
-	e.SessionID = textfmt.TerminalSafe(e.SessionID)
-	e.LogicalAgent = textfmt.TerminalSafe(e.LogicalAgent)
-	e.ClientName = textfmt.TerminalSafe(e.ClientName)
-	e.Reason = textfmt.TerminalSafe(e.Reason)
-	e.CallID = textfmt.TerminalSafe(e.CallID) // plumb-minted, so a lookup never changes
+	e.Path = textfmt.TerminalSafeLine(e.Path)
+	e.From = textfmt.TerminalSafeLine(e.From)
+	e.Tool = textfmt.TerminalSafeLine(e.Tool)
+	e.SessionName = textfmt.TerminalSafeLine(e.SessionName)
+	e.SessionID = textfmt.TerminalSafeLine(e.SessionID)
+	e.LogicalAgent = textfmt.TerminalSafeLine(e.LogicalAgent)
+	e.ClientName = textfmt.TerminalSafeLine(e.ClientName)
+	e.Reason = textfmt.TerminalSafeLine(e.Reason)
+	e.CallID = textfmt.TerminalSafeLine(e.CallID) // plumb-minted, so a lookup never changes
 }
 
 // filteredDiffEntries returns write-diff history records matching diffFilter.
@@ -150,7 +150,10 @@ func (m *Model) rightLinesDiffs(rw int) []string {
 		cWhen, cOp, cTool, cWriter, cDiff = 12, 8, 14, 15, 22
 	)
 	s3 := "   "
-	cPath := max(rw-2-cWhen-cOp-cTool-cWriter-cDiff-15, 12)
+	// A row is the 4-cell "  > " marker, six columns and five 3-cell
+	// separators, and must fit roww (rw-2): leaving out the marker made the
+	// selected row 4 cells too wide, so SelectedStyle wrapped it onto two lines.
+	cPath := max(rw-2-4-cWhen-cOp-cTool-cWriter-cDiff-15, 12)
 	sln := "  " + SepStyle.Render(strings.Repeat("─", rw-3))
 	roww := rw - 2
 
@@ -246,7 +249,7 @@ func (m *Model) openDiffDetail(e history.Entry) {
 			// rendered or copied. Tabs are expanded so line widths hold.
 			m.diffDetailText = strings.ReplaceAll(textfmt.TerminalSafe(diff), "\t", "    ")
 		} else {
-			m.diffDetailErr = textfmt.TerminalSafe(err.Error())
+			m.diffDetailErr = textfmt.TerminalSafeLine(err.Error())
 		}
 	}
 
@@ -255,9 +258,9 @@ func (m *Model) openDiffDetail(e history.Entry) {
 	}
 	if m.globalDB != nil && e.CallID != "" {
 		call, ok, _ := m.globalDB.CallByID(e.CallID)
-		call.Tool = textfmt.TerminalSafe(call.Tool)
-		call.ErrorMsg = textfmt.TerminalSafe(call.ErrorMsg)
-		call.SessionName = textfmt.TerminalSafe(call.SessionName)
+		call.Tool = textfmt.TerminalSafeLine(call.Tool)
+		call.ErrorMsg = textfmt.TerminalSafeLine(call.ErrorMsg)
+		call.SessionName = textfmt.TerminalSafeLine(call.SessionName)
 		m.diffDetailCall = call
 		m.diffDetailHaveCall = ok
 	} else {

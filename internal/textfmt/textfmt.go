@@ -15,6 +15,7 @@ package textfmt
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -193,6 +194,17 @@ func TerminalSafe(s string) string {
 		}
 	}
 	return string(b)
+}
+
+// TerminalSafeLine is TerminalSafe for a single-line field (a path, a name):
+// a newline is shown as "^J" too, so a hostile file name cannot forge an extra
+// row of a listing, and a tab becomes a space.
+func TerminalSafeLine(s string) string {
+	s = TerminalSafe(s)
+	if !strings.ContainsAny(s, "\n\t") {
+		return s
+	}
+	return strings.NewReplacer("\n", "^J", "\t", " ").Replace(s)
 }
 
 // needsTerminalScrub reports whether the rune decoded from size bytes must be
