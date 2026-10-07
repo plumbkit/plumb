@@ -336,46 +336,21 @@ func (m Model) handleRenameModalKey(msg tea.KeyPressMsg) Model {
 	return m
 }
 
+func clampScroll(val, maxVal int) int {
+	return min(max(val, 0), maxVal)
+}
+
 func (m *Model) enforceScrollBounds() {
 	if m.scrollBounds == nil {
 		return
 	}
-	if m.dashScroll > m.scrollBounds.maxDash {
-		m.dashScroll = m.scrollBounds.maxDash
-	}
-	if m.dashScroll < 0 {
-		m.dashScroll = 0
-	}
-	if m.leftScroll > m.scrollBounds.maxLeft {
-		m.leftScroll = m.scrollBounds.maxLeft
-	}
-	if m.leftScroll < 0 {
-		m.leftScroll = 0
-	}
-	if m.rightScroll > m.scrollBounds.maxRight {
-		m.rightScroll = m.scrollBounds.maxRight
-	}
-	if m.rightScroll < 0 {
-		m.rightScroll = 0
-	}
-	if m.popupLeftScroll > m.scrollBounds.maxPopupLeft {
-		m.popupLeftScroll = m.scrollBounds.maxPopupLeft
-	}
-	if m.popupLeftScroll < 0 {
-		m.popupLeftScroll = 0
-	}
-	if m.popupDetailScroll > m.scrollBounds.maxPopupDetail {
-		m.popupDetailScroll = m.scrollBounds.maxPopupDetail
-	}
-	if m.popupDetailScroll < 0 {
-		m.popupDetailScroll = 0
-	}
-	if m.logDetailScroll > m.scrollBounds.maxLogDetail {
-		m.logDetailScroll = m.scrollBounds.maxLogDetail
-	}
-	if m.logDetailScroll < 0 {
-		m.logDetailScroll = 0
-	}
+	m.dashScroll = clampScroll(m.dashScroll, m.scrollBounds.maxDash)
+	m.leftScroll = clampScroll(m.leftScroll, m.scrollBounds.maxLeft)
+	m.rightScroll = clampScroll(m.rightScroll, m.scrollBounds.maxRight)
+	m.popupLeftScroll = clampScroll(m.popupLeftScroll, m.scrollBounds.maxPopupLeft)
+	m.popupDetailScroll = clampScroll(m.popupDetailScroll, m.scrollBounds.maxPopupDetail)
+	m.logDetailScroll = clampScroll(m.logDetailScroll, m.scrollBounds.maxLogDetail)
+	m.diffDetailScroll = clampScroll(m.diffDetailScroll, m.scrollBounds.maxDiffDetail)
 }
 
 func (m Model) logBodyHeight() int {

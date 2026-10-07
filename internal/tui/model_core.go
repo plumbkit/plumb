@@ -30,6 +30,7 @@ type scrollBounds struct {
 	maxPopupLeft   int
 	maxPopupDetail int
 	maxLogDetail   int
+	maxDiffDetail  int
 }
 
 // Model is the root Bubble Tea model for the sessions dashboard.
@@ -90,7 +91,6 @@ type Model struct {
 
 	statsTableBodyRow     int
 	recentTableBodyRow    int
-	diffTableBodyRow      int
 	lastDiagnosticsOutput string
 
 	// Write-diff history tab (Diffs, index 3).

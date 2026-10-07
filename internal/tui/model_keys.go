@@ -306,6 +306,7 @@ func (m Model) mainKeyUp() Model {
 	case focusDiffs:
 		if m.diffCursor > 0 {
 			m.diffCursor--
+			m.ensureDiffCursorVisible()
 		}
 	case focusDetails, focusDiagnostics:
 		if m.rightScroll > 0 {
@@ -360,6 +361,7 @@ func (m Model) mainKeyDown() Model {
 		entries := m.filteredDiffEntries()
 		if m.diffCursor < len(entries)-1 {
 			m.diffCursor++
+			m.ensureDiffCursorVisible()
 		}
 	case focusDetails, focusDiagnostics:
 		m.rightScroll++
@@ -404,6 +406,7 @@ func (m Model) mainKeyPageDown() Model {
 		if m.diffCursor >= len(entries) {
 			m.diffCursor = max(len(entries)-1, 0)
 		}
+		m.ensureDiffCursorVisible()
 	case focusDetails, focusDiagnostics:
 		m.rightScroll += pageSize
 	default:
@@ -450,6 +453,7 @@ func (m Model) mainKeyPageUp() Model {
 		if m.diffCursor < 0 {
 			m.diffCursor = 0
 		}
+		m.ensureDiffCursorVisible()
 	case focusDetails, focusDiagnostics:
 		m.rightScroll -= pageSize
 		if m.rightScroll < 0 {

@@ -41,9 +41,9 @@ func (m *Model) handleRightPanelClick(bodyRow int) {
 			m.statsCursor, m.focusPanel = idx, focusStats
 		}
 	case 3: // Diffs tab
-		entries := m.filteredDiffEntries()
-		if idx := tableRowClick(bodyRow, m.diffTableBodyRow, len(entries)); idx >= 0 {
+		if idx := m.diffEntryAtLine(bodyRow); idx >= 0 {
 			m.diffCursor, m.focusPanel = idx, focusDiffs
+			m.ensureDiffCursorVisible()
 		}
 	}
 }

@@ -34,19 +34,94 @@ func (m Model) filteredDiffEntries() []history.Entry {
 	return out
 }
 
+// diffEntryLine returns the visual line index in rightLines for entry targetIdx.
+// Line 0 is rightTabBar, Line 1 is empty, Line 2 is table header, Line 3 is separator,
+// Line 4 is the first entry. Each entry with GapBefore takes 2 lines, others take 1.
+func (m Model) diffEntryLine(targetIdx int) int {
+	entries := m.filteredDiffEntries()
+	if targetIdx < 0 || targetIdx >= len(entries) {
+		return -1
+	}
+	line := 4
+	for i, e := range entries {
+		if i == targetIdx {
+			return line
+		}
+		line++
+		if e.GapBefore {
+			line++
+		}
+	}
+	return -1
+}
+
+// diffEntryAtLine returns the entry index for the given line in rightLines,
+// or -1 if the line is a header, separator, gap row, or past the entries.
+func (m Model) diffEntryAtLine(bodyRow int) int {
+	entries := m.filteredDiffEntries()
+	if len(entries) == 0 || bodyRow < 4 {
+		return -1
+	}
+	line := 4
+	for i, e := range entries {
+		if line == bodyRow {
+			return i
+		}
+		line++
+		if e.GapBefore {
+			if line == bodyRow {
+				return -1 // Gap row is non-selecting.
+			}
+			line++
+		}
+	}
+	return -1
+}
+
+// ensureDiffCursorVisible scrolls rightScroll so that the selected entry
+// (and its gap row, if any) is within the visible right-panel viewport.
+func (m *Model) ensureDiffCursorVisible() {
+	top := m.diffEntryLine(m.diffCursor)
+	if top < 0 {
+		return
+	}
+	entries := m.filteredDiffEntries()
+	bottom := top
+	if m.diffCursor < len(entries) && entries[m.diffCursor].GapBefore {
+		bottom++
+	}
+	if m.diffCursor == 0 {
+		top = 0 // Reveal headers when at top.
+	}
+
+	bodyHeight := max(m.height-6, 1)
+	rightFooterLen := 0
+	if m.currentSection == 1 {
+		rightFooterLen = len(m.sessionsRightFooter())
+	}
+	rightViewH := max(bodyHeight-rightFooterLen, 1)
+
+	if bottom >= m.rightScroll+rightViewH {
+		m.rightScroll = bottom - rightViewH + 1
+	}
+	if top < m.rightScroll {
+		m.rightScroll = top
+	}
+	if m.rightScroll < 0 {
+		m.rightScroll = 0
+	}
+}
+
 func (m *Model) rightLinesDiffs(rw int) []string {
 	if m.historyErr != "" {
-		m.diffTableBodyRow = -1
 		return []string{"  " + WarnStyle.Render("History error: "+m.historyErr)}
 	}
 	if m.historyReader == nil {
-		m.diffTableBodyRow = -1
 		return []string{"  " + MutedStyle.Render("No write history database found.")}
 	}
 
 	entries := m.filteredDiffEntries()
 	if len(entries) == 0 {
-		m.diffTableBodyRow = -1
 		if m.diffFilter != "" {
 			return []string{"  " + MutedStyle.Render(fmt.Sprintf("No changes match filter %q.", m.diffFilter))}
 		}
@@ -69,7 +144,6 @@ func (m *Model) rightLinesDiffs(rw int) []string {
 		render.PadLeft(HintStyle.Render("Diff"), cDiff)
 
 	lines := []string{h, sln}
-	m.diffTableBodyRow = 2
 
 	for i, e := range entries {
 		sel := m.focusPanel == focusDiffs && i == m.diffCursor
@@ -167,6 +241,14 @@ func (m *Model) openDiffDetail(e history.Entry) {
 	}
 }
 
+func (m Model) diffDetailMaxScroll() int {
+	boxW := max(m.width, 60)
+	innerW := boxW - 2
+	scrollH := max(m.height-10, 4)
+	allLines := m.diffDetailContentLines(innerW - 4)
+	return max(len(allLines)-scrollH, 0)
+}
+
 func (m Model) renderDiffDetail(bg string) string {
 	boxW := max(m.width, 60)
 	innerW := boxW - 2
@@ -174,6 +256,9 @@ func (m Model) renderDiffDetail(bg string) string {
 
 	allLines := m.diffDetailContentLines(innerW - 4)
 	maxScroll := max(len(allLines)-scrollH, 0)
+	if m.scrollBounds != nil {
+		m.scrollBounds.maxDiffDetail = maxScroll
+	}
 	scroll := max(min(m.diffDetailScroll, maxScroll), 0)
 	visible := allLines[scroll:]
 	scrollbar := scrollbarCol(len(allLines), scrollH, scroll, false)
@@ -299,7 +384,10 @@ func (m Model) handleDiffDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.diffDetailOpen = false
 		return m, nil
 	case "j", "down":
-		m.diffDetailScroll++
+		maxScroll := m.diffDetailMaxScroll()
+		if m.diffDetailScroll < maxScroll {
+			m.diffDetailScroll++
+		}
 		return m, nil
 	case "k", "up":
 		if m.diffDetailScroll > 0 {
@@ -310,7 +398,7 @@ func (m Model) handleDiffDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 		m.diffDetailScroll = 0
 		return m, nil
 	case "G":
-		m.diffDetailScroll = 999999
+		m.diffDetailScroll = m.diffDetailMaxScroll()
 		return m, nil
 	case "c", "y":
 		return m, copyTextToClipboard(m.diffDetailText)

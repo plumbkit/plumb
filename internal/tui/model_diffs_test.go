@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -227,5 +228,177 @@ func TestDiffDetailOverlay(t *testing.T) {
 		if m.diffDetailOpen {
 			t.Fatalf("key %q did not close diff detail overlay", key)
 		}
+	}
+}
+
+func TestDiffsClickRowMapping(t *testing.T) {
+	entries := []history.Entry{
+		{Seq: 1, Tool: "edit_file", Path: "pkg/one.go", GapBefore: true},
+		{Seq: 2, Tool: "write_file", Path: "pkg/two.go", GapBefore: false},
+		{Seq: 3, Tool: "delete_file", Path: "pkg/three.go", GapBefore: false},
+	}
+	m := &Model{
+		currentSection: 1,
+		rightTab:       3, // Diffs tab
+		focusPanel:     focusDiffs,
+		diffEntries:    entries,
+		diffCursor:     0,
+		historyReader:  &history.Reader{},
+	}
+
+	// Layout in rightLines:
+	// 0: tab bar
+	// 1: blank
+	// 2: table header
+	// 3: separator
+	// 4: entry 0 (pkg/one.go)
+	// 5: entry 0 gap (GapBefore)
+	// 6: entry 1 (pkg/two.go)
+	// 7: entry 2 (pkg/three.go)
+
+	// Header and separator clicks must be non-selecting
+	if idx := m.diffEntryAtLine(2); idx != -1 {
+		t.Fatalf("click at header row 2 got %d, want -1", idx)
+	}
+	if idx := m.diffEntryAtLine(3); idx != -1 {
+		t.Fatalf("click at separator row 3 got %d, want -1", idx)
+	}
+
+	// Entry 0 row click
+	if idx := m.diffEntryAtLine(4); idx != 0 {
+		t.Fatalf("click at row 4 got %d, want 0", idx)
+	}
+
+	// Gap row click must be non-selecting
+	if idx := m.diffEntryAtLine(5); idx != -1 {
+		t.Fatalf("click at gap row 5 got %d, want -1", idx)
+	}
+
+	// Entry 1 row click
+	if idx := m.diffEntryAtLine(6); idx != 1 {
+		t.Fatalf("click at row 6 got %d, want 1", idx)
+	}
+
+	// Entry 2 row click
+	if idx := m.diffEntryAtLine(7); idx != 2 {
+		t.Fatalf("click at row 7 got %d, want 2", idx)
+	}
+
+	// Out of bounds click
+	if idx := m.diffEntryAtLine(8); idx != -1 {
+		t.Fatalf("click at row 8 got %d, want -1", idx)
+	}
+
+	// Verify handleRightPanelClick uses mapping and ignores gaps/headers
+	m.handleRightPanelClick(2) // header
+	if m.diffCursor != 0 {
+		t.Fatalf("header click changed diffCursor to %d", m.diffCursor)
+	}
+
+	m.handleRightPanelClick(5) // gap
+	if m.diffCursor != 0 {
+		t.Fatalf("gap click changed diffCursor to %d", m.diffCursor)
+	}
+
+	m.handleRightPanelClick(6) // entry 1
+	if m.diffCursor != 1 {
+		t.Fatalf("entry 1 click got diffCursor %d, want 1", m.diffCursor)
+	}
+}
+
+func TestDiffsCursorViewportScroll(t *testing.T) {
+	entries := make([]history.Entry, 0, 40)
+	for i := range 40 {
+		entries = append(entries, history.Entry{
+			Seq:  int64(i + 1),
+			Tool: "edit_file",
+			Path: fmt.Sprintf("file_%02d.go", i),
+		})
+	}
+
+	m := Model{
+		height:         20,
+		width:          80,
+		currentSection: 1,
+		rightTab:       3,
+		focusPanel:     focusDiffs,
+		diffEntries:    entries,
+		diffCursor:     0,
+		rightScroll:    0,
+		historyReader:  &history.Reader{},
+	}
+
+	// 25 Down presses
+	for range 25 {
+		m = m.mainKeyDown()
+	}
+
+	if m.diffCursor != 25 {
+		t.Fatalf("diffCursor after 25 Down presses = %d, want 25", m.diffCursor)
+	}
+
+	// Entry 25 line must be visible in viewport
+	entryLine := m.diffEntryLine(m.diffCursor)
+	rightViewH := max(max(m.height-6, 1)-2, 1) // footer has 2 lines in section 1
+	if entryLine < m.rightScroll || entryLine >= m.rightScroll+rightViewH {
+		t.Fatalf("entry line %d not in viewport [%d, %d)", entryLine, m.rightScroll, m.rightScroll+rightViewH)
+	}
+	if m.rightScroll == 0 {
+		t.Fatalf("expected rightScroll > 0 after 25 Down presses, got 0")
+	}
+
+	// 25 Up presses should return to top and scroll to 0
+	for range 25 {
+		m = m.mainKeyUp()
+	}
+	if m.diffCursor != 0 {
+		t.Fatalf("diffCursor after 25 Up presses = %d, want 0", m.diffCursor)
+	}
+	if m.rightScroll != 0 {
+		t.Fatalf("rightScroll after returning to top = %d, want 0", m.rightScroll)
+	}
+}
+
+func TestDiffDetailScrollBounds(t *testing.T) {
+	entry := history.Entry{
+		Seq:     1,
+		Tool:    "edit_file",
+		Path:    "large.go",
+		Content: history.ContentDiff,
+	}
+	diffLines := make([]string, 50)
+	for i := range diffLines {
+		diffLines[i] = fmt.Sprintf("+line %d", i)
+	}
+	m := Model{
+		width:           80,
+		height:          24,
+		diffDetailOpen:  true,
+		diffDetailEntry: entry,
+		diffDetailText:  strings.Join(diffLines, "\n"),
+	}
+
+	maxScroll := m.diffDetailMaxScroll()
+	if maxScroll <= 0 {
+		t.Fatalf("expected non-zero maxScroll for 50-line diff in 24-row terminal, got %d", maxScroll)
+	}
+
+	// Press G to jump to bottom
+	m, _ = m.handleDiffDetailKey(tea.KeyPressMsg{Code: 0, Text: "G"})
+	if m.diffDetailScroll != maxScroll {
+		t.Fatalf("after G, scroll = %d, want maxScroll %d", m.diffDetailScroll, maxScroll)
+	}
+
+	// Press k once to step up one row
+	m, _ = m.handleDiffDetailKey(tea.KeyPressMsg{Code: 0, Text: "k"})
+	if m.diffDetailScroll != maxScroll-1 {
+		t.Fatalf("after k, scroll = %d, want %d", m.diffDetailScroll, maxScroll-1)
+	}
+
+	// Press j beyond end should not overscroll
+	m, _ = m.handleDiffDetailKey(tea.KeyPressMsg{Code: 0, Text: "G"})
+	m, _ = m.handleDiffDetailKey(tea.KeyPressMsg{Code: 0, Text: "j"})
+	if m.diffDetailScroll != maxScroll {
+		t.Fatalf("after j past bottom, scroll = %d, want %d", m.diffDetailScroll, maxScroll)
 	}
 }
