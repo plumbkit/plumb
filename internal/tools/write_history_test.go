@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -420,5 +421,115 @@ func TestWriteHistory_IsolationAndErrors(t *testing.T) {
 	_, err = noWSTool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err == nil || !strings.Contains(err.Error(), "no workspace resolved") {
 		t.Fatalf("expected no workspace error, got %v", err)
+	}
+}
+
+func TestWriteHistory_RelativeFileFilterScopedToRequestedWorkspace(t *testing.T) {
+	rootRepo := paths.Canonical(t.TempDir())
+	subproject := filepath.Join(rootRepo, "subproject")
+	filePath := filepath.Join(subproject, "file1.txt")
+	dbPath := filepath.Join(t.TempDir(), "history.db")
+
+	s, err := history.Open(dbPath, history.Options{})
+	if err != nil {
+		t.Fatalf("history.Open: %v", err)
+	}
+	s.Enqueue(history.Item{
+		Change: history.Change{
+			Kind:   history.KindFile,
+			Op:     history.OpUpdate,
+			Tool:   "edit_file",
+			Path:   filePath,
+			Before: history.SideFromBytes([]byte("old")),
+			After:  history.SideFromBytes([]byte("new")),
+		},
+		Workspace: subproject,
+		CallID:    "CALL_SUB",
+	})
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("history.Close: %v", err)
+	}
+
+	tool := NewWriteHistory().
+		WithWorkspace(func(_ context.Context) string { return rootRepo }).
+		withOpeners(
+			func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) },
+			nil,
+		)
+
+	// Query with explicit workspace = subproject, and relative file = "file1.txt"
+	query := fmt.Sprintf(`{"workspace": %q, "file": "file1.txt"}`, subproject)
+	out, err := tool.Execute(context.Background(), json.RawMessage(query))
+	if err != nil {
+		t.Fatalf("Execute with relative file: %v", err)
+	}
+
+	if !strings.Contains(out, "file1.txt") || !strings.Contains(out, "#1") {
+		t.Fatalf("expected output to contain file1.txt (#1), got:\n%s", out)
+	}
+}
+
+func TestWriteHistory_BoundedCallOutput(t *testing.T) {
+	ws := paths.Canonical(t.TempDir())
+	dbPath := filepath.Join(t.TempDir(), "history.db")
+
+	s, err := history.Open(dbPath, history.Options{})
+	if err != nil {
+		t.Fatalf("history.Open: %v", err)
+	}
+
+	// Create 20 changes with 16 KiB diffs in a single call (total raw diff ~320 KiB)
+	largeDiffContent := strings.Repeat("x", 16*1024)
+	for i := range 20 {
+		s.Enqueue(history.Item{
+			Change: history.Change{
+				Kind:   history.KindFile,
+				Op:     history.OpUpdate,
+				Tool:   "edit_file",
+				Path:   filepath.Join(ws, fmt.Sprintf("file_%02d.txt", i)),
+				Before: history.SideFromBytes([]byte("")),
+				After:  history.SideFromBytes([]byte(largeDiffContent)),
+			},
+			Workspace: ws,
+			CallID:    "CALL_MANY_FILES",
+		})
+	}
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatalf("history.Close: %v", err)
+	}
+
+	tool := NewWriteHistory().
+		WithWorkspace(func(_ context.Context) string { return ws }).
+		withOpeners(
+			func() (*history.Reader, error) { return history.OpenReadOnlyAt(dbPath) },
+			nil,
+		)
+
+	// Show mode with call_id without pagination: must be bounded by aggregate budget
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"call_id": "CALL_MANY_FILES"}`))
+	if err != nil {
+		t.Fatalf("Execute for call_id: %v", err)
+	}
+
+	// Should not exceed aggregate budget plus safety margin
+	if len(out) > maxTotalShowBytes+2048 {
+		t.Fatalf("output size %d exceeded maxTotalShowBytes budget %d", len(out), maxTotalShowBytes)
+	}
+
+	if !strings.Contains(out, "omitted to stay within response budget") {
+		t.Fatalf("expected omitted entries notice in output, got tail:\n%s", out[max(0, len(out)-300):])
+	}
+
+	// Paging with offset and limit should work
+	pagedOut, err := tool.Execute(context.Background(), json.RawMessage(`{"call_id": "CALL_MANY_FILES", "offset": 2, "limit": 2}`))
+	if err != nil {
+		t.Fatalf("Execute for paged call_id: %v", err)
+	}
+
+	if !strings.Contains(pagedOut, "file_02.txt") || !strings.Contains(pagedOut, "file_03.txt") {
+		t.Fatalf("expected paged output to contain file_02 and file_03, got:\n%s", pagedOut)
+	}
+	if strings.Contains(pagedOut, "file_01.txt") || strings.Contains(pagedOut, "file_04.txt") {
+		t.Fatalf("paged output contained out-of-range files, got:\n%s", pagedOut)
 	}
 }

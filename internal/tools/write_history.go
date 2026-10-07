@@ -47,11 +47,11 @@ var writeHistorySchema = json.RawMessage(`{
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum changes to list (default 20, max 100) (list mode)."
+      "description": "Maximum changes to list or show (default 20 for list mode, max 100)."
     },
     "offset": {
       "type": "integer",
-      "description": "Pagination offset (default 0) (list mode)."
+      "description": "Pagination offset (default 0)."
     },
     "max_diff_bytes": {
       "type": "integer",
@@ -70,6 +70,7 @@ const (
 	maxHistoryLimit     = 100
 	defaultMaxDiffBytes = 32 * 1024  // 32 KiB
 	maxAllowedDiffBytes = 128 * 1024 // 128 KiB
+	maxTotalShowBytes   = 128 * 1024 // 128 KiB aggregate budget for call diff output
 	diffTruncatedNotice = "\n… (diff truncated; use max_diff_bytes to expand)"
 )
 
@@ -183,7 +184,10 @@ func (a *writeHistoryArgs) validateShow() error {
 }
 
 func (a *writeHistoryArgs) validateLimits() error {
-	if a.Limit <= 0 {
+	if a.Limit < 0 {
+		return errors.New("limit must be non-negative")
+	}
+	if a.Mode == "list" && a.Limit == 0 {
 		a.Limit = defaultHistoryLimit
 	}
 	if a.Limit > maxHistoryLimit {
@@ -281,11 +285,15 @@ func (t *WriteHistory) resolveSessionFilter(filterSession string) (string, error
 	return filterSession, nil
 }
 
-func (t *WriteHistory) resolveFileFilter(ctx context.Context, file string) (string, error) {
+func (t *WriteHistory) resolveFileFilter(ctx context.Context, ws, file string) (string, error) {
 	if file == "" {
 		return "", nil
 	}
-	resolved, err := resolvePath(ctx, file, t.ws, t.contested)
+	wsFn := t.ws
+	if ws != "" {
+		wsFn = func(context.Context) string { return ws }
+	}
+	resolved, err := resolvePath(ctx, file, wsFn, t.contested)
 	if err != nil {
 		return "", fmt.Errorf("resolving file: %w", err)
 	}
@@ -300,7 +308,7 @@ func (t *WriteHistory) runList(ctx context.Context, rdr *history.Reader, ws stri
 	if err != nil {
 		return writeHistoryResult{}, err
 	}
-	filePath, err := t.resolveFileFilter(ctx, a.File)
+	filePath, err := t.resolveFileFilter(ctx, ws, a.File)
 	if err != nil {
 		return writeHistoryResult{}, err
 	}
@@ -332,7 +340,7 @@ func (t *WriteHistory) runShow(rdr *history.Reader, ws string, a writeHistoryArg
 	if a.Seq != 0 {
 		return t.runShowSeq(rdr, ws, a.Seq, a.MaxDiffBytes)
 	}
-	return t.runShowCall(rdr, ws, a.CallID, a.MaxDiffBytes)
+	return t.runShowCall(rdr, ws, a.CallID, a.MaxDiffBytes, a.Limit, a.Offset)
 }
 
 func (t *WriteHistory) runShowSeq(rdr *history.Reader, ws string, seq int64, maxDiffBytes int) (writeHistoryResult, error) {
@@ -359,7 +367,7 @@ func (t *WriteHistory) runShowSeq(rdr *history.Reader, ws string, seq int64, max
 	}, nil
 }
 
-func (t *WriteHistory) runShowCall(rdr *history.Reader, ws string, callID string, maxDiffBytes int) (writeHistoryResult, error) {
+func (t *WriteHistory) runShowCall(rdr *history.Reader, ws string, callID string, maxDiffBytes int, limit int, offset int) (writeHistoryResult, error) {
 	entries, diffs, err := rdr.ByCall(callID)
 	if err != nil {
 		return writeHistoryResult{}, fmt.Errorf("history by call %s: %w", callID, err)
@@ -371,6 +379,16 @@ func (t *WriteHistory) runShowCall(rdr *history.Reader, ws string, callID string
 		if ws != "" && paths.Canonical(e.Workspace) != ws {
 			return writeHistoryResult{}, fmt.Errorf("history entries for call %s belong to a different workspace", callID)
 		}
+	}
+
+	if offset > 0 || limit > 0 {
+		start := min(offset, len(entries))
+		end := len(entries)
+		if limit > 0 && start+limit < end {
+			end = start + limit
+		}
+		entries = entries[start:end]
+		diffs = diffs[start:end]
 	}
 
 	summary, haveCall := t.lookupStatsCall(callID)
@@ -486,7 +504,15 @@ func formatShowResult(res writeHistoryResult) string {
 		sb.WriteString("(call metadata unavailable)\n\n")
 	}
 
+	maxOutput := max(res.MaxDiffBytes, maxTotalShowBytes)
+
 	for i, e := range res.Entries {
+		if sb.Len() >= maxOutput {
+			omitted := len(res.Entries) - i
+			fmt.Fprintf(&sb, "… (%d change(s) in this call omitted to stay within response budget; inspect individually using seq or page with offset/limit)\n", omitted)
+			break
+		}
+
 		fromPath := e.Path
 		if e.From != "" {
 			fromPath = e.From
@@ -499,7 +525,9 @@ func formatShowResult(res writeHistoryResult) string {
 			if i < len(res.Diffs) {
 				diff = res.Diffs[i]
 			}
-			formatShowDiff(&sb, diff, res.MaxDiffBytes)
+			avail := max(maxOutput-sb.Len(), 0)
+			diffCap := min(res.MaxDiffBytes, avail)
+			formatShowDiff(&sb, diff, diffCap)
 		} else {
 			fmt.Fprintf(&sb, "[%s]\n", e.Content)
 		}
