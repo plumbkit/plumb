@@ -353,15 +353,27 @@ func (m *Model) refreshDiffs() {
 	if ws == "" {
 		ws = m.dashProjectFolder
 	}
+	// An empty Workspace filter means every workspace; the tab is "this
+	// workspace", so with none resolved it shows nothing rather than all.
+	m.diffNoWorkspace = ws == ""
+	if m.diffNoWorkspace {
+		m.diffEntries = nil
+		m.diffCursor = 0
+		return
+	}
 	entries, err := m.historyReader.List(history.Filter{Workspace: ws, Limit: 100})
 	if err != nil {
 		m.historyErr = err.Error()
 		return
 	}
 	m.historyErr = ""
+	for i := range entries {
+		terminalSafeEntry(&entries[i])
+	}
 	m.diffEntries = entries
-	if m.diffCursor >= len(m.diffEntries) && len(m.diffEntries) > 0 {
-		m.diffCursor = len(m.diffEntries) - 1
+	// Clamp against what the tab shows: with a filter active that is fewer rows.
+	if n := len(m.filteredDiffEntries()); m.diffCursor >= n {
+		m.diffCursor = max(n-1, 0)
 	}
 }
 

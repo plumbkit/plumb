@@ -16,6 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 var (
@@ -278,9 +279,21 @@ func renderListJSON(entries []history.Entry) error {
 	return nil
 }
 
+// historyDisplay scrubs untrusted text (paths, diffs and error strings recorded
+// in history) when stdout is a terminal, where an escape sequence in a
+// repository file would otherwise run. Piped output stays byte-exact, for patch
+// and friends.
+func historyDisplay(tty bool, s string) string {
+	if tty {
+		return textfmt.TerminalSafe(s)
+	}
+	return s
+}
+
 func renderListText(entries []history.Entry) {
+	tty := stdoutIsTerminal()
 	for _, e := range entries {
-		fmt.Println(formatListEntry(e))
+		fmt.Println(historyDisplay(tty, formatListEntry(e)))
 		if e.GapBefore {
 			gapLine := "  ⋯ unrecorded change (outside plumb's write tools)"
 			if e.GapDropped {
@@ -410,6 +423,7 @@ func renderShowJSON(entries []history.Entry, diffs []string, haveCall bool, call
 }
 
 func renderShowText(entries []history.Entry, diffs []string, haveCall bool, call stats.CallSummary) {
+	tty := stdoutIsTerminal()
 	if haveCall {
 		status := "success"
 		if !call.Success {
@@ -419,7 +433,7 @@ func renderShowText(entries []history.Entry, diffs []string, haveCall bool, call
 		if call.SessionName != "" {
 			sess = "  session " + call.SessionName
 		}
-		fmt.Printf("%s (%dms, %s)%s\n\n", call.Tool, call.DurationMs, status, sess)
+		fmt.Print(historyDisplay(tty, fmt.Sprintf("%s (%dms, %s)%s\n\n", call.Tool, call.DurationMs, status, sess)))
 	} else {
 		fmt.Println("(call metadata unavailable: stats.db has no row for this call)")
 		fmt.Println()
@@ -431,11 +445,11 @@ func renderShowText(entries []history.Entry, diffs []string, haveCall bool, call
 		if e.From != "" {
 			fromPath = e.From
 		}
-		fmt.Printf("--- a/%s\n", fromPath)
-		fmt.Printf("+++ b/%s\n", path)
+		fmt.Println(historyDisplay(tty, "--- a/"+fromPath))
+		fmt.Println(historyDisplay(tty, "+++ b/"+path))
 		if e.Content == history.ContentDiff {
 			if diffs[i] != "" {
-				fmt.Println(diffs[i])
+				fmt.Println(historyDisplay(tty, diffs[i]))
 			}
 		} else {
 			fmt.Printf("[%s]\n", e.Content)

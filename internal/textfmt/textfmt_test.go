@@ -265,3 +265,23 @@ func TestHumanBytes_AcceptsEveryByteCountKind(t *testing.T) {
 		t.Errorf("HumanBytes(int) = %q", got)
 	}
 }
+
+func TestTerminalSafe(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"plain\ntext → ok", "plain\ntext → ok"},
+		{"clear\x1b[2Jscreen", "clear^[[2Jscreen"},
+		{"\x1b]52;c;ZXZpbA==\x07", "^[]52;c;ZXZpbA==^G"},
+		{"a\tb", "a\tb"},
+		{"crlf\r\n", "crlf^M\n"},
+		{"del\x7f", "del^?"},
+		{"c1\u009b31m", "c1�31m"},
+	}
+	for _, c := range cases {
+		if got := TerminalSafe(c.in); got != c.want {
+			t.Errorf("TerminalSafe(%q) = %q, want %q", c.in, got, c.want)
+		}
+		if strings.ContainsAny(TerminalSafe(c.in), "\x1b\x07\r\x7f\u009b") {
+			t.Errorf("TerminalSafe(%q) still holds a control", c.in)
+		}
+	}
+}

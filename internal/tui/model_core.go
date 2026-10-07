@@ -103,9 +103,11 @@ type Model struct {
 	diffDetailOpen     bool
 	diffDetailScroll   int
 	diffDetailEntry    history.Entry
-	diffDetailText     string
+	diffDetailText     string // terminal-safe (textfmt.TerminalSafe), as shown and copied
+	diffDetailErr      string // why the diff could not be read; never copied as the diff
 	diffDetailCall     stats.CallSummary
 	diffDetailHaveCall bool
+	diffNoWorkspace    bool // no session or project folder to scope the Diffs tab to
 
 	// Control socket path for live daemon queries.
 	ctrlPath string

@@ -13,6 +13,21 @@ import (
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
+// terminalSafeEntry scrubs every string an entry renders. Paths, tool names,
+// session and agent labels come from history.db, and a repository can name a
+// file with an escape sequence in it (see textfmt.TerminalSafe).
+func terminalSafeEntry(e *history.Entry) {
+	e.Path = textfmt.TerminalSafe(e.Path)
+	e.From = textfmt.TerminalSafe(e.From)
+	e.Tool = textfmt.TerminalSafe(e.Tool)
+	e.SessionName = textfmt.TerminalSafe(e.SessionName)
+	e.SessionID = textfmt.TerminalSafe(e.SessionID)
+	e.LogicalAgent = textfmt.TerminalSafe(e.LogicalAgent)
+	e.ClientName = textfmt.TerminalSafe(e.ClientName)
+	e.Reason = textfmt.TerminalSafe(e.Reason)
+	e.CallID = textfmt.TerminalSafe(e.CallID) // plumb-minted, so a lookup never changes
+}
+
 // filteredDiffEntries returns write-diff history records matching diffFilter.
 func (m Model) filteredDiffEntries() []history.Entry {
 	if m.diffFilter == "" {
@@ -119,6 +134,9 @@ func (m *Model) rightLinesDiffs(rw int) []string {
 	if m.historyReader == nil {
 		return []string{"  " + MutedStyle.Render("No write history database found.")}
 	}
+	if m.diffNoWorkspace {
+		return []string{"  " + MutedStyle.Render("No workspace selected: pick a session to see its write history.")}
+	}
 
 	entries := m.filteredDiffEntries()
 	if len(entries) == 0 {
@@ -219,13 +237,16 @@ func (m *Model) openDiffDetail(e history.Entry) {
 	m.diffDetailScroll = 0
 	m.diffDetailEntry = e
 	m.diffDetailText = ""
+	m.diffDetailErr = ""
 
 	if m.historyReader != nil && e.Content == history.ContentDiff {
 		_, diff, err := m.historyReader.Get(e.Seq)
 		if err == nil {
-			m.diffDetailText = diff
+			// The diff is file content: untrusted, so scrubbed before it is
+			// rendered or copied. Tabs are expanded so line widths hold.
+			m.diffDetailText = strings.ReplaceAll(textfmt.TerminalSafe(diff), "\t", "    ")
 		} else {
-			m.diffDetailText = "error decompressing diff: " + err.Error()
+			m.diffDetailErr = textfmt.TerminalSafe(err.Error())
 		}
 	}
 
@@ -234,6 +255,9 @@ func (m *Model) openDiffDetail(e history.Entry) {
 	}
 	if m.globalDB != nil && e.CallID != "" {
 		call, ok, _ := m.globalDB.CallByID(e.CallID)
+		call.Tool = textfmt.TerminalSafe(call.Tool)
+		call.ErrorMsg = textfmt.TerminalSafe(call.ErrorMsg)
+		call.SessionName = textfmt.TerminalSafe(call.SessionName)
 		m.diffDetailCall = call
 		m.diffDetailHaveCall = ok
 	} else {
@@ -336,6 +360,9 @@ func (m Model) diffDetailBodyLines() []string {
 	if e.Content != history.ContentDiff && e.Content != "" {
 		return append(lines, "", WarnStyle.Render(fmt.Sprintf("[%s] - diff content was withheld", e.Content)))
 	}
+	if m.diffDetailErr != "" {
+		return append(lines, "", WarnStyle.Render("error reading diff: "+m.diffDetailErr))
+	}
 	if m.diffDetailText == "" {
 		return append(lines, MutedStyle.Render("(empty diff)"))
 	}
@@ -380,6 +407,10 @@ func (m Model) renderDiffDetailStatusBar(innerW int) string {
 func (m Model) handleDiffDetailKey(msg tea.KeyPressMsg) (Model, tea.Cmd) {
 	key := msg.String()
 	switch key {
+	case "ctrl+q":
+		return m, tea.Quit
+	case "ctrl+c":
+		return m.mainKeyQuit()
 	case "esc", "q", "enter":
 		m.diffDetailOpen = false
 		return m, nil

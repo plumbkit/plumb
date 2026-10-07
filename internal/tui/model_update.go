@@ -164,7 +164,8 @@ func (m *Model) handleLeftMouseClick(mouse tea.Mouse) {
 	if mouse.Button != tea.MouseLeft {
 		return
 	}
-	if m.logDetailOpen {
+	// A click while an overlay is open must not act on the panels behind it.
+	if m.logDetailOpen || m.diffDetailOpen {
 		return
 	}
 	if m.sectionMenuOpen {
@@ -269,6 +270,7 @@ func (m *Model) handleTabBarClick(x int) {
 		m.rightTab = 4
 		m.focusPanel = focusDiagnostics
 	}
+	m.refreshDiffs() // no-op unless the Diffs tab is now showing
 }
 
 func (m Model) handleKeyMsg(msg tea.KeyPressMsg) (Model, tea.Cmd) {
@@ -464,6 +466,10 @@ func (m *Model) handleMouseWheelDash(delta int) bool {
 }
 
 func (m *Model) handleMouseWheel(mouse tea.Mouse, delta int) {
+	if m.diffDetailOpen {
+		m.diffDetailScroll = min(max(m.diffDetailScroll+delta, 0), m.diffDetailMaxScroll())
+		return
+	}
 	if m.showPopup {
 		m.handleMouseWheelPopup(mouse, delta)
 		return

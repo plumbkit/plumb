@@ -253,6 +253,7 @@ func (m Model) mainKeyTab() Model {
 		m.rightTab = 0
 		m.focusPanel = focusSessions
 	}
+	m.refreshDiffs() // load on entry, not on the next poll; no-op on other tabs
 	return m
 }
 
@@ -279,6 +280,7 @@ func (m Model) mainKeyShiftTab() Model {
 	} else {
 		m.focusPanel = focusSessions
 	}
+	m.refreshDiffs() // load on entry, not on the next poll; no-op on other tabs
 	return m
 }
 
