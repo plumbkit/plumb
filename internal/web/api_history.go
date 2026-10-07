@@ -208,6 +208,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		Workspaces: activeWorkspaces(),
 		Changes:    []historyItemDTO{},
 	}
+	// No workspace given and none active: an empty Workspace filter would list
+	// every workspace under a "" label. Only all=true asks for that.
+	if ws == "" && !filter.All {
+		writeJSON(w, out)
+		return
+	}
 
 	rdr, err := history.OpenReadOnly()
 	if err != nil {

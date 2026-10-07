@@ -81,8 +81,13 @@
       const hasSelectedSeq = selectedSeq != null && changes.some((c) => c.seq === selectedSeq);
       const hasSelectedCall = selectedCallId != null && changes.some((c) => c.callId === selectedCallId);
 
-      if (hasSelectedSeq || hasSelectedCall) {
-        // Selection remains valid in the current result set
+      if (hasSelectedSeq) {
+        // The selection survives, but detailReqId++ above discarded any detail
+        // fetch still in flight for it: fetch again, or the viewer would show
+        // "Loading diff…" for ever.
+        await selectSeq(selectedSeq);
+      } else if (hasSelectedCall) {
+        await selectCall(selectedCallId);
       } else if (changes.length > 0) {
         // Selection is no longer present; select first matching change
         selectedSeq = null;
@@ -323,19 +328,6 @@
           <!-- Changes inside this call -->
           <div class="divide-y" style="border-color:color-mix(in srgb,var(--rule) 50%,transparent)">
             {#each grp.changes as c (c.seq)}
-              <!-- Gap marker if gapBefore is true -->
-              {#if c.gapBefore}
-                <div
-                  class="px-3 py-1.5 text-[11px] flex items-center gap-1.5 font-mono"
-                  style="background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--warn)"
-                >
-                  <span>⚠</span>
-                  <span>
-                    {c.gapDropped ? "⋯ unrecorded change (dropped by queue overflow)" : "⋯ unrecorded change (outside plumb)"}
-                  </span>
-                </div>
-              {/if}
-
               <button
                 class="w-full text-left px-3 py-2 flex items-center gap-2 text-[12px] transition-colors cursor-pointer"
                 style={selectedSeq === c.seq
@@ -371,6 +363,21 @@
                   {formatTime(c.at)}
                 </span>
               </button>
+
+              <!-- gapBefore: an unrecorded change OLDER than this row. The list is
+                   newest first, so the marker goes below the row, as in the CLI
+                   and the TUI. -->
+              {#if c.gapBefore}
+                <div
+                  class="px-3 py-1.5 text-[11px] flex items-center gap-1.5 font-mono"
+                  style="background:color-mix(in srgb,var(--warn) 8%,transparent);color:var(--warn)"
+                >
+                  <span>⚠</span>
+                  <span>
+                    {c.gapDropped ? "⋯ unrecorded change (dropped by queue overflow)" : "⋯ unrecorded change (outside plumb)"}
+                  </span>
+                </div>
+              {/if}
             {/each}
           </div>
         </div>

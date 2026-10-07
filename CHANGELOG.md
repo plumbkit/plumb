@@ -9,8 +9,11 @@
   daemon's web server, backed by `internal/history.Reader` and `internal/stats`.
   A new History tab in the web UI renders an interactive ECharts write-activity
   timeline, grouped tool calls with execution durations and error/success badges,
-  gap markers (`⋯ unrecorded change`), and a syntax-highlighted unified-diff viewer
-  with withheld markers for sensitive and binary files (#605).
+  gap markers (`⋯ unrecorded change`), and a unified-diff viewer (added, removed
+  and hunk lines coloured) with withheld markers for sensitive and binary
+  files. With no workspace given and none active, `/api/history` lists nothing
+  rather than every workspace; `all=true` asks for all. The UI's unit tests now
+  run in CI (`npm test` in the web ui job) (#605).
 
 ## 0.22.0 (2026-10-05)
 

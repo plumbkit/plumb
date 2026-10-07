@@ -250,6 +250,11 @@ jobs:
           cache-dependency-path: internal/web/ui/package-lock.json
       - name: make web-ui
         run: make web-ui
+      # The UI's unit tests (tests/*.test.mjs; the Playwright smoke/shots
+      # scripts are separate), e.g. the tooltip escaping that guards the history
+      # timeline against hostile paths. make web-ui has already run npm ci.
+      - name: web ui unit tests
+        run: cd internal/web/ui && npm test
       - name: dist must match the committed assets
         run: |
           # porcelain, not `git diff`: a diff cannot see an UNTRACKED file, so a

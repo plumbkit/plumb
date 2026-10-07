@@ -64,6 +64,47 @@ func TestHandleHistory_EmptyDB(t *testing.T) {
 	}
 }
 
+// With no workspace param and no active session, an empty Workspace filter
+// would list every workspace; only all=true asks for that.
+func TestHandleHistory_NoWorkspaceListsNothing(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir()) // isolates history.db and the session registry
+	histStore, err := history.Open(history.DBPath(), history.Options{})
+	if err != nil {
+		t.Fatalf("open history store: %v", err)
+	}
+	ws := t.TempDir()
+	histStore.Enqueue(history.Item{
+		Workspace: ws, CallID: "call-1",
+		Change: history.Change{
+			At: time.Now(), Op: history.OpCreate, Kind: history.KindFile, Tool: "write_file",
+			Path: filepath.Join(ws, "a.txt"), After: history.SideFromBytes([]byte("a\n")),
+		},
+	})
+	if err := histStore.Close(context.Background()); err != nil {
+		t.Fatalf("close history store: %v", err)
+	}
+
+	list := func(query string) historyListDTO {
+		t.Helper()
+		w := httptest.NewRecorder()
+		(&Server{}).handleHistory(w, httptest.NewRequest(http.MethodGet, "/api/history"+query, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status %d: %s", query, w.Code, w.Body.String())
+		}
+		var res historyListDTO
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatalf("%s: unmarshal: %v", query, err)
+		}
+		return res
+	}
+	if got := list("?all=true"); len(got.Changes) != 1 { // control: the row is there
+		t.Fatalf("control: all=true listed %d changes, want 1", len(got.Changes))
+	}
+	if got := list(""); len(got.Changes) != 0 || got.Workspace != "" {
+		t.Fatalf("no workspace: listed %d changes (workspace %q), want none", len(got.Changes), got.Workspace)
+	}
+}
+
 func TestHandleHistory_ListsAndFilters(t *testing.T) {
 	ws := t.TempDir()
 	histStore, statsDB := seedHistoryAndStats(t, ws)
