@@ -941,12 +941,18 @@ Given changed files/symbols, return likely affected files and tests. **Inputs:**
 `files` (array), `symbols` (array), `max_results` (default 50).
 
 ### `topology_routes`
-Pattern-matches entry-point-shaped symbol names/signatures (Go HTTP handlers,
-Cobra commands, Python `@app.route`). Does **not** parse route registrations or
-call sites — it cannot recover a path-to-handler binding, only candidate
-functions whose name/signature look like a known entry-point idiom. Results
-annotated with confidence — heuristic. **Inputs:** `framework` (optional: `go`
-| `python` | `cobra`), `path_prefix` (optional), `limit` (default 20).
+Recovers entry points from registration sites in the topology index: route →
+handler for Go `net/http`, gorilla/mux, chi, gin and echo and for Python
+Flask/FastAPI decorators, plus the Cobra command tree (`Use` → `Run`/`RunE`,
+linked through `AddCommand`). A site counts only when its file imports the
+framework. Handlers are labelled `resolved` / `same-package` / `decorated` /
+`name-match` / `ambiguous` / `external` / `unresolved` — not type-checked; router
+group/mount prefixes are not composed. Swift, and frameworks with no recovered
+site, fall back to name/signature candidates labelled `name-match`. See
+[Route recovery](topology.md#route-recovery). **Inputs:** `framework` (optional:
+`net/http` | `mux` | `chi` | `gin` | `echo` | `cobra` | `flask` | `fastapi` |
+`vapor` | `argument-parser`), `path_prefix` (optional: a route prefix or a Cobra
+command path), `limit` (per list, default 50).
 
 ### `structural_query`
 Find symbols by **shape**, not name — a curated set of named structural checks

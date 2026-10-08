@@ -114,6 +114,15 @@ import "net/http"
 func ListUsers(w http.ResponseWriter, r *http.Request) {}
 `,
 	// Registration-shaped calls in a file that imports no HTTP framework.
+	// A registration in a test is a fixture, not an entry point.
+	"web/server_test.go": `package web
+
+import "net/http"
+
+func fixtureHandler(w http.ResponseWriter, r *http.Request) {}
+
+func setup(mux *http.ServeMux) { mux.HandleFunc("/test-only", fixtureHandler) }
+`,
 	"cache/cache.go": `package cache
 
 type C struct{}
@@ -142,7 +151,7 @@ func TestRoutesCallSite_GoNetHTTP(t *testing.T) {
 		"* /missing [net/http] -> http.NotFound (external)",
 		"5 HTTP route(s)",
 	)
-	mustNotContain(t, out, "/fake", "/not-a-route", "name-match candidates")
+	mustNotContain(t, out, "/fake", "/not-a-route", "/test-only", "name-match candidates")
 }
 
 // TestRoutesCallSite_PathPrefixFiltersRouteStrings: path_prefix is now a real
@@ -189,6 +198,13 @@ func versionCmd() *cobra.Command {
 	return &cobra.Command{Use: "version", Run: func(*cobra.Command, []string) {}}
 }
 
+func pairCmds() []*cobra.Command {
+	return []*cobra.Command{
+		&cobra.Command{Use: "pair-a", RunE: runLeaf},
+		&cobra.Command{Use: "pair-b", RunE: runServe},
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(serveCmd, configCmd, versionCmd())
 	rootCmd.AddCommand(` + strings.Join(args, ", ") + `)
@@ -205,7 +221,9 @@ func TestRoutesCallSite_CobraTree(t *testing.T) {
 	tool := routesFixture(t, cobraFixture())
 	out := runRoutes(t, tool, map[string]any{"framework": "cobra"})
 	mustContain(t, out,
-		"15 Cobra command(s)",
+		"17 Cobra command(s)",
+		"\n  pair-a -> runLeaf (same-package",
+		"\n  pair-b -> runServe (same-package",
 		"\n  app  [rootCmd cli/root.go:",
 		"\n    serve -> runServe (same-package, cli/root.go:",
 		"\n    config  [configCmd cli/root.go:",
@@ -240,6 +258,14 @@ def create_app():
     def nested():
         pass
     return app
+`,
+	"svc/test_api.py": `from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/pytest-only")
+def fixture():
+    pass
 `,
 	"svc/api.py": `from fastapi import APIRouter
 
@@ -280,7 +306,7 @@ func TestRoutesCallSite_PythonDecorators(t *testing.T) {
 		"WEBSOCKET /ws [fastapi] -> stream (decorated, svc/api.py:",
 		"5 HTTP route(s)",
 	)
-	mustNotContain(t, out, "/nope")
+	mustNotContain(t, out, "/nope", "/pytest-only")
 }
 
 // TestRoutesCallSite_FallsBackToNameMatchOnlyWithoutSites: a framework with no
@@ -296,4 +322,70 @@ func HandleFuncWrapper() {}
 	out := runRoutes(t, tool, map[string]any{"framework": "net/http"})
 	mustContain(t, out, "name-match candidates: 1", "HandleFuncWrapper", "(name-match)")
 	mustNotContain(t, out, "recovered from registration sites")
+}
+
+// TestRoutesCallSite_GoRouterFrameworks covers gin, echo and chi: each one's
+// handler position, and the attribution guards — a client call through another
+// package's import, and gin's three-argument Handle, are not routes.
+func TestRoutesCallSite_GoRouterFrameworks(t *testing.T) {
+	tool := routesFixture(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.22\n",
+		"g/gin.go": `package g
+
+import (
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+)
+
+func auth(c *gin.Context)      {}
+func listItems(c *gin.Context) {}
+
+func Register(r *gin.Engine) {
+	r.GET("/items", auth, listItems)
+	r.Handle("GET", "/raw", listItems)
+	_, _ = http.Get("/client-call")
+}
+`,
+		"e/echo.go": `package e
+
+import "github.com/labstack/echo/v4"
+
+func show(c echo.Context) error { return nil }
+func mw(next echo.HandlerFunc) echo.HandlerFunc { return next }
+
+func makeHandler() echo.HandlerFunc { return show }
+
+func Register(e *echo.Echo) {
+	e.POST("/things", show, mw)
+	// An expression before a name: positions are unknowable, so mw must not be
+	// read as the handler.
+	e.PUT("/made", makeHandler(), mw)
+}
+`,
+		"c/chi.go": `package c
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+func getUser(w http.ResponseWriter, r *http.Request) {}
+
+func Register(r chi.Router) {
+	r.Get("/users/{id}", getUser)
+	_, _ = http.Get("/also-a-client-call")
+}
+`,
+	})
+	out := runRoutes(t, tool, map[string]any{})
+	mustContain(t, out,
+		"GET /items [gin] -> listItems (same-package, g/gin.go:",
+		"POST /things [echo] -> show (same-package, e/echo.go:",
+		"GET /users/{id} [chi] -> getUser (same-package, c/chi.go:",
+		"PUT /made [echo] -> <inline or expression> (unresolved)",
+		"4 HTTP route(s)",
+	)
+	mustNotContain(t, out, "/client-call", "/also-a-client-call", "/raw", "-> auth", "-> mw")
 }

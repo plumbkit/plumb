@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -64,9 +65,18 @@ func pythonDecoratorSites(ctx context.Context, tx *sql.Tx) ([]pySite, error) {
 		if err := rows.Scan(&s.fileID, &s.path, &s.callee, &s.line, &s.hasString, &s.str, &s.enclosing); err != nil {
 			return nil, fmt.Errorf("topology: routes: python site scan: %w", err)
 		}
-		sites = append(sites, s)
+		if !isPythonTestPath(s.path) {
+			sites = append(sites, s)
+		}
 	}
 	return sites, rows.Err()
+}
+
+// isPythonTestPath matches pytest's default discovery names: a route decorated
+// in a test module is a fixture, not an entry point.
+func isPythonTestPath(p string) bool {
+	base := path.Base(p)
+	return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "conftest.py"
 }
 
 // pythonFramework attributes a decorator to the framework its file imports.
