@@ -377,6 +377,9 @@ func renderMessages(rows []collab.Row, budget int, now time.Time, preview bool) 
 		if r.Addressee == collab.AddresseeNext {
 			sb.WriteString(" (to next arrival)")
 		}
+		if r.ConversationID != "" {
+			fmt.Fprintf(&sb, " [thread %s]", r.ConversationID)
+		}
 		fmt.Fprintf(&sb, ", %s ago: %q%s\n", humaniseAge(now.Sub(r.CreatedAt)), body, marker)
 	}
 	if preview {
