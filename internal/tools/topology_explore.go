@@ -206,7 +206,8 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 		}
 	}
 
-	writeMembersSection(&sb, nb.Members)
+	maxBytes := topology.ClampToolBytes(a.MaxBytes)
+	writeMembersSection(&sb, nb.Members, maxBytes, &nb.Truncated)
 
 	if nb.Truncated {
 		sb.WriteString("\n[truncated: max_nodes or max_bytes reached — reduce depth or increase limits]\n")
@@ -240,17 +241,31 @@ func topologyAmbiguityNote(name string, alternatives []topology.Node) string {
 	return sb.String()
 }
 
-func writeMembersSection(sb *strings.Builder, members []topology.Node) {
+func writeMembersSection(sb *strings.Builder, members []topology.Node, maxBytes int, truncated *bool) {
 	if len(members) == 0 {
 		return
 	}
-	fmt.Fprintf(sb, "\nmembers (%d):\n", len(members))
-	for _, m := range members {
-		fmt.Fprintf(sb, "  %s %s — %s", string(m.Kind), m.Qualified, m.Path)
-		if m.StartLine > 0 {
-			fmt.Fprintf(sb, " L%d", m.StartLine)
+	header := fmt.Sprintf("\nmembers (%d):\n", len(members))
+	if maxBytes > 0 && sb.Len()+len(header) > maxBytes {
+		if truncated != nil {
+			*truncated = true
 		}
-		sb.WriteString("\n")
+		return
+	}
+	sb.WriteString(header)
+	for _, m := range members {
+		line := fmt.Sprintf("  %s %s — %s", string(m.Kind), m.Qualified, m.Path)
+		if m.StartLine > 0 {
+			line += fmt.Sprintf(" L%d", m.StartLine)
+		}
+		line += "\n"
+		if maxBytes > 0 && sb.Len()+len(line) > maxBytes {
+			if truncated != nil {
+				*truncated = true
+			}
+			break
+		}
+		sb.WriteString(line)
 	}
 }
 

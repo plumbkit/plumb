@@ -152,3 +152,19 @@ func TestTopologyExplore_UnmatchedHintFailsHonestly(t *testing.T) {
 		t.Errorf("unexpected error format: %v", err)
 	}
 }
+
+// TestTopologyExplore_MembersBudgetHonoured verifies that writeMembersSection
+// bounds output and sets Truncated banner when max_bytes is reached.
+func TestTopologyExplore_MembersBudgetHonoured(t *testing.T) {
+	tool, _ := openExploreFixture(t)
+
+	raw, _ := json.Marshal(map[string]any{"name": "Greeter", "max_bytes": 100})
+	out, err := tool.Execute(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("Execute(Greeter): %v", err)
+	}
+
+	if !strings.Contains(out, "[truncated: max_nodes or max_bytes reached") {
+		t.Errorf("expected truncation notice under tight max_bytes:\n%s", out)
+	}
+}

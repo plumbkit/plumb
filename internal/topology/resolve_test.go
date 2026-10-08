@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -160,6 +161,110 @@ func TestTypeMembers_ExposesMethods(t *testing.T) {
 	}
 	if members[0].Qualified != "(*WorkspaceSearch).Execute" || members[1].Qualified != "(*WorkspaceSearch).Name" {
 		t.Errorf("unexpected members: %+v", members)
+	}
+}
+
+func TestTypeMembers_SamePackageScoping(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "twopkg.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	// Package A has type Store and method MethodA.
+	fileA := insertTestFile(t, db, "pkgA/store.go")
+	typeA := insertTestNode(t, db, fileA, "pkgA/store.go", Node{
+		Kind:      KindType,
+		Name:      "Store",
+		Qualified: "Store",
+		Language:  "go",
+	})
+	insertTestNode(t, db, fileA, "pkgA/store.go", Node{
+		Kind:      KindMethod,
+		Name:      "MethodA",
+		Qualified: "(*Store).MethodA",
+		Language:  "go",
+	})
+
+	// Package B also has a type Store and method MethodB.
+	fileB := insertTestFile(t, db, "pkgB/store.go")
+	typeB := insertTestNode(t, db, fileB, "pkgB/store.go", Node{
+		Kind:      KindType,
+		Name:      "Store",
+		Qualified: "Store",
+		Language:  "go",
+	})
+	insertTestNode(t, db, fileB, "pkgB/store.go", Node{
+		Kind:      KindMethod,
+		Name:      "MethodB",
+		Qualified: "(*Store).MethodB",
+		Language:  "go",
+	})
+
+	// Members of pkgA's Store must only contain MethodA, never MethodB from pkgB.
+	typeNodeA := Node{ID: typeA, Kind: KindType, Name: "Store", Path: "pkgA/store.go", FileID: fileA}
+	membersA, err := TypeMembers(context.Background(), db, typeNodeA, 10)
+	if err != nil {
+		t.Fatalf("TypeMembers(pkgA): %v", err)
+	}
+	if len(membersA) != 1 {
+		t.Fatalf("expected exactly 1 member for pkgA.Store, got %d: %+v", len(membersA), membersA)
+	}
+	if membersA[0].Qualified != "(*Store).MethodA" {
+		t.Errorf("expected (*Store).MethodA, got %q", membersA[0].Qualified)
+	}
+
+	// Members of pkgB's Store must only contain MethodB, never MethodA from pkgA.
+	typeNodeB := Node{ID: typeB, Kind: KindType, Name: "Store", Path: "pkgB/store.go", FileID: fileB}
+	membersB, err := TypeMembers(context.Background(), db, typeNodeB, 10)
+	if err != nil {
+		t.Fatalf("TypeMembers(pkgB): %v", err)
+	}
+	if len(membersB) != 1 {
+		t.Fatalf("expected exactly 1 member for pkgB.Store, got %d: %+v", len(membersB), membersB)
+	}
+	if membersB[0].Qualified != "(*Store).MethodB" {
+		t.Errorf("expected (*Store).MethodB, got %q", membersB[0].Qualified)
+	}
+}
+
+func TestExploreFrom_TypeMembersMaxBytesBudget(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "budget.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "pkg/service.go")
+	typeID := insertTestNode(t, db, fileID, "pkg/service.go", Node{
+		Kind:      KindType,
+		Name:      "Service",
+		Qualified: "Service",
+		Language:  "go",
+	})
+	for i := range 20 {
+		insertTestNode(t, db, fileID, "pkg/service.go", Node{
+			Kind:      KindMethod,
+			Name:      fmt.Sprintf("Method%d", i),
+			Qualified: fmt.Sprintf("(*Service).Method%d", i),
+			Language:  "go",
+		})
+	}
+
+	typeNode := Node{ID: typeID, Kind: KindType, Name: "Service", Path: "pkg/service.go", FileID: fileID}
+	nb, err := ExploreFrom(context.Background(), db, typeNode, ExploreOpts{
+		Depth:    1,
+		MaxNodes: 50,
+		MaxBytes: 250,
+	})
+	if err != nil {
+		t.Fatalf("ExploreFrom: %v", err)
+	}
+	if !nb.Truncated {
+		t.Errorf("expected Truncated=true under tight MaxBytes budget")
+	}
+	if len(nb.Members) >= 20 {
+		t.Errorf("expected truncated members under tight MaxBytes budget, got %d", len(nb.Members))
 	}
 }
 
