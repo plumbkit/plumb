@@ -237,13 +237,22 @@ const (
 	// project's registration strings live, so a call-sites table that omits it
 	// cannot answer the questions call sites are being captured for.
 	CallSiteField CallSiteKind = "field"
+	// CallSiteDecorator is a decorator applied to a declaration: the
+	// `@app.route("/x")` above `def x():`. Unlike the other two kinds its
+	// enclosing node is NOT a caller — it is the decorated declaration, which for
+	// a route decorator is the handler itself.
+	CallSiteDecorator CallSiteKind = "decorator"
 )
 
 // MaxCallSiteArgIdents caps how many identifier-shaped arguments a CallSite
 // records. The cap exists so one pathological call cannot dominate the table;
 // ArgCount records the true argument count so a consumer can tell a short call
 // from a truncated one instead of silently reading the cap as the whole list.
-const MaxCallSiteArgIdents = 8
+//
+// It was 8 until route recovery needed it: a Cobra root registers its whole
+// command tree in one call (plumb's own `rootCmd.AddCommand(...)` passes 20), so
+// a cap of 8 cut most of the tree off at the root.
+const MaxCallSiteArgIdents = 32
 
 // CallSite is one syntactic call expression (or composite-literal field value)
 // recorded verbatim, BEFORE any resolution.

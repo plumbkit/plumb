@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/topology"
@@ -14,22 +15,24 @@ var topologyRoutesSchema = json.RawMessage(`{
   "properties": {
     "framework": {
       "type": "string",
-      "description": "Optional framework hint: 'gin', 'chi', 'mux', 'echo', 'cobra', 'fastapi', 'flask', 'vapor', 'argument-parser'. Omit to scan all known patterns."
+      "description": "Optional framework: 'net/http', 'mux' (net/http + gorilla), 'chi', 'gin', 'echo', 'cobra', 'flask', 'fastapi', or the name-match-only 'vapor' / 'argument-parser'. Omit for all."
     },
     "path_prefix": {
       "type": "string",
-      "description": "Optional substring filter applied to the candidate symbol's name/signature (e.g. 'api') — NOT a URL path filter; it is not matched against any route path, since none is parsed."
+      "description": "Optional prefix filter: a route string ('/api'), or a Cobra command path ('plumb config'). Name-match candidates, which have no route, are filtered by symbol name/signature substring instead."
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum number of route entries to return. Default 20.",
-      "default": 20
+      "description": "Maximum HTTP routes and maximum commands to list (each). Default 50.",
+      "default": 50
     }
   },
   "additionalProperties": false
 }`)
 
-// TopologyRoutes pattern-matches topology nodes whose name/signature look like HTTP/CLI entry points.
+// TopologyRoutes recovers route registrations (route string -> handler) and Cobra
+// command trees from the call sites recorded in the topology index, falling back
+// to name/signature pattern candidates only where no registration site matched.
 //
 // Concurrency: Execute is safe for concurrent use.
 type TopologyRoutes struct {
@@ -44,19 +47,17 @@ func NewTopologyRoutes(storeFn func() *topology.Store) *TopologyRoutes {
 func (*TopologyRoutes) Name() string                 { return "topology_routes" }
 func (*TopologyRoutes) InputSchema() json.RawMessage { return topologyRoutesSchema }
 func (*TopologyRoutes) Description() string {
-	return "Pattern-matches entry-point-shaped symbol NAMES and signatures: Go handler funcs " +
-		"(http.HandleFunc, r.GET/POST, mux.Handle), Cobra cmd.Run/RunE, Python decorators " +
-		"(@app.route, @router.get, FastAPI path decorators), and Swift/Vapor idioms " +
-		"(RouteCollection.boot, configure(_:Application), ParsableCommand.run). " +
-		"It does NOT parse route registrations or call sites, so it cannot recover a " +
-		"path-to-handler binding (e.g. \"/api/x\" -> handlerFn) — it only finds functions whose " +
-		"name or signature looks like a known entry-point idiom. Results are candidates, not " +
-		"confirmed routes: each carries a confidence annotation reflecting the pattern's typical " +
-		"accuracy, not a resolved binding. Returns a clear message when no candidates match or " +
-		"topology is disabled."
+	return "Recovers entry points from REGISTRATION sites in the topology index: route string -> handler " +
+		"for Go net/http, gorilla/mux, chi, gin and echo, and Python Flask/FastAPI decorators; and the " +
+		"Cobra command tree (Use -> Run/RunE, linked through AddCommand). A site counts only when its file " +
+		"imports that framework. Each handler is labelled resolved / same-package / decorated / name-match " +
+		"/ ambiguous / external / unresolved; none is type-checked, and router group/mount prefixes are not " +
+		"composed. Swift (Vapor, ArgumentParser), and any framework with no recovered site, fall back to " +
+		"name/signature candidates labelled name-match — those are guesses, not bindings."
 }
 
-// routeEntry is a matched route/entry-point candidate.
+// routeEntry is a name-match candidate: a symbol whose name or signature looks
+// like an entry-point idiom, with no registration site behind it.
 type routeEntry struct {
 	Node       topology.Node
 	Pattern    string // matched pattern name
@@ -78,11 +79,18 @@ func (t *TopologyRoutes) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if store == nil {
 		return topologyDisabledMessage(), nil
 	}
-	routes, runErr := t.run(ctx, store, a)
-	if runErr != nil {
-		return "", runErr
+	fws, siteCovered := siteFrameworks(a.Framework)
+	rep := &topology.RouteReport{}
+	if siteCovered {
+		if rep, err = store.Routes(ctx, topology.RouteOpts{Frameworks: fws}); err != nil {
+			return "", fmt.Errorf("topology_routes: %w", err)
+		}
 	}
-	return formatRoutesResult(routes, a), nil
+	candidates, err := t.run(ctx, store, a, fallbackPatterns(a.Framework, siteCovered, rep))
+	if err != nil {
+		return "", err
+	}
+	return formatRoutesReport(rep, candidates, a), nil
 }
 
 func parseTopologyRoutesArgs(raw json.RawMessage) (topologyRoutesArgs, error) {
@@ -91,16 +99,73 @@ func parseTopologyRoutesArgs(raw json.RawMessage) (topologyRoutesArgs, error) {
 		return a, fmt.Errorf("topology_routes: invalid arguments: %w", err)
 	}
 	if a.Limit <= 0 {
-		a.Limit = 20
+		a.Limit = 50
 	}
 	return a, nil
 }
 
-func (t *TopologyRoutes) run(ctx context.Context, store *topology.Store, a topologyRoutesArgs) ([]routeEntry, error) {
+// siteFrameworks maps the framework argument to the families route recovery
+// reads from registration sites. siteCovered is false for a framework only the
+// name-match fallback knows (Swift has no recorded sites). An unknown name means
+// "all", as it always has.
+func siteFrameworks(framework string) (fws []topology.RouteFramework, siteCovered bool) {
+	switch strings.ToLower(strings.TrimSpace(framework)) {
+	case "net/http", "http", "nethttp":
+		return []topology.RouteFramework{topology.FrameworkNetHTTP}, true
+	case "mux":
+		return []topology.RouteFramework{topology.FrameworkNetHTTP, topology.FrameworkGorilla}, true
+	case "gorilla", "gorilla/mux":
+		return []topology.RouteFramework{topology.FrameworkGorilla}, true
+	case "chi":
+		return []topology.RouteFramework{topology.FrameworkChi}, true
+	case "gin":
+		return []topology.RouteFramework{topology.FrameworkGin}, true
+	case "echo":
+		return []topology.RouteFramework{topology.FrameworkEcho}, true
+	case "cobra":
+		return []topology.RouteFramework{topology.FrameworkCobra}, true
+	case "flask":
+		return []topology.RouteFramework{topology.FrameworkFlask}, true
+	case "fastapi":
+		return []topology.RouteFramework{topology.FrameworkFastAPI}, true
+	case "vapor", "argument-parser":
+		return nil, false
+	default:
+		return nil, true
+	}
+}
+
+// fallbackPatterns picks the name-match patterns to run. Swift idioms always
+// run when asked for (no Swift site is recorded); the other patterns run only
+// when recovery found nothing, so a recovered binding is never shadowed by, or
+// listed beside, a guess about the same code.
+func fallbackPatterns(framework string, siteCovered bool, rep *topology.RouteReport) []routePattern {
+	if !siteCovered {
+		return routePatterns(framework)
+	}
+	recovered := len(rep.Bindings) > 0 || rep.CommandCount > 0
+	if strings.TrimSpace(framework) != "" {
+		if recovered {
+			return nil
+		}
+		return routePatterns(framework)
+	}
+	if !recovered {
+		return routePatterns("")
+	}
+	var swift []routePattern
+	for _, p := range routePatterns("") {
+		if matchesFramework(p.name, "vapor") || matchesFramework(p.name, "argument-parser") {
+			swift = append(swift, p)
+		}
+	}
+	return swift
+}
+
+func (t *TopologyRoutes) run(ctx context.Context, store *topology.Store, a topologyRoutesArgs, patterns []routePattern) ([]routeEntry, error) {
 	if store == nil {
 		return nil, nil
 	}
-	patterns := routePatterns(a.Framework)
 	seen := map[int64]bool{}
 	var routes []routeEntry
 
@@ -188,7 +253,7 @@ func matchesFramework(patternName, framework string) bool {
 		return strings.Contains(patternName, "cobra")
 	case "gin", "chi", "echo":
 		return strings.Contains(patternName, "r.")
-	case "mux":
+	case "mux", "net/http", "http", "nethttp", "gorilla", "gorilla/mux":
 		return strings.Contains(patternName, "mux") || strings.Contains(patternName, "HandleFunc")
 	case "fastapi", "flask":
 		return strings.Contains(patternName, "@")
@@ -213,31 +278,195 @@ func isRouteCandidate(n topology.Node, p routePattern, pathPrefix string) bool {
 	return strings.Contains(sig, strings.ToLower(p.query))
 }
 
-func formatRoutesResult(routes []routeEntry, a topologyRoutesArgs) string {
-	if len(routes) == 0 {
-		msg := "topology_routes: no route patterns matched"
+// formatRoutesReport renders recovered bindings, the Cobra tree, and any
+// name-match candidates — counts first, each list capped at a.Limit.
+func formatRoutesReport(rep *topology.RouteReport, candidates []routeEntry, a topologyRoutesArgs) string {
+	bindings := filterBindings(rep.Bindings, a.PathPrefix)
+	var sb strings.Builder
+	if len(bindings) == 0 && rep.CommandCount == 0 && len(candidates) == 0 {
+		sb.WriteString("topology_routes: no registration sites and no name-match candidates found")
 		if a.Framework != "" {
-			msg += fmt.Sprintf(" (framework=%q)", a.Framework)
+			fmt.Fprintf(&sb, " (framework=%q)", a.Framework)
 		}
-		msg += "\nNote: route detection is pattern-matched (heuristic); confidence reflects approximate accuracy."
-		return msg
+		sb.WriteString("\nNote: recovery reads Go and Python registration sites; a framework the registering file does not import is not recognised.")
+		return sb.String()
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "topology routes: %d entry point(s) found (source=topology, heuristic)\n\n", len(routes))
-	for _, r := range routes {
-		fmt.Fprintf(&sb, "  %s %s\n", string(r.Node.Kind), r.Node.Name)
-		fmt.Fprintf(&sb, "    path:    %s", r.Node.Path)
-		if r.Node.StartLine > 0 {
-			fmt.Fprintf(&sb, " L%d", r.Node.StartLine)
-		}
-		sb.WriteString("\n")
-		if r.Node.Signature != "" {
-			fmt.Fprintf(&sb, "    sig:     %s\n", r.Node.Signature)
-		}
-		fmt.Fprintf(&sb, "    pattern: %s  conf=%.2f\n", r.Pattern, r.Confidence)
-		sb.WriteString("\n")
+	if len(bindings) > 0 || rep.CommandCount > 0 {
+		fmt.Fprintf(&sb, "topology routes: %d HTTP route(s), %d Cobra command(s) recovered from registration sites (source=topology call sites)\n",
+			len(bindings), rep.CommandCount)
+		writeRouteCounts(&sb, bindings, rep)
 	}
-	sb.WriteString("Note: results are pattern-matched against function names/signatures — not type-resolved.\n")
+	if len(bindings) > 0 {
+		sb.WriteString("\nHTTP routes:\n")
+		for i, b := range bindings {
+			if i == a.Limit {
+				fmt.Fprintf(&sb, "  … %d more route(s) omitted (raise limit)\n", len(bindings)-i)
+				break
+			}
+			method := b.Method
+			if method == "" {
+				method = "*"
+			}
+			fmt.Fprintf(&sb, "  %s %s [%s] -> %s\n      registered %s:%d\n",
+				method, routeText(b), b.Framework, handlerText(b.Handler), b.Path, b.Line)
+		}
+	}
+	if rep.CommandCount > 0 {
+		writeCommandTree(&sb, rep, a)
+	}
+	if len(candidates) > 0 {
+		fmt.Fprintf(&sb, "\nname-match candidates: %d (no registration site; a name/signature pattern, not a binding)\n", len(candidates))
+		for _, r := range candidates {
+			fmt.Fprintf(&sb, "  %s %s  %s", string(r.Node.Kind), r.Node.Name, r.Node.Path)
+			if r.Node.StartLine > 0 {
+				fmt.Fprintf(&sb, " L%d", r.Node.StartLine)
+			}
+			fmt.Fprintf(&sb, "\n    pattern: %s  conf=%.2f (name-match)\n", r.Pattern, r.Confidence)
+		}
+	}
+	sb.WriteString("\nNote: handlers are tied by import and package scope, not type-checked; router group/mount prefixes are not composed.")
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+func filterBindings(bs []topology.RouteBinding, prefix string) []topology.RouteBinding {
+	if prefix == "" {
+		return bs
+	}
+	var out []topology.RouteBinding
+	for _, b := range bs {
+		if !b.Dynamic && strings.HasPrefix(b.Route, prefix) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func routeText(b topology.RouteBinding) string {
+	switch {
+	case !b.Dynamic:
+		return b.Route
+	case b.Route != "":
+		return "<dynamic: " + b.Route + ">"
+	default:
+		return "<dynamic>"
+	}
+}
+
+func handlerText(h topology.RouteHandler) string {
+	text := h.Text
+	if text == "" {
+		text = "<inline or expression>"
+	}
+	switch {
+	case h.Node != nil:
+		return fmt.Sprintf("%s (%s, %s:%d)", text, h.Confidence, h.Node.Path, h.Node.StartLine)
+	case h.Confidence == topology.HandlerAmbiguous:
+		return fmt.Sprintf("%s (ambiguous: %d candidates)", text, h.Candidates)
+	default:
+		return fmt.Sprintf("%s (%s)", text, h.Confidence)
+	}
+}
+
+// writeRouteCounts prints per-framework and per-confidence tallies.
+func writeRouteCounts(sb *strings.Builder, bindings []topology.RouteBinding, rep *topology.RouteReport) {
+	byFw := map[topology.RouteFramework]int{}
+	byConf := map[topology.HandlerConfidence]int{}
+	for _, b := range bindings {
+		byFw[b.Framework]++
+		byConf[b.Handler.Confidence]++
+	}
+	groups := 0
+	byFw[topology.FrameworkCobra] += rep.CommandCount
+	visitCommands(rep.Commands, func(c *topology.Command, _ int) {
+		if c.Handler.Confidence == "" {
+			groups++
+			return
+		}
+		byConf[c.Handler.Confidence]++
+	})
+	var fw []string
+	for _, f := range topology.AllRouteFrameworks {
+		if byFw[f] > 0 {
+			fw = append(fw, fmt.Sprintf("%s %d", f, byFw[f]))
+		}
+	}
+	fmt.Fprintf(sb, "  frameworks: %s\n", strings.Join(fw, ", "))
+	var conf []string
+	for _, c := range []topology.HandlerConfidence{
+		topology.HandlerResolved, topology.HandlerSamePackage,
+		topology.HandlerDecorated, topology.HandlerNameMatch, topology.HandlerAmbiguous,
+		topology.HandlerExternal, topology.HandlerUnresolved,
+	} {
+		if byConf[c] > 0 {
+			conf = append(conf, fmt.Sprintf("%s %d", c, byConf[c]))
+		}
+	}
+	if groups > 0 {
+		conf = append(conf, fmt.Sprintf("group commands (no Run) %d", groups))
+	}
+	fmt.Fprintf(sb, "  handlers:   %s\n", strings.Join(conf, ", "))
+}
+
+// visitCommands walks the recovered command forest depth-first, once per
+// command even if it is registered under two parents or in a cycle.
+func visitCommands(roots []*topology.Command, fn func(c *topology.Command, depth int)) {
+	seen := map[*topology.Command]bool{}
+	var walk func(c *topology.Command, depth int)
+	walk = func(c *topology.Command, depth int) {
+		if seen[c] {
+			return
+		}
+		seen[c] = true
+		fn(c, depth)
+		kids := append([]*topology.Command(nil), c.Children...)
+		sort.SliceStable(kids, func(i, j int) bool { return kids[i].Name() < kids[j].Name() })
+		for _, k := range kids {
+			walk(k, depth+1)
+		}
+	}
+	for _, r := range roots {
+		walk(r, 0)
+	}
+}
+
+func writeCommandTree(sb *strings.Builder, rep *topology.RouteReport, a topologyRoutesArgs) {
+	sb.WriteString("\nCobra commands:\n")
+	printed, matched := 0, 0
+	var names []string
+	visitCommands(rep.Commands, func(c *topology.Command, depth int) {
+		names = append(names[:depth], commandName(c))
+		full := strings.Join(names, " ")
+		if a.PathPrefix != "" && !strings.HasPrefix(full, a.PathPrefix) {
+			return
+		}
+		matched++
+		if printed >= a.Limit {
+			return
+		}
+		printed++
+		label, indent := commandName(c), strings.Repeat("  ", depth+1)
+		if a.PathPrefix != "" {
+			label, indent = full, "  "
+		}
+		fmt.Fprintf(sb, "%s%s", indent, label)
+		if c.Handler.Confidence != "" {
+			fmt.Fprintf(sb, " -> %s", handlerText(c.Handler))
+		}
+		fmt.Fprintf(sb, "  [%s %s:%d]\n", c.Decl, c.Path, c.Line)
+	})
+	if matched > printed {
+		fmt.Fprintf(sb, "  … %d more command(s) omitted (raise limit)\n", matched-printed)
+	}
+	if rep.UnlinkedChildArgs > 0 {
+		fmt.Fprintf(sb, "  %d AddCommand argument(s) not linked (a factory call or expression, an unknown name, or an unrecovered parent); their commands, if recovered, are listed at top level\n",
+			rep.UnlinkedChildArgs)
+	}
+}
+
+func commandName(c *topology.Command) string {
+	if c.Dynamic {
+		return "<dynamic Use>"
+	}
+	return c.Name()
 }

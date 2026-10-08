@@ -157,7 +157,12 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	    the table cannot backfill itself either. Same reasoning as 2.
 //	4 — derived edge target identity: the to_identity column lets scoped lifecycle
 //	    passes repoint edges after the target file's node rowids are replaced.
-const SchemaVersion = 4
+//	5 — route recovery inputs: Python decorator sites (site_kind 'decorator') and
+//	    an arg_idents cap raised from 8 to 32. An unchanged file is never
+//	    re-extracted, so without the bump its rows would keep the truncated
+//	    argument list and no decorator sites — indistinguishable from a file
+//	    that has none. Same reasoning as 2.
+const SchemaVersion = 5
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The
