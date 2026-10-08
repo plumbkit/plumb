@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
+  package-level affected test summaries with counts, reasons, and concrete `run_task`
+  targets without printing individual test rows. `detail: "detailed"` remains the
+  default for compatibility.
+- **Type membership expansion in `topology_explore`.** Exploring a type/class node
+  now surfaces an explicit `members (N)` section with actionable method selectors,
+  strictly scoped to the type's own package for Go receiver methods and bounded
+  within the `max_bytes` response budget.
+
 ### Changed
 
 - **`topology_routes` recovers route → handler bindings from registration
@@ -29,19 +40,6 @@
   from 8 to 32 so a Cobra root's one-line `AddCommand(...)` is not cut off. An
   unchanged file is never re-extracted on its own, so the version bump makes
   every row pick these up.
-### Added
-
-- **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
-  package-level affected test summaries with counts, reasons, and concrete `run_task`
-  targets without printing individual test rows. `detail: "detailed"` remains the
-  default for compatibility.
-- **Type membership expansion in `topology_explore`.** Exploring a type/class node
-  now surfaces an explicit `members (N)` section with actionable method selectors,
-  strictly scoped to the type's own package for Go receiver methods and bounded
-  within the `max_bytes` response budget.
-
-### Changed
-
 - **Receiver selector normalisation across topology tools.** `topology_explore`,
   `topology_impact`, and `ResolveNodes` now normalise supported receiver formats
   (`WorkspaceSearch.Execute`, `(*WorkspaceSearch).Execute`, `WorkspaceSearch/Execute`),
@@ -67,8 +65,8 @@
   Bounded the members section within `max_bytes` to prevent payload overruns.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
-  conversation threads rather than only the final message.
-
+  conversation threads rather than only the final message, and marks each delivered
+  message row with its conversation thread.
 ## 0.23.0 (2026-10-07)
 
 ### Added
