@@ -133,3 +133,43 @@ func TestRenderMessages_MultipleRowsRetainReplyHandles(t *testing.T) {
 		t.Errorf("expected exactly one reply handle for alice's thread; got %d in:\n%s", strings.Count(out, wantAlice), out)
 	}
 }
+
+// TestRenderMessages_SameAuthorMultipleThreads guards that when a single author
+// sends notes across multiple distinct threads, every message identifies its
+// specific thread, distinct reply handles are generated for each thread, and
+// thread identifiers survive clamped/truncated bodies.
+func TestRenderMessages_SameAuthorMultipleThreads(t *testing.T) {
+	rows := []collab.Row{
+		{
+			AuthorSession:  "alice",
+			Body:           "first note in thread alpha",
+			ConversationID: "conv-alpha",
+			CreatedAt:      time.Now(),
+		},
+		{
+			AuthorSession:  "alice",
+			Body:           strings.Repeat("long text to truncate ", 20),
+			ConversationID: "conv-beta",
+			CreatedAt:      time.Now(),
+		},
+	}
+	out := RenderMessages(rows, 40, time.Now())
+	wantAlphaHandle := `reply: leave_note({to: "alice", conversation_id: "conv-alpha", body: "…"})`
+	wantBetaHandle := `reply: leave_note({to: "alice", conversation_id: "conv-beta", body: "…"})`
+
+	if !strings.Contains(out, wantAlphaHandle) {
+		t.Errorf("expected alpha reply handle %q; got:\n%s", wantAlphaHandle, out)
+	}
+	if !strings.Contains(out, wantBetaHandle) {
+		t.Errorf("expected beta reply handle %q; got:\n%s", wantBetaHandle, out)
+	}
+	if !strings.Contains(out, "[thread conv-alpha]") {
+		t.Errorf("expected thread indicator [thread conv-alpha]; got:\n%s", out)
+	}
+	if !strings.Contains(out, "[thread conv-beta]") {
+		t.Errorf("expected thread indicator [thread conv-beta]; got:\n%s", out)
+	}
+	if !strings.Contains(out, "truncated") {
+		t.Errorf("expected truncated body indicator for beta; got:\n%s", out)
+	}
+}
