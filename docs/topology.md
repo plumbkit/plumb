@@ -163,7 +163,7 @@ treat it as an optional, rebuildable index.
 | Understand a symbol's neighbourhood | `topology_explore` |
 | Assess the blast radius of a change | `topology_impact` |
 | Know which tests a change might affect | `topology_affected` |
-| Find symbols shaped like entry points (handler/command name patterns) | `topology_routes` |
+| Find entry points: route → handler registrations and the Cobra command tree | `topology_routes` |
 | Jump to a definition with certainty | `get_definition` (LSP) |
 | Find every real call site | `find_references` (LSP) |
 | Rename safely across the workspace | `rename_symbol` (LSP) |
@@ -196,11 +196,10 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   sibling test files the call graph alone misses). Recall-biased; each test
   carries a confidence (1.0 containment, 0.8 dependency edge, 0.5 co-located)
   and the reason it was flagged. Use after writing to decide what to run.
-- **`topology_routes`** — pattern-matches entry-point-shaped symbol names/signatures
-  (Go HTTP handlers, Cobra commands, Python `@app.route`). It does **not** parse route
-  registrations or call sites, so it cannot recover a path-to-handler binding (e.g.
-  `"/api/x" -> handlerFn`) — only symbol-name/signature candidates, each carrying a
-  confidence annotation.
+- **`topology_routes`** — recovers entry points from registration sites recorded in
+  the index: route string → handler for Go `net/http`, gorilla/mux, chi, gin and echo,
+  Python Flask/FastAPI decorators, and the Cobra command tree (`Use` → `Run`/`RunE`,
+  linked through `AddCommand`). See [Route recovery](#route-recovery) below.
 
 ## Package-level reachability
 
@@ -395,6 +394,48 @@ the symbol name is the honest tool and the refusal says so rather than implying 
 exists. Package-level reachability is **not** offered as the coarser answer, because it
 is gated to the same language set.
 
+## Route recovery
+
+`topology_routes` reads REGISTRATION sites — the call, composite-literal field or
+decorator that binds a route string to a handler — from `topology_call_sites`, the
+same table the cross-file call resolver uses.
+
+| Family | What is read | Handler |
+|---|---|---|
+| Go `net/http`, gorilla/mux, chi | `Handle`/`HandleFunc(pattern, h)`; chi's `Get`/`Post`/… | the argument after the route |
+| gin, echo | `GET`/`POST`/…/`Any` with a literal `/…` route | gin: the last argument (middleware comes first); echo: the one after the route |
+| Cobra | each `&cobra.Command{Use: …, RunE: …}` literal, linked by `parent.AddCommand(child, …)` | the `RunE` (else `Run`) field |
+| Flask, FastAPI | `@app.route("/x")`, `@router.get("/x")`, … | the decorated function itself |
+
+A site counts only when the registering file imports that framework (qualify by import,
+never by a bare method name), and a qualifier that is an import of some other package
+is rejected — `http.Get("/x")` in a chi file is a client call. Registrations in test
+files are fixtures and are skipped. Go 1.22 `"GET /items/{id}"` patterns are split into
+method and route.
+
+Each handler carries a label, never a probability:
+
+- `resolved` — `pkg.Handler` resolved through the file's own import to that package's
+  top-level function.
+- `same-package` — a bare name, matched to the package's top-level function of that
+  name (a local variable of the same name would shadow it).
+- `decorated` — Python: the handler is the decorated declaration.
+- `name-match` — a method value (`s.handleX`) matched to the package's only method of
+  that name; the receiver's type is not checked.
+- `ambiguous` — several candidates; none is chosen.
+- `external` — a handler in a package outside the index (`http.NotFound`).
+- `unresolved` — an inline function, an expression, or a name no declaration carries.
+
+What it does not do: compose router group or mount prefixes (`r.Route("/api", …)`,
+`r.Group("/v1")`) — each route is reported with the string written at its own site; read
+a route that is not a string literal (it is shown as `<dynamic>`); or link a Cobra child
+passed as a factory call or a local variable (counted and disclosed as unlinked, and the
+command is listed at top level). Argument positions are rebuilt only when every
+argument is the route literal or a name; otherwise no handler is named rather than the
+wrong one. Swift (Vapor, ArgumentParser) records no call sites, so it — and any framework
+with no recovered site — falls back to the older name/signature candidates, labelled
+`name-match`.
+
 ## Configuration
 
 All `[topology]` fields (see the
@@ -425,10 +466,10 @@ never committed.
   method calls on a receiver are the modal Go call and are left unresolved by design, so
   a caller list from the topology call graph is a lower bound and never a complete one.
   Confirm with `find_references`.
-- **`topology_routes` is heuristic and name/signature-only.** It pattern-matches
-  known entry-point idioms against symbol names and signatures; it does **not** parse
-  route registrations or call sites, so it cannot map a path to its handler. Always
-  read the confidence annotation.
+- **`topology_routes` recovers what is written at the registration site, untyped.**
+  Handlers are tied by import and package scope, never type-checked; router group and
+  mount prefixes are not composed; Swift and frameworks with no recorded site fall back
+  to `name-match` candidates. Always read the handler label.
 - **Freshness is eventual.** Edits made through plumb re-index immediately;
   external changes are picked up by the periodic resync (or on the next attach).
 - **Enabled by default.** Opt out with `[topology] enabled = false` (per-project

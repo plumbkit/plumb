@@ -83,6 +83,10 @@ func goRouteSites(ctx context.Context, tx *sql.Tx) ([]goSite, error) {
 			return nil, fmt.Errorf("topology: routes: go site scan: %w", err)
 		}
 		s.kind, s.enclosingKind, s.spread = CallSiteKind(kind), NodeKind(encKind), spread != 0
+		if isGoTestPath(s.path) {
+			// A registration in a test is a fixture, not an entry point.
+			continue
+		}
 		if idents != "" {
 			s.idents = strings.Split(idents, ",")
 		}

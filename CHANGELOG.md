@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **`topology_routes` recovers route → handler bindings from registration
+  sites instead of guessing from symbol names.** It reads the call sites the
+  index records: Go `net/http`, gorilla/mux, chi, gin and echo registrations
+  (route string, HTTP method where the call names one, and the handler), the
+  Cobra command tree (`Use` → `Run`/`RunE`, linked through `AddCommand`), and
+  Python Flask/FastAPI route decorators. A site counts only when its file
+  imports that framework, and registrations in test files are skipped. Each
+  handler is labelled `resolved` (through the file's import), `same-package`,
+  `decorated`, `name-match` (a method value; the receiver type is not
+  checked), `ambiguous`, `external` or `unresolved`. Router group and mount
+  prefixes are not composed. Swift (Vapor, ArgumentParser), and any framework
+  with no recovered site, still fall back to name/signature candidates, now
+  labelled `name-match`. `path_prefix` filters route strings and Cobra command
+  paths, and `limit` defaults to 50 per list. On plumb's own CLI it recovers
+  44 commands: the `plumb` root with 41 commands beneath it, and two built
+  where `AddCommand` cannot be followed (a loop-local variable, a factory
+  appended to a slice), listed at top level. 25 are tied to their handler
+  function; 17 use an inline function, which is reported as such. Reachability
+  still seeds from the name-match candidates; seeding it from recovered
+  handlers is a follow-up that needs its own before/after numbers.
+- **The topology index is rebuilt once on upgrade (schema 5).** The Python
+  extractor now records decorator sites, and the call-site argument cap rises
+  from 8 to 32 so a Cobra root's one-line `AddCommand(...)` is not cut off. An
+  unchanged file is never re-extracted on its own, so the version bump makes
+  every row pick these up.
+
 ## 0.23.0 (2026-10-07)
 
 ### Added
