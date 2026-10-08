@@ -169,7 +169,7 @@ func (t *TopologyImpact) resolveReachabilityRoots(ctx context.Context, store *to
 // per topology_routes' own contract, these are name/signature matches, not
 // confirmed entry points.
 func reachabilityRouteCandidates(ctx context.Context, store *topology.Store) ([]string, error) {
-	routes, err := (&TopologyRoutes{}).run(ctx, store, topologyRoutesArgs{Limit: reachabilityRouteCandidateLimit})
+	routes, err := (&TopologyRoutes{}).run(ctx, store, topologyRoutesArgs{Limit: reachabilityRouteCandidateLimit}, routePatterns(""))
 	if err != nil {
 		return nil, fmt.Errorf("topology_impact: reachability: route candidates: %w", err)
 	}

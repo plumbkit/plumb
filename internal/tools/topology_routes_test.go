@@ -25,26 +25,26 @@ func TestTopologyRoutes_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Limit != 20 {
-		t.Errorf("limit default=%d, want 20", a.Limit)
+	if a.Limit != 50 {
+		t.Errorf("limit default=%d, want 50", a.Limit)
 	}
 }
 
 func TestTopologyRoutes_FormatEmpty(t *testing.T) {
 	a := topologyRoutesArgs{Limit: 20}
-	out := formatRoutesResult([]routeEntry{}, a)
-	if !strings.Contains(out, "no route patterns matched") {
+	out := formatRoutesReport(&topology.RouteReport{}, []routeEntry{}, a)
+	if !strings.Contains(out, "no registration sites and no name-match candidates found") {
 		t.Errorf("empty result message wrong: %s", out)
 	}
 }
 
 func TestTopologyRoutes_FormatNilResult(t *testing.T) {
 	a := topologyRoutesArgs{Limit: 20}
-	out := formatRoutesResult(nil, a)
+	out := formatRoutesReport(&topology.RouteReport{}, nil, a)
 	if strings.Contains(out, "disabled") {
 		t.Errorf("nil routes is a no-results case, not 'disabled'; got: %s", out)
 	}
-	if !strings.Contains(out, "no route patterns matched") {
+	if !strings.Contains(out, "no registration sites and no name-match candidates found") {
 		t.Errorf("expected no-results message, got: %s", out)
 	}
 }
@@ -211,11 +211,14 @@ func TestTopologyRoutes_FormatWithEntry(t *testing.T) {
 		},
 	}
 	a := topologyRoutesArgs{Limit: 20}
-	out := formatRoutesResult(routes, a)
+	out := formatRoutesReport(&topology.RouteReport{}, routes, a)
 	if !strings.Contains(out, "handleUsers") {
 		t.Errorf("expected handleUsers in output, got: %s", out)
 	}
-	if !strings.Contains(out, "conf=0.70") {
-		t.Errorf("expected confidence annotation, got: %s", out)
+	if !strings.Contains(out, "conf=0.70 (name-match)") {
+		t.Errorf("a name-match candidate must say so beside its confidence, got: %s", out)
+	}
+	if !strings.Contains(out, "not a binding") {
+		t.Errorf("name-match candidates must be labelled as not bindings, got: %s", out)
 	}
 }

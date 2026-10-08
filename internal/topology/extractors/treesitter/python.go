@@ -39,13 +39,27 @@ func (e *PythonExtractor) Extensions() []string { return []string{".py"} }
 // Function-local bindings are not surfaced. Returns (nil, nil, nil) when the
 // source cannot be parsed.
 func (e *PythonExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	nodes, edges, _, err := e.ExtractWithCallSites(ctx, relPath, src)
+	return nodes, edges, err
+}
+
+// ExtractWithCallSites is Extract plus the file's decorator sites, from the same
+// parse. Only decorators are recorded: they are where a Flask or FastAPI route is
+// bound to its handler, and the handler is the decorated declaration itself, so
+// no cross-file resolution is needed to name it. Ordinary Python call sites are
+// NOT recorded — Python is not a call-graph language (callgraph.go), and a
+// partial set of call rows would read as a complete one.
+func (e *PythonExtractor) ExtractWithCallSites(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	lang := e.lang.get()
-	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+	var sites []topology.CallSite
+	nodes, edges, err := extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
 		w := &pyWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)
+		sites = w.sites
 		return w.nodes, w.edges
 	})
+	return nodes, edges, sites, err
 }
 
 type pyWalk struct {
@@ -56,6 +70,7 @@ type pyWalk struct {
 	edges      []topology.Edge
 	funcIdx    map[string]int64 // function/method/test name → node index, for call edges
 	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
+	sites      []topology.CallSite
 }
 
 func line(p tsg.Point) int { return int(p.Row) + 1 }
@@ -79,6 +94,8 @@ func (w *pyWalk) walk(n *tsg.Node, enclosingClass int64, inFunc bool) {
 		w.walkChildren(n, -1, true)
 	case "import_statement", "import_from_statement":
 		w.addImports(n)
+	case "decorated_definition":
+		w.walkDecorated(n, enclosingClass, inFunc)
 	case "assignment":
 		if !inFunc {
 			w.maybeAssignment(n, enclosingClass)
@@ -86,6 +103,128 @@ func (w *pyWalk) walk(n *tsg.Node, enclosingClass int64, inFunc bool) {
 	default:
 		w.walkChildren(n, enclosingClass, inFunc)
 	}
+}
+
+// walkDecorated walks a decorated declaration and records each of its decorators
+// as a CallSiteDecorator whose enclosing node is the DECORATED declaration. The
+// declaration's node is the first one its walk appends, so its index is known
+// before the walk runs; a definition that appends nothing (a nameless one) leaves
+// the decorators unattributed rather than pinned to an unrelated node. A def
+// nested in a function is still a node, which matters: Flask's application
+// factory registers every route inside `create_app()`.
+func (w *pyWalk) walkDecorated(n *tsg.Node, enclosingClass int64, inFunc bool) {
+	def := n.ChildByFieldName("definition", w.lang)
+	if def == nil {
+		w.walkChildren(n, enclosingClass, inFunc)
+		return
+	}
+	idx := len(w.nodes)
+	w.walk(def, enclosingClass, inFunc)
+	if len(w.nodes) == idx {
+		return
+	}
+	for _, c := range n.Children() {
+		if c.Type(w.lang) == "decorator" {
+			w.addDecorator(c, idx)
+		}
+	}
+}
+
+// addDecorator records one `@expr` decorator. A call decorator
+// (`@app.route("/x")`) carries its arguments; a bare one (`@staticmethod`) is
+// recorded with none. A decorator whose callee is not a plain name chain
+// (`@handlers[0]`) has nothing a consumer could match, and is skipped.
+func (w *pyWalk) addDecorator(dec *tsg.Node, enclosing int) {
+	expr := firstNamedChild(dec)
+	if expr == nil {
+		return
+	}
+	fn, args := expr, (*tsg.Node)(nil)
+	if expr.Type(w.lang) == "call" {
+		fn = expr.ChildByFieldName("function", w.lang)
+		args = expr.ChildByFieldName("arguments", w.lang)
+	}
+	callee, qualifier := w.dottedParts(fn)
+	if callee == "" {
+		return
+	}
+	site := topology.CallSite{
+		EnclosingIdx: enclosing,
+		Kind:         topology.CallSiteDecorator,
+		Callee:       callee,
+		Qualifier:    qualifier,
+		StartByte:    int(dec.StartByte()),
+		StartLine:    line(dec.StartPoint()),
+	}
+	if args != nil {
+		for _, a := range args.Children() {
+			if !a.IsNamed() || a.Type(w.lang) == "comment" {
+				continue
+			}
+			site.ArgCount++
+			if s, ok := w.stringLiteral(a); ok && !site.HasStringArg {
+				site.FirstStringArg, site.HasStringArg = s, true
+			}
+			if _, q := w.dottedParts(a); a.Type(w.lang) == "identifier" || q != "" {
+				if len(site.ArgIdents) < topology.MaxCallSiteArgIdents {
+					site.ArgIdents = append(site.ArgIdents, a.Text(w.src))
+				}
+			}
+		}
+	}
+	w.sites = append(w.sites, site)
+}
+
+// dottedParts splits an identifier or attribute chain (`app`, `api.router.get`)
+// into its final name and the dotted text to its left. Anything else — a call, a
+// subscript — yields ("", "").
+func (w *pyWalk) dottedParts(n *tsg.Node) (name, qualifier string) {
+	if n == nil {
+		return "", ""
+	}
+	switch n.Type(w.lang) {
+	case "identifier":
+		return n.Text(w.src), ""
+	case "attribute":
+		obj := n.ChildByFieldName("object", w.lang)
+		attr := n.ChildByFieldName("attribute", w.lang)
+		if obj == nil || attr == nil {
+			return "", ""
+		}
+		objName, objQual := w.dottedParts(obj)
+		if objName == "" {
+			return "", ""
+		}
+		if objQual != "" {
+			objName = objQual + "." + objName
+		}
+		return attr.Text(w.src), objName
+	}
+	return "", ""
+}
+
+// stringLiteral reports a plain string literal's value, as written between its
+// quotes. An f-string with an interpolation and an implicitly concatenated string
+// are not literals: their value is not in the source as one span.
+func (w *pyWalk) stringLiteral(n *tsg.Node) (string, bool) {
+	if n.Type(w.lang) != "string" {
+		return "", false
+	}
+	var start, end *tsg.Node
+	for _, c := range n.Children() {
+		switch c.Type(w.lang) {
+		case "interpolation":
+			return "", false
+		case "string_start":
+			start = c
+		case "string_end":
+			end = c
+		}
+	}
+	if start == nil || end == nil || end.StartByte() < start.EndByte() {
+		return "", false
+	}
+	return string(w.src[start.EndByte():end.StartByte()]), true
 }
 
 func (w *pyWalk) walkChildren(n *tsg.Node, enclosingClass int64, inFunc bool) {

@@ -393,3 +393,66 @@ func TestPython_TrailingHeaderCommentDoesNotExtendARealRun(t *testing.T) {
 	}
 	assertDocSpans(t, src, nodes, map[string]string{"bump": "# Documents bump."})
 }
+
+// TestPython_DecoratorSitesAttachToTheDecoratedDeclaration pins the contract
+// route recovery reads: each decorator is one CallSiteDecorator whose enclosing
+// node is the decorated def (the handler), a def nested in a function still
+// gets its decorators, and an interpolated f-string is not a literal route.
+func TestPython_DecoratorSitesAttachToTheDecoratedDeclaration(t *testing.T) {
+	src := []byte(`from flask import Flask
+app = Flask(__name__)
+
+@app.route("/users/<id>", methods=["GET"])
+def show_user(id):
+    pass
+
+def create_app():
+    @app.get("/nested")
+    def nested():
+        pass
+    return app
+
+@app.post(f"/{PREFIX}/login")
+@staticmethod
+def login():
+    pass
+`)
+	nodes, _, sites, err := NewPython().ExtractWithCallSites(context.Background(), "views.py", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enclosing := func(s topology.CallSite) string {
+		if s.EnclosingIdx < 0 || s.EnclosingIdx >= len(nodes) {
+			return ""
+		}
+		return nodes[s.EnclosingIdx].Name
+	}
+	type want struct {
+		callee, qualifier, handler, route string
+		literal                           bool
+	}
+	wants := []want{
+		{"route", "app", "show_user", "/users/<id>", true},
+		{"get", "app", "nested", "/nested", true},
+		{"post", "app", "login", "", false},
+		{"staticmethod", "", "login", "", false},
+	}
+	if len(sites) != len(wants) {
+		t.Fatalf("got %d decorator sites, want %d: %+v", len(sites), len(wants), sites)
+	}
+	for i, w := range wants {
+		s := sites[i]
+		if s.Kind != topology.CallSiteDecorator || s.Callee != w.callee || s.Qualifier != w.qualifier {
+			t.Errorf("site %d = %s %q.%q, want decorator %q.%q", i, s.Kind, s.Qualifier, s.Callee, w.qualifier, w.callee)
+		}
+		if got := enclosing(s); got != w.handler {
+			t.Errorf("site %d (%s) attached to %q, want the decorated def %q", i, s.Callee, got, w.handler)
+		}
+		if s.HasStringArg != w.literal || s.FirstStringArg != w.route {
+			t.Errorf("site %d (%s) route = %q literal=%v, want %q literal=%v", i, s.Callee, s.FirstStringArg, s.HasStringArg, w.route, w.literal)
+		}
+	}
+	if sites[0].ArgCount != 2 {
+		t.Errorf("route decorator arg count = %d, want 2 (the keyword argument counts)", sites[0].ArgCount)
+	}
+}

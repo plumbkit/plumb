@@ -54,8 +54,8 @@ func TestTopologyRoutes_EmptyResultNotDisabled(t *testing.T) {
 	if strings.Contains(out, "disabled") {
 		t.Errorf("no matched routes must not report 'disabled'; got: %q", out)
 	}
-	if !strings.Contains(out, "no route patterns matched") {
-		t.Errorf("expected 'no route patterns matched'; got: %q", out)
+	if !strings.Contains(out, "no registration sites and no name-match candidates found") {
+		t.Errorf("expected the no-results message; got: %q", out)
 	}
 }
 

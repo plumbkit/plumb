@@ -99,7 +99,7 @@ func functionMainRoots(g *topology.FunctionGraph) []int64 {
 func (t *TopologyImpact) defaultFunctionRoots(ctx context.Context, store *topology.Store, g *topology.FunctionGraph) ([]int64, map[int64]bool, error) {
 	roots := functionMainRoots(g)
 	candidates := map[int64]bool{}
-	routes, err := (&TopologyRoutes{}).run(ctx, store, topologyRoutesArgs{Limit: reachabilityRouteCandidateLimit})
+	routes, err := (&TopologyRoutes{}).run(ctx, store, topologyRoutesArgs{Limit: reachabilityRouteCandidateLimit}, routePatterns(""))
 	if err != nil {
 		return nil, nil, fmt.Errorf("topology_impact: function reachability: route candidates: %w", err)
 	}
