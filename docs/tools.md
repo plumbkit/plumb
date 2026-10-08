@@ -906,7 +906,9 @@ max 100).
 BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
 (default 2, max 4), `max_nodes` (default 50, max 200), `max_bytes` (default
 30000, max 100000), `include_source` (`none` = name only | `signatures`
-(default) | `snippets`/`full` = signature plus docstring), `edge_kinds`.
+(default) | `docstrings` = signature plus docstring; `snippets`/`full` accepted as
+aliases; complete function bodies belong to `read_symbol`), `edge_kinds`, `path`, `kind`.
+Exploring a type/class node also lists its member methods (`members (N)`).
 Budgeting is on **symbol boundaries**: each whole symbol is costed against
 `max_bytes` for the chosen source mode and added only if it fits in full, so a
 truncated result is always a set of whole, coherent symbols — never a fragment
@@ -938,7 +940,9 @@ only for the Go call graph and refuses clearly when that admission is unavailabl
 
 ### `topology_affected`
 Given changed files/symbols, return likely affected files and tests. **Inputs:**
-`files` (array), `symbols` (array), `max_results` (default 50).
+`files` (array), `symbols` (array), `max_results` (default 50), `detail` (`detailed`
+default, includes individual test names for changed packages | `compact` package-only
+summary with test counts, reasons, and `run_task` targets).
 
 ### `topology_routes`
 Recovers entry points from registration sites in the topology index: route →

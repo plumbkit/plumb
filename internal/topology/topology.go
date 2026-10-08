@@ -168,6 +168,7 @@ type Neighbourhood struct {
 	Nodes     []Node
 	Edges     []Edge
 	Truncated bool
+	Members   []Node // member symbols (methods, fields) for type/class/interface centres
 }
 
 // FileError is one file that failed to index and the reason recorded at the

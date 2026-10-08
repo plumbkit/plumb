@@ -94,3 +94,42 @@ func TestClampWithTruncationMarker_CountsOnlySenderBytes(t *testing.T) {
 		})
 	}
 }
+
+// TestRenderMessages_MultipleRowsRetainReplyHandles guards that delivery of
+// multiple notes across distinct threads retains an actionable reply handle for
+// every conversation thread, rather than dropping earlier handles.
+func TestRenderMessages_MultipleRowsRetainReplyHandles(t *testing.T) {
+	rows := []collab.Row{
+		{
+			AuthorSession:  "alice",
+			Body:           "first note",
+			ConversationID: "conv-alice",
+			CreatedAt:      time.Now(),
+		},
+		{
+			AuthorSession:  "bob",
+			Body:           "second note",
+			ConversationID: "conv-bob",
+			CreatedAt:      time.Now(),
+		},
+		{
+			AuthorSession:  "alice",
+			Body:           "third note in same thread",
+			ConversationID: "conv-alice",
+			CreatedAt:      time.Now(),
+		},
+	}
+	out := RenderMessages(rows, 1024, time.Now())
+	wantAlice := `reply: leave_note({to: "alice", conversation_id: "conv-alice", body: "…"})`
+	wantBob := `reply: leave_note({to: "bob", conversation_id: "conv-bob", body: "…"})`
+
+	if !strings.Contains(out, wantAlice) {
+		t.Errorf("expected alice reply handle %q; got:\n%s", wantAlice, out)
+	}
+	if !strings.Contains(out, wantBob) {
+		t.Errorf("expected bob reply handle %q; got:\n%s", wantBob, out)
+	}
+	if strings.Count(out, wantAlice) != 1 {
+		t.Errorf("expected exactly one reply handle for alice's thread; got %d in:\n%s", strings.Count(out, wantAlice), out)
+	}
+}

@@ -117,15 +117,17 @@ func (a *workspaceSearchArgs) wants(corpus string) bool {
 
 // wsHit is one merged broker result, carrying the labelling contract fields.
 type wsHit struct {
-	corpus  string // code | docs | memory
-	source  string // topology-fts | memory-fts
-	path    string // workspace-relative; "" for memories
-	line    int    // 0 when unknown
-	label   string // symbol "name (kind)" or memory name
-	field   string
-	score   float64
-	snippet string
-	why     string
+	corpus    string // code | docs | memory
+	source    string // topology-fts | memory-fts
+	path      string // workspace-relative; "" for memories
+	line      int    // 0 when unknown
+	label     string // symbol "name (kind)" or memory name
+	field     string
+	score     float64
+	snippet   string
+	why       string
+	coverage  float64
+	isDemoted bool
 }
 
 func (t *WorkspaceSearch) Execute(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -166,12 +168,23 @@ func (t *WorkspaceSearch) searchTopology(ctx context.Context, a workspaceSearchA
 }
 
 // searchCode returns the code-corpus hits: one ranked topology query with doc
-// nodes dropped (they are served by searchDocs' dedicated queries).
+// nodes dropped (they are served by searchDocs' dedicated queries). Common
+// import/package-only matches on conceptual (multi-term) queries are demoted so
+// declarations with higher token coverage rank first, while exact-symbol and
+// explicit import queries retain their top hits.
 func (t *WorkspaceSearch) searchCode(ctx context.Context, store *topology.Store, a workspaceSearchArgs) []wsHit {
-	results, err := store.Search(ctx, a.Query, topology.SearchOpts{Limit: a.Limit * 2, Snippets: true})
+	fetchLimit := a.Limit * 4
+	if fetchLimit < 40 {
+		fetchLimit = 40
+	}
+	results, err := store.Search(ctx, a.Query, topology.SearchOpts{Limit: fetchLimit, Snippets: true})
 	if err != nil {
 		return nil
 	}
+	terms := queryTerms(a.Query)
+	isExplicitImport := isExplicitImportQuery(terms)
+	isMultiTerm := len(terms) > 1
+
 	var code []wsHit
 	for _, r := range results {
 		if isDocNode(r.Node) {
@@ -179,9 +192,82 @@ func (t *WorkspaceSearch) searchCode(ctx context.Context, store *topology.Store,
 		}
 		h := topoHit(r)
 		h.corpus, h.why = "code", codeWhy(r.Field)
+
+		isImportOrPkg := r.Node.Kind == topology.KindImport || r.Node.Kind == topology.KindPackage
+		matched := countMatchedTerms(r.Node, terms)
+		var coverage float64
+		if len(terms) > 0 {
+			coverage = float64(matched) / float64(len(terms))
+		}
+		h.coverage = coverage
+
+		// Demote common import/package-only matches during conceptual (multi-term)
+		// discovery while preserving exact-symbol (single-term) or explicit import controls.
+		if isMultiTerm && isImportOrPkg && !isExplicitImport && coverage < 0.5 {
+			h.isDemoted = true
+		}
 		code = append(code, h)
 	}
+
+	sort.SliceStable(code, func(i, j int) bool {
+		// Non-demoted declarations rank ahead of demoted imports.
+		if code[i].isDemoted != code[j].isDemoted {
+			return !code[i].isDemoted
+		}
+		// When query has multiple terms, higher token coverage ranks first.
+		if isMultiTerm && code[i].coverage != code[j].coverage {
+			return code[i].coverage > code[j].coverage
+		}
+		// Otherwise, rank by FTS score.
+		return code[i].score > code[j].score
+	})
+
+	if len(code) > a.Limit {
+		code = code[:a.Limit]
+	}
 	return code
+}
+
+func queryTerms(query string) []string {
+	var terms []string
+	seen := make(map[string]bool)
+	for _, f := range strings.Fields(strings.ToLower(query)) {
+		t := strings.Trim(f, "\"'`,;:.()[]{}*!?")
+		if t != "" && !seen[t] {
+			seen[t] = true
+			terms = append(terms, t)
+		}
+	}
+	return terms
+}
+
+func isExplicitImportQuery(terms []string) bool {
+	for _, t := range terms {
+		if t == "import" || t == "imports" || t == "package" || t == "pkg" {
+			return true
+		}
+	}
+	return false
+}
+
+func countMatchedTerms(n topology.Node, terms []string) int {
+	nameLower := strings.ToLower(n.Name)
+	qualLower := strings.ToLower(n.Qualified)
+	sigLower := strings.ToLower(n.Signature)
+	docLower := strings.ToLower(n.Docstring)
+	pathLower := strings.ToLower(n.Path)
+
+	count := 0
+	for _, t := range terms {
+		if strings.Contains(nameLower, t) ||
+			strings.Contains(qualLower, t) ||
+			strings.Contains(sigLower, t) ||
+			strings.Contains(docLower, t) ||
+			strings.Contains(pathLower, t) {
+			count++
+		}
+	}
+	return count
 }
 
 // searchDocs returns the docs-corpus hits via per-language queries (the
@@ -207,11 +293,15 @@ func searchDocs(ctx context.Context, store *topology.Store, a workspaceSearchArg
 // topoHit converts one topology search result into the broker's hit shape
 // (corpus and why are set by the caller).
 func topoHit(r topology.SearchResult) wsHit {
+	selector := r.Node.Name
+	if r.Node.Qualified != "" && strings.Contains(r.Node.Qualified, ".") {
+		selector = r.Node.Qualified
+	}
 	return wsHit{
 		source:  "topology-fts",
 		path:    r.Node.Path,
 		line:    r.Node.StartLine,
-		label:   fmt.Sprintf("%s (%s)", r.Node.Name, r.Node.Kind),
+		label:   fmt.Sprintf("%s (%s)", selector, r.Node.Kind),
 		field:   r.Field,
 		score:   r.Score,
 		snippet: r.Snippet,

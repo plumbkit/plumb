@@ -3,7 +3,9 @@ package topology
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -60,17 +62,104 @@ func TestResolveNodes_PathHintSelects(t *testing.T) {
 	}
 }
 
-func TestResolveNodes_UnmatchedHintIgnored(t *testing.T) {
+func TestResolveNodes_UnmatchedHintReturnsMismatchError(t *testing.T) {
 	db := seedTwoSameName(t)
 	defer db.Close()
 
-	// A kind that matches nothing must not turn a real symbol into a miss.
+	// A hint that matches nothing must return a HintMismatchError naming the
+	// candidates rather than silently selecting an unrelated node.
 	cands, err := ResolveNodes(context.Background(), db, "Target", NodeHint{Kind: string(KindMethod)})
-	if err != nil {
-		t.Fatalf("ResolveNodes: %v", err)
+	if err == nil {
+		t.Fatalf("expected HintMismatchError, got nil with %d candidates", len(cands))
 	}
-	if len(cands) != 2 {
-		t.Errorf("unmatched hint should be ignored, leaving 2 candidates; got %d", len(cands))
+	var hintErr *HintMismatchError
+	if !errors.As(err, &hintErr) {
+		t.Fatalf("expected *HintMismatchError, got %T: %v", err, err)
+	}
+	if len(hintErr.Candidates) != 2 {
+		t.Errorf("expected 2 candidates in HintMismatchError, got %d", len(hintErr.Candidates))
+	}
+	errMsg := hintErr.Error()
+	if !strings.Contains(errMsg, `kind: "method"`) || !strings.Contains(errMsg, "Retry with") {
+		t.Errorf("unexpected error message: %q", errMsg)
+	}
+}
+
+func TestResolveNodes_ReceiverVariantsResolveSameNode(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "variants.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "pkg/search.go")
+	insertTestNode(t, db, fileID, "pkg/search.go", Node{
+		Kind:      KindMethod,
+		Name:      "Execute",
+		Qualified: "(*WorkspaceSearch).Execute",
+		Language:  "go",
+	})
+
+	queries := []string{
+		"WorkspaceSearch.Execute",
+		"(*WorkspaceSearch).Execute",
+		"(WorkspaceSearch).Execute",
+		"*WorkspaceSearch.Execute",
+		"WorkspaceSearch/Execute",
+		"Execute",
+	}
+
+	for _, q := range queries {
+		cands, err := ResolveNodes(context.Background(), db, q, NodeHint{})
+		if err != nil {
+			t.Fatalf("ResolveNodes(%q): %v", q, err)
+		}
+		if len(cands) != 1 {
+			t.Fatalf("ResolveNodes(%q) want 1 match, got %d", q, len(cands))
+		}
+		if cands[0].Qualified != "(*WorkspaceSearch).Execute" {
+			t.Errorf("ResolveNodes(%q) = %q, want (*WorkspaceSearch).Execute", q, cands[0].Qualified)
+		}
+	}
+}
+
+func TestTypeMembers_ExposesMethods(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "members.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	defer db.Close()
+
+	fileID := insertTestFile(t, db, "pkg/search.go")
+	typeID := insertTestNode(t, db, fileID, "pkg/search.go", Node{
+		Kind:      KindType,
+		Name:      "WorkspaceSearch",
+		Qualified: "WorkspaceSearch",
+		Language:  "go",
+	})
+	insertTestNode(t, db, fileID, "pkg/search.go", Node{
+		Kind:      KindMethod,
+		Name:      "Execute",
+		Qualified: "(*WorkspaceSearch).Execute",
+		Language:  "go",
+	})
+	insertTestNode(t, db, fileID, "pkg/search.go", Node{
+		Kind:      KindMethod,
+		Name:      "Name",
+		Qualified: "(*WorkspaceSearch).Name",
+		Language:  "go",
+	})
+
+	typeNode := Node{ID: typeID, Kind: KindType, Name: "WorkspaceSearch", Path: "pkg/search.go"}
+	members, err := TypeMembers(context.Background(), db, typeNode, 10)
+	if err != nil {
+		t.Fatalf("TypeMembers: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("expected 2 members, got %d", len(members))
+	}
+	if members[0].Qualified != "(*WorkspaceSearch).Execute" || members[1].Qualified != "(*WorkspaceSearch).Name" {
+		t.Errorf("unexpected members: %+v", members)
 	}
 }
 

@@ -48,24 +48,25 @@ func formatAffectedResult(result *affectedResult, a topologyAffectedArgs, scope 
 
 	// Name individual tests only where naming them helps: the packages the change
 	// actually landed in. Elsewhere every test carries an identical label, so the
-	// list is noise. EVERY changed package is named, not just the first — a caller
-	// who changed three files in three packages has no reason to get test names for
-	// one of them and a bare count for the others.
-	for i := range pkgs {
-		p := &pkgs[i]
-		if p.Reason != reasonChanged {
-			continue
-		}
-		fmt.Fprintf(&sb, "\ntests in %s (%d):\n", p.Dir, p.Count)
-		shown := p.Tests
-		if len(shown) > maxNamedTests {
-			shown = shown[:maxNamedTests]
-		}
-		for _, ts := range shown {
-			fmt.Fprintf(&sb, "  %s — %s L%d\n", ts.Node.Name, ts.Node.Path, ts.Node.StartLine)
-		}
-		if rest := p.Count - len(shown); rest > 0 {
-			fmt.Fprintf(&sb, "  … (+%d more in this package)\n", rest)
+	// list is noise. Suppressed in compact mode where callers only need the package
+	// summary and run_task targets.
+	if a.Detail != "compact" && a.Detail != "summary" {
+		for i := range pkgs {
+			p := &pkgs[i]
+			if p.Reason != reasonChanged {
+				continue
+			}
+			fmt.Fprintf(&sb, "\ntests in %s (%d):\n", p.Dir, p.Count)
+			shown := p.Tests
+			if len(shown) > maxNamedTests {
+				shown = shown[:maxNamedTests]
+			}
+			for _, ts := range shown {
+				fmt.Fprintf(&sb, "  %s — %s L%d\n", ts.Node.Name, ts.Node.Path, ts.Node.StartLine)
+			}
+			if rest := p.Count - len(shown); rest > 0 {
+				fmt.Fprintf(&sb, "  … (+%d more in this package)\n", rest)
+			}
 		}
 	}
 

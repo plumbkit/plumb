@@ -35,7 +35,7 @@ var topologyExploreSchema = json.RawMessage(`{
     },
     "include_source": {
       "type": "string",
-      "description": "How much source detail to include per symbol: none (name only), signatures (default), or snippets/full (signature plus docstring). Symbols are always returned whole — max_bytes truncates on symbol boundaries, never mid-function.",
+      "description": "How much source detail to include per symbol: none (name and path only), signatures (default, includes signature), or docstrings (signature plus docstring first line). 'snippets' and 'full' are accepted as backward-compatible aliases for 'docstrings'. (To read complete function bodies, use read_symbol instead).",
       "default": "signatures"
     },
     "edge_kinds": {
@@ -85,7 +85,9 @@ func (*TopologyExplore) Description() string {
 		"(the default, \"signatures\", is several times larger), and depth=1 with max_nodes=15 answers " +
 		"\"what touches this?\" in a fraction of the default budget (depth 2, 50 nodes, 30000 bytes) — " +
 		"raise them once you know what you are looking for. " +
-		"Returns the centre node, neighbour nodes, and connecting edges up to depth/max_nodes/max_bytes. " +
+		"Returns the centre node, neighbour nodes, connecting edges, and members (for types) up to depth/max_nodes/max_bytes. " +
+		"Source detail covers names, signatures, and docstrings (include_source=\"docstrings\", with \"snippets\"/\"full\" as aliases); " +
+		"to read complete function source bodies, call read_symbol. " +
 		"Reports truncation when limits are hit. Source is 'topology' (approximate — use LSP semantic " +
 		"tools for authoritative reference and definition lookups). Returns an error when topology is " +
 		"disabled or the symbol is not in the index."
@@ -204,6 +206,8 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 		}
 	}
 
+	writeMembersSection(&sb, nb.Members)
+
 	if nb.Truncated {
 		sb.WriteString("\n[truncated: max_nodes or max_bytes reached — reduce depth or increase limits]\n")
 	}
@@ -236,6 +240,20 @@ func topologyAmbiguityNote(name string, alternatives []topology.Node) string {
 	return sb.String()
 }
 
+func writeMembersSection(sb *strings.Builder, members []topology.Node) {
+	if len(members) == 0 {
+		return
+	}
+	fmt.Fprintf(sb, "\nmembers (%d):\n", len(members))
+	for _, m := range members {
+		fmt.Fprintf(sb, "  %s %s — %s", string(m.Kind), m.Qualified, m.Path)
+		if m.StartLine > 0 {
+			fmt.Fprintf(sb, " L%d", m.StartLine)
+		}
+		sb.WriteString("\n")
+	}
+}
+
 func writeNeighbourLine(sb *strings.Builder, n topology.Node, includeSource string) {
 	fmt.Fprintf(sb, "  %s %s — %s", string(n.Kind), n.Name, n.Path)
 	if n.StartLine > 0 {
@@ -251,9 +269,10 @@ func writeNeighbourLine(sb *strings.Builder, n topology.Node, includeSource stri
 }
 
 // wantsDocstring reports whether the source mode includes docstrings (the
-// richer "snippets"/"full" modes), as opposed to signatures alone.
+// richer "docstrings" mode, with "snippets"/"full" as aliases), as opposed to
+// signatures alone.
 func wantsDocstring(includeSource string) bool {
-	return includeSource == "snippets" || includeSource == "full"
+	return includeSource == "docstrings" || includeSource == "snippets" || includeSource == "full"
 }
 
 // firstLine returns the first non-empty line of s, trimmed and length-capped,
