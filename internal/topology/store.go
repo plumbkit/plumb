@@ -275,6 +275,12 @@ func (s *Store) ExploreFrom(ctx context.Context, centre Node, opts ExploreOpts) 
 	return ExploreFrom(ctx, s.db, centre, opts)
 }
 
+// TypeMembers returns the indexed member symbols (methods, fields) belonging to
+// a type node.
+func (s *Store) TypeMembers(ctx context.Context, centre Node, limit int) ([]Node, error) {
+	return TypeMembers(ctx, s.db, centre, limit)
+}
+
 // ImpactFrom performs a bidirectional BFS from an already-resolved centre node.
 func (s *Store) ImpactFrom(ctx context.Context, centre Node, opts ImpactOpts) (*ImpactResult, error) {
 	return ImpactFrom(ctx, s.db, centre, opts)

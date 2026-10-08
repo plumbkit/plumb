@@ -37,8 +37,14 @@ var topologyAffectedSchema = json.RawMessage(`{
     },
     "max_results": {
       "type": "integer",
-      "description": "Maximum PACKAGES to return. Default 50, which is well above a normal answer — raise it only for a change that fans out very widely. Tests are counted per package rather than listed individually, so this no longer caps test rows; the changed package always sorts first, so a cap cannot drop the package the edit landed in.",
+      "description": "Maximum packages to return. Default 50; changed package always sorts first.",
       "default": 50
+    },
+    "detail": {
+      "type": "string",
+      "enum": ["compact", "detailed"],
+      "description": "Detail level: 'compact' (package summary, no test names) or 'detailed' (default, includes test names).",
+      "default": "detailed"
     }
   },
   "additionalProperties": false
@@ -88,7 +94,7 @@ func (*TopologyAffected) Name() string                 { return "topology_affect
 func (*TopologyAffected) InputSchema() json.RawMessage { return topologyAffectedSchema }
 func (*TopologyAffected) Description() string {
 	return "After you change code, ask this which tests to run instead of running the whole " +
-		"suite. Given changed files or symbols, it answers with PACKAGES to run — one row " +
+		"suite. Given changed files or symbols, it answers with packages to run — one row " +
 		"each with the test count and why the package is implicated, plus the individual " +
 		"test names in the package the change landed in. Where the workspace's test runner " +
 		"takes a positional path (go, python), each row leads with a ready target to hand " +
@@ -96,12 +102,9 @@ func (*TopologyAffected) Description() string {
 		"[tasks.<lang>].working_dir so it works from the directory that command runs in. " +
 		"Where the runner scopes by name or by a project-specific flag (rust, typescript, " +
 		"swift, zig), the directory is named and no command is guessed. " +
-		"A package is reached either by containing the change, or by importing a package " +
-		"that does (cross-package import edges). Within a reached package every test is " +
-		"counted, because co-location cannot tell which of them exercise the change: that " +
-		"is the recall bias, and it is deliberate — a missed test is worse than an extra. " +
-		"Results are heuristic; verify before relying. max_results bounds the number of " +
-		"PACKAGES, and the changed package is always listed first so a cap cannot drop it. " +
+		"A package is reached either by containing the change or importing a package that does. " +
+		"Within a reached package every test is counted (recall-biased). Results are heuristic; " +
+		"verify before relying. max_results bounds the packages (changed package sorts first). " +
 		"Returns a clear message when topology is disabled."
 }
 
@@ -109,6 +112,7 @@ type topologyAffectedArgs struct {
 	Files      []string `json:"files"`
 	Symbols    []string `json:"symbols"`
 	MaxResults int      `json:"max_results"`
+	Detail     string   `json:"detail"`
 }
 
 // affectedTest is a test likely impacted by a change, with how it was reached
@@ -265,12 +269,18 @@ func parseTopologyAffectedArgs(raw json.RawMessage) (topologyAffectedArgs, error
 	if a.MaxResults <= 0 {
 		a.MaxResults = defaultMaxPackages
 	}
+	if a.Detail == "" {
+		a.Detail = "detailed"
+	}
 	return a, nil
 }
 
 func (a *topologyAffectedArgs) validate() error {
 	if len(a.Files) == 0 && len(a.Symbols) == 0 {
 		return errors.New("topology_affected: at least one file or symbol is required")
+	}
+	if a.Detail != "detailed" && a.Detail != "compact" && a.Detail != "summary" {
+		return fmt.Errorf("topology_affected: unknown detail %q (want compact or detailed)", a.Detail)
 	}
 	return nil
 }

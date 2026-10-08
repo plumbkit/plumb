@@ -384,8 +384,16 @@ func renderMessages(rows []collab.Row, budget int, now time.Time, preview bool) 
 			"Call check_messages to take delivery and get the reply handle.\n")
 		return sb.String()
 	}
-	fmt.Fprintf(&sb, "  reply: leave_note({to: %q, conversation_id: %q, body: \"…\"})\n",
-		rows[len(rows)-1].AuthorSession, rows[len(rows)-1].ConversationID)
+	seen := make(map[string]bool)
+	for _, r := range rows {
+		key := r.AuthorSession + "\x00" + r.ConversationID
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		fmt.Fprintf(&sb, "  reply: leave_note({to: %q, conversation_id: %q, body: \"…\"})\n",
+			r.AuthorSession, r.ConversationID)
+	}
 	return sb.String()
 }
 

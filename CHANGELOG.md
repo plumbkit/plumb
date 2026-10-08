@@ -29,6 +29,39 @@
   from 8 to 32 so a Cobra root's one-line `AddCommand(...)` is not cut off. An
   unchanged file is never re-extracted on its own, so the version bump makes
   every row pick these up.
+### Added
+
+- **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
+  package-level affected test summaries with counts, reasons, and concrete `run_task`
+  targets without printing individual test rows. `detail: "detailed"` remains the
+  default for compatibility.
+- **Type membership expansion in `topology_explore`.** Exploring a type/class node
+  now surfaces an explicit `members (N)` section with actionable method selectors
+  across both Go receiver methods and AST-nested class methods.
+
+### Changed
+
+- **Receiver selector normalisation across topology tools.** `topology_explore`,
+  `topology_impact`, and `ResolveNodes` now normalise supported receiver formats
+  (`WorkspaceSearch.Execute`, `(*WorkspaceSearch).Execute`, `WorkspaceSearch/Execute`),
+  resolving the same declaration and eliminating mismatches with `read_symbol`.
+- **Honest hint mismatch reporting in topology tools.** When a supplied `path` or `kind`
+  hint excludes all indexed candidates, resolution returns a helpful hint mismatch error
+  with candidate locations and retry guidance rather than silently choosing an unrelated
+  symbol from another file.
+- **`workspace_search` ranking de-noising.** Multi-term conceptual code searches now
+  demote common import/package-only matches so relevant declarations rank within the
+  top hits, while preserving exact symbol and explicit import queries.
+- **Unambiguous source mode naming in `topology_explore`.** Documented and exposed
+  `include_source: "docstrings"` (signature plus docstring first line), retaining
+  `snippets` and `full` as backward-compatible aliases, and clarified that complete
+  function bodies belong to `read_symbol`.
+
+### Fixed
+
+- **Multi-thread reply handle retention in collab chat.** Delivery of multiple
+  messages now attaches actionable `reply: leave_note(...)` handles for all distinct
+  conversation threads rather than only the final message.
 
 ## 0.23.0 (2026-10-07)
 

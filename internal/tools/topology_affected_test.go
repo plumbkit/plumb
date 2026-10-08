@@ -185,3 +185,27 @@ func TestGraphBudgetSurvivesTheTraversalCeilings(t *testing.T) {
 			got.MaxBytes, fits, realisticNodeBytes, asked.MaxNodes)
 	}
 }
+
+func TestTopologyAffected_CompactModeOmitsIndividualTests(t *testing.T) {
+	a := topologyAffectedArgs{
+		Symbols:    []string{"Foo"},
+		MaxResults: 50,
+		Detail:     "compact",
+	}
+	result := &affectedResult{
+		Tests: []affectedTest{
+			{Node: topology.Node{Name: "TestFoo", Path: "internal/stats/foo_test.go", StartLine: 10}, Confidence: 0.5, Reason: reasonChanged},
+			{Node: topology.Node{Name: "TestBar", Path: "internal/cli/bar_test.go", StartLine: 5}, Confidence: 0.5, Reason: reasonImporter},
+		},
+	}
+	out := formatAffectedResult(result, a, TestScope{Language: "go", Style: TargetGoPackage})
+
+	// Packages and targets must appear.
+	if !strings.Contains(out, "./internal/stats/...") || !strings.Contains(out, "./internal/cli/...") {
+		t.Errorf("compact output must include package targets; got:\n%s", out)
+	}
+	// Individual test names must NOT appear in compact mode.
+	if strings.Contains(out, "TestFoo") || strings.Contains(out, "tests in internal/stats") {
+		t.Errorf("compact output must omit individual test names and section; got:\n%s", out)
+	}
+}

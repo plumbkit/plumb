@@ -234,3 +234,71 @@ func TestInterleaveHits(t *testing.T) {
 		t.Errorf("exhausting all lists should return every hit, got %d", len(got))
 	}
 }
+
+func TestWorkspaceSearch_ConceptualQueryDemotesCommonImports(t *testing.T) {
+	ws := t.TempDir()
+	file1 := `package demo
+
+import "context"
+
+// ContextBudgetExplorer explores topology caller budget across tests.
+func ContextBudgetExplorer() {}
+`
+	file2 := `package demo
+
+import "context"
+
+func Unrelated() {}
+`
+	if err := os.WriteFile(filepath.Join(ws, "explore.go"), []byte(file1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "other.go"), []byte(file2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New()})
+	if err != nil {
+		t.Fatalf("topology.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		hits, _ := store.Search(context.Background(), "context", topology.SearchOpts{Limit: 10})
+		if len(hits) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	tool := NewWorkspaceSearch(func(context.Context) string { return ws }, func() *topology.Store { return store })
+
+	// Conceptual broad query: declaration must rank ahead of import "context"
+	out := runWorkspaceSearch(t, tool, map[string]any{
+		"query":   "context budget explore topology callers tests",
+		"corpora": []string{"code"},
+		"limit":   5,
+	})
+
+	if !strings.Contains(out, "ContextBudgetExplorer (function)") {
+		t.Errorf("expected ContextBudgetExplorer to appear in hits:\n%s", out)
+	}
+	declIdx := strings.Index(out, "ContextBudgetExplorer (function)")
+	importIdx := strings.Index(out, "context (import)")
+	if importIdx != -1 && importIdx < declIdx {
+		t.Errorf("expected declaration to rank ahead of common import; got import at %d and decl at %d:\n%s",
+			importIdx, declIdx, out)
+	}
+
+	// Explicit import query: import context must surface
+	importOut := runWorkspaceSearch(t, tool, map[string]any{
+		"query":   "import context",
+		"corpora": []string{"code"},
+		"limit":   5,
+	})
+	if !strings.Contains(importOut, "context (import)") {
+		t.Errorf("expected import to surface for explicit import query:\n%s", importOut)
+	}
+}

@@ -99,7 +99,71 @@ func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*N
 // ResolveNodes) use this so the traversal is guaranteed to start from the
 // intended node rather than an arbitrary first match.
 func ExploreFrom(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
-	return bfs(ctx, db, centre, clampOpts(opts))
+	nb, err := bfs(ctx, db, centre, clampOpts(opts))
+	if err != nil {
+		return nil, err
+	}
+	if isTypeKind(centre.Kind) {
+		members, mErr := TypeMembers(ctx, db, centre, 50)
+		if mErr == nil {
+			nb.Members = members
+		}
+	}
+	return nb, nil
+}
+
+func isTypeKind(k NodeKind) bool {
+	return k == KindType || k == KindClass
+}
+
+// TypeMembers returns the indexed member symbols (methods, fields) belonging to
+// a type/class/interface node, bounded up to maxMembers. It joins both explicit
+// EdgeContains edges (common in Python, TS, Java) and receiver-qualified methods
+// (Go conventions where methods share the package parent with the type).
+func TypeMembers(ctx context.Context, db *sql.DB, centre Node, limit int) ([]Node, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if !isTypeKind(centre.Kind) {
+		return nil, nil
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT DISTINCT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
+                n.start_line, n.end_line, n.docstring, n.language, f.path
+         FROM topology_nodes n
+         JOIN topology_files f ON f.id = n.file_id
+         WHERE (
+             n.id IN (
+                 SELECT to_id FROM topology_edges
+                 WHERE from_id = ? AND kind = 'contains'
+             )
+             OR (
+                 n.kind = 'method' AND (
+                     n.qualified LIKE '(*' || ? || ').%'
+                     OR n.qualified LIKE '(' || ? || ').%'
+                     OR n.qualified LIKE ? || '.%'
+                     OR n.qualified LIKE ? || '/%'
+                 )
+             )
+         )
+         AND n.kind IN ('method', 'function', 'field')
+         ORDER BY f.path, n.start_line
+         LIMIT ?`,
+		centre.ID, centre.Name, centre.Name, centre.Name, centre.Name, limit)
+	if err != nil {
+		return nil, fmt.Errorf("topology: type members: %w", err)
+	}
+	defer rows.Close()
+	var members []Node
+	for rows.Next() {
+		var m Node
+		if err := rows.Scan(&m.ID, &m.FileID, &m.Kind, &m.Name, &m.Qualified, &m.Signature,
+			&m.StartLine, &m.EndLine, &m.Docstring, &m.Language, &m.Path); err != nil {
+			continue
+		}
+		members = append(members, m)
+	}
+	return members, rows.Err()
 }
 
 func clampOpts(opts ExploreOpts) ExploreOpts {
@@ -143,21 +207,73 @@ func (h NodeHint) matches(n Node) bool {
 	return true
 }
 
+// HintMismatchError is returned when a symbol exists in the topology index but
+// every candidate is excluded by the caller's path/kind hint.
+type HintMismatchError struct {
+	Name       string
+	Hint       NodeHint
+	Candidates []Node
+}
+
+func (e *HintMismatchError) Error() string {
+	var sb strings.Builder
+	var hintDesc []string
+	if e.Hint.PathSubstr != "" {
+		hintDesc = append(hintDesc, fmt.Sprintf("path: %q", e.Hint.PathSubstr))
+	}
+	if e.Hint.Kind != "" {
+		hintDesc = append(hintDesc, fmt.Sprintf("kind: %q", e.Hint.Kind))
+	}
+	fmt.Fprintf(&sb, "topology: symbol %q not found matching hint (%s); %d candidate(s) exist in other locations:",
+		e.Name, strings.Join(hintDesc, ", "), len(e.Candidates))
+	limit := 5
+	if len(e.Candidates) < limit {
+		limit = len(e.Candidates)
+	}
+	for i := range limit {
+		c := e.Candidates[i]
+		fmt.Fprintf(&sb, "\n  %s %s — %s", string(c.Kind), c.Qualified, c.Path)
+		if c.StartLine > 0 {
+			fmt.Fprintf(&sb, " L%d", c.StartLine)
+		}
+	}
+	if len(e.Candidates) > limit {
+		fmt.Fprintf(&sb, "\n  … (+%d more)", len(e.Candidates)-limit)
+	}
+	sb.WriteString("\nRetry with a matching path/kind or omit the hint.")
+	return sb.String()
+}
+
 // ResolveNodes returns every indexed node whose name or qualified name equals
-// name, ordered deterministically by path then start line. When hint is
-// non-empty and matches at least one candidate the result is restricted to the
-// matching nodes; a hint that matches nothing is ignored, so a stale hint never
-// turns a real symbol into a miss. The first element is the best pick for a
-// traversal start; any remaining elements are genuine same-name alternatives a
-// caller can surface for disambiguation.
+// name (or a supported receiver variant), ordered deterministically by path
+// then start line. When hint is non-empty and matches at least one candidate the
+// result is restricted to the matching nodes; if the hint excludes all
+// candidates, a HintMismatchError is returned so callers never silently select
+// an unrelated symbol.
 func ResolveNodes(ctx context.Context, db *sql.DB, name string, hint NodeHint) ([]Node, error) {
-	rows, err := db.QueryContext(ctx,
+	variants := SelectorVariants(name)
+	if len(variants) == 0 {
+		return nil, nil
+	}
+	ph := strings.Repeat("?,", len(variants))
+	ph = ph[:len(ph)-1]
+	args := make([]any, 0, len(variants)*2+1)
+	for _, v := range variants {
+		args = append(args, v)
+	}
+	for _, v := range variants {
+		args = append(args, v)
+	}
+	args = append(args, name)
+	//nolint:gosec // G201: IN clause built from placeholders and bind params
+	query := fmt.Sprintf(
 		`SELECT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
                 n.start_line, n.end_line, n.docstring, n.language, f.path
          FROM topology_nodes n
          JOIN topology_files f ON f.id = n.file_id
-         WHERE n.name = ? OR n.qualified = ?
-         ORDER BY f.path, n.start_line`, name, name)
+         WHERE n.name IN (%s) OR n.qualified IN (%s)
+         ORDER BY (n.qualified = ?) DESC, f.path, n.start_line`, ph, ph)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("topology: resolve nodes: %w", err)
 	}
@@ -186,34 +302,59 @@ func ResolveNodes(ctx context.Context, db *sql.DB, name string, hint NodeHint) (
 	if len(matched) > 0 {
 		return matched, nil
 	}
-	return all, nil
+	if len(all) > 0 {
+		return nil, &HintMismatchError{
+			Name:       name,
+			Hint:       hint,
+			Candidates: all,
+		}
+	}
+	return nil, nil
 }
 
-// resolveNode maps a bare name to a single indexed node.
+// resolveNode maps a bare or receiver-qualified name to a single indexed node.
 //
 // The ORDER BY is load-bearing, not cosmetic. Names collide heavily — every file
 // that imports "strings" contributes a node named "strings", so one workspace
 // here holds 636 of them — and without an ordering SQLite is free to return any
 // matching row, silently answering about a different file on a later call.
 // Prefer, in order: an exact qualified-name match (the caller gave a fully
-// qualified name and means that node), then a real declaration over an import or
-// package clause, then the lowest id so repeated calls agree.
+// qualified name and means that node), then an exact name match, then a real
+// declaration over an import or package clause, then the lowest id so repeated
+// calls agree.
 //
 // Callers that already hold a resolved node must use the *From variants
 // (ExploreFrom, ImpactFrom) rather than round-tripping through a name here —
 // re-resolving discards the identity they already had.
 func resolveNode(db *sql.DB, name string) (Node, error) {
-	var n Node
-	row := db.QueryRow(
+	variants := SelectorVariants(name)
+	if len(variants) == 0 {
+		return Node{}, fmt.Errorf("topology: symbol %q not found in index", name)
+	}
+	ph := strings.Repeat("?,", len(variants))
+	ph = ph[:len(ph)-1]
+	args := make([]any, 0, len(variants)*2+2)
+	for _, v := range variants {
+		args = append(args, v)
+	}
+	for _, v := range variants {
+		args = append(args, v)
+	}
+	args = append(args, name, name)
+	//nolint:gosec // G201: IN clause built from placeholders and bind params
+	query := fmt.Sprintf(
 		`SELECT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
                 n.start_line, n.end_line, n.docstring, n.language, f.path
          FROM topology_nodes n
          JOIN topology_files f ON f.id = n.file_id
-         WHERE n.name = ? OR n.qualified = ?
+         WHERE n.name IN (%s) OR n.qualified IN (%s)
          ORDER BY (n.qualified = ?) DESC,
+                  (n.name = ?) DESC,
                   (n.kind NOT IN ('import','package','file')) DESC,
                   n.id
-         LIMIT 1`, name, name, name)
+         LIMIT 1`, ph, ph)
+	var n Node
+	row := db.QueryRow(query, args...)
 	if err := row.Scan(&n.ID, &n.FileID, &n.Kind, &n.Name, &n.Qualified, &n.Signature,
 		&n.StartLine, &n.EndLine, &n.Docstring, &n.Language, &n.Path); err == sql.ErrNoRows {
 		return n, fmt.Errorf("topology: symbol %q not found in index", name)
