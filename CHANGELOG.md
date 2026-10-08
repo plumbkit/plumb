@@ -36,8 +36,9 @@
   targets without printing individual test rows. `detail: "detailed"` remains the
   default for compatibility.
 - **Type membership expansion in `topology_explore`.** Exploring a type/class node
-  now surfaces an explicit `members (N)` section with actionable method selectors
-  across both Go receiver methods and AST-nested class methods.
+  now surfaces an explicit `members (N)` section with actionable method selectors,
+  strictly scoped to the type's own package for Go receiver methods and bounded
+  within the `max_bytes` response budget.
 
 ### Changed
 
@@ -48,7 +49,8 @@
 - **Honest hint mismatch reporting in topology tools.** When a supplied `path` or `kind`
   hint excludes all indexed candidates, resolution returns a helpful hint mismatch error
   with candidate locations and retry guidance rather than silently choosing an unrelated
-  symbol from another file.
+  symbol from another file. A hint that matches no declaration yields an honest error
+  instead of an arbitrary graph traversal.
 - **`workspace_search` ranking de-noising.** Multi-term conceptual code searches now
   demote common import/package-only matches so relevant declarations rank within the
   top hits, while preserving exact symbol and explicit import queries.
@@ -59,6 +61,10 @@
 
 ### Fixed
 
+- **Package scoping and budget compliance for type members.** Fixed Go method
+  matching in `TypeMembers` to strictly match same-package methods with exact
+  receiver type equality rather than matching methods across the entire repository.
+  Bounded the members section within `max_bytes` to prevent payload overruns.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message.

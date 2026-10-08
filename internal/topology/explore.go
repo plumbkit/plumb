@@ -99,71 +99,32 @@ func Explore(ctx context.Context, db *sql.DB, name string, opts ExploreOpts) (*N
 // ResolveNodes) use this so the traversal is guaranteed to start from the
 // intended node rather than an arbitrary first match.
 func ExploreFrom(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
-	nb, err := bfs(ctx, db, centre, clampOpts(opts))
+	opts = clampOpts(opts)
+	nb, err := bfs(ctx, db, centre, opts)
 	if err != nil {
 		return nil, err
 	}
 	if isTypeKind(centre.Kind) {
 		members, mErr := TypeMembers(ctx, db, centre, 50)
-		if mErr == nil {
-			nb.Members = members
+		if mErr != nil {
+			return nil, mErr
+		}
+		// Budget members against remaining MaxBytes so the response stays within bounds.
+		usedBytes := estimateBytes(centre, opts.IncludeSource)
+		for _, n := range nb.Nodes {
+			usedBytes += estimateBytes(n, opts.IncludeSource)
+		}
+		for _, m := range members {
+			mBytes := len(m.Kind) + len(m.Qualified) + len(m.Path) + 20
+			if usedBytes+mBytes > opts.MaxBytes {
+				nb.Truncated = true
+				break
+			}
+			nb.Members = append(nb.Members, m)
+			usedBytes += mBytes
 		}
 	}
 	return nb, nil
-}
-
-func isTypeKind(k NodeKind) bool {
-	return k == KindType || k == KindClass
-}
-
-// TypeMembers returns the indexed member symbols (methods, fields) belonging to
-// a type/class/interface node, bounded up to maxMembers. It joins both explicit
-// EdgeContains edges (common in Python, TS, Java) and receiver-qualified methods
-// (Go conventions where methods share the package parent with the type).
-func TypeMembers(ctx context.Context, db *sql.DB, centre Node, limit int) ([]Node, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	if !isTypeKind(centre.Kind) {
-		return nil, nil
-	}
-	rows, err := db.QueryContext(ctx,
-		`SELECT DISTINCT n.id, n.file_id, n.kind, n.name, n.qualified, n.signature,
-                n.start_line, n.end_line, n.docstring, n.language, f.path
-         FROM topology_nodes n
-         JOIN topology_files f ON f.id = n.file_id
-         WHERE (
-             n.id IN (
-                 SELECT to_id FROM topology_edges
-                 WHERE from_id = ? AND kind = 'contains'
-             )
-             OR (
-                 n.kind = 'method' AND (
-                     n.qualified LIKE '(*' || ? || ').%'
-                     OR n.qualified LIKE '(' || ? || ').%'
-                     OR n.qualified LIKE ? || '.%'
-                     OR n.qualified LIKE ? || '/%'
-                 )
-             )
-         )
-         AND n.kind IN ('method', 'function', 'field')
-         ORDER BY f.path, n.start_line
-         LIMIT ?`,
-		centre.ID, centre.Name, centre.Name, centre.Name, centre.Name, limit)
-	if err != nil {
-		return nil, fmt.Errorf("topology: type members: %w", err)
-	}
-	defer rows.Close()
-	var members []Node
-	for rows.Next() {
-		var m Node
-		if err := rows.Scan(&m.ID, &m.FileID, &m.Kind, &m.Name, &m.Qualified, &m.Signature,
-			&m.StartLine, &m.EndLine, &m.Docstring, &m.Language, &m.Path); err != nil {
-			continue
-		}
-		members = append(members, m)
-	}
-	return members, rows.Err()
 }
 
 func clampOpts(opts ExploreOpts) ExploreOpts {

@@ -279,7 +279,7 @@ func (a *topologyAffectedArgs) validate() error {
 	if len(a.Files) == 0 && len(a.Symbols) == 0 {
 		return errors.New("topology_affected: at least one file or symbol is required")
 	}
-	if a.Detail != "detailed" && a.Detail != "compact" && a.Detail != "summary" {
+	if a.Detail != "detailed" && a.Detail != "compact" {
 		return fmt.Errorf("topology_affected: unknown detail %q (want compact or detailed)", a.Detail)
 	}
 	return nil
