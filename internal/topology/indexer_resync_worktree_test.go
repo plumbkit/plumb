@@ -181,3 +181,35 @@ func TestResync_DoesNotGuessAtUnexpectedGitFile(t *testing.T) {
 			"<root>/.git/worktrees/relative; want none", under)
 	}
 }
+
+// TestResync_SkipsASubmoduleWorktree is the shape review round 1 caught (B1), and the case the
+// test above cannot cover: agent worktrees in a workspace whose code lives in a submodule
+// belong to THAT repository, so their gitdir is <root>/.git/modules/<sub>/worktrees/<name> —
+// not <root>/.git/worktrees. The old prefix rule matched only the latter, so every plumb-ops
+// agent worktree was indexed as another full copy of the repository, which is why PLAN-491 was
+// filed. This test is the guard: a prefix rule cannot pass it.
+func TestResync_SkipsASubmoduleWorktree(t *testing.T) {
+	root := worktreeWorkspace(t)
+	// A worktree OF THE SUBMODULE — what a plumb-ops agent worktree actually is. Real git, so
+	// the gitdir line is the one git writes for a submodule worktree, not one this test invented.
+	gitIn(t, filepath.Join(root, "plumb"), "worktree", "add", "-b", "wt-sub",
+		filepath.Join(root, "plumb-wt-sub"))
+	writeIndexTree(t, filepath.Join(root, "plumb-wt-sub"), map[string]string{
+		"extra.go": "package sub\nfunc Extra() {}\n",
+	})
+
+	idx, db := newTestIndexer(t, root)
+	got := resyncPaths(t, idx, db)
+
+	if under := pathsUnder(got, "plumb-wt-sub"); len(under) != 0 {
+		t.Errorf("a SUBMODULE's worktree was indexed: %v — its gitdir sits under "+
+			".git/modules/plumb/worktrees, so it is a linked worktree of this workspace", under)
+	}
+	// The other half stays true: the submodule is content this workspace contains.
+	if !slices.Contains(got, "plumb/sub.go") {
+		t.Errorf("the submodule must stay indexed: %v", got)
+	}
+	if !slices.Contains(got, "main.go") {
+		t.Errorf("the root's own file must stay indexed: %v", got)
+	}
+}
