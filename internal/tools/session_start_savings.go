@@ -19,7 +19,7 @@ import (
 // tool reproduces on its own — see clientcaps.ModelVersion v4), and how many
 // times a write guard actually caught something — a real count, not an
 // estimate. None of the three is fabricated into a single net total: the
-// surcharge is a per-request client-side cost the daemon cannot multiply by
+// catalogue size is an upper bound on a client-side cost the daemon cannot multiply by
 // call volume, and the savings figure is scoped to the CURRENT model version
 // only (older rows measured a different counterfactual — see
 // stats.Filter.SavingsModelVersion).

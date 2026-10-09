@@ -1,7 +1,9 @@
 package clientcaps
 
-// surcharge.go — the tool-schema surcharge estimate: the per-request cost of
-// the tool definitions served to a client, before it makes a single call.
+// surcharge.go — the advertised tool-catalogue estimate: the size of the tool
+// definitions served to a client, an UPPER BOUND on what reaches its model per
+// step (deferred tool loading and prompt caching cut the real cost, and plumb
+// observes neither; PLAN-413 measures it on the wire in cmd/clientsmoke).
 // This is the honest counterweight to the read/efficiency savings scored in
 // score.go — plumb's own tool surface is not free, and the banner this feeds
 // must say so alongside any savings claim (PLAN-367).
@@ -33,7 +35,7 @@ package clientcaps
 // lookup.
 const surchargeCharsPerToken = 4.57
 
-// SurchargeReport is the estimated per-request cost of the tool schemas a
+// SurchargeReport is the estimated upper-bound per-step cost of the tool schemas a
 // client's session actually advertises: NOT a daemon-observable, NOT a total
 // to multiply by call volume — it is paid once by the client for every
 // request regardless of how many tools that request calls, so summing it
@@ -51,7 +53,7 @@ type SurchargeReport struct {
 	ToolCount int
 }
 
-// ProfileSurcharge estimates the per-request tool-schema surcharge for the
+// ProfileSurcharge estimates the advertised tool-catalogue size for the
 // tools visible under one served profile. schemaBytes maps every REGISTERED
 // tool to the wire byte size of its tools/list entry (see
 // mcp.Server.ToolSchemaBytes); visible reports whether a given tool name is
