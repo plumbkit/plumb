@@ -73,16 +73,11 @@ jobs:
       # CGO_ENABLED=0 builds the old watcher backend (kqueue) opened every file in
       # the workspace, .plumb's SQLite databases included, and released their
       # locks whenever a watcher stopped. Run the watcher and lock tests the way
-      # the release is built, and compile the other macOS architecture too
-      # (running it would need Rosetta).
-      - name: watcher tests as released (macOS, CGO_ENABLED=0)
+      # the release is built, on both shipped architectures (amd64 under
+      # Rosetta). release.yml runs the same script before goreleaser.
+      - name: watcher tests as released (macOS arm64 + amd64, CGO_ENABLED=0)
         if: runner.os == 'macOS'
-        env:
-          CGO_ENABLED: "0"
-        run: |
-          go test -count=1 ./internal/fswatch/
-          go test -count=1 -run 'FSWatcher|LSPFSWatcher|LSPWatch' ./internal/topology/ ./internal/cli/
-          GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
+        run: ./scripts/test-watcher-as-released.sh
 
       # internal/fswatch picks a backend per platform; `make verify` only ever
       # builds the runner's own. Compile its tests for the platforms no runner

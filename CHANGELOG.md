@@ -142,6 +142,18 @@
   `include_source: "docstrings"` (signature plus docstring first line), retaining
   `snippets` and `full` as backward-compatible aliases, and clarified that complete
   function bodies belong to `read_symbol`.
+- **A release now proves its macOS watcher keeps the daemon's SQLite locks
+  before building (PLAN-488 follow-up).** `scripts/test-watcher-as-released.sh`
+  runs the file-watcher and lock tests the way macOS releases are built:
+  `CGO_ENABLED=0`, on arm64 and on amd64. amd64 runs under Rosetta, where it
+  was only compiled before. CI's macOS verify leg runs the script, and
+  `release.yml` gains a `watcher-locks` job on macOS that goreleaser waits for.
+  So a tag on a commit CI never tested still cannot publish a macOS binary
+  whose watcher drops the locks. The script fails unless each of the three
+  lock tests actually ran and passed, so a rename cannot leave it green on
+  "no tests to run". The release jobs now also require a push event: a
+  manual dispatch started on a tag used to pass the tag-ref gates and could
+  publish, although the workflow said it could not.
 
 ### Fixed
 
