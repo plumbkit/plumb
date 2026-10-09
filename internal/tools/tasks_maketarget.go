@@ -44,7 +44,7 @@ var makefileNames = []string{"GNUmakefile", "makefile", "Makefile"}
 func (t *Tasks) unconfiguredSlotRemedy(ctx context.Context, ws string, cmd TaskCommand, path, slot string) string {
 	dir := runDirOf(ws, cmd)
 	if path != "" {
-		if resolved, err := resolveTaskPath(ws, cmd, path); err == nil && t.deps.checkBoundary(ctx, resolved) == nil {
+		if resolved, err := resolveTaskPath(ws, path); err == nil && t.deps.checkBoundary(ctx, resolved) == nil {
 			dir = resolved
 			if dest := probeGitDir(ctx, resolved); dest.place == placeTree {
 				dir = filepath.Join(dest.tree.top, filepath.FromSlash(dest.tree.prefix))

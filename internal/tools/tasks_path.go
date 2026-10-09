@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // tasks_path.go implements run_task's optional `path`: run the stored command in
@@ -39,14 +41,14 @@ import (
 
 // rerootForPath returns cmd with its working directory moved into path.
 //
-// path may be absolute, or relative to the directory the command would have run
-// in. It must exist, be a directory, and lie inside the workspace. Whether it is
-// a git work-tree only decides the extra care taken around it: the {workspace}
-// root follows it into the same work-tree, and an argument naming an absolute
-// path in the tree being LEFT is refused, because that argument would be left
-// pointing at the wrong checkout.
+// path may be absolute, or relative to the pinned WORKSPACE — the same base every
+// other plumb path argument uses. It must exist, be a directory, and lie inside the
+// workspace. Whether it is a git work-tree only decides the extra care taken around
+// it: the {workspace} root follows it into the same work-tree, and an argument
+// naming an absolute path in the tree being LEFT is refused, because that argument
+// would be left pointing at the wrong checkout.
 func (t *Tasks) rerootForPath(ctx context.Context, ws string, cmd TaskCommand, path string) (TaskCommand, error) {
-	target, err := resolveTaskPath(ws, cmd, path)
+	target, err := resolveTaskPath(ws, path)
 	if err != nil {
 		return cmd, err
 	}
@@ -71,6 +73,12 @@ func (t *Tasks) rerootForPath(ctx context.Context, ws string, cmd TaskCommand, p
 			}
 			cmd.Root = rerootedRoot(cmd.Root, from.tree.top, dest.tree.top)
 		}
+	} else {
+		// Not a work-tree, so git cannot spell the path for us: canonicalise it
+		// ourselves, or the same directory can be reported (and used) as both /var/...
+		// and /private/var/... depending on the caller's TMPDIR — which is how this was
+		// found, running the tool through the daemon rather than from a shell.
+		target = paths.Canonical(target)
 	}
 	cmd.WorkingDir = target
 	cmd.Notes = append(cmd.Notes, fmt.Sprintf("running in %s (path): resolution language, command and trust are the pinned workspace's (%s)",
@@ -78,24 +86,29 @@ func (t *Tasks) rerootForPath(ctx context.Context, ws string, cmd TaskCommand, p
 	return cmd, nil
 }
 
-// resolveTaskPath turns the caller's path into an absolute directory, relative
-// paths being relative to the directory the command would have run in. Every
-// failure names what was wrong with the path rather than letting the child fail
-// on a chdir.
-func resolveTaskPath(ws string, cmd TaskCommand, path string) (string, error) {
+// resolveTaskPath turns the caller's path into an absolute directory: relative
+// paths resolve against the pinned workspace, like every other plumb path
+// argument. Every failure names what was wrong with the path — and which base it
+// was resolved against — rather than letting the child fail on a chdir.
+//
+// It deliberately does NOT resolve against the directory the command would have
+// run in, which was the first rule here. Dogfooding found the difference: with
+// `[tasks.go] working_dir = "plumb"`, `path: "plumb-wt-497"` resolved to
+// plumb/plumb-wt-497 and was refused, while the caller plainly meant the work-tree
+// beside the submodule checkout — which is the case this feature exists for.
+func resolveTaskPath(ws, path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("run_task: path is empty; omit it to run in the workspace")
 	}
-	base := runDirOf(ws, cmd)
 	target := path
 	if !filepath.IsAbs(target) {
-		target = filepath.Join(base, path)
+		target = filepath.Join(ws, path)
 	}
 	target = filepath.Clean(target)
 	info, err := os.Stat(target)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("run_task: path %s does not exist (asked for %q, relative to %s)", target, path, base)
+		return "", fmt.Errorf("run_task: path %s does not exist (asked for %q, relative to the workspace %s)", target, path, ws)
 	case !info.IsDir():
 		return "", fmt.Errorf("run_task: path %s is not a directory", target)
 	}

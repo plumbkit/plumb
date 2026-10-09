@@ -129,6 +129,25 @@ func TestRerootForPath_AcceptsADirectoryInsideTheWorkspace(t *testing.T) {
 	}
 }
 
+// TestRerootForPath_RelativePathIsWorkspaceRelative pins the rule dogfooding
+// corrected: `path` resolves like every other plumb path argument — against the
+// pinned WORKSPACE — and not against the directory the command would run in. With
+// plumb-ops's own shape (`[tasks.go] working_dir = "plumb"`), the old rule sent
+// `path: "plumb-wt-497"` to plumb/plumb-wt-497 and refused it, while the caller
+// meant the work-tree beside the submodule checkout.
+func TestRerootForPath_RelativePathIsWorkspaceRelative(t *testing.T) {
+	ws, repo, wt, tool := pathFixture(t)
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
+
+	got, err := tool.rerootForPath(context.Background(), ws, cmd, filepath.Base(wt))
+	if err != nil {
+		t.Fatalf("a workspace-relative path must resolve: %v", err)
+	}
+	if want := paths.Canonical(wt); got.WorkingDir != want {
+		t.Errorf("WorkingDir = %q, want %q — relative to the workspace, not to the run directory", got.WorkingDir, want)
+	}
+}
+
 func TestRerootForPath_RefusesAPathThatIsNotThere(t *testing.T) {
 	ws, repo, _, tool := pathFixture(t)
 	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
@@ -136,6 +155,8 @@ func TestRerootForPath_RefusesAPathThatIsNotThere(t *testing.T) {
 	if _, err := tool.rerootForPath(context.Background(), ws, cmd, filepath.Join(ws, "missing")); err == nil ||
 		!strings.Contains(err.Error(), "does not exist") {
 		t.Errorf("a missing path = %v, want a refusal naming it", err)
+	} else if !strings.Contains(err.Error(), "relative to the workspace") {
+		t.Errorf("the refusal must name the base it resolved against: %v", err)
 	}
 	file := filepath.Join(repo, "f.txt")
 	if _, err := tool.rerootForPath(context.Background(), ws, cmd, file); err == nil ||

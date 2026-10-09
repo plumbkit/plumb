@@ -225,7 +225,7 @@ var runTaskSchema = json.RawMessage(`{
     },
     "path": {
       "type": "string",
-      "description": "Run in this directory: absolute, or relative to the command's own directory; must be inside the workspace."
+      "description": "Run in this directory: absolute, or relative to the workspace; must be inside the workspace."
     }
   },
   "required": ["slot"],
