@@ -62,6 +62,14 @@ var CoCallRules = []CoCallRule{{
 		"internal/tools.MutationTest.restore":       "temporary mutant restored within the call (owner decision)",
 		"internal/tools.MutationTest.restoreFailed": "temporary mutant restored within the call (owner decision)",
 
+		// A clean-clone merge preview (PLAN-454): plumb builds a throwaway bare
+		// repository beside the real one, points its object store at the real one with
+		// an alternates file, and deletes the whole directory again before returning.
+		// Nothing the user owns is written, so there is no user-visible change to
+		// record in history.db — the same reasoning as the mutants above.
+		"internal/tools.writeAlternateRepo": "writes the alternates file of a throwaway preview clone, removed in the same call",
+		"internal/tools.Git.runCleanClone":  "removes that throwaway preview clone; no user file is touched",
+
 		// Git lock sidecars, not user content.
 		"internal/tools.clearGitLockOwner":  "git lock sidecar file, not user content",
 		"internal/tools.reapStaleGitLock":   "git lock sidecar file, not user content",

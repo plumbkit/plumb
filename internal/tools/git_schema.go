@@ -43,7 +43,11 @@ var gitSchema = json.RawMessage(`{
     },
     "amend": {
       "type": "boolean",
-      "description": "commit only: fold the staged changes into HEAD (--amend) instead of adding a commit. Omit message to keep HEAD's message. Refused when HEAD is already on a remote-tracking ref."
+      "description": "commit only: fold the staged changes into HEAD (--amend); omit message to keep HEAD's."
+    },
+    "clean_clone": {
+      "type": "boolean",
+      "description": "merge-tree only: preview in a clean clone — no local config or system attributes."
     },
     "wait": {
       "type": "boolean",

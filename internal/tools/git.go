@@ -117,6 +117,10 @@ type gitToolArgs struct {
 	// detaching at [git] detach_after — see Execute.
 	Amend bool `json:"amend"`
 	Wait  bool `json:"wait"`
+	// CleanClone previews a merge-tree in a throwaway clean clone of the repository
+	// (git_clean_clone.go): the answer a machine with no local git configuration or
+	// system attributes would compute.
+	CleanClone bool `json:"clean_clone"`
 	// The read-tier output window (git_window.go): a slice of, or a pattern over,
 	// a read command's output instead of all of it.
 	StartLine     *int   `json:"start_line"`
@@ -132,6 +136,9 @@ func (a gitToolArgs) validate() error {
 	}
 	if a.Amend && a.Subcommand != "commit" {
 		return fmt.Errorf("git: amend folds changes into HEAD, so it applies to commit, not %q", a.Subcommand)
+	}
+	if a.CleanClone && a.Subcommand != "merge-tree" {
+		return fmt.Errorf("git: clean_clone previews a merge in a clean clone, so it applies to merge-tree, not %q", a.Subcommand)
 	}
 	return nil
 }
@@ -179,6 +186,9 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	}
 	if err := t.guardCall(ctx, a); err != nil {
 		return "", err
+	}
+	if a.CleanClone {
+		return t.runCleanClone(ctx, a, window)
 	}
 	child := gitChildSpecFor(policy)
 	if a.Wait {
