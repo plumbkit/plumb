@@ -247,6 +247,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		slog.Warn("daemon: invalid log config; keeping defaults", "err", err)
 	}
 	logRecoveredHijacks()
+	sweepKilledMutants()
 
 	// Soft heap ceiling: bound a memory spike so it can't exhaust the machine,
 	// and surface the active limit in daemon.log.

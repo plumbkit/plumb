@@ -172,6 +172,18 @@
 
 ### Fixed
 
+- **A killed `mutation_test` no longer leaves a mutant in your source (PLAN-459).**
+  The tool restored its mutant on every exit path a running process can take, but
+  not when the process was killed: a daemon restart mid-run left a mutant sitting in
+  a source file, and the client's "re-read the file to check whether it landed"
+  named neither the file nor the mutant. The mutant is now journalled — path, digest
+  before, digest of the mutant, the original bytes, the mode — under the daemon's
+  state dir BEFORE it is written, and the entry is cleared only once the restore has
+  been verified by digest. Whatever survives into the next daemon start belongs to a
+  process that no longer exists, so a startup sweep puts those files back and says
+  so in the daemon log; a file someone else has edited since (matching neither
+  digest) is left exactly as it is and reported, because guessing which content the
+  user wants would be worse than saying so.
 - **With history off, a huge before-side is no longer read (PLAN-457).** The
   before-side of a write served two consumers — the history row and the response
   diff — and with history off only the response wanted it, which withholds
