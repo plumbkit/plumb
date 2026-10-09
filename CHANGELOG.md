@@ -128,6 +128,9 @@
   - Doctor gives that remedy for the topology, stats and history databases
     only when SQLite itself reports corruption (`sqlitex.IsCorrupt`). A busy
     or unopenable file gets a retry hint instead of "remove it".
+  - An old stats schema now says to start a plumb session, because the
+    daemon migrates it. It used to say "delete it so plumb can create a fresh
+    global stats database", which threw the history away for nothing.
   - Doctor used to report a corrupt `topology.db` as "index is empty, initial
     indexing may still be in progress": the read-only open is lazy and the
     status census ignores query errors. The status read now probes the schema

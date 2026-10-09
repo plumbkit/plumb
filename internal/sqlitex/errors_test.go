@@ -21,6 +21,23 @@ func readErr(t *testing.T, path, query string) error {
 	return db.QueryRow(query).Scan(&n)
 }
 
+func TestIsCorruptCode(t *testing.T) {
+	for code, want := range map[int]bool{
+		11:  true,  // SQLITE_CORRUPT
+		26:  true,  // SQLITE_NOTADB
+		779: true,  // SQLITE_CORRUPT_INDEX: extended codes keep the primary in the low byte
+		267: true,  // SQLITE_CORRUPT_VTAB
+		5:   false, // SQLITE_BUSY
+		14:  false, // SQLITE_CANTOPEN
+		10:  false, // SQLITE_IOERR
+		522: false, // SQLITE_IOERR_SHORT_READ
+	} {
+		if got := isCorruptCode(code); got != want {
+			t.Errorf("isCorruptCode(%d) = %v, want %v", code, got, want)
+		}
+	}
+}
+
 func TestIsCorrupt(t *testing.T) {
 	dir := t.TempDir()
 
