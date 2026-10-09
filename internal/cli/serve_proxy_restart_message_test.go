@@ -165,6 +165,44 @@ func TestProxyRestartMessage_GroupsPathsByState(t *testing.T) {
 	}
 }
 
+// TestProxyRestartMessage_NamesOnlyItsOwnWorkspace is SF3's acceptance: the note is about ONE
+// interrupted request in ONE workspace, so a journal entry from another project must not be
+// named in it — while the empty-workspace call, the contract for a caller that cannot resolve
+// one, still describes everything rather than nothing.
+func TestProxyRestartMessage_NamesOnlyItsOwnWorkspace(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	mine := filepath.Join(t.TempDir(), "mine")
+	theirs := filepath.Join(t.TempDir(), "theirs")
+	for _, dir := range []string{mine, theirs} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mineFile := filepath.Join(mine, "a.go")
+	theirsFile := filepath.Join(theirs, "b.go")
+	for _, f := range []string{mineFile, theirsFile} {
+		if err := os.WriteFile(f, []byte("package p\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// The file still HOLDS the mutant, which is the state whose sentence names it.
+		journalEntry(t, f, "package p\n", "package p\n// mutant\n")
+	}
+
+	msg := proxyRestartMessage("mutation_test", mine)
+	if !strings.Contains(msg, mineFile) {
+		t.Errorf("this workspace's own file must be named in the note:\n%s", msg)
+	}
+	if strings.Contains(msg, theirsFile) {
+		t.Errorf("ANOTHER workspace's file must not be named in a note about this request:\n%s", msg)
+	}
+
+	// An empty workspace filters nothing: better to describe every entry than to describe none.
+	all := proxyRestartMessage("mutation_test", "")
+	if !strings.Contains(all, mineFile) || !strings.Contains(all, theirsFile) {
+		t.Errorf("a caller that cannot resolve its workspace must still be told about every entry:\n%s", all)
+	}
+}
+
 func TestProxyRestartMessage_SaysWhenNothingIsLeftJournalled(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	msg := proxyRestartMessage("mutation_test", "")
