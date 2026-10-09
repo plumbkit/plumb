@@ -914,7 +914,8 @@ aliases; complete function bodies belong to `read_symbol`), `edge_kinds`, `path`
 Exploring a type/class node also lists its member methods (`members (N)`).
 N counts every member found; members cut by `max_bytes` are reported as
 `… K more member(s) omitted`, and a type with more than 50 members reads
-`members (50+)` with a pointer to `file_outline`.
+`members (50+)` with a pointer to `workspace_symbols` (a Go type's methods can
+span files, so one file's outline is not the whole set).
 Budgeting is on **symbol boundaries**: each whole symbol is costed against
 `max_bytes` for the chosen source mode and added only if it fits in full, so a
 truncated result is always a set of whole, coherent symbols — never a fragment
