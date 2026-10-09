@@ -97,7 +97,10 @@
   watch `config.toml` itself, re-attach after an atomic save swaps the inode,
   and use a one-second stat tick to pick up a `config.toml` created inside an
   existing `.plumb`. A regression test holds an fcntl lock on a database in
-  `.plumb` and checks from a second process that it survives the watcher.
+  `.plumb` and checks from a second process that it survives the watcher. One
+  behaviour change: renaming the global `config.toml` away no longer reloads
+  it (which reset the daemon to defaults); like deleting it, it now keeps the
+  loaded config.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered
