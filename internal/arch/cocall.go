@@ -74,10 +74,11 @@ var CoCallRules = []CoCallRule{{
 		// own state dir, and the sweep's write is plumb UNDOING its own temporary
 		// mutation: the mutant was never a user edit, so neither the mutation nor its
 		// reversal is a user-visible change to record.
-		"internal/tools.journalMutant":      "journal entry for a mutant in flight, under the daemon's state dir",
-		"internal/tools.clearMutantJournal": "removes that entry once the file is verifiably back",
-		"internal/tools.sweepOne":           "restores a source file a killed mutation_test left mutated; plumb undoing its own temporary change",
-		"internal/tools.SweepMutantJournal": "removes the journal entries it has resolved, under the daemon's state dir",
+		"internal/tools.journalMutant":            "journal entry for a mutant in flight, under the daemon's state dir",
+		"internal/tools.checkMutantJournalUsable": "writability probe for the journal directory: creates a temp file under the daemon's state dir and removes it again; not user content",
+		"internal/tools.clearMutantJournal":       "removes that entry once the file is verifiably back",
+		"internal/tools.sweepOne":                 "restores a source file a killed mutation_test left mutated; plumb undoing its own temporary change",
+		"internal/tools.SweepMutantJournal":       "removes the journal entries it has resolved, under the daemon's state dir",
 
 		// Git lock sidecars, not user content.
 		"internal/tools.clearGitLockOwner":  "git lock sidecar file, not user content",
