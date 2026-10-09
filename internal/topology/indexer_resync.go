@@ -229,16 +229,19 @@ func linkedWorktree(root, dir string) bool {
 		target = filepath.Join(dir, target)
 	}
 	target = paths.Canonical(filepath.Clean(target))
-	// The test is the SHAPE, confined to this workspace: a path under the root carrying both
-	// a .git component and a worktrees component. Confinement matters — a repository outside
-	// the workspace is not ours to classify, so it is never pruned on this rule — and so does
-	// the .git component, which is what distinguishes a worktree's gitdir from any directory
-	// that merely happens to be called "worktrees".
-	rootCanonical := paths.Canonical(root)
-	if target != rootCanonical && !strings.HasPrefix(target, rootCanonical+string(filepath.Separator)) {
+	// The test is the SHAPE of the part of target INSIDE this workspace: a relative path whose
+	// components include both .git and worktrees. Two things make the relative form load-bearing
+	// rather than cosmetic. First, confinement: a repository outside the workspace is not ours
+	// to classify, so it is never pruned on this rule. Second — and this is review round 1's B3 —
+	// testing the ABSOLUTE path's components would classify every file in a workspace that merely
+	// LIVES under a directory called "worktrees" (…/code/worktrees/myproject) as a linked
+	// worktree, and prune the whole workspace. Only the path below the root says anything about
+	// what is inside it.
+	rel, err := filepath.Rel(paths.Canonical(root), target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
-	return hasPathComponent(target, ".git") && hasPathComponent(target, "worktrees")
+	return hasPathComponent(rel, ".git") && hasPathComponent(rel, "worktrees")
 }
 
 // hasPathComponent reports whether any whole component of path equals name. A substring
