@@ -288,7 +288,12 @@ func sweepOne(entry mutantJournalEntry) sweepAction {
 	default:
 		return sweepAttention
 	}
-	if err := os.WriteFile(entry.Path, entry.Original, os.FileMode(entry.Mode)); err != nil {
+	// safeWrite, not os.WriteFile: the restore is the one write this card cannot afford to
+	// get wrong. A plain write TRUNCATES the file first, so a process killed mid-restore
+	// would leave the user's source file shorter than it started — worse than the mutant
+	// it was undoing. safeWrite stages a temp file and renames it over the target, which
+	// is atomic, so the file is either the mutant or the original and never half of each.
+	if _, err := safeWrite(entry.Path, entry.Original, os.FileMode(entry.Mode)); err != nil {
 		return sweepAttention
 	}
 	got, err := fileSHA256(entry.Path)
