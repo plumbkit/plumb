@@ -200,12 +200,17 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 	// not. Sort so the messages shown are genuinely the oldest — the ones whose
 	// silence has lasted longest and is worth acting on.
 	slices.SortStableFunc(unread, func(a, b collab.Row) int { return a.CreatedAt.Compare(b.CreatedAt) })
-	return renderReceipt(unread, now)
+	return renderReceipt(unread, now, t.deps.ResolvePeer)
 }
 
 // renderReceipt formats the unread-sent block, or "" when everything the session
 // sent has been read. Silence is the common case and carries its own meaning.
-func renderReceipt(unread []collab.Row, now time.Time) string {
+//
+// resolve (CollabDeps.ResolvePeer, may be nil) lets each row say whether its
+// recipient can still read it (PLAN-496). "Unread" alone left a sender unable to
+// tell a peer that is merely busy from one whose session has ended — and a note
+// bound to an ended session expires unread whatever the sender waits for.
+func renderReceipt(unread []collab.Row, now time.Time, resolve func(name string) (PeerSession, bool)) string {
 	if len(unread) == 0 {
 		return ""
 	}
@@ -225,6 +230,7 @@ func renderReceipt(unread []collab.Row, now time.Time) string {
 		if r.TargetWorkspace != "" {
 			fmt.Fprintf(&sb, " (cross-project, to %s)", r.TargetWorkspace)
 		}
+		sb.WriteString(recipientState(r, resolve))
 		sb.WriteString("\n")
 		bound = bound || r.AddresseeID != ""
 	}
@@ -248,6 +254,33 @@ func renderReceipt(unread []collab.Row, now time.Time) string {
 	}
 	sb.WriteString("Tell your human rather than waiting indefinitely.\n")
 	return sb.String()
+}
+
+// recipientState is the per-row liveness clause of the receipt: whether the
+// session a note is waiting for can still take it. resolve reports the ONE live
+// session answering to a name, and found=false when none does or several do, so
+// that case is worded as what it is — no single holder — rather than as an ending
+// the resolver cannot see. A "next" note has no recipient yet, and a nil resolve
+// means liveness is unknown; both add nothing.
+func recipientState(r collab.Row, resolve func(name string) (PeerSession, bool)) string {
+	if resolve == nil || r.Addressee == collab.AddresseeNext {
+		return ""
+	}
+	peer, ok := resolve(r.Addressee)
+	switch {
+	case r.AddresseeID == "" && ok:
+		return "; a live session answers to that name"
+	case r.AddresseeID == "":
+		return "; no single live session answers to that name now — the next session to take it will receive it"
+	case ok && peer.ID == r.AddresseeID:
+		return "; the session it is bound to is live"
+	case ok:
+		return "; the session it is bound to has ended and the name now belongs to another session, " +
+			"so it will expire unread — re-send to reach the current holder"
+	default:
+		return "; no single live session answers to that name now, so the session it is bound to " +
+			"has most likely ended and it will expire unread — re-send if it still matters"
+	}
 }
 
 func (t *CheckMessages) render(ctx context.Context, rows []collab.Row, policy CollabPolicy, inbox Inbox) string {

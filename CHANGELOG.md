@@ -101,6 +101,16 @@
 
 ### Changed
 
+- **`check_messages` says whether each unread note's recipient can still read it
+  (PLAN-496).** The receipt of your own unread notes said only "still unread", so
+  a sender could not tell a busy peer from one whose session had ended — and a
+  note bound to an ended session expires unread however long you wait. Each row now
+  adds the recipient's state: the session it is bound to is live; it has ended and
+  the name now belongs to another session (so re-send); no single live session
+  answers to the name (so it most likely expires unread); or, for a note addressed
+  by name only, whether a live session holds the name or the next one to take it
+  will receive it. A `"next"` note and a receipt built without a resolver are
+  unchanged.
 - **The web API reports a failing topology index (PLAN-489).** `failing` joins the
   topology JSON the dashboard reads, and unlike every other field there it cannot
   come from the on-disk snapshot: a failed cycle is a property of the LIVE indexer,
