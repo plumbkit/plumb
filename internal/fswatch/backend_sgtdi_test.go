@@ -3,8 +3,11 @@
 package fswatch
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +25,90 @@ func (f *fakeSgtdi) Events() <-chan fswatcher.WatchEvent  { return f.events }
 func (f *fakeSgtdi) Dropped() <-chan fswatcher.WatchEvent { return f.dropped }
 func (f *fakeSgtdi) Close()                               {}
 
+// fakeRun is a run whose readiness the test controls. Cancelling it (as close
+// does) stops it, as cancelling sgtdi's Watch does.
+func fakeRun() *sgtdiRun {
+	stopped := make(chan struct{})
+	var once sync.Once
+	return &sgtdiRun{
+		src:     &fakeSgtdi{events: make(chan fswatcher.WatchEvent), dropped: make(chan fswatcher.WatchEvent)},
+		cancel:  func() { once.Do(func() { close(stopped) }) },
+		ready:   make(chan struct{}),
+		stopped: stopped,
+	}
+}
+
+// fakeStarts returns a startFunc that hands every run it starts to the test.
+func fakeStarts() (startFunc, <-chan *sgtdiRun) {
+	runs := make(chan *sgtdiRun, 8)
+	return func(string, Options) (*sgtdiRun, error) {
+		r := fakeRun()
+		runs <- r
+		return r, nil
+	}, runs
+}
+
+func nextRun(t *testing.T, runs <-chan *sgtdiRun, what string) *sgtdiRun {
+	t.Helper()
+	select {
+	case r := <-runs:
+		return r
+	case <-time.After(10 * time.Second):
+		t.Fatalf("%s: no run was started", what)
+		return nil
+	}
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+func awaitLost(t *testing.T, w *Watcher, what string) {
+	t.Helper()
+	select {
+	case <-w.lost:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: Lost was not signalled", what)
+	}
+}
+
+// notBeforeReady is how long a test watches for something that must not happen
+// while a run is not ready. Without the readiness gate the supervisor acts
+// within microseconds of a start returning, so this is generous.
+const notBeforeReady = 300 * time.Millisecond
+
+// supervise runs the supervisor over first and returns a channel closed when it
+// returns. The Watcher is closed at cleanup if the test has not closed it, and
+// a supervisor that then fails to return is reported rather than waited on.
+func supervise(t *testing.T, w *Watcher, first *sgtdiRun, start startFunc) <-chan struct{} {
+	t.Helper()
+	finished := make(chan struct{})
+	go func() { w.superviseSgtdi(Options{}, first, start); close(finished) }()
+	t.Cleanup(func() {
+		if !isClosed(w.done) {
+			close(w.done)
+		}
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("the supervisor did not return after the Watcher closed")
+		}
+	})
+	return finished
+}
+
+// loseRoot ends first's run as a lost root and takes the Lost it signals.
+func loseRoot(t *testing.T, w *Watcher, first *sgtdiRun) {
+	t.Helper()
+	first.src.(*fakeSgtdi).events <- fswatcher.WatchEvent{Path: w.root, Types: []fswatcher.EventType{fswatcher.EventRename}}
+	awaitLost(t, w, "root renamed away")
+}
+
 // TestSuperviseSgtdi_FailureIsDegraded: a backend that stops on its own with the
 // root still in place is not restarted (it would most likely fail again, and
 // each restart costs a reconcile); the Watcher reports Failed, for good, and
@@ -36,8 +123,12 @@ func TestSuperviseSgtdi_FailureIsDegraded(t *testing.T) {
 		cancel:  func() {},
 		stopped: stopped,
 	}
+	restarted := func(string, Options) (*sgtdiRun, error) {
+		t.Error("a failed backend was restarted")
+		return nil, errors.New("no restart")
+	}
 	finished := make(chan struct{})
-	go func() { w.superviseSgtdi(Options{}, run); close(finished) }()
+	go func() { w.superviseSgtdi(Options{}, run, restarted); close(finished) }()
 	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
@@ -50,6 +141,186 @@ func TestSuperviseSgtdi_FailureIsDegraded(t *testing.T) {
 	}
 	if !lostSignalled(w) {
 		t.Error("a failed backend did not signal Lost")
+	}
+}
+
+// TestStartSupervised_WaitsForReadiness: New returns only once the backend's
+// initial watches are in place, so a consumer's first full scan cannot finish
+// before a change it misses is watched.
+func TestStartSupervised_WaitsForReadiness(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	start, runs := fakeStarts()
+	returned := make(chan error, 1)
+	go func() { returned <- w.startSupervised(Options{}, start) }()
+	run := nextRun(t, runs, "New")
+	select {
+	case err := <-returned:
+		t.Fatalf("New returned (err %v) before the backend's watches were in place", err)
+	case <-time.After(notBeforeReady):
+	}
+	close(run.ready)
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("New did not return once the backend was ready")
+	}
+	close(w.done)
+	w.wg.Wait()
+	if !isClosed(run.stopped) {
+		t.Error("closing the Watcher left the run going")
+	}
+}
+
+// TestStartSupervised_StoppedBeforeReadyFails: a backend that cannot put its
+// watches in place fails New, with its own error, and is not left running.
+func TestStartSupervised_StoppedBeforeReadyFails(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	cause := errors.New("inotify: no space left on device")
+	run := fakeRun()
+	run.err = cause
+	run.cancel()
+	err := w.startSupervised(Options{}, func(string, Options) (*sgtdiRun, error) { return run, nil })
+	if !errors.Is(err, cause) {
+		t.Fatalf("New = %v, want the backend's own error", err)
+	}
+}
+
+// TestSuperviseSgtdi_RestartWaitsForReadiness: after a lost root, the reconcile
+// that covers what was made while the root was unwatched is asked for only once
+// the new run's watches are in place. Asked earlier, a consumer could finish
+// reconciling before a watch existed and miss a change made in between for good.
+func TestSuperviseSgtdi_RestartWaitsForReadiness(t *testing.T) {
+	root := t.TempDir()
+	w := testWatcher(root, 8)
+	start, runs := fakeStarts()
+	first := fakeRun()
+	supervise(t, w, first, start)
+	loseRoot(t, w, first) // the root is still a directory: recreated, say
+
+	second := nextRun(t, runs, "restart")
+	select {
+	case <-w.lost:
+		t.Fatal("the reconcile after a restart was asked for before the new run's watches were in place")
+	case <-time.After(notBeforeReady):
+	}
+	close(second.ready)
+	awaitLost(t, w, "the new run became ready")
+
+	second.src.(*fakeSgtdi).events <- fswatcher.WatchEvent{Path: filepath.Join(root, "a.go"), Types: []fswatcher.EventType{fswatcher.EventCreate}}
+	select {
+	case ev := <-w.events:
+		if ev.Path != filepath.Join(root, "a.go") {
+			t.Errorf("delivered %+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restarted run's events are not pumped")
+	}
+	if isClosed(w.failed) {
+		t.Error("a lost and recovered root marked the Watcher failed")
+	}
+}
+
+// TestSuperviseSgtdi_CloseWhileRestartIsPending: Close does not wait for a run
+// that is still putting its watches in place; that run is stopped, and nothing
+// is reported for it.
+func TestSuperviseSgtdi_CloseWhileRestartIsPending(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	start, runs := fakeStarts()
+	first := fakeRun()
+	finished := supervise(t, w, first, start)
+	loseRoot(t, w, first)
+	second := nextRun(t, runs, "restart")
+
+	close(w.done)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the Watcher waited on a run that never became ready")
+	}
+	if !isClosed(second.stopped) {
+		t.Error("the pending run was left going")
+	}
+	if lostSignalled(w) {
+		t.Error("Lost was signalled for a run that never became ready")
+	}
+	if isClosed(w.failed) {
+		t.Error("closing the Watcher marked it failed")
+	}
+}
+
+// TestSuperviseSgtdi_RestartThatStopsBeforeReadyIsDegraded: a restarted run
+// that stops before it is ready, with the root still in place, is a failure
+// like any other: Failed, and Lost, and no restart loop.
+func TestSuperviseSgtdi_RestartThatStopsBeforeReadyIsDegraded(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	start, runs := fakeStarts()
+	first := fakeRun()
+	finished := supervise(t, w, first, start)
+	loseRoot(t, w, first)
+	second := nextRun(t, runs, "restart")
+	second.err = errors.New("inotify: no space left on device")
+	second.cancel()
+
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the supervisor did not give up on a restart that failed")
+	}
+	if !isClosed(w.failed) {
+		t.Error("a restart that failed did not close Failed")
+	}
+	if !lostSignalled(w) {
+		t.Error("a restart that failed did not signal Lost")
+	}
+	select {
+	case r := <-runs:
+		t.Errorf("the supervisor started another run after a failure: %p", r)
+	default:
+	}
+}
+
+// TestSuperviseSgtdi_RootGoneAgainBeforeReadyIsWaitedFor: a restarted run that
+// stops because the root went again is another lost root, not a failure: the
+// supervisor waits for the root once more and asks for the reconcile only when
+// a run is ready.
+func TestSuperviseSgtdi_RootGoneAgainBeforeReadyIsWaitedFor(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "ws")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	w := testWatcher(root, 8)
+	start, runs := fakeStarts()
+	first := fakeRun()
+	supervise(t, w, first, start)
+	loseRoot(t, w, first)
+
+	second := nextRun(t, runs, "restart")
+	if err := os.Remove(root); err != nil {
+		t.Fatal(err)
+	}
+	second.cancel()
+	select {
+	case r := <-runs:
+		t.Fatalf("a run was started while the root was missing: %p", r)
+	case <-time.After(2 * rootRetryMin):
+	}
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	third := nextRun(t, runs, "second restart")
+	if lostSignalled(w) {
+		t.Fatal("Lost was signalled before a restarted run was ready")
+	}
+	close(third.ready)
+	awaitLost(t, w, "the third run became ready")
+	if isClosed(w.failed) {
+		t.Error("a root that came back marked the Watcher failed")
+	}
+	if !isClosed(second.stopped) {
+		t.Error("the run that stopped before ready was not closed")
 	}
 }
 

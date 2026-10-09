@@ -18,21 +18,25 @@ import (
 // vanished files). See indexer.go for the worker loop, indexer_extract.go for
 // per-file extraction, and indexer_persist.go for the DB writes.
 
-// processDelete removes one file's rows and reports whether there was anything
-// to remove. A path the index never held changes nothing, so it reports false
-// and the derived-edge passes need not run for it.
+// processDelete removes the rows of whatever was indexed at relPath and reports
+// whether there was anything to remove. A path the index never held changes
+// nothing, so it reports false and the derived-edge passes need not run for it.
 func (idx *Indexer) processDelete(ctx context.Context, relPath string) error {
 	_, err := idx.processDeleteChanged(ctx, relPath)
 	return err
 }
 
+// processDeleteChanged removes the file indexed at relPath, or, when relPath
+// names no indexed file, every file indexed below it. A directory renamed or
+// removed is reported only under its own name: no watcher backend reports the
+// files it held, so without the subtree its old children would stay indexed
+// until the next resync, and a resync is suppressed while the watcher runs.
+// It is called only once relPath is gone (or escapes the workspace), so
+// nothing below it can still be live.
 func (idx *Indexer) processDeleteChanged(ctx context.Context, relPath string) (bool, error) {
 	_ = ctx
-	var fileID int64
-	row := idx.db.QueryRow(`SELECT id FROM topology_files WHERE path = ?`, relPath)
-	if err := row.Scan(&fileID); err == sql.ErrNoRows {
-		return false, nil
-	} else if err != nil {
+	ids, err := idx.indexedAtOrBelow(relPath)
+	if err != nil || len(ids) == 0 {
 		return false, err
 	}
 	tx, err := idx.db.Begin()
@@ -40,16 +44,50 @@ func (idx *Indexer) processDeleteChanged(ctx context.Context, relPath string) (b
 		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeded; on the failure path the error is already being returned
-	if err := deleteFileNodes(tx, fileID); err != nil {
-		return false, err
-	}
-	if _, err := tx.Exec(`DELETE FROM topology_files WHERE id = ?`, fileID); err != nil {
-		return false, err
+	for _, id := range ids {
+		if err := deleteFileNodes(tx, id); err != nil {
+			return false, err
+		}
+		if _, err := tx.Exec(`DELETE FROM topology_files WHERE id = ?`, id); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// indexedAtOrBelow returns the id of the file indexed at relPath or, failing
+// that, the ids of every file indexed below it. The subtree is a half-open range
+// over the path index, [relPath+sep, relPath+(sep+1)), never a LIKE: a name may
+// hold % or _, and a sibling sharing the prefix (a.go, ab/) sorts outside it.
+func (idx *Indexer) indexedAtOrBelow(relPath string) ([]int64, error) {
+	var id int64
+	err := idx.db.QueryRow(`SELECT id FROM topology_files WHERE path = ?`, relPath).Scan(&id)
+	if err == nil {
+		return []int64{id}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if relPath == "" || relPath == "." {
+		return nil, nil // the root itself is never deleted file by file
+	}
+	rows, err := idx.db.Query(`SELECT id FROM topology_files WHERE path >= ? AND path < ?`,
+		relPath+string(filepath.Separator), relPath+string(filepath.Separator+1))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // errResyncAborted is returned through filepath.Walk when the indexer is

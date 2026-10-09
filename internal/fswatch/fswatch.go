@@ -36,6 +36,13 @@
 //     staying silent.
 //   - It keeps watching the root PATH: a root directory renamed away and
 //     recreated, or replaced by another, is watched again.
+//   - New returns only once the root is watched, so a consumer's first full
+//     scan made after it cannot miss a change. A Lost that follows a root's
+//     return is likewise signalled only once the new watch is in place.
+//   - A directory that arrives whole (created, or moved in) is reported with
+//     its contents. A directory moved away is reported under its own name
+//     only: no OS reports the entries it took with it, so a consumer drops
+//     what it knew below that name itself.
 package fswatch
 
 import (

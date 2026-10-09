@@ -164,6 +164,16 @@
   - A populated directory moved into a workspace now has its files reported;
     FSEvents reports only the directory, which the topology index skips, and
     inotify misses files created in a new directory before it watches it.
+  - A populated directory moved away (or out of the workspace) no longer
+    leaves its files in the topology index. Every backend reports only the
+    directory's own name, so deleting that path now also removes every file
+    indexed below it, in one transaction. Before, those files stayed
+    searchable until the next resync, which the running watcher suppresses.
+  - On Linux and Windows, starting a watcher now waits until sgtdi has put
+    every initial watch in place, and the full resync after the workspace
+    directory returns is requested only once its new watches are in place.
+    Before, a resync could finish while watches were still being added, and a
+    change made in that gap was never seen.
   - Accepted behaviour change for macOS release builds: editing the target of
     an indexed in-workspace symlink no longer re-indexes the symlink until the
     next resync. kqueue happened to report the link too, because opening it
