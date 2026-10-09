@@ -77,7 +77,7 @@ func resolveDetail(raw json.RawMessage, autoBrief bool) (string, error) {
 // woken session must still see its pending mail, or the wake flow loses its
 // point; it is nil-safe and a no-op when mailbox delivery is unwired or empty,
 // so it costs nothing when there is nothing to deliver.
-func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, linked bool, stampNote string, claimable bool) string {
+func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, linked bool, stampNote string, claimable bool, mail mailMode) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Workspace: %s\n\n", ws)
 	// The same re-pin block the full packet renders: which pin moved, how many
@@ -128,7 +128,7 @@ func (t *SessionStart) executeBrief(ws, lang, inheritedName, repinLine string, l
 		sb.WriteString(strings.TrimRight(nativeEditLaneWarning, "\n"))
 		sb.WriteString("\n")
 	}
-	t.writeSessionMessages(&sb, ws, claimable)
+	t.writeSessionMessages(&sb, ws, claimable, mail)
 	sb.WriteString("\n" + briefOrientationFooter)
 	return sb.String()
 }
