@@ -64,6 +64,12 @@ type Indexer struct {
 	// graph. Only the single background worker goroutine touches it.
 	forceFullRebuild bool
 
+	// catchUpQueued records that the current failure has already had its
+	// catch-up resync (see runQueueCycle), so later clean cycles leave the
+	// retry to the backoff instead of queueing a full resync each. Cleared when
+	// the index next goes idle. Only the background worker goroutine touches it.
+	catchUpQueued bool
+
 	// idleReclaim is the debounce delay before draining the parse-arena pool once
 	// the queue goes quiet. A steady trickle of single-file edits never trips the
 	// per-cycle burst gate (shouldReclaimAfterBurst), so without this the pooled
@@ -298,23 +304,26 @@ type retryBackoff struct {
 }
 
 // scheduleRetry arms or disarms the failure-retry timer after a cycle. A cycle
-// that did not end in error stops the timer and resets the backoff. A failed
-// cycle arms it with the next delay unless a retry is already pending: only a
-// failed retry escalates the backoff, so a persistent error costs one full
-// resync per retryMax at most, while a burst of failing file events during a
-// brief fault neither escalates it nor pushes the pending retry out.
+// that leaves the index healthy stops the timer and resets the backoff. While
+// it is failing, the backoff is left as it is when a retry is already pending
+// or a catch-up resync is queued (state "running"), and otherwise the timer is
+// armed with the next delay. So only a failed retry or catch-up escalates it:
+// a persistent error costs one full resync per retryMax at most, and a burst
+// of failing file events during a brief fault neither escalates the backoff
+// nor pushes the pending retry out.
 func (idx *Indexer) scheduleRetry(timer *time.Timer, r *retryBackoff) {
-	if idx.State() != "error" || idx.retryBase <= 0 {
+	h := idx.Health()
+	switch {
+	case !h.Failing || idx.retryBase <= 0:
 		timer.Stop()
 		*r = retryBackoff{}
-		return
+	case h.State != "error", r.armed:
+		// A catch-up resync is queued, or a retry is already pending.
+	default:
+		r.delay = nextRetryDelay(r.delay, idx.retryBase, idx.retryMax)
+		r.armed = true
+		timer.Reset(r.delay)
 	}
-	if r.armed {
-		return
-	}
-	r.delay = nextRetryDelay(r.delay, idx.retryBase, idx.retryMax)
-	r.armed = true
-	timer.Reset(r.delay)
 }
 
 // nextRetryDelay doubles prev, starting from base and capped at limit. A zero
@@ -370,11 +379,19 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 		// An earlier cycle failed and this one succeeded without a full resync,
 		// so whatever the failed cycle was indexing may still be missing: an event
 		// for some other file must not declare the index healthy. The fault has
-		// evidently cleared, so catch up now rather than at the next retry, and
-		// stay failing until that resync succeeds.
+		// apparently cleared, so catch up now rather than at the next retry, and
+		// stay failing until a resync succeeds. Once per failure: if the catch-up
+		// fails too, the fault is in the resync itself, and queueing a full resync
+		// per clean event would bypass the backoff.
+		if idx.catchUpQueued {
+			idx.setState("error", "")
+			break
+		}
+		idx.catchUpQueued = true
 		idx.setState("running", "")
 		idx.Enqueue("", opResync)
 	default:
+		idx.catchUpQueued = false
 		idx.setState("idle", "")
 	}
 	// A successful resync drained the arena pool as its final step.

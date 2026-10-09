@@ -144,7 +144,8 @@
   the pre-failure snapshot with no caveat. A failed cycle now schedules a full
   resync with backoff, from 30 seconds doubling to 30 minutes, until one
   succeeds. A later cycle that succeeds without one, such as an unrelated file
-  event, queues the resync at once rather than declaring the index healthy.
+  event, queues a catch-up resync at once (once per failure; after that the
+  backoff governs) rather than declaring the index healthy.
   Until then `topology_search`, `topology_explore`,
   `topology_impact`, `topology_affected`, `topology_routes` and
   `structural_query` lead every answer and error with a `⚠ STALE INDEX`

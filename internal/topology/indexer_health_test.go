@@ -218,8 +218,9 @@ func TestIndexer_OverflowResyncSettlesAFailure(t *testing.T) {
 
 // TestScheduleRetry_OnlyAFailedRetryEscalates pins the backoff bookkeeping: a
 // failing file-event cycle while a retry is pending leaves the pending retry's
-// delay alone, only a failed retry doubles it, and any cycle that does not end
-// in error resets it. The delays are hours, so the timer never fires here.
+// delay alone, only a failed retry (or catch-up) doubles it, a queued catch-up
+// leaves it as it is, and only a healthy index resets it. The delays are
+// hours, so the timer never fires here.
 func TestScheduleRetry_OnlyAFailedRetryEscalates(t *testing.T) {
 	idx := newIndexer(t.TempDir(), nil, nil, 0, 0)
 	idx.retryBase, idx.retryMax = time.Hour, 4*time.Hour
@@ -242,10 +243,74 @@ func TestScheduleRetry_OnlyAFailedRetryEscalates(t *testing.T) {
 	if r != (retryBackoff{delay: 2 * time.Hour, armed: true}) {
 		t.Fatalf("failed retry: %+v, want the delay doubled and armed", r)
 	}
-	idx.setState("running", "") // e.g. the catch-up resync after a clean cycle
+	idx.setState("running", "") // a catch-up resync is queued; the index is still failing
+	idx.scheduleRetry(timer, &r)
+	if r != (retryBackoff{delay: 2 * time.Hour, armed: true}) {
+		t.Fatalf("a queued catch-up reset or escalated the backoff: %+v", r)
+	}
+	r.armed = false // the retry fired while the catch-up was queued
+	idx.setState("error", "catch-up failed")
+	idx.scheduleRetry(timer, &r)
+	if r != (retryBackoff{delay: 4 * time.Hour, armed: true}) {
+		t.Fatalf("failed catch-up: %+v, want the delay doubled and armed", r)
+	}
+	idx.setState("idle", "")
 	idx.scheduleRetry(timer, &r)
 	if r != (retryBackoff{}) {
-		t.Fatalf("a cycle that did not end in error left the backoff %+v, want it reset", r)
+		t.Fatalf("a healthy index left the backoff %+v, want it reset", r)
+	}
+}
+
+// TestIndexer_CatchUpOncePerFailure: a clean cycle while failing queues ONE
+// catch-up resync per failure. If that resync fails too, the fault is in the
+// resync itself, and a full resync per clean file event would bypass the
+// backoff: on an active workspace the worker would sit in back-to-back full
+// walks. Later clean cycles leave the index in error for the retry timer, and
+// going idle re-arms the catch-up for the next failure. Cycles run
+// synchronously, with no worker, so the queue can be inspected.
+func TestIndexer_CatchUpOncePerFailure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topology.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	for _, name := range []string{"a.go", "b.go", "c.go"} {
+		src := "package p\n\nfunc " + strings.ToUpper(strings.TrimSuffix(name, ".go")) + "() {}\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	idx.reclaimFn = func() {}
+	queued := func() int {
+		n := len(idx.queue)
+		for len(idx.queue) > 0 {
+			<-idx.queue // discard: this test plays the failed catch-up by hand
+		}
+		return n
+	}
+
+	idx.setState("error", "boom")
+	idx.runQueueCycle(indexOp{kind: opUpsert, path: "a.go"})
+	if n, h := queued(), idx.Health(); n != 1 || h.State != "running" || !h.Failing {
+		t.Fatalf("first clean cycle while failing: queued %d, health %+v; want one catch-up, running and failing", n, h)
+	}
+
+	idx.setState("error", "catch-up failed") // the catch-up resync failed
+	idx.runQueueCycle(indexOp{kind: opUpsert, path: "b.go"})
+	if n, h := queued(), idx.Health(); n != 0 || h.State != "error" || !h.Failing {
+		t.Fatalf("clean cycle after a failed catch-up: queued %d, health %+v; want nothing queued, left in error for the retry timer", n, h)
+	}
+
+	idx.runQueueCycle(indexOp{kind: opResync}) // a retry resync succeeds
+	if h := idx.Health(); h.State != "idle" || h.Failing {
+		t.Fatalf("successful resync: health %+v, want idle", h)
+	}
+	idx.setState("error", "a new failure")
+	idx.runQueueCycle(indexOp{kind: opUpsert, path: "c.go"})
+	if n := queued(); n != 1 {
+		t.Fatalf("a new failure after recovery queued %d catch-ups, want 1: going idle must re-arm the catch-up", n)
 	}
 }
 
