@@ -331,10 +331,12 @@ func classifyWorktree(args []string) gitTier {
 		return tierRead
 	case "add":
 		// -B/--force-create resets an existing branch to the start point, which
-		// discards its commits exactly as `checkout -B` does. Destructive here;
-		// refineRefReset lowers it back to a write for a branch that does not
-		// exist yet, which is the common `worktree add -B new-branch` case.
-		if worktreeGrammar.has(args, "B", "force-create") {
+		// discards its commits exactly as `checkout -B` does; refineRefReset
+		// lowers it back to a write for a branch that does not exist yet. -f/--force
+		// lets two worktrees hold the SAME branch (git refuses that without it), so
+		// the branch can then be committed to from either checkout — destructive
+		// for the same reason `checkout -B` is.
+		if worktreeGrammar.has(args, "Bf", "force-create", "force") {
 			return tierDestructive
 		}
 		return tierWrite

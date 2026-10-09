@@ -16,8 +16,6 @@ import (
 // directory moves — into a work-tree of the same repository, or a directory the
 // workspace contains, and nowhere else.
 
-func canonicalForTest(p string) string { return paths.Canonical(p) }
-
 func callRunTask(t *testing.T, tool *Tasks, args map[string]any) (string, error) {
 	t.Helper()
 	raw, err := json.Marshal(args)
@@ -46,10 +44,10 @@ func TestRerootForPath_LinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-rooting into a linked work-tree: %v", err)
 	}
-	if want := canonicalForTest(wt); got.WorkingDir != want {
+	if want := paths.Canonical(wt); got.WorkingDir != want {
 		t.Errorf("WorkingDir = %q, want %q", got.WorkingDir, want)
 	}
-	if got.Root != canonicalForTest(wt) {
+	if got.Root != paths.Canonical(wt) {
 		t.Errorf("Root = %q, want the work-tree root: {workspace} must follow the command", got.Root)
 	}
 	if len(got.Notes) == 0 {
@@ -76,7 +74,7 @@ func TestRerootForPath_AcceptsARepositoryInsideTheWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a repository inside the workspace must be runnable inside it: %v", err)
 	}
-	if want := canonicalForTest(nested); got.WorkingDir != want {
+	if want := paths.Canonical(nested); got.WorkingDir != want {
 		t.Errorf("WorkingDir = %q, want %q", got.WorkingDir, want)
 	}
 }
@@ -153,7 +151,7 @@ func TestRunTask_PathRunsTheCommandInTheWorktree(t *testing.T) {
 	if !sawPath {
 		t.Error("the resolver must receive the caller's path")
 	}
-	if want := canonicalForTest(wt); !strings.Contains(out, want) {
+	if want := paths.Canonical(wt); !strings.Contains(out, want) {
 		t.Errorf("the command did not run in %s:\n%s", want, out)
 	}
 	if !strings.Contains(out, "running in ") {

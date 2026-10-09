@@ -202,9 +202,10 @@ func (t *Git) guardCall(ctx context.Context, a gitToolArgs) error {
 	if err := t.checkBoundary(ctx, a); err != nil {
 		return err
 	}
-	// Removing a worktree destroys whatever is in it. git refuses a dirty one, but
-	// --force gets past that, and the write tier alone would let it through.
-	if err := checkGitWorktreeRemove(ctx, a); err != nil {
+	// A worktree call creates, moves or deletes a directory: its paths are
+	// confined to the workspace, and a removal that would discard work needs
+	// confirm (git_worktree.go).
+	if err := t.checkGitWorktree(ctx, a); err != nil {
 		return err
 	}
 	// An amend rewrites HEAD, which is only private while no remote has it.

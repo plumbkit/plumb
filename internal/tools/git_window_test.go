@@ -234,6 +234,28 @@ func TestGitSchema_AdvertisesTheWindow(t *testing.T) {
 	}
 }
 
+// TestGit_TruncationNotesNameTheWindow pins S5 of review round 1: a capped answer
+// must say how to ask for the part the caller wanted, because the cap is exactly
+// the friction the window exists for.
+func TestGit_TruncationNotesNameTheWindow(t *testing.T) {
+	big := strings.Repeat("x", maxGitBytes+10)
+	if got := formatGitOutput("show", big, false); !strings.Contains(got, "start_line/end_line") {
+		t.Errorf("the 100 KiB note must name the window params:\n%s", got)
+	}
+	var log strings.Builder
+	for range 300 {
+		log.WriteString("a commit line\n")
+	}
+	if got := formatGitOutput("log", log.String(), false); !strings.Contains(got, "start_line/end_line/pattern") {
+		t.Errorf("the 200-line note must name the window params:\n%s", got)
+	}
+	// A windowed call is a request for specific lines, so the line cap must not
+	// silently drop the tail of what it asked for.
+	if got := formatGitOutput("log", log.String(), true); !strings.Contains(got, "a commit line") {
+		t.Errorf("a windowed log must keep its lines:\n%s", got)
+	}
+}
+
 // gitRun runs a git command in dir for a fixture, failing the test on error.
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()

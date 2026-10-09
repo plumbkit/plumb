@@ -26,6 +26,8 @@ func TestClassifyWorktree_Tiers(t *testing.T) {
 		{"add -b is a write", []string{"add", "-b", "topic", "wt"}, tierWrite},
 		{"add -B resets a branch, so destructive", []string{"add", "-B", "topic", "wt"}, tierDestructive},
 		{"add --force-create resets a branch", []string{"add", "--force-create", "topic", "wt"}, tierDestructive},
+		{"add -f lets two worktrees share a branch, so destructive", []string{"add", "-f", "wt"}, tierDestructive},
+		{"add --force is destructive for the same reason", []string{"add", "--force", "wt"}, tierDestructive},
 		{"remove is a write", []string{"remove", "wt"}, tierWrite},
 		{"lock is a write", []string{"lock", "wt"}, tierWrite},
 		{"unlock is a write", []string{"unlock", "wt"}, tierWrite},

@@ -41,7 +41,8 @@
   large blob at a revision is answered with those lines even though the whole
   blob is past the 100 KiB cap. Until now the only ways to read a slice of a
   large blob were the whole file (spilled outside the workspace, unreadable by
-  `read_file`) or a native shell fallback.
+  `read_file`) or a native shell fallback. Both truncation notes now name the
+  window parameters, so a capped answer says how to ask for the part it cut.
 - **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
   plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
   declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless
@@ -88,7 +89,13 @@
   `lock` and `unlock` are writes; `move`, `prune` and `repair` are destructive,
   as is `worktree add -B`, which resets a branch. `worktree remove` refuses a
   worktree holding uncommitted work — and any unconfirmed `--force` — unless
-  `confirm: true`, naming what would be discarded.
+  `confirm: true`, naming what would be discarded; it also refuses a worktree on
+  a detached HEAD whose commits no branch, tag or remote reaches, because the
+  reflog naming them is deleted with the directory (`--force` does not help
+  there). `add`, `move` and `remove` are confined to the workspace through the
+  same boundary every other tool uses — an outside path is refused, and `confirm`
+  does not lift that — and `add -f/--force` joins `-B` at the destructive tier,
+  since it lets two worktrees hold one branch.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were

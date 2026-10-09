@@ -471,10 +471,10 @@ func formatGitOutput(sub, result string, windowed bool) string {
 	// not have its tail silently dropped here.
 	if !windowed && (sub == "log" || sub == "blame") {
 		result = truncateLines(result, maxLogLines,
-			fmt.Sprintf("… (showing first %d lines — add --oneline / -n N to narrow, or use args to filter)", maxLogLines))
+			fmt.Sprintf("… (showing first %d lines — add --oneline / -n N to narrow, or pass start_line/end_line/pattern)", maxLogLines))
 	}
 	if len(result) > maxGitBytes {
-		result = result[:maxGitBytes] + "\n… (output truncated at 100 KiB)"
+		result = result[:maxGitBytes] + "\n… (output truncated at 100 KiB — pass pattern, or start_line/end_line, to window a large output)"
 	}
 	if strings.TrimSpace(result) == "" {
 		return "(no output)"
