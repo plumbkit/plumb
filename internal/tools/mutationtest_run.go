@@ -188,6 +188,11 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	// Journalled BEFORE the write (PLAN-459): a process killed between these two
 	// statements leaves an entry with nothing mutated, which the startup sweep
 	// resolves by finding the original digest already in place.
+	if err := journalMutant(tgt, mutated); err != nil {
+		res.outcome = MutationInvalid
+		res.reason = err.Error()
+		return res, nil
+	}
 	if _, err := safeWrite(tgt.path, []byte(mutated), tgt.mode); err != nil {
 		clearMutantJournal(tgt.path) // nothing was mutated, so there is nothing to sweep
 		res.outcome = MutationInvalid
@@ -357,7 +362,6 @@ func (t *MutationTest) restore(ctx context.Context, tgt mutationTarget) error {
 	if sha != tgt.sha {
 		return t.restoreFailed(tgt, fmt.Sprintf("the restored content does not match the pre-run snapshot (sha256 %s, want %s)", sha, tgt.sha))
 	}
-	clearMutantJournal(tgt.path) // the digest matched: there is nothing left to sweep
 	t.announce(ctx, tgt.path)
 	t.deps.notifyTopology(tgt.path)
 	return nil
