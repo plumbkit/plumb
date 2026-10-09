@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/fsync"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -94,48 +95,14 @@ func journalMutant(tgt mutationTarget, mutated string) error {
 	if err != nil {
 		return fmt.Errorf("mutant journal: %w", err)
 	}
-	if err := writeFileAtomic(journalPathFor(dir, tgt.path), data, 0o600); err != nil {
+	// fsync.AtomicWrite, not a hand-rolled stage-and-rename: the shared primitive fsyncs the
+	// staging file before the rename and the directory after it, preserves an existing file's
+	// mode, and cleans up on every failure path. A half-written journal entry is worse than
+	// none — it describes a mutant whose target cannot be read back — so the entry appears
+	// complete or not at all, and the trigger for the arch gate's write-history rule lands on
+	// THIS function, which already carries the reason it needs no history row.
+	if err := fsync.AtomicWrite(journalPathFor(dir, tgt.path), data, fsync.Options{Mode: 0o600}); err != nil {
 		return fmt.Errorf("mutant journal: %w", err)
-	}
-	return nil
-}
-
-// writeFileAtomic writes data to path through a temp file in the same directory, fsyncing
-// the file AND the directory before returning.
-//
-// A half-written journal entry is worse than none: it describes a mutant whose target
-// cannot be read back, so the sweep would report an entry it cannot act on while the mutant
-// is still on disk. The rename is what makes the entry appear complete or not at all; the
-// directory fsync is what makes the rename itself survive a power cut rather than only the
-// bytes it points at.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".journal-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }() // a no-op once the rename below has succeeded
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
 	}
 	return nil
 }
