@@ -7,6 +7,9 @@
 # run its tests offline is fetched here: the Go module graph, the pinned
 # toolchain, and the language servers the `//go:build integration` tier drives.
 # The brief the scanner reads before it starts is .oss-scanner/threat_model.md.
+# The scanner keeps a repository's .dockerignore when the Dockerfile lives in the
+# repository, so Dockerfile.dockerignore beside this file replaces the root one
+# (BuildKit) and keeps .git in the context.
 #
 # Contract (see github.com/anthropics/oss-scanner, templates/Dockerfile): the
 # checkout lives at /src, the final stage keeps a package manager, and a failing

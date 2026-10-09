@@ -73,8 +73,13 @@ under `cmd/smoke` and `cmd/clientsmoke`, and `testdata/` fixtures.
   reproducer: build the hostile repository under `/tmp`, start `plumb serve`
   with `HOME` and the `XDG_*` directories pointed at a scratch directory, then
   `initialize` and `session_start` with that repository as the workspace.
-- This image runs as root. A few tests that rely on permission denial skip or
-  fail under root; that is not a finding.
+- Known environmental failures, which are not findings. The image runs as root,
+  so the rollback tests that make a directory read-only to force a failure
+  (`TestWorkspaceEditRollbackRecordsReverts`,
+  `TestTransactionPartialFailureRecordsRevertsBeforeTheAntecedentIsWritten`,
+  `TestTransactionRollbackReportsOnlyWhatItRestored`) fail. And where the
+  container cannot create user namespaces, `bwrap` cannot start, so
+  `TestRunCommand_Runs` fails with `Creating new namespace failed`.
 
 ## How you rate severity
 
