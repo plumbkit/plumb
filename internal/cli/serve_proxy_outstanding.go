@@ -198,11 +198,20 @@ func mutantJournalClause(state tools.MutantJournalState, paths []string) string 
 		}
 		return " This was a mutation_test; the files at " + joined +
 			" match neither side, so plumb left them exactly as they were — re-read them before retrying"
-	default: // MutantFileGone
+	case tools.MutantFileGone:
 		if one {
 			return " This was a mutation_test; the file at " + joined + " no longer exists"
 		}
 		return " This was a mutation_test; the files at " + joined + " no longer exist"
+	default:
+		// A state this switch does not know must not inherit another state's claim: the
+		// old `default: // MutantFileGone` gave a future fifth state the sentence "no
+		// longer exists", which is a false statement about a file that is sitting
+		// there. Say only what is certainly true — a mutant is journalled for the path.
+		if one {
+			return " This was a mutation_test; a mutant is journalled for " + joined
+		}
+		return " This was a mutation_test; mutants are journalled for " + joined
 	}
 }
 

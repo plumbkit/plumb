@@ -216,7 +216,10 @@
   digest) is left exactly as it is and reported, because guessing which content the
   user wants would be worse than saying so. When the daemon restarts mid-request,
   the reconnect error for an interrupted `mutation_test` now names those files
-  itself, instead of leaving the caller with "re-read the file" and no path.
+  itself, instead of leaving the caller with "re-read the file" and no path — and
+  it words each case for what is true: the file is classified by digest, so one
+  still holding the mutant says so rather than claiming, as it used to, that
+  someone had edited it.
 - **With history off, a huge before-side is no longer read (PLAN-457).** The
   before-side of a write served two consumers — the history row and the response
   diff — and with history off only the response wanted it, which withholds
