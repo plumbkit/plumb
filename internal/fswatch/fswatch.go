@@ -125,8 +125,9 @@ type Watcher struct {
 	events chan Event
 	lost   chan struct{}
 
-	// failed is closed, once, by a backend that has stopped for good. Only the
-	// sgtdi supervisor can (backend_sgtdi.go); FSEvents streams do not die.
+	// failed is closed, once, by a backend that can no longer see every change.
+	// Only the sgtdi supervisor closes it (backend_sgtdi.go); FSEvents streams do
+	// not die.
 	failed chan struct{}
 
 	exclude     *regexp.Regexp // Options.ExcludeRegex, nil when empty
@@ -189,15 +190,20 @@ func (w *Watcher) Events() <-chan Event { return w.events }
 // by Close.
 func (w *Watcher) Lost() <-chan struct{} { return w.lost }
 
-// Failed is closed if the backend stops for good on its own: no further events
-// will arrive from this Watcher, ever. It is a degraded state, not a loss to
-// reconcile once. Lost is signalled too, but a single reconcile restores
-// nothing after it, so a consumer relying on events for freshness must fall back
-// to something periodic. A lost root is NOT a failure: the Watcher waits for the
-// root to return. Close does not close Failed.
+// Failed is closed, for good, once the Watcher can no longer see every change:
+// the backend stopped on its own (no further events will arrive), or the
+// inotify watch limit left part of the tree unwatched (events keep arriving for
+// the rest). It is a degraded state, not a loss to reconcile once. Lost is
+// signalled too, but a single reconcile restores nothing after it, so a
+// consumer relying on events for freshness must fall back to something
+// periodic. A lost root is NOT a failure: the Watcher waits for the root to
+// return. Close does not close Failed.
 func (w *Watcher) Failed() <-chan struct{} { return w.failed }
 
-// Close stops watching and waits for the backend to finish.
+// Close stops watching and waits for the backend to finish. On Linux and
+// Windows that includes a restart walk in progress, which sgtdi cannot
+// interrupt: a root that came back on a stalled mount holds Close until the
+// walk ends.
 func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)
