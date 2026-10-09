@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Security
+
+- **Go toolchain go1.26.8 → go1.26.9.** govulncheck flagged ten standard-library
+  advisories published after go1.26.8, all fixed in go1.26.9: GO-2026-6603,
+  GO-2026-6605, GO-2026-6609, GO-2026-6610, GO-2026-6611, GO-2026-6612,
+  GO-2026-6613 and GO-2026-6617 (`net/http`), GO-2026-6607 (`crypto/tls`) and
+  GO-2026-6608 (`net/textproto`, `mime/multipart`). `make vuln` is clean on
+  go1.26.9.
+
 ### Added
 
 - **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
