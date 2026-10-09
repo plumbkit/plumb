@@ -187,6 +187,35 @@ func TestIndexer_UnrelatedSuccessDoesNotMaskAFailedFile(t *testing.T) {
 	}
 }
 
+// TestIndexer_OverflowResyncSettlesAFailure: the queue-overflow recovery
+// resync a cycle runs is a full resync too, so after a failure it clears the
+// failure itself rather than queueing a redundant catch-up resync. Runs the
+// cycle synchronously, with no worker, so the queue can be inspected.
+func TestIndexer_OverflowResyncSettlesAFailure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topology.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package p\n\nfunc A() {}\n"), 0o644); err != nil {
+		t.Fatalf("write a.go: %v", err)
+	}
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	idx.reclaimFn = func() {}
+
+	idx.setState("error", "boom")
+	idx.resyncPending = true
+	idx.runQueueCycle(indexOp{kind: opUpsert, path: "a.go"})
+
+	if h := idx.Health(); h.Failing || h.State != "idle" {
+		t.Fatalf("a cycle that completed an overflow resync left health %+v, want idle and not failing", h)
+	}
+	if n := len(idx.queue); n != 0 {
+		t.Errorf("queued %d redundant catch-up op(s) after a cycle that already resynced", n)
+	}
+}
+
 // TestScheduleRetry_OnlyAFailedRetryEscalates pins the backoff bookkeeping: a
 // failing file-event cycle while a retry is pending leaves the pending retry's
 // delay alone, only a failed retry doubles it, and any cycle that does not end
