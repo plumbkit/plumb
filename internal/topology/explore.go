@@ -13,6 +13,9 @@ const (
 	defaultMaxBytes = 30000
 	hardCapDepth    = 4
 
+	// MemberListCap is the most members ExploreFrom lists for a type centre.
+	MemberListCap = 50
+
 	// maxNodeBytes is the per-node cost the traversal's two ceilings are sized
 	// against. estimateBytes over this repo's own index (26,826 nodes, the
 	// IncludeSource mode impactBFS uses) measures avg 150 B, median 142, p90 223,
@@ -105,19 +108,25 @@ func ExploreFrom(ctx context.Context, db *sql.DB, centre Node, opts ExploreOpts)
 		return nil, err
 	}
 	if isTypeKind(centre.Kind) {
-		members, mErr := TypeMembers(ctx, db, centre, 50)
+		// One past the cap tells a type with exactly 50 members from a larger one.
+		members, mErr := TypeMembers(ctx, db, centre, MemberListCap+1)
 		if mErr != nil {
 			return nil, mErr
+		}
+		if len(members) > MemberListCap {
+			members = members[:MemberListCap]
+			nb.MembersCapped = true
 		}
 		// Budget members against remaining MaxBytes so the response stays within bounds.
 		usedBytes := estimateBytes(centre, opts.IncludeSource)
 		for _, n := range nb.Nodes {
 			usedBytes += estimateBytes(n, opts.IncludeSource)
 		}
-		for _, m := range members {
+		for i, m := range members {
 			mBytes := len(m.Kind) + len(m.Qualified) + len(m.Path) + 20
 			if usedBytes+mBytes > opts.MaxBytes {
 				nb.Truncated = true
+				nb.MembersOmitted = len(members) - i
 				break
 			}
 			nb.Members = append(nb.Members, m)

@@ -121,6 +121,13 @@
 
 ### Fixed
 
+- **`topology_explore` no longer drops a type's members silently when
+  `max_bytes` cuts them (PLAN-461).** The `members (N)` header now counts every
+  member found, a byte cut adds `… K more member(s) omitted`, and a type with
+  more than 50 members reads `members (50+)` with a pointer to `file_outline`.
+  Previously a tight budget removed the section outright, and a partial cut
+  left a header that counted only the members it listed.
+
 - **Topology recovery guidance no longer says to delete the index under a
   running daemon, and `plumb doctor` now reports an index with a corrupt
   header or schema.** (PLAN-467)
