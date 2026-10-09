@@ -73,7 +73,7 @@ func TestUncoveredOutlineNote_SilentForIndexedAndUnknownTypes(t *testing.T) {
 // The companion to the above: with nothing uncovered, an empty outline is a
 // fact about the FILE and must not be explained away as a coverage gap.
 func TestFormatFileOutline_EmptyOutlineIsNotBlamedOnCoverage(t *testing.T) {
-	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/models/User.scala", source: "topology"})
+	out := formatFileOutline(&outlineResult{uri: "file:///ws/app/models/User.scala", source: "topology"}, nil)
 	if !strings.Contains(out, "(no symbols)") {
 		t.Errorf("the empty-outline line should still be present:\n%s", out)
 	}
@@ -85,7 +85,7 @@ func TestFormatFileOutline_EmptyOutlineIsNotBlamedOnCoverage(t *testing.T) {
 // A supported language keeps the terse output — the explanation is reserved for
 // the case that actually needs it, so the common path gains no noise.
 func TestFormatFileOutline_EmptyGoOutlineStaysTerse(t *testing.T) {
-	out := formatFileOutline(&outlineResult{uri: "file:///ws/empty.go", source: "lsp"})
+	out := formatFileOutline(&outlineResult{uri: "file:///ws/empty.go", source: "lsp"}, nil)
 	if strings.Contains(out, "coverage gap") {
 		t.Errorf("Go is indexed; an empty outline is a fact about the file:\n%s", out)
 	}
