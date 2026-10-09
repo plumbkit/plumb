@@ -13,6 +13,13 @@
 
 ### Added
 
+- **A build image and brief for Anthropic's OSS Scanner.**
+  `.oss-scanner/Dockerfile` builds plumb with the module graph, the pinned
+  toolchain, the integration tier's language servers and `bwrap` fetched up
+  front, so the scanner's offline audit can build and test it.
+  `.oss-scanner/threat_model.md` points the audit at the attack surface, and
+  `docs/threat-model.md` gains a Severity section that rates a finding by what
+  the attacker reaches beyond the user's own configuration.
 - **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
   plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
   declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless
