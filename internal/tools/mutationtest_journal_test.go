@@ -273,6 +273,44 @@ func TestMutantJournalStates_SkipsEntriesItCannotRead(t *testing.T) {
 	}
 }
 
+// TestJournalMutant_LeavesNoPartialEntry pins the atomicity of the entry write: the entry
+// appears complete or not at all, and the temp file it was staged in never survives as
+// something a reader could mistake for a journal entry.
+func TestJournalMutant_LeavesNoPartialEntry(t *testing.T) {
+	path := journalFixture(t, "x\n", "y\n")
+	dir, err := mutantJournalDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var jsonFiles, tempFiles int
+	for _, e := range entries {
+		switch filepath.Ext(e.Name()) {
+		case ".json":
+			jsonFiles++
+		case ".tmp":
+			tempFiles++
+		}
+	}
+	if jsonFiles != 1 {
+		t.Errorf("want exactly one journal entry, found %d", jsonFiles)
+	}
+	if tempFiles != 0 {
+		t.Errorf("the temp file used for the atomic write survived (%d) — a reader must never see it", tempFiles)
+	}
+	// The entry is readable and names the target: a truncated or half-renamed file would fail here.
+	states, err := MutantJournalStates()
+	if err != nil {
+		t.Fatalf("MutantJournalStates: %v", err)
+	}
+	if len(states) != 1 || states[0].Path != path {
+		t.Errorf("states = %+v, want exactly the one entry for %s", states, path)
+	}
+}
+
 // TestSweepMutantJournal_ReportsAnEntryItCannotParse covers the state the sweep used to
 // swallow: an entry that cannot be read or parsed means a mutant was applied and plumb
 // cannot say where — so it must be REPORTED (by its own file name) and KEPT, because

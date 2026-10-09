@@ -94,8 +94,48 @@ func journalMutant(tgt mutationTarget, mutated string) error {
 	if err != nil {
 		return fmt.Errorf("mutant journal: %w", err)
 	}
-	if err := os.WriteFile(journalPathFor(dir, tgt.path), data, 0o600); err != nil {
+	if err := writeFileAtomic(journalPathFor(dir, tgt.path), data, 0o600); err != nil {
 		return fmt.Errorf("mutant journal: %w", err)
+	}
+	return nil
+}
+
+// writeFileAtomic writes data to path through a temp file in the same directory, fsyncing
+// the file AND the directory before returning.
+//
+// A half-written journal entry is worse than none: it describes a mutant whose target
+// cannot be read back, so the sweep would report an entry it cannot act on while the mutant
+// is still on disk. The rename is what makes the entry appear complete or not at all; the
+// directory fsync is what makes the rename itself survive a power cut rather than only the
+// bytes it points at.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, ".journal-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }() // a no-op once the rename below has succeeded
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }
