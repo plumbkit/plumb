@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,11 @@ func TestIndexHealthNote(t *testing.T) {
 		if !strings.Contains(synced, want) {
 			t.Errorf("notice lacks %q:\n%s", want, synced)
 		}
+	}
+
+	multiline := indexHealthNote(topology.Health{Failing: true, LastError: "rebuild failed:\n  disk I/O error"}, now)
+	if strings.Contains(multiline, "\n") || !strings.Contains(multiline, "rebuild failed: disk I/O error") {
+		t.Errorf("a multi-line error was not collapsed onto the notice's line: %q", multiline)
 	}
 
 	long := indexHealthNote(topology.Health{Failing: true, LastError: strings.Repeat("é", 500)}, now)
@@ -149,6 +155,7 @@ func TestTopologyTools_LabelAFailingIndex(t *testing.T) {
 		{"topology_explore not found", NewTopologyExplore(storeFn), `{"name":"NoSuchSymbol"}`},
 		{"topology_affected", NewTopologyAffected(storeFn), `{"files":["demo.go"]}`},
 		{"topology_impact", NewTopologyImpact(storeFn), `{"name":"Beta"}`},
+		{"topology_impact not found", NewTopologyImpact(storeFn), `{"name":"NoSuchSymbol"}`},
 		{"topology_impact package reachability", NewTopologyImpact(storeFn), `{"mode":"reachability"}`},
 		{"topology_impact function reachability", NewTopologyImpact(storeFn), `{"mode":"reachability","granularity":"function"}`},
 		{"topology_routes", NewTopologyRoutes(storeFn), `{}`},
@@ -174,6 +181,10 @@ func TestTopologyTools_LabelAFailingIndex(t *testing.T) {
 	if got := topologyIndexStatus(store); got != "fresh" {
 		t.Errorf("workspace_search freshness on a healthy index = %q, want fresh", got)
 	}
+	errSentinel := errors.New("sentinel")
+	if err := withIndexHealthErr(store, errSentinel); !errors.Is(err, errSentinel) || err.Error() != errSentinel.Error() {
+		t.Errorf("withIndexHealthErr on a healthy index = %v, want the error untouched", err)
+	}
 
 	heal := injectPersistFault(t, ws)
 	writeFixture("demo.go", "package demo\n\nfunc Alpha() { Beta() }\n\nfunc Beta() {}\n\nfunc Gamma() {}\n")
@@ -191,6 +202,9 @@ func TestTopologyTools_LabelAFailingIndex(t *testing.T) {
 	}
 	if got := topologyIndexStatus(store); got != "stale" {
 		t.Errorf("workspace_search freshness on a failing index = %q, want stale", got)
+	}
+	if err := withIndexHealthErr(store, errSentinel); !errors.Is(err, errSentinel) || !strings.Contains(err.Error(), staleIndexMarker) {
+		t.Errorf("withIndexHealthErr on a failing index = %v: want the notice added and errors.Is preserved", err)
 	}
 
 	heal()

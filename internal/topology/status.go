@@ -27,8 +27,9 @@ type Health struct {
 	LastSync time.Time
 	// LastError is the most recent indexing error, kept after recovery.
 	LastError string
-	// Failing reports that the most recent completed cycle ended in error. It
-	// stays set while a retry cycle runs, and clears only when one succeeds.
+	// Failing reports that a cycle failed and no full resync has succeeded
+	// since. It stays set while retry cycles run, and through a later cycle
+	// that succeeds without a full resync, which queues one instead.
 	Failing bool
 }
 

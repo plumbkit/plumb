@@ -146,11 +146,13 @@ pipeline has four parts:
    `.ignore` files, and `exclude_patterns`. Editing a `.gitignore` triggers a
    full resync, so a newly ignored tree is un-indexed (the prune pass removes
    rows for files the walk no longer visits) and a newly un-ignored one is
-   picked up. A cycle that fails (a database error, say) is retried on its own,
-   with backoff from 30 seconds doubling to 30 minutes, until one succeeds.
-   Until then `topology_status` flags the index `FAILING`, and every
-   topology-backed answer leads with a `⚠ STALE INDEX` notice: it is served from
-   the last good snapshot, so an absence in it is not evidence of absence.
+   picked up. A cycle that fails (a database error, say) is retried on its own
+   as a full resync, with backoff from 30 seconds doubling to 30 minutes, until
+   one succeeds. Until then `topology_status` flags the index `FAILING`, and
+   every answer from `topology_search`, `topology_explore`, `topology_impact`,
+   `topology_affected`, `topology_routes` and `structural_query` leads with a
+   `⚠ STALE INDEX` notice: it is served from the last good snapshot, so an
+   absence in it is not evidence of absence.
 4. **Six tools query the graph** (below), reporting their source and freshness so
    an agent never mistakes an approximate answer for compiler-grade truth.
 
