@@ -169,6 +169,10 @@ type Neighbourhood struct {
 	Edges     []Edge
 	Truncated bool
 	Members   []Node // member symbols (methods, fields) for type/class/interface centres
+	// MembersOmitted counts members found but left out of Members by the byte
+	// budget; MembersCapped means more exist than the per-type listing cap.
+	MembersOmitted int
+	MembersCapped  bool
 }
 
 // FileError is one file that failed to index and the reason recorded at the

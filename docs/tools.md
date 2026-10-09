@@ -912,6 +912,9 @@ BFS neighbourhood around a named symbol. **Inputs:** `name` (required), `depth`
 (default) | `docstrings` = signature plus docstring; `snippets`/`full` accepted as
 aliases; complete function bodies belong to `read_symbol`), `edge_kinds`, `path`, `kind`.
 Exploring a type/class node also lists its member methods (`members (N)`).
+N counts every member found; members cut by `max_bytes` are reported as
+`… K more member(s) omitted`, and a type with more than 50 members reads
+`members (50+)` with a pointer to `file_outline`.
 Budgeting is on **symbol boundaries**: each whole symbol is costed against
 `max_bytes` for the chosen source mode and added only if it fits in full, so a
 truncated result is always a set of whole, coherent symbols — never a fragment

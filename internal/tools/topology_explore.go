@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -197,7 +198,7 @@ func formatTopologyNeighbourhood(nb *topology.Neighbourhood, a topologyExploreAr
 	}
 
 	maxBytes := topology.ClampToolBytes(a.MaxBytes)
-	writeMembersSection(&sb, nb.Members, maxBytes, &nb.Truncated)
+	writeMembersSection(&sb, nb, maxBytes)
 
 	if nb.Truncated {
 		sb.WriteString("\n[truncated: max_nodes or max_bytes reached — reduce depth or increase limits]\n")
@@ -231,31 +232,46 @@ func topologyAmbiguityNote(name string, alternatives []topology.Node) string {
 	return sb.String()
 }
 
-func writeMembersSection(sb *strings.Builder, members []topology.Node, maxBytes int, truncated *bool) {
-	if len(members) == 0 {
+// writeMembersSection lists a type's members within maxBytes. Members a budget
+// cuts — the traversal's (nb.MembersOmitted) or this response's — are never
+// dropped silently: their count is written after the cut, outside the budget,
+// like the truncation footer. The header counts every member found.
+func writeMembersSection(sb *strings.Builder, nb *topology.Neighbourhood, maxBytes int) {
+	total := len(nb.Members) + nb.MembersOmitted
+	if total == 0 {
 		return
 	}
-	header := fmt.Sprintf("\nmembers (%d):\n", len(members))
+	count := strconv.Itoa(total)
+	if nb.MembersCapped {
+		count += "+"
+	}
+	header := fmt.Sprintf("\nmembers (%s):\n", count)
 	if maxBytes > 0 && sb.Len()+len(header) > maxBytes {
-		if truncated != nil {
-			*truncated = true
-		}
+		nb.Truncated = true
+		fmt.Fprintf(sb, "\nmembers (%s): none listed, max_bytes reached — raise max_bytes to list them\n", count)
 		return
 	}
 	sb.WriteString(header)
-	for _, m := range members {
+	shown := 0
+	for _, m := range nb.Members {
 		line := fmt.Sprintf("  %s %s — %s", string(m.Kind), m.Qualified, m.Path)
 		if m.StartLine > 0 {
 			line += fmt.Sprintf(" L%d", m.StartLine)
 		}
 		line += "\n"
 		if maxBytes > 0 && sb.Len()+len(line) > maxBytes {
-			if truncated != nil {
-				*truncated = true
-			}
+			nb.Truncated = true
 			break
 		}
 		sb.WriteString(line)
+		shown++
+	}
+	if omitted := total - shown; omitted > 0 {
+		fmt.Fprintf(sb, "  … %d more member(s) omitted, max_bytes reached — raise max_bytes to list them\n", omitted)
+	}
+	if nb.MembersCapped {
+		fmt.Fprintf(sb, "  … more members exist beyond the first %d — use file_outline on the type's file for the rest\n",
+			topology.MemberListCap)
 	}
 }
 
