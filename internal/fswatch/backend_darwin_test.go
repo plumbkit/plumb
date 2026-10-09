@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sync"
 	"testing"
@@ -20,26 +19,8 @@ import (
 // way startBackend wires them to the library.
 func testPump(t *testing.T, root, canon string, cooldown time.Duration, buffer int) (*Watcher, *fseventsPump) {
 	t.Helper()
-	w := &Watcher{
-		root:   root,
-		events: make(chan Event, buffer),
-		lost:   make(chan struct{}, 1),
-		done:   make(chan struct{}),
-	}
-	re := regexp.MustCompile(ExcludeDirsRegex(root, "vendor"))
-	return w, &fseventsPump{w: w, exclude: re, canon: canon, deb: newDebouncer(cooldown), expandLimit: maxExpand}
-}
-
-func drain(w *Watcher) []Event {
-	var out []Event
-	for {
-		select {
-		case ev := <-w.events:
-			out = append(out, ev)
-		default:
-			return out
-		}
-	}
+	w := testWatcher(root, buffer)
+	return w, &fseventsPump{w: w, canon: canon, deb: newDebouncer(cooldown)}
 }
 
 func TestDebouncer(t *testing.T) {
@@ -159,54 +140,24 @@ func TestPump_RebasesOntoCallersRoot(t *testing.T) {
 	}
 }
 
-// TestPump_ExpandsDirectoryThatArrivedWhole: a populated directory moved into
-// the tree is one FSEvents event; its contents must still be reported, minus
-// excluded subtrees, without following symlinks out of it.
+// TestPump_ExpandsDirectoryThatArrivedWhole: the pump hands a directory event
+// to expandIfDir (expand_test.go covers the walk itself), after rebasing.
 func TestPump_ExpandsDirectoryThatArrivedWhole(t *testing.T) {
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	outside := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outside, "secret.go"), nil, 0o644); err != nil {
+	moved := filepath.Join(root, "moved")
+	if err := os.MkdirAll(filepath.Join(moved, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	moved := filepath.Join(root, "moved")
-	for _, rel := range []string{"a.go", "pkg/b.go", "pkg/deep/c.go", "vendor/v.go", ".git/HEAD"} {
-		p := filepath.Join(moved, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(p, nil, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Symlink(outside, filepath.Join(moved, "link")); err != nil {
+	if err := os.WriteFile(filepath.Join(moved, "pkg", "b.go"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	w, p := testPump(t, root, root, 0, 64)
 	p.accept(fswatcher.Event{Name: moved, Op: fswatcher.Rename}, time.Now())
-
-	evs := drain(w)
-	got := make([]string, 0, len(evs))
-	for _, ev := range evs {
-		rel, _ := filepath.Rel(root, ev.Path)
-		got = append(got, filepath.ToSlash(rel))
-	}
-	slices.Sort(got)
-	want := []string{"moved", "moved/a.go", "moved/link", "moved/pkg", "moved/pkg/b.go", "moved/pkg/deep", "moved/pkg/deep/c.go"}
-	if !slices.Equal(got, want) {
-		t.Errorf("got  %v\nwant %v", got, want)
-	}
-
-	// Past the limit, the walk stops and asks for a reconcile.
-	w, p = testPump(t, root, root, 0, 64)
-	p.expandLimit = 2
-	p.accept(fswatcher.Event{Name: moved, Op: fswatcher.Rename}, time.Now())
-	select {
-	case <-w.lost:
-	default:
-		t.Error("an expansion past its limit did not signal Lost")
+	if got := relPaths(root, drain(w)); !slices.Equal(got, []string{"moved", "moved/pkg", "moved/pkg/b.go"}) {
+		t.Errorf("got %v", got)
 	}
 }
 

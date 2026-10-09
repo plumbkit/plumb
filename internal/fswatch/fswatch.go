@@ -100,6 +100,9 @@ type Watcher struct {
 	events chan Event
 	lost   chan struct{}
 
+	exclude     *regexp.Regexp // Options.ExcludeRegex, nil when empty
+	expandLimit int            // maxExpand, smaller in tests
+
 	done      chan struct{}
 	wg        sync.WaitGroup
 	closeOnce sync.Once
@@ -117,11 +120,19 @@ func New(root string, opts Options) (*Watcher, error) {
 	if opts.Cooldown < 0 {
 		return nil, fmt.Errorf("fswatch: negative cooldown %v", opts.Cooldown)
 	}
+	var exclude *regexp.Regexp
+	if opts.ExcludeRegex != "" {
+		if exclude, err = regexp.Compile(opts.ExcludeRegex); err != nil {
+			return nil, fmt.Errorf("fswatch: exclude regex: %w", err)
+		}
+	}
 	w := &Watcher{
-		root:   filepath.Clean(abs),
-		events: make(chan Event, eventBuffer),
-		lost:   make(chan struct{}, 1),
-		done:   make(chan struct{}),
+		root:        filepath.Clean(abs),
+		events:      make(chan Event, eventBuffer),
+		lost:        make(chan struct{}, 1),
+		exclude:     exclude,
+		expandLimit: maxExpand,
+		done:        make(chan struct{}),
 	}
 	if err := w.startBackend(opts); err != nil {
 		return nil, err

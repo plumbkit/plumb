@@ -45,7 +45,8 @@ func (w *Watcher) startBackend(opts Options) error {
 
 // pumpSgtdi forwards sgtdi's events until the Watcher is closed. An overflow
 // marker, or anything on sgtdi's Dropped channel (its own buffer filled), means
-// events were lost.
+// events were lost. A directory that appears is expanded (expandIfDir): inotify
+// never reports files created in it before sgtdi has registered its watch.
 func pumpSgtdi(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent) {
 	for {
 		select {
@@ -61,6 +62,7 @@ func pumpSgtdi(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent) {
 			}
 			if op := opFromTypes(ev.Types); op != 0 {
 				w.deliver(Event{Path: ev.Path, Op: op})
+				w.expandIfDir(ev.Path, op, func(child string) { w.deliver(Event{Path: child, Op: Create}) })
 			}
 		case _, ok := <-dropped:
 			if !ok {

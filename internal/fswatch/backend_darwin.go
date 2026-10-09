@@ -3,13 +3,9 @@
 package fswatch
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -24,25 +20,10 @@ import (
 // the deadline out again and nothing is ever delivered.
 const maxHoldFactor = 5
 
-// maxExpand bounds how many entries one directory that arrived whole may
-// report. A bigger tree is left to a full reconcile, which Lost requests.
-const maxExpand = 10000
-
-// errExpandLimit stops an expansion walk at maxExpand.
-var errExpandLimit = errors.New("fswatch: expansion limit")
-
 // startBackend runs one FSEvents stream over the root. fswatcher/fswatcher
 // reaches CoreServices through purego, so this holds in CGO_ENABLED=0 builds;
 // the stream reports paths and opens no file under the root.
 func (w *Watcher) startBackend(opts Options) error {
-	var exclude *regexp.Regexp
-	if opts.ExcludeRegex != "" {
-		re, err := regexp.Compile(opts.ExcludeRegex)
-		if err != nil {
-			return fmt.Errorf("fswatch: exclude regex: %w", err)
-		}
-		exclude = re
-	}
 	src, err := fswatcher.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("fswatch: %w", err)
@@ -55,11 +36,9 @@ func (w *Watcher) startBackend(opts Options) error {
 	// library resolves symlinks in every event path besides; callers relate
 	// events to the root they passed, so map the resolved prefix back.
 	p := &fseventsPump{
-		w:           w,
-		exclude:     exclude,
-		canon:       paths.Canonical(w.root),
-		deb:         newDebouncer(opts.Cooldown),
-		expandLimit: maxExpand,
+		w:     w,
+		canon: paths.Canonical(w.root),
+		deb:   newDebouncer(opts.Cooldown),
 	}
 	// The library blocks its FSEvents dispatch queue while its channels are
 	// full, so they are drained here without pause; whatever plumb's consumer
@@ -72,11 +51,9 @@ func (w *Watcher) startBackend(opts Options) error {
 // fseventsPump moves events from the library to the Watcher: rebased onto the
 // caller's root, filtered, debounced, and delivered without blocking.
 type fseventsPump struct {
-	w           *Watcher
-	exclude     *regexp.Regexp
-	canon       string // the root with symlinks resolved
-	deb         *debouncer
-	expandLimit int // maxExpand, smaller in tests
+	w     *Watcher
+	canon string // the root with symlinks resolved
+	deb   *debouncer
 }
 
 // run drains evs and errs until both are closed (the library closes them when
@@ -121,21 +98,11 @@ func (p *fseventsPump) accept(ev fswatcher.Event, now time.Time) {
 		return
 	}
 	path := p.rebase(ev.Name)
-	if p.excluded(path) {
+	if p.w.excluded(path) {
 		return
 	}
 	p.emit(path, op, now)
-	if op.Has(Create | Rename) {
-		if fi, err := os.Lstat(path); err == nil && fi.IsDir() {
-			p.expand(path, now)
-		}
-	}
-}
-
-// excluded applies Options.ExcludeRegex as sgtdi does: to the full path and to
-// the base name.
-func (p *fseventsPump) excluded(path string) bool {
-	return p.exclude != nil && (p.exclude.MatchString(path) || p.exclude.MatchString(filepath.Base(path)))
+	p.w.expandIfDir(path, op, func(child string) { p.emit(child, Create, now) })
 }
 
 // emit hands one change to the debouncer, or straight to the consumer when
@@ -146,42 +113,6 @@ func (p *fseventsPump) emit(path string, op Op, now time.Time) {
 		return
 	}
 	p.deb.add(path, op, now)
-}
-
-// expand reports, as created, everything inside a directory that appeared
-// whole. FSEvents reports a populated directory moved or renamed into the tree
-// as that one directory, and consumers that index files (the topology index
-// skips directories) would otherwise miss its contents until a full resync.
-// Changes made inside a directory after it appears are reported one by one, so
-// a directory created empty and then filled is merely reported twice.
-//
-// The walk opens directories and never a regular file, so it cannot disturb a
-// SQLite lock; it does not follow symlinks, and it prunes excluded
-// directories. Past expandLimit entries it stops and asks for a reconcile.
-func (p *fseventsPump) expand(dir string, now time.Time) {
-	n := 0
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || path == dir {
-			return nil //nolint:nilerr // an unreadable entry, or one gone already, has nothing to report
-		}
-		if d.IsDir() {
-			// With the trailing separator, a pattern that excludes everything
-			// UNDER a directory (ExcludeDirsRegex's dot branch) prunes it whole.
-			if p.excluded(path) || p.excluded(path+string(filepath.Separator)) {
-				return filepath.SkipDir
-			}
-		} else if p.excluded(path) {
-			return nil
-		}
-		if n++; n > p.expandLimit {
-			return errExpandLimit
-		}
-		p.emit(path, Create, now)
-		return nil
-	})
-	if errors.Is(err, errExpandLimit) {
-		p.w.signalLost()
-	}
 }
 
 // rebase rewrites a path under the resolved root onto the caller's spelling of
