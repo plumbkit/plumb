@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -65,6 +66,10 @@ func TestIndexer_FailedCycleRetriesUntilItRecovers(t *testing.T) {
 	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
 	idx.retryBase = 20 * time.Millisecond
 	idx.retryMax = 80 * time.Millisecond
+	// A full resync drains the arena pool as its last step, and the per-file
+	// half of each retry succeeds under this fault, so reclaims count retries.
+	var resyncs atomic.Int64
+	idx.reclaimFn = func() { resyncs.Add(1) }
 	failDerivedRebuild(t, idx)
 	idx.Start() // the startup resync is the cycle that fails
 	t.Cleanup(idx.Stop)
@@ -84,9 +89,12 @@ func TestIndexer_FailedCycleRetriesUntilItRecovers(t *testing.T) {
 	}
 
 	// Positive control for the retry itself: while the fault holds, retries keep
-	// failing and the index keeps saying so. A Failing that cleared here would
-	// mean something other than a successful cycle cleared it.
+	// running and failing, and the index keeps saying so.
+	before := resyncs.Load()
 	time.Sleep(200 * time.Millisecond) // several retryMax periods
+	if got := resyncs.Load() - before; got < 2 {
+		t.Fatalf("%d retry resyncs ran in 200ms with a 20-80ms backoff, want at least 2", got)
+	}
 	if h := idx.Health(); !h.Failing {
 		t.Fatalf("index stopped reporting failure while the fault still holds; health = %+v", h)
 	}
@@ -112,6 +120,103 @@ func TestIndexer_FailedCycleRetriesUntilItRecovers(t *testing.T) {
 	}
 	if n == 0 {
 		t.Error("recovered cycle did not write the resolver fingerprint")
+	}
+}
+
+// TestIndexer_UnrelatedSuccessDoesNotMaskAFailedFile: a file whose re-index
+// failed must not be forgotten when a later event for some OTHER file
+// succeeds. That cycle proves the fault cleared but never revisits the failed
+// file, so it must queue a full resync and keep the index failing until the
+// resync succeeds, rather than report the index healthy while the failed
+// file's change is missing. The retry timer is set far out, so it cannot be
+// what recovers.
+func TestIndexer_UnrelatedSuccessDoesNotMaskAFailedFile(t *testing.T) {
+	dir := t.TempDir()
+	db, err := openDB(filepath.Join(dir, ".plumb", "topology.db"))
+	if err != nil {
+		t.Fatalf("openDB: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	write("a.go", "package p\n\nfunc A() {}\n")
+
+	idx := newIndexer(dir, db, []Extractor{&minimalExtractor{}}, 512*1024, 0)
+	idx.retryBase = time.Hour
+	idx.Start()
+	t.Cleanup(idx.Stop)
+	if !waitFor(func() bool { h := idx.Health(); return h.State == "idle" && !h.LastSync.IsZero() }, 5*time.Second) {
+		t.Fatalf("startup resync did not complete; health = %+v", idx.Health())
+	}
+
+	faults := []string{"inject_files_insert", "inject_files_update"}
+	for _, stmt := range []string{
+		`CREATE TRIGGER inject_files_insert BEFORE INSERT ON topology_files BEGIN SELECT RAISE(ABORT, '` + injectedIOErr + `'); END`,
+		`CREATE TRIGGER inject_files_update BEFORE UPDATE ON topology_files BEGIN SELECT RAISE(ABORT, '` + injectedIOErr + `'); END`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("install fault trigger: %v", err)
+		}
+	}
+	write("a.go", "package p\n\nfunc A() {}\n\nfunc A2() {}\n")
+	idx.Enqueue("a.go", opUpsert)
+	if !waitFor(func() bool { return idx.Health().Failing }, 5*time.Second) {
+		t.Fatalf("a.go's re-index did not fail under the fault; health = %+v", idx.Health())
+	}
+	for _, name := range faults {
+		if _, err := db.Exec(`DROP TRIGGER ` + name); err != nil {
+			t.Fatalf("drop fault trigger: %v", err)
+		}
+	}
+
+	write("b.go", "package p\n\nfunc B() {}\n")
+	idx.Enqueue("b.go", opUpsert)
+	if !waitFor(func() bool { h := idx.Health(); return !h.Failing && h.State == "idle" }, 5*time.Second) {
+		t.Fatalf("index did not recover; health = %+v", idx.Health())
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM topology_nodes WHERE name = 'A2'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("index reports healthy but a.go's A2 is not indexed (%d rows): the failed file was forgotten", n)
+	}
+}
+
+// TestScheduleRetry_OnlyAFailedRetryEscalates pins the backoff bookkeeping: a
+// failing file-event cycle while a retry is pending leaves the pending retry's
+// delay alone, only a failed retry doubles it, and any cycle that does not end
+// in error resets it. The delays are hours, so the timer never fires here.
+func TestScheduleRetry_OnlyAFailedRetryEscalates(t *testing.T) {
+	idx := newIndexer(t.TempDir(), nil, nil, 0, 0)
+	idx.retryBase, idx.retryMax = time.Hour, 4*time.Hour
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	defer timer.Stop()
+	var r retryBackoff
+
+	idx.setState("error", "boom")
+	idx.scheduleRetry(timer, &r)
+	if r != (retryBackoff{delay: time.Hour, armed: true}) {
+		t.Fatalf("first failure: %+v, want the base delay armed", r)
+	}
+	idx.scheduleRetry(timer, &r) // a file-event cycle fails while the retry is pending
+	if r != (retryBackoff{delay: time.Hour, armed: true}) {
+		t.Fatalf("event failure with a retry pending escalated the backoff: %+v", r)
+	}
+	r.armed = false // the retry fired, as backgroundWorker records it
+	idx.scheduleRetry(timer, &r)
+	if r != (retryBackoff{delay: 2 * time.Hour, armed: true}) {
+		t.Fatalf("failed retry: %+v, want the delay doubled and armed", r)
+	}
+	idx.setState("running", "") // e.g. the catch-up resync after a clean cycle
+	idx.scheduleRetry(timer, &r)
+	if r != (retryBackoff{}) {
+		t.Fatalf("a cycle that did not end in error left the backoff %+v, want it reset", r)
 	}
 }
 

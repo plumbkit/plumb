@@ -353,13 +353,16 @@ func (t *WorkspaceSearch) searchMemory(ctx context.Context, a workspaceSearchArg
 }
 
 // topologyIndexStatus maps the indexer state onto the broker's freshness
-// vocabulary: idle means the watcher/indexer has caught up (fresh), a stopped
-// or errored indexer may be serving an out-of-date snapshot (stale), and
-// anything else is mid-build.
+// vocabulary: idle means the watcher/indexer has caught up (fresh), a stopped,
+// errored or still-failing indexer may be serving an out-of-date snapshot
+// (stale), and anything else is mid-build.
 func topologyIndexStatus(store *topology.Store) string {
 	return indexFreshness(store.Health())
 }
 
+// indexFreshness is topologyIndexStatus's mapping, split out so it can be
+// tested without a live indexer. Failing wins over State: a retry cycle reports
+// "running" while it still serves the pre-failure snapshot.
 func indexFreshness(h topology.Health) string {
 	if h.Failing {
 		// A retry cycle after a failure reports "running"; it is still serving

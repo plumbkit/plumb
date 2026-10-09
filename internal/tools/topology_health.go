@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -14,7 +15,8 @@ import (
 const staleIndexMarker = "⚠ STALE INDEX"
 
 // maxHealthErrorBytes bounds the indexer error quoted in the notice. SQLite
-// errors are short, but a wrapped chain is not bounded by anything here.
+// errors are short, but a wrapped chain is not bounded by anything here. The
+// quote is also collapsed onto one line so the notice stays a single line.
 const maxHealthErrorBytes = 200
 
 // withIndexHealth puts a stale-index notice ahead of a topology-backed answer
@@ -60,5 +62,5 @@ func indexHealthNote(h topology.Health, now time.Time) string {
 	return fmt.Sprintf("%s — the topology indexer is failing (%s; last error: %s). "+
 		"This answer may be missing recent changes, so an absence here is not evidence of absence. "+
 		"The indexer retries with backoff; topology_status shows its state.",
-		staleIndexMarker, since, textfmt.ClampBytes(h.LastError, maxHealthErrorBytes))
+		staleIndexMarker, since, textfmt.ClampBytes(strings.Join(strings.Fields(h.LastError), " "), maxHealthErrorBytes))
 }

@@ -85,7 +85,7 @@ type Indexer struct {
 	state         string
 	lastSync      time.Time
 	lastErr       string
-	failing       bool // the most recent completed cycle ended in error
+	failing       bool // a cycle failed and no full resync has succeeded since
 	resyncPending bool // set when Enqueue overflows; triggers a recovery resync
 }
 
@@ -207,7 +207,8 @@ func (idx *Indexer) Health() Health {
 
 // setState records a state transition. failing follows only the states that
 // end a cycle: "running" leaves it alone, so a cycle in flight after a failure
-// still reports the index as failing until that cycle actually succeeds.
+// still reports the index as failing. runQueueCycle reports "idle" after a
+// failure only from a cycle that completed a full resync.
 func (idx *Indexer) setState(state, errMsg string) {
 	idx.mu.Lock()
 	idx.state = state
@@ -245,7 +246,7 @@ func (idx *Indexer) backgroundWorker() {
 	reclaimPending := false
 
 	// Failure-retry timer: a cycle that ends in error arms it, and it re-runs a
-	// full resync with exponential backoff until a cycle succeeds. Nothing else
+	// full resync with exponential backoff until one succeeds. Nothing else
 	// retries a failed cycle: the periodic tick below runs only from idle and is
 	// off entirely under the file watcher, so a failed derived-edge rebuild left
 	// the index in error until the next file event — on a quiet workspace,
@@ -253,7 +254,7 @@ func (idx *Indexer) backgroundWorker() {
 	retryTimer := time.NewTimer(time.Hour)
 	retryTimer.Stop()
 	defer retryTimer.Stop()
-	var retryDelay time.Duration
+	var retry retryBackoff
 
 	for {
 		select {
@@ -274,13 +275,14 @@ func (idx *Indexer) backgroundWorker() {
 				reclaimPending = true
 				idleTimer.Reset(idx.idleReclaim)
 			}
-			retryDelay = idx.scheduleRetry(retryTimer, retryDelay)
+			idx.scheduleRetry(retryTimer, &retry)
 		case <-idleTimer.C:
 			if reclaimPending {
 				idx.reclaimFn()
 				reclaimPending = false
 			}
 		case <-retryTimer.C:
+			retry.armed = false
 			if idx.State() == "error" {
 				idx.Enqueue("", opResync)
 			}
@@ -288,18 +290,31 @@ func (idx *Indexer) backgroundWorker() {
 	}
 }
 
-// scheduleRetry arms or disarms the failure-retry timer after a cycle and
-// returns the delay it armed, which the next call doubles. A successful cycle
-// stops the timer and resets the backoff; a failed one arms it with the next
-// delay, so a persistent error costs one full resync per retryMax at most.
-func (idx *Indexer) scheduleRetry(timer *time.Timer, prev time.Duration) time.Duration {
+// retryBackoff is the worker's failure-retry bookkeeping. Only the single
+// background worker goroutine touches it.
+type retryBackoff struct {
+	delay time.Duration // the delay last armed; the next retry failure doubles it
+	armed bool          // the timer is pending
+}
+
+// scheduleRetry arms or disarms the failure-retry timer after a cycle. A cycle
+// that did not end in error stops the timer and resets the backoff. A failed
+// cycle arms it with the next delay unless a retry is already pending: only a
+// failed retry escalates the backoff, so a persistent error costs one full
+// resync per retryMax at most, while a burst of failing file events during a
+// brief fault neither escalates it nor pushes the pending retry out.
+func (idx *Indexer) scheduleRetry(timer *time.Timer, r *retryBackoff) {
 	if idx.State() != "error" || idx.retryBase <= 0 {
 		timer.Stop()
-		return 0
+		*r = retryBackoff{}
+		return
 	}
-	next := nextRetryDelay(prev, idx.retryBase, idx.retryMax)
-	timer.Reset(next)
-	return next
+	if r.armed {
+		return
+	}
+	r.delay = nextRetryDelay(r.delay, idx.retryBase, idx.retryMax)
+	r.armed = true
+	timer.Reset(r.delay)
 }
 
 // nextRetryDelay doubles prev, starting from base and capped at limit. A zero
@@ -324,14 +339,16 @@ func nextRetryDelay(prev, base, limit time.Duration) time.Duration {
 func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 	ops := idx.drain(initial)
 	idx.setState("running", "")
-	changes, reclaimed, lastErr := idx.processOps(ops)
+	// processOps reports a resync's reclaim only when the resync succeeded, so
+	// its flag doubles as "a full resync completed this cycle".
+	changes, resynced, lastErr := idx.processOps(ops)
 	if idx.takeResyncPending() {
 		changed, err := idx.processResyncChanged(context.Background())
 		if err != nil {
 			slog.Warn("topology: recovery resync error", "err", err)
 			lastErr = err
 		} else {
-			reclaimed = true
+			resynced = true
 			if changed {
 				changes.markFull()
 			}
@@ -346,11 +363,22 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 		slog.Warn("topology: derived edge rebuild error", "err", err)
 		lastErr = err
 	}
-	if lastErr != nil {
+	switch {
+	case lastErr != nil:
 		idx.setState("error", lastErr.Error())
-	} else {
+	case idx.Health().Failing && !resynced:
+		// An earlier cycle failed and this one succeeded without a full resync,
+		// so whatever the failed cycle was indexing may still be missing: an event
+		// for some other file must not declare the index healthy. The fault has
+		// evidently cleared, so catch up now rather than at the next retry, and
+		// stay failing until that resync succeeds.
+		idx.setState("running", "")
+		idx.Enqueue("", opResync)
+	default:
 		idx.setState("idle", "")
 	}
+	// A successful resync drained the arena pool as its final step.
+	reclaimed := resynced
 	if shouldReclaimAfterBurst(len(ops)) {
 		// A coalesced burst (git checkout, a formatter) left a large transient
 		// parse working set. A single small edit must NOT pay a stop-the-world GC,
