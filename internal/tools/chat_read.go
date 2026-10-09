@@ -93,7 +93,10 @@ func (i Inbox) Snapshot(ctx context.Context) (collab.MailboxSnapshot, error) {
 			return collab.MailboxSnapshot{}, err
 		}
 		result.Count += part.Count
-		_, _ = fmt.Fprintf(hash, "%t:%s;", store.IsGlobal(), part.Fingerprint)
+		// Creating an empty store for another recipient is not new eligible mail.
+		if part.Count > 0 {
+			_, _ = fmt.Fprintf(hash, "%t:%s;", store.IsGlobal(), part.Fingerprint)
+		}
 	}
 	result.Fingerprint = hex.EncodeToString(hash.Sum(nil))
 	return result, nil

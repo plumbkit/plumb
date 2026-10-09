@@ -199,3 +199,56 @@ func TestMailboxProbe_SlowRecipientDoesNotDelayOtherRecipients(t *testing.T) {
 		})
 	}
 }
+
+func TestMailboxProbe_UnrelatedStoreCreationDoesNotRepeatNotice(t *testing.T) {
+	for _, firstGlobal := range []bool{false, true} {
+		t.Run(map[bool]string{false: "global store created", true: "local store created"}[firstGlobal], func(t *testing.T) {
+			world := newIdentityWorld(t)
+			world.cfg.Collab.CrossProject = true
+			root := identityRepo(t)
+			recipient := world.conn("")
+			recipient.start("conversation", root, "conversation", nil)
+			registerMailboxConn(recipient)
+			openFirst, openOther := func() *collab.Store { return world.pool.acquire(root) }, world.pool.acquireGlobal
+			if firstGlobal {
+				openFirst, openOther = openOther, openFirst
+			}
+			send := func(store *collab.Store, to, id, target, body string) {
+				t.Helper()
+				_, err := store.PutNote(context.Background(), collab.NoteInput{
+					AuthorSession: "peer", AuthorID: "peer-id", Addressee: to, AddresseeID: id,
+					Body: body, TTL: time.Hour, TargetWorkspace: target, OriginWorkspace: "/peer",
+				}, time.Now())
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			send(openFirst(), recipient.s.sessionName(), recipient.s.sessionID(), root, "original eligible note")
+			request := hookMailboxRequest{SessionID: "conversation", Stop: true}
+			first, err := world.registry.mailboxProbe(context.Background(), request)
+			if err != nil || !first.Notify || first.Report.Count != 1 {
+				t.Fatalf("first note did not notify: %+v err=%v", first, err)
+			}
+			other := openOther()
+			send(other, "stranger", "stranger-id", "/elsewhere", "unrelated note")
+			unchanged, err := world.registry.mailboxProbe(context.Background(), request)
+			if err != nil || unchanged.Notify || unchanged.Report.Count != 1 {
+				t.Fatalf("store creation repeated an unchanged notice: %+v err=%v", unchanged, err)
+			}
+			send(other, recipient.s.sessionName(), recipient.s.sessionID(), root, "new eligible note")
+			newArrival, err := world.registry.mailboxProbe(context.Background(), request)
+			if err != nil || !newArrival.Notify || newArrival.Report.Count != 2 {
+				t.Fatalf("actual new arrival did not notify: %+v err=%v", newArrival, err)
+			}
+			read, isErr := recipient.call("conversation", "check_messages", nil)
+			if isErr || !strings.Contains(read, "original eligible note") || !strings.Contains(read, "new eligible note") ||
+				strings.Contains(read, "unrelated note") {
+				t.Fatalf("probe changed delivery rights or consumed mail: %s error=%v", read, isErr)
+			}
+			read, isErr = recipient.call("conversation", "check_messages", nil)
+			if isErr || !strings.Contains(read, "No messages") {
+				t.Fatalf("eligible note delivered twice: %s error=%v", read, isErr)
+			}
+		})
+	}
+}
