@@ -8,9 +8,8 @@
 // extracted node/edge sets per file.
 // Usage: PARITY_CORPUS=<dir> go test -tags parity ./internal/topology/extractors/ -run TestParitySweep -v
 //
-// Note this file is invisible to `make verify` and to `golangci-lint run`, which
-// do not pass -tags parity. Lint it explicitly before touching it:
-// golangci-lint run --build-tags parity ./internal/topology/extractors/
+// `make lint-tags` (part of `make verify`) lints this file with the parity tag;
+// a plain `golangci-lint run` does not see it.
 package extractors_test
 
 import (

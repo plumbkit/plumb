@@ -346,11 +346,15 @@
   `clients_conformance` tag for seven weeks. `make lint-tags`, now part of
   `make verify` and so of CI, lints them all in one run with every tag that
   `scripts/build-tags.sh` finds in the tree, so a new tag is covered without a
-  config change. It surfaced 24 findings beyond that struct. Twenty-one are
-  fixed: `intrange` ×7, `perfsprint` ×1, `predeclared` ×4, `thelper` ×7 and
-  `unconvert` ×2. Three `usetesting` hits are kept, with a reason: two short
-  `/tmp` HOMEs for the macOS socket-path limit, and failure evidence that has
-  to outlive the test.
+  config change. It surfaced 25 findings beyond that struct, across macOS
+  and Linux; each OS lints its own platform files, and CI runs both.
+  Twenty-one are fixed: `intrange` ×7, `perfsprint` ×1, `predeclared` ×4,
+  `thelper` ×7 and `unconvert` ×2. Four `usetesting` hits are kept, with a
+  reason:
+  - two short `/tmp` HOMEs, for the macOS socket-path limit;
+  - failure evidence that has to outlive the test;
+  - the Linux sandbox test's escape target, which must not be under `/tmp`:
+    inside the jail, `/tmp` is a writable tmpfs.
 
 ## 0.23.0 (2026-10-07)
 

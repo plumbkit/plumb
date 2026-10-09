@@ -227,6 +227,8 @@ lint-tags:
 # sandbox_darwin*.go or process_darwin*.go (and vice versa) — a real blind spot:
 # a linter change validated on one platform can pass locally and fail CI's other
 # matrix leg. Static analysis only; it never runs the other platform's tests.
+# It lints the other OS's tagged files too (lint-tags' list): a file behind
+# `linux && integration` is otherwise seen by no macOS lint at all.
 #
 # Run it after changing .golangci.yml or touching platform-constrained code.
 # Not in `verify` — it roughly doubles lint time to cover nine files, and CI's
@@ -236,8 +238,10 @@ lint-tags:
 lint-cross:
 	@other=$$(if [ "$$(go env GOOS)" = "darwin" ]; then echo linux; else echo darwin; fi); \
 		echo "lint-cross: linting the $$other tree (current GOOS=$$(go env GOOS))"; \
-		GOOS=$$other golangci-lint run && GOOS=$$other go vet ./... && \
-		echo "lint-cross: OK ($$other tree clean)"
+		tags=$$(./scripts/build-tags.sh) || exit 1; \
+		GOOS=$$other golangci-lint run && GOOS=$$other golangci-lint run --build-tags="$$tags" && \
+		GOOS=$$other go vet ./... && \
+		echo "lint-cross: OK ($$other tree clean, tagged files included)"
 
 # check-size fails if any Go file exceeds its line rule — 600 for source, 900 for
 # tests (with a grandfather baseline for files still awaiting a split). Keeps the
