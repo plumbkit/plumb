@@ -46,13 +46,15 @@
   `read_file`) or a native shell fallback. Both truncation notes now name the
   window parameters, so a capped answer says how to ask for the part it cut.
 - **`git merge-tree` can preview a merge as a clean clone would (PLAN-454).** The
-  opt-in `clean_clone: true` answers the question a hosted forge answers: the
-  merge runs in a throwaway bare repository whose object store is an alternate of
-  the real one, with the machine's global and system config and attributes off, so
-  a machine-local `merge=union` driver in `.git/info/attributes` can no longer make
-  a real conflict look clean (that trap is what hid a CHANGELOG conflict in #588).
-  An in-tree `.gitattributes` still applies, because it is part of the tree under
-  review rather than machine state. The real repository gains no object.
+  opt-in `clean_clone: true` answers the question a fresh clone answers: the merge
+  runs in a throwaway bare repository whose object store is an alternate of the
+  real one, with the machine's global and system config and attributes off — and,
+  since review round 2, with no init template and with every `GIT_*` variable
+  dropped except `GIT_EXEC_PATH`, so `GIT_CONFIG_PARAMETERS` cannot smuggle config
+  in — so a machine-local `merge=union` driver in `.git/info/attributes` can no
+  longer make a real conflict look clean (that trap is what hid a CHANGELOG conflict
+  in #588). An in-tree `.gitattributes` still applies, because it is part of the tree
+  under review rather than machine state. The real repository gains no object.
 - **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
   plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
   declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless

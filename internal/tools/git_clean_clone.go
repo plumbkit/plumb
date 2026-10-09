@@ -12,7 +12,7 @@ import (
 
 // git_clean_clone.go implements `merge-tree`'s opt-in clean-clone preview
 // (PLAN-454 gap 5): the answer a machine with no local git configuration and no
-// system attributes would compute, which is the answer a hosted forge computes.
+// system attributes would compute — what a fresh clone of the repository computes.
 //
 // Why it is needed: `git merge-tree` reads the LOCAL repository's merge drivers,
 // including `.git/info/attributes` — a machine-local file no reviewer can see. A
@@ -88,12 +88,22 @@ func (t *Git) runCleanClone(ctx context.Context, a gitToolArgs, window gitWindow
 func cleanCloneArgs(ctx context.Context, root string, args []string) (out []string, attrSource string) {
 	out = make([]string, len(args))
 	positional := 0
-	for i, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		out[i] = arg
+		if arg == "--" {
+			break // after -- everything is a path, never a revision
+		}
 		if base, ok := strings.CutPrefix(arg, "--merge-base="); ok {
 			if sha, resolved := revParseCommit(ctx, root, base); resolved {
 				out[i] = "--merge-base=" + sha
 			}
+			continue
+		}
+		if optionTakesValue(arg) {
+			// The value belongs to the option, not to the merge: a strategy option's
+			// value must not be rev-parsed just because a ref of that name exists.
+			i = consumeOptionValue(ctx, root, args, out, i)
 			continue
 		}
 		if strings.HasPrefix(arg, "-") {
@@ -112,6 +122,33 @@ func cleanCloneArgs(ctx context.Context, root string, args []string) (out []stri
 	return out, attrSource
 }
 
+// consumeOptionValue handles an option that takes its value as a separate argument:
+// the value is stepped over, and resolved only when the option is --merge-base,
+// which is the one value in merge-tree's grammar that IS a revision. It returns the
+// index of the value so the caller's loop advances past it.
+func consumeOptionValue(ctx context.Context, root string, args, out []string, i int) int {
+	if i+1 >= len(args) {
+		return i
+	}
+	if args[i] == "--merge-base" {
+		if sha, resolved := revParseCommit(ctx, root, args[i+1]); resolved {
+			out[i+1] = sha
+		}
+	}
+	return i + 1
+}
+
+// optionTakesValue reports whether a merge-tree option consumes the next argument.
+// A joined form (`-Xours`, `--strategy-option=ours`) needs no entry here: it is one
+// argument and takes no separate value.
+func optionTakesValue(arg string) bool {
+	switch arg {
+	case "-X", "--strategy-option", "--merge-base":
+		return true
+	}
+	return false
+}
+
 // revParseCommit resolves rev to a commit SHA in root, reporting false when it is
 // not a revision at all (a path, a flag value) rather than failing the call.
 func revParseCommit(ctx context.Context, root, rev string) (string, bool) {
@@ -128,7 +165,13 @@ func revParseCommit(ctx context.Context, root, rev string) (string, bool) {
 // alternate of root's, so every object the merge needs is readable and nothing is
 // written back.
 func writeAlternateRepo(ctx context.Context, root, dir string) error {
-	if out, err := exec.CommandContext(ctx, "git", "init", "--bare", "-q", dir).CombinedOutput(); err != nil {
+	// --template= (empty) suppresses every init template, including the one
+	// GIT_TEMPLATE_DIR names, so a template cannot seed the "clean" clone with an
+	// info/attributes of its own. The init runs in cleanCloneEnv for the same reason
+	// the merge does (review round 2, S4-2).
+	init := exec.CommandContext(ctx, "git", "init", "--bare", "-q", "--template=", dir)
+	init.Env = cleanCloneEnv("")
+	if out, err := init.CombinedOutput(); err != nil {
 		return fmt.Errorf("git merge-tree: clean-clone preview: creating the preview repository: %w: %s",
 			err, strings.TrimSpace(string(out)))
 	}
@@ -169,26 +212,22 @@ func runCleanCloneMergeTree(ctx context.Context, dir string, args []string, attr
 	return string(out), nil
 }
 
-// cleanCloneEnv is the child's environment: the daemon's, with every git config
-// and attribute source the machine supplies removed. GIT_ATTR_SOURCE is set when
-// a tree was resolved, so an in-tree `.gitattributes` still applies.
+// cleanCloneEnv is the child's environment: the daemon's, with EVERY GIT_*
+// variable removed except GIT_EXEC_PATH (which locates git's own helpers and
+// carries no configuration), then the settings that make the clone clean.
+//
+// The first version removed a denylist of names, and review round 2 was right to
+// refuse it: GIT_CONFIG_PARAMETERS and GIT_CONFIG_COUNT/KEY_n/VALUE_n inject
+// configuration exactly as effectively as GIT_CONFIG_GLOBAL, and a denylist only
+// ever knows the names someone thought of. GIT_ATTR_SOURCE is set when a tree was
+// resolved, so an in-tree `.gitattributes` still applies.
 func cleanCloneEnv(attrSource string) []string {
-	drop := []string{
-		"GIT_DIR=", "GIT_WORK_TREE=", "GIT_CONFIG_GLOBAL=", "GIT_CONFIG_SYSTEM=",
-		"GIT_CONFIG_NOSYSTEM=", "GIT_ATTR_NOSYSTEM=", "GIT_ATTR_SOURCE=",
-	}
 	env := make([]string, 0, len(os.Environ())+4)
 	for _, kv := range os.Environ() {
-		skip := false
-		for _, prefix := range drop {
-			if strings.HasPrefix(kv, prefix) {
-				skip = true
-				break
-			}
+		if name, _, ok := strings.Cut(kv, "="); ok && strings.HasPrefix(name, "GIT_") && name != "GIT_EXEC_PATH" {
+			continue
 		}
-		if !skip {
-			env = append(env, kv)
-		}
+		env = append(env, kv)
 	}
 	env = append(env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1")
 	if attrSource != "" {
