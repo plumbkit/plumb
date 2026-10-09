@@ -51,10 +51,14 @@ func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (
 	if len(steps) == 0 {
 		// No command for this slot. Hand back the context the tool needs to say
 		// WHICH language it resolved for and what that language does have, rather
-		// than a bare "not configured for this workspace".
+		// than a bare "not configured for this workspace" — plus, when the workspace
+		// has one, the Makefile target that IS this project's gate for the verb
+		// (`make vuln` is what filed PLAN-494).
 		return tools.TaskCommand{
 			Slot: slot, Language: lang, Configured: configuredSlots(tc, lang),
 			ConfigPath: config.ProjectConfigPath(ws),
+			Root:       ws,
+			Remedy:     makeTargetRemedy(ws, slot),
 		}, nil
 	}
 	workdir, wdErr := commandWorkdir(ws, tc.WorkingDir)

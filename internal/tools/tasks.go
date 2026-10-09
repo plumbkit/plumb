@@ -105,6 +105,11 @@ type TaskCommand struct {
 	// Root is the workspace root {workspace} expands to; empty falls back to the
 	// directory the command runs in.
 	Root string
+	// Remedy is a workspace-specific next step for a slot that has NO command —
+	// today, the project's own Makefile target for that verb (`make vuln`). It is
+	// set only on the empty-Steps answer, where the resolver has established that
+	// the slot is missing, and rendered by noCommandError.
+	Remedy string
 }
 
 // noCommandError explains an unconfigured slot in terms the caller can act on:
@@ -137,8 +142,19 @@ func noCommandError(cmd TaskCommand, slot string) error {
 			"Set one with [tasks.%s] %s = \"...\" in %s, "+
 			"or via agent_config op=set when the user has enabled [agent_config_writes]; "+
 			"then run `plumb trust` in the workspace, since a command from the project's config "+
-			"is not run until it is trusted. A command in your global config needs no trust",
-		slot, subject, have, key, slot, where)
+			"is not run until it is trusted. A command in your global config needs no trust%s",
+		slot, subject, have, key, slot, where, remedySuffix(cmd))
+}
+
+// remedySuffix renders the workspace-specific next step the resolver found for a
+// slot that has no command — today, the project's own Makefile target for that
+// verb. It is a suffix rather than an extra paragraph so the refusal stays one
+// block, and empty when the resolver found nothing workspace-specific to say.
+func remedySuffix(cmd TaskCommand) string {
+	if cmd.Remedy == "" {
+		return ""
+	}
+	return " " + cmd.Remedy
 }
 
 // runTaskContested is the refusal for run_task on a connection whose pin is
@@ -155,6 +171,10 @@ type TaskRequest struct {
 	Run      string // {run}: a test-name filter
 	Verbose  bool   // {verbose:<flag>}
 	Language string // "" = the workspace's primary
+	// Path asks for the command to be run in another directory — a work-tree of
+	// the same repository, or a directory inside the workspace (tasks_path.go).
+	// Resolution and trust ignore it deliberately: only the execution moves.
+	Path string
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -202,6 +222,10 @@ var runTaskSchema = json.RawMessage(`{
     "language": {
       "type": "string",
       "description": "Which [tasks.<language>] block to run, in a polyglot repo. Omit for the primary. A language with no commands is refused, naming those that have them."
+    },
+    "path": {
+      "type": "string",
+      "description": "Run in this directory instead of the workspace/working_dir: a git work-tree of the same repository (e.g. plumb-wt-<card>) or a directory inside the workspace. Absolute, or relative to the directory the command would have run in. The command, its language and its trust still come from the pinned workspace's config."
     }
   },
   "required": ["slot"],
@@ -220,6 +244,7 @@ type runTaskArgs struct {
 	Run      string `json:"run"`
 	Verbose  bool   `json:"verbose"`
 	Language string `json:"language"`
+	Path     string `json:"path"`
 }
 
 func (a runTaskArgs) validate() error {
@@ -239,6 +264,11 @@ func (a runTaskArgs) validate() error {
 	if a.Language != "" && !taskLanguageName.MatchString(a.Language) {
 		return fmt.Errorf("run_task: language %q is not a valid [tasks.<lang>] key "+
 			"(lowercase letter first, then letters, digits, _ or -, max 32 characters)", a.Language)
+	}
+	// Shape only. Whether the path names a work-tree plumb will run in is a
+	// question for rerootForPath, which can ask git; a control character is not.
+	if strings.ContainsAny(a.Path, "\x00\n\r") {
+		return errors.New("run_task: path must be one line with no control characters")
 	}
 	return nil
 }
@@ -263,6 +293,15 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	}
 	if len(cmd.Steps) == 0 {
 		return "", noCommandError(cmd, a.Slot)
+	}
+	if a.Path != "" {
+		ws := cmd.Root
+		if ws == "" {
+			ws = t.workspace(ctx)
+		}
+		if cmd, err = rerootForPath(ctx, ws, cmd, a.Path); err != nil {
+			return "", err
+		}
 	}
 	return t.run(ctx, cmd)
 }
