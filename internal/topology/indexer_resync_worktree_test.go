@@ -213,3 +213,26 @@ func TestResync_SkipsASubmoduleWorktree(t *testing.T) {
 		t.Errorf("the root's own file must stay indexed: %v", got)
 	}
 }
+
+// TestResync_WorkspaceUnderAWorktreesDirectory is B3's regression guard, and the reason the
+// shape test reads the components BELOW the root rather than the whole absolute path: a
+// workspace that merely LIVES under a directory called "worktrees" — …/code/worktrees/myproject
+// — would otherwise have every path inside it classified as a linked worktree and be pruned
+// entirely. That is a worse failure than the multiplicity the rule exists to remove, and it is
+// invisible to any test whose workspace sits somewhere innocuous.
+func TestResync_WorkspaceUnderAWorktreesDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "worktrees", "myproject")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeIndexTree(t, root, map[string]string{"main.go": "package main\nfunc Main() {}\n"})
+
+	idx, db := newTestIndexer(t, root)
+	got := resyncPaths(t, idx, db)
+
+	if !slices.Contains(got, "main.go") {
+		t.Errorf("a workspace under a directory named %q was pruned: %v — the shape test must "+
+			"judge the path below the root, not the names the workspace happens to sit under",
+			"worktrees", got)
+	}
+}
