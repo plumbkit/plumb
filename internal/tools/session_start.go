@@ -127,7 +127,7 @@ type SessionStart struct {
 	mailboxFn      func() (on bool, inbox Inbox)                                                                           // may be nil; the mailbox delivery snapshot
 	xcodeHintFn    XcodeHintFn                                                                                             // may be nil; bare-Xcode BSP guidance
 	tasksFn        func(context.Context) TaskState                                                                         // may be nil; the resolved run_task/run_command state for this workspace
-	surchargeFn    func() (bytes int, tokens int, toolCount int)                                                           // may be nil; the per-request tool-schema surcharge (measured bytes + derived token estimate) for the tools THIS connection actually advertises
+	surchargeFn    func() (bytes int, tokens int, toolCount int)                                                           // may be nil; the advertised tool-catalogue size (measured bytes + derived token estimate) for the tools THIS connection actually advertises
 }
 
 // WithProjectPolicy wires the accessor for this session's capability-granting
@@ -205,7 +205,7 @@ func (t *SessionStart) resolvedToolProfile() (string, int, string) {
 	return t.toolProfile()
 }
 
-// WithSurcharge wires the per-request tool-schema surcharge estimate for the
+// WithSurcharge wires the advertised tool-catalogue estimate for the
 // tools this connection actually advertises (see
 // clientcaps.ProfileSurcharge / mcp.Server.ToolSchemaBytes) — a client-side
 // cost the daemon cannot observe directly, so it is computed fresh from the

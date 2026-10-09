@@ -348,3 +348,31 @@ func TestCodexWireCapture(t *testing.T) {
 		}
 	}
 }
+
+// TestMeasureStepCountsDirectPlumbShapes is the positive control for the
+// direct-path count. The wire tests only ever see Codex defer, so on their own
+// they could not tell "no plumb schema in tools[]" from "the measurement does
+// not recognise one". Both shapes a client may use are counted here: a flat
+// function named for plumb, and plumb tools nested under a plumb namespace. A
+// non-plumb tool and a definition-less entry (like tool_search) are not.
+func TestMeasureStepCountsDirectPlumbShapes(t *testing.T) {
+	var tools []any
+	if err := json.Unmarshal([]byte(`[
+		{"type":"function","name":"mcp__plumb__read_file","parameters":{"type":"object"}},
+		{"type":"namespace","name":"mcp__plumb__","tools":[
+			{"type":"function","name":"edit_file","parameters":{"type":"object"}},
+			{"type":"function","name":"git","parameters":{"type":"object"}}
+		]},
+		{"type":"function","name":"exec_command","parameters":{"type":"object"}},
+		{"type":"tool_search"}
+	]`), &tools); err != nil {
+		t.Fatal(err)
+	}
+	s := measureStep(0, tools, nil)
+	if s.PlumbDirect != 3 || s.PlumbDirectBytes == 0 {
+		t.Fatalf("measureStep counted %d plumb schemas (%d bytes) in tools[], want 3 (one flat, two namespaced)", s.PlumbDirect, s.PlumbDirectBytes)
+	}
+	if s.SearchedTools != 0 {
+		t.Fatalf("no input was given, yet %d schemas were counted as re-sent", s.SearchedTools)
+	}
+}

@@ -59,6 +59,10 @@ type kimiProvider struct {
 	done      bool
 }
 
+// errSelectToolsMissing is the script's failure when a plumb tool is absent from
+// tools[] and Kimi offers no select_tools to load it.
+var errSelectToolsMissing = errors.New("select_tools is not offered")
+
 type kimiChatRequest struct {
 	Messages []any `json:"messages"`
 	Tools    []any `json:"tools"`
@@ -108,7 +112,7 @@ func (p *kimiProvider) next(req kimiChatRequest) (call map[string]any, text stri
 			p.waited++
 			return map[string]any{"name": "Glob", "args": map[string]any{"pattern": "*.txt"}}, "", nil
 		}
-		return nil, "", fmt.Errorf("%s is not in tools[] and select_tools is not offered (after %d wait steps)", want.base, p.waited)
+		return nil, "", fmt.Errorf("%s is not in tools[] and %w (after %d wait steps)", want.base, errSelectToolsMissing, p.waited)
 	}
 	if p.selected {
 		return nil, "", fmt.Errorf("select_tools did not load %s into tools[]", want.base)
@@ -248,7 +252,6 @@ type kimiMode struct {
 	name       string
 	toolSelect bool // [experimental] tool-select
 	capability bool // the model declares dynamically_loaded_tools
-	lean       bool // plumb setup kimi-code --lean (client-side enabledTools)
 }
 
 func writeKimiConfig(t *testing.T, kimiHome, providerURL string, m kimiMode) {
@@ -278,9 +281,17 @@ tool-select = %t
 	}
 }
 
-// runKimiWireCapture runs the script once under m. It returns the report, how
-// many script tools were called, and how many plumb names were announced.
-func runKimiWireCapture(t *testing.T, m kimiMode) (wireReport, int, int, error) {
+// kimiRun is one Kimi run: the report, how many script tools were called, how
+// many plumb names were announced, and whether plumb saw Kimi connect at all.
+type kimiRun struct {
+	report    wireReport
+	called    int
+	announced int
+	connected bool
+}
+
+// runKimiWireCapture runs the script once under m.
+func runKimiWireCapture(t *testing.T, m kimiMode) (kimiRun, error) {
 	t.Helper()
 	kimiPath, err := exec.LookPath("kimi")
 	if err != nil {
@@ -297,11 +308,7 @@ func runKimiWireCapture(t *testing.T, m kimiMode) (wireReport, int, int, error) 
 	}
 	env := append(conformanceEnv(tmpHome), "KIMI_CODE_HOME="+kimiHome)
 	t.Cleanup(func() { stopDaemon(tmpHome) })
-	setup := []string{"setup", "kimi-code"}
-	if m.lean {
-		setup = append(setup, "--lean")
-	}
-	runPlumbSetup(t, env, setup...)
+	runPlumbSetup(t, env, "setup", "kimi-code")
 
 	provider := &kimiProvider{}
 	server := httptest.NewServer(provider)
@@ -319,13 +326,16 @@ func runKimiWireCapture(t *testing.T, m kimiMode) (wireReport, int, int, error) 
 	runErr := cmd.Run()
 	steps, called, announced, provErr := provider.result()
 	report := wireReport{Client: "kimi-code", Version: strings.TrimSpace(string(version)), Mode: m.name, Steps: steps}
+	// A plumb session file proves Kimi completed the MCP handshake with plumb,
+	// which separates "Kimi hid plumb's tools" from "plumb never connected".
+	_, connected := findClientSession(t, tmpHome)
 	if provErr == nil && runErr != nil {
 		provErr = fmt.Errorf("kimi exited: %w\nstdout:\n%s\nstderr:\n%s", runErr, truncate(stdout.Bytes(), 3000), truncate(stderr.Bytes(), 3000))
 	}
 	if provErr == nil && len(steps) == 0 {
 		provErr = errors.New("kimi made no model request")
 	}
-	return report, called, announced, provErr
+	return kimiRun{report: report, called: called, announced: announced, connected: connected}, provErr
 }
 
 // knownKimiDisclosureDefect is the upstream bug that makes tool-select unusable
@@ -350,10 +360,15 @@ func TestKimiWireCapture(t *testing.T) {
 	}
 	var reports []wireReport
 	for _, m := range modes {
-		r, called, announced, err := runKimiWireCapture(t, m)
+		run, err := runKimiWireCapture(t, m)
+		r, called, announced := run.report, run.called, run.announced
 		if m.name == "tool-select" {
 			switch {
-			case err != nil && strings.Contains(err.Error(), "select_tools is not offered"):
+			case errors.Is(err, errSelectToolsMissing) && !run.connected:
+				// Without a handshake this is a setup or harness failure, not
+				// the upstream defect: never let it pass as the known bug.
+				t.Errorf("tool-select: plumb never connected to Kimi, so this run says nothing about %s: %v", knownKimiDisclosureDefect, err)
+			case errors.Is(err, errSelectToolsMissing):
 				for _, s := range r.Steps {
 					if s.PlumbDirect != 0 {
 						t.Errorf("tool-select step %d carried plumb schemas; expected none under %s", s.Step, knownKimiDisclosureDefect)
@@ -364,9 +379,9 @@ func TestKimiWireCapture(t *testing.T) {
 			case err != nil:
 				t.Errorf("tool-select: %v", err)
 			default:
-				t.Errorf("Kimi %s tool-select now loads plumb tools through select_tools (called %d/%d, %d announced): %s appears fixed. "+
+				t.Errorf("Kimi %s tool-select now reaches plumb (presentation %s, called %d/%d, %d announced): %s appears fixed. "+
 					"Re-run PLAN-413 phase 1, then update this tripwire and the client matrix in docs/token-efficiency.md",
-					r.Version, called, len(kimiScriptTools), announced, knownKimiDisclosureDefect)
+					r.Version, r.presentation(), called, len(kimiScriptTools), announced, knownKimiDisclosureDefect)
 			}
 			reports = append(reports, r)
 			continue
