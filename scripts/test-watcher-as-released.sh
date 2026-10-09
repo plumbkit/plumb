@@ -20,9 +20,35 @@ if [ "$(go env GOOS)" != "darwin" ]; then
 	exit 1
 fi
 
+# The lock tests, by name. go test exits 0 on "[no tests to run]", so a rename
+# that drops one out of the -run filter must fail this script, not leave it
+# green.
+locks="TestWatcher_KeepsSQLiteLocks TestFSWatcher_StopKeepsSQLiteLocksInPlumbDir TestLSPFSWatcher_StopKeepsSQLiteLocksInPlumbDir"
+
+out="$(mktemp)"
+trap 'rm -f "$out"' EXIT
+
+# run appends a go test's verbose output to $out, and prints all of it on a
+# failure.
+run() {
+	if ! "$@" >>"$out" 2>&1; then
+		cat "$out"
+		exit 1
+	fi
+}
+
 export CGO_ENABLED=0
 for arch in arm64 amd64; do
 	echo "test-watcher-as-released: darwin/$arch, CGO_ENABLED=0"
-	GOARCH=$arch go test -count=1 ./internal/fswatch/
-	GOARCH=$arch go test -count=1 -run 'FSWatcher|LSPFSWatcher|LSPWatch' ./internal/topology/ ./internal/cli/
+	: >"$out"
+	run env GOARCH="$arch" go test -count=1 -v ./internal/fswatch/
+	run env GOARCH="$arch" go test -count=1 -v -run 'FSWatcher|LSPFSWatcher|LSPWatch' ./internal/topology/ ./internal/cli/
+	grep -E '^(ok|FAIL)[[:space:]]' "$out"
+	for name in $locks; do
+		if ! grep -q -- "^--- PASS: $name " "$out"; then
+			echo "test-watcher-as-released: $name did not run on darwin/$arch" >&2
+			exit 1
+		fi
+	done
+	echo "test-watcher-as-released: darwin/$arch lock tests passed: $locks"
 done

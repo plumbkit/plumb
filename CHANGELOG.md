@@ -149,7 +149,11 @@
   was only compiled before. CI's macOS verify leg runs the script, and
   `release.yml` gains a `watcher-locks` job on macOS that goreleaser waits for.
   So a tag on a commit CI never tested still cannot publish a macOS binary
-  whose watcher drops the locks.
+  whose watcher drops the locks. The script fails unless each of the three
+  lock tests actually ran and passed, so a rename cannot leave it green on
+  "no tests to run". The release jobs now also require a push event: a
+  manual dispatch started on a tag used to pass the tag-ref gates and could
+  publish, although the workflow said it could not.
 
 ### Fixed
 
