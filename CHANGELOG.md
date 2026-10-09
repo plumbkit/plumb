@@ -135,6 +135,19 @@
   behaviour change: renaming the global `config.toml` away no longer reloads
   it (which reset the daemon to defaults); like deleting it, it now keeps the
   loaded config.
+- **A failed topology indexing cycle is retried, and answers from a failing
+  index say so.** (PLAN-467) A cycle that failed, such as a derived-edge rebuild
+  hitting a SQLite I/O error, left the index in error until the next file
+  event. The periodic resync runs only from idle and is off under the file
+  watcher, so on a quiet workspace that was indefinite. Meanwhile
+  `topology_explore`, `topology_impact` and `topology_affected` answered from
+  the pre-failure snapshot with no caveat. A failed cycle now schedules a full
+  resync with backoff, from 30 seconds doubling to 30 minutes, until one
+  succeeds. Until then `topology_search`, `topology_explore`,
+  `topology_impact`, `topology_affected`, `topology_routes` and
+  `structural_query` lead every answer and error with a `⚠ STALE INDEX`
+  notice. `workspace_search` reports the code corpus as `stale` rather than
+  `building`, and `topology_status` flags the index `FAILING`.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered
