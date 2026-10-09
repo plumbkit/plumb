@@ -101,6 +101,15 @@
 
 ### Changed
 
+- **The web API reports a failing topology index (PLAN-489).** `failing` joins the
+  topology JSON the dashboard reads, and unlike every other field there it cannot
+  come from the on-disk snapshot: a failed cycle is a property of the LIVE indexer,
+  and an out-of-process read reports `stopped` by contract. The daemon therefore
+  hands the web server a live health accessor for the workspaces it actually owns
+  (a non-creating pool lookup — a dashboard poll must not open a database), and the
+  handler uses it when present. Where it is absent the field stays false and
+  `indexerState: "stopped"` carries the meaning, so a UI that renders the badge only
+  while the state is live can never show a false "healthy" from a stopped snapshot.
 - **The indexer skips linked worktrees, and keeps submodules (PLAN-491).** A
   workspace holding agent worktrees (`plumb-wt-*`, `plumb-review-*`) indexed each
   one as another full copy of the repository — 20,291 files and 753 MiB in this

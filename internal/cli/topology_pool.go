@@ -76,6 +76,32 @@ func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology
 	return s
 }
 
+// get returns the pool's store for root when one is already open, and nil
+// otherwise. It never opens a store — a read-only caller (the web dashboard's
+// health poll) must not materialise an index, with its database file and
+// background indexer, for a workspace that has none. Same never-creates
+// discipline as collabPool.getGlobal.
+func (p *topologyPool) get(root string) *topology.Store {
+	if root == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stores[root]
+}
+
+// healthFor reports the LIVE indexer's health for root, and false when the pool
+// holds no store for it — so a caller can tell "this indexer is healthy" from
+// "there is no indexer here to ask", which is the web layer's failing flag being
+// known rather than merely false. Reads through get, so it never opens a store.
+func (p *topologyPool) healthFor(root string) (topology.Health, bool) {
+	s := p.get(root)
+	if s == nil {
+		return topology.Health{}, false
+	}
+	return s.Health(), true
+}
+
 // Reconcile applies a new global topology config to the pool when the global
 // config reloads. It is a no-op when the topology config is unchanged (so it
 // stays cheap across unrelated config edits). When topology is disabled it

@@ -390,6 +390,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		// have never exchanged a cross-project message never materialises it,
 		// including from the dashboard reading this.
 		CollabGlobalStore: collabPool.getGlobal,
+		// healthFor reads the LIVE indexer's health for a workspace this daemon
+		// holds a store for (never opening one, so a dashboard poll cannot
+		// materialise an index); ok=false leaves the DTO's failing flag false —
+		// "not known", not "fine".
+		TopologyHealth: topoPool.healthFor,
 	})
 	defer webServer.Close()
 
