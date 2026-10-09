@@ -54,7 +54,7 @@ func journalDigest(content string) string {
 
 func TestProxyRestartMessage_IsUnchangedForEveryOtherTool(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	msg := proxyRestartMessage("read_file")
+	msg := proxyRestartMessage("read_file", "")
 	if strings.Contains(msg, "mutation_test") {
 		t.Errorf("only a mutation_test needs the extra sentence:\n%s", msg)
 	}
@@ -120,7 +120,7 @@ func TestProxyRestartMessage_WordsEachJournalState(t *testing.T) {
 			journalEntry(t, target, original, mutant)
 			tc.leave(t, target)
 
-			msg := proxyRestartMessage("mutation_test")
+			msg := proxyRestartMessage("mutation_test", "")
 			if !strings.Contains(msg, target) {
 				t.Errorf("the interrupted mutation_test must name the file:\n%s", msg)
 			}
@@ -155,7 +155,7 @@ func TestProxyRestartMessage_GroupsPathsByState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := proxyRestartMessage("mutation_test")
+	msg := proxyRestartMessage("mutation_test", "")
 	if !strings.Contains(msg, "mutants are still applied at") ||
 		!strings.Contains(msg, applied) || !strings.Contains(msg, alsoApplied) {
 		t.Errorf("the two still-applied files need one plural sentence naming both:\n%s", msg)
@@ -167,7 +167,7 @@ func TestProxyRestartMessage_GroupsPathsByState(t *testing.T) {
 
 func TestProxyRestartMessage_SaysWhenNothingIsLeftJournalled(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	msg := proxyRestartMessage("mutation_test")
+	msg := proxyRestartMessage("mutation_test", "")
 	if !strings.Contains(msg, "nothing is left journalled") {
 		t.Errorf("an empty journal is good news and must be told as such:\n%s", msg)
 	}

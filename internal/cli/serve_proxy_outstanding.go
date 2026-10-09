@@ -91,7 +91,7 @@ func (p *reconnectingProxy) failOutstandingBelow(gen uint64) {
 	p.dropPendingStarts(ids)
 
 	for _, req := range failed {
-		message, err := json.Marshal(proxyRestartMessage(req.tool))
+		message, err := json.Marshal(proxyRestartMessage(req.tool, p.pinned))
 		if err != nil {
 			// A message that cannot be encoded must still leave the client with an
 			// answer: the point of this whole sweep is that nothing hangs.
@@ -128,7 +128,7 @@ func calledTool(e rpcEnvelope) string {
 // mutant needs a re-read, one already back does not, and only a file matching neither
 // side is one plumb deliberately left alone. Saying "matches neither side" for a file
 // that simply still holds the mutant is the lie this classifier exists to prevent.
-func proxyRestartMessage(tool string) string {
+func proxyRestartMessage(tool, workspace string) string {
 	const base = "plumb daemon restarted mid-request; this request's outcome is unconfirmed — for a write, re-read the file to check whether it landed before retrying"
 	if tool != "mutation_test" {
 		return base
@@ -139,6 +139,33 @@ func proxyRestartMessage(tool string) string {
 	}
 	if len(states) == 0 {
 		return base + ". This was a mutation_test: nothing is left journalled, so any mutant it had applied has been put back"
+	}
+	// Keep only THIS workspace's mutants: a note about this request that names another project's
+	// files would be worse than saying less (PLAN-459 SHOULD-FIX 3). Containment, not provenance —
+	// an entry records an absolute target path, and a path under this workspace is this
+	// workspace's business. An EMPTY workspace filters nothing, the contract for a caller that
+	// cannot resolve one: better to describe every entry than to describe none.
+	if workspace != "" {
+		// The separator is taken from the workspace's own spelling rather than from filepath,
+		// which this file does not import: a workspace is written the way its platform writes
+		// paths, so its last separator is the right one for the comparison.
+		sep := "/"
+		if i := strings.LastIndexAny(workspace, `\/`); i >= 0 {
+			sep = string(workspace[i])
+		}
+		root := strings.TrimSuffix(workspace, sep) + sep
+		kept := states[:0]
+		for _, st := range states {
+			if strings.HasPrefix(st.Path, root) {
+				kept = append(kept, st)
+			}
+		}
+		states = kept
+		if len(states) == 0 {
+			// Narrower than the case above: nothing is journalled FOR THIS WORKSPACE, so this
+			// must not claim a mutant was put back — only that none is on record here.
+			return base + ". This was a mutation_test: nothing is left journalled for this workspace"
+		}
 	}
 	// One sentence per state, so a group is never described as something it is not.
 	var msg strings.Builder
