@@ -276,7 +276,8 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return c.PeerAwareness, c.HintBudgetBytes
 		}).
 		WithMailboxFor(func(ctx context.Context) (bool, tools.Inbox) {
-			return s.collabConfig().Mailbox, s.inboxFor(ctx)
+			inbox := s.inboxFor(ctx)
+			return inbox.Policy.Mailbox, inbox
 		}).
 		WithLSPLanguage(s.acquiredLanguageName).
 		WithLSPSkipNote(s.lspHomeSkipNote).

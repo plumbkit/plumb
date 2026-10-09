@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -125,6 +126,7 @@ type ctrlHandlers struct {
 	// conversationCleared records that a Claude Code conversation was started by
 	// /clear: conversation-cleared <new session id> (conn_clear_markers.go).
 	conversationCleared func(string)
+	mailbox             func(context.Context, hookMailboxRequest) (hookMailboxReply, error)
 }
 
 // serveControlSocket accepts admin connections on ln and handles each in its
@@ -162,6 +164,10 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	}
 
 	if handleLSPCommand(conn, line, h) {
+		return
+	}
+
+	if handleMailboxCommand(conn, line, h) {
 		return
 	}
 

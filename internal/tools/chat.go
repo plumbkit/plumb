@@ -88,6 +88,10 @@ type Inbox struct {
 	// Global returns the daemon-level cross-project store if it already exists,
 	// never creating it.
 	Global func() *collab.Store
+	// Readers preserve open errors on explicit mailbox reads. Neither reader
+	// creates a missing database; advisory callers may use the legacy accessors.
+	WorkspaceReader func() (*collab.Store, error)
+	GlobalReader    func() (*collab.Store, error)
 }
 
 // Keys are the notifier keys this inbox is woken by: its own name, its stable
@@ -152,38 +156,11 @@ func (i Inbox) stores() []*collab.Store {
 // the recipient is the one reading — so a cross-project note's retention is
 // decided by whichever project claims it, never by the sender's setting.
 func (i Inbox) Claim(ctx context.Context) []collab.Row {
-	if !i.Policy.Mailbox || i.Self == "" {
-		return nil
+	rows, err := i.ClaimResult(ctx)
+	if err != nil {
+		slog.Debug("collab: claim messages failed", "session", i.Self, "err", err)
 	}
-	stores := i.stores()
-	if len(stores) == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
-	defer cancel()
-
-	now := time.Now()
-	var out []collab.Row
-	for _, s := range stores {
-		remaining := maxDeliveredPerCall - len(out)
-		if remaining <= 0 {
-			break
-		}
-		claim := s.ClaimNotes
-		if i.Policy.KeepDeliveredNotes {
-			claim = s.ClaimNotesKeeping
-		}
-		rows, err := claim(ctx, i.claimant(), now, remaining)
-		if err != nil {
-			// Delivery is advisory and must never fail the tool call that carried
-			// it, but a swallowed error here means an agent silently did not get a
-			// message — the one failure mode nobody would ever notice. Log it.
-			slog.Debug("collab: claim messages failed", "session", i.Self, "err", err)
-			continue
-		}
-		out = append(out, rows...)
-	}
-	return out
+	return rows
 }
 
 // Preview is one peeked note together with a key identifying it across the two

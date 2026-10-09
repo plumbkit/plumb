@@ -131,6 +131,8 @@ func TestClearRelinksTheConnectionToTheNewConversation(t *testing.T) {
 	if info.ID != c.s.sessionID() {
 		t.Errorf("`plumb mail --external-id conv-NEW` resolves to %q, want the connection %q", info.ID, c.s.sessionID())
 	}
+	registerMailboxConn(c)
+	mailboxTestDaemon(t, w.registry)
 	if report, ok := hookMailReport("conv-NEW", ws); !ok || report.Session != name {
 		t.Errorf("the Stop hook finds %q (ok=%v) for conv-NEW, want %q", report.Session, ok, name)
 	}

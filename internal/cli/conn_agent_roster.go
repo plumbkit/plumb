@@ -182,7 +182,7 @@ func (s *connSession) unregisterAgentRosters() {
 // caller that is nobody — an unattributable call on a shared connection — answers
 // "" and is listed as no one.
 func (s *connSession) rosterIdentity(ctx context.Context) (workspace, selfID string) {
-	return s.workspaceFor(ctx), s.identityFor(ctx, true).id
+	return s.workspaceFor(ctx), s.identityFor(ctx).id
 }
 
 // touchAgentRoster keeps the calling agent's own row fresh. LastSeenAt comes

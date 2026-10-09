@@ -206,14 +206,13 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	if s.chatWatch == nil {
 		return ""
 	}
-	ccfg := s.collabConfig()
-	if !ccfg.Mailbox {
-		return ""
-	}
 	// knownInboxFor, not inboxFor: this preview rides every tool result, and an
 	// agent that has not yet needed an identity has no mail to preview, so it must
 	// not be given a roster row merely for having run a tool.
 	inbox := s.knownInboxFor(ctx)
+	if !inbox.Policy.Mailbox {
+		return ""
+	}
 	keys := inbox.Keys()
 	if len(keys) == 0 {
 		return ""

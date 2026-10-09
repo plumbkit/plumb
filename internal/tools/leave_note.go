@@ -84,7 +84,7 @@ func (t *LeaveNote) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if err != nil {
 		return "", err
 	}
-	policy := t.deps.Policy()
+	policy := t.deps.policy(ctx)
 	if !policy.Mailbox {
 		return "leave_note is disabled — set [collab] mailbox = true (globally or in this " +
 			"workspace's .plumb/config.toml) to leave notes for peers.", nil

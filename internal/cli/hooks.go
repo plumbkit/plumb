@@ -223,21 +223,11 @@ func installedCount(states []hookState) int {
 
 // Shared hook runtime — used by both clients' hidden run verbs.
 
-// hookMailReport prefers the stable conversation ID and falls back to cwd only
-// when it identifies exactly one live session. Every error is intentionally
-// converted to "no report": these hooks are advisory and must fail open.
-func hookMailReport(sessionID, cwd string) (mailReport, bool) {
-	if id := strings.TrimSpace(sessionID); id != "" {
-		if report, err := mailReportFor("external-id", id); err == nil {
-			return report, true
-		}
-	}
-	if dir := strings.TrimSpace(cwd); dir != "" {
-		if report, err := mailReportFor("workspace", dir); err == nil {
-			return report, true
-		}
-	}
-	return mailReport{}, false
+// hookMailReport observes only the daemon's established live recipient. An
+// unavailable or older daemon allows completion; offline mail is never a fallback.
+func hookMailReport(sessionID, _ string) (mailReport, bool) {
+	reply, ok := probeHookMailbox(sessionID, false)
+	return reply.Report, ok
 }
 
 // hookWakeProbe is hookMailReport plus the one extra fact an adaptive wake
