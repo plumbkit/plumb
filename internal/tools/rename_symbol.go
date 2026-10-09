@@ -130,7 +130,7 @@ func (*RenameSymbol) InputSchema() json.RawMessage {
 				"character":{"type":"integer","minimum":0,"description":"Zero-based column; only without symbol_name."},
 				"symbol_name":{"type":"string","description":"Preferred over line/character: a plain name or Type.Method."},
 				"new_name":{"type":"string","description":"The new identifier."},
-				"dirty_ok":{"type":"boolean","default":false,"description":"Allow target files with uncommitted git changes (default false)."},
+				"dirty_ok":{"type":"boolean","default":false,"description":"Allow target files with uncommitted git changes (default false: refused)."},
 				"dry_run":{"type":"boolean","default":true,"description":"Preview only (default true)."},
 				"structural_fallback":{"type":"boolean","default":false,"description":"When the language server cannot rename, fall back to a whole-word text rename via find_replace (NOT scope-aware; honours dry_run). Default false."}
 			},

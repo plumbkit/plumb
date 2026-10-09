@@ -118,7 +118,7 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "test_target": {
       "type": "string",
-      "description": "The test command's {target}: scope the run to the affected package (ask topology_affected); each mutant costs a compile+test cycle. One shell-safe argument."
+      "description": "The test command's {target}: scope the run to the affected package (ask topology_affected); each mutant costs a compile+test cycle. One shell-safe argument; refused if the test command has no {target}."
     },
     "test_run": {
       "type": "string",
@@ -143,7 +143,7 @@ func (*MutationTest) Name() string                 { return "mutation_test" }
 func (*MutationTest) InputSchema() json.RawMessage { return mutationTestSchema }
 
 func (*MutationTest) Description() string {
-	return "Prove an assertion is real: apply an explicit mutant (file_path + exact-once old_string/new_string), check it COMPILES, run a scoped test set, classify, and restore the file. KILLED = compiled and a test failed (the assertion is real). SURVIVED = compiled and every test passed (the assertion is VACUOUS). INVALID = did not apply, compile, start or finish (proves nothing; never counted as a kill). Scope with test_target (ask topology_affected) and test_run. Runs the stored, trust-gated run_task slots from the git work tree holding the file; mutants spanning work trees are refused. Restoration is guaranteed and SHA-verified on every exit path. Refuses a file with uncommitted changes, and refuses to start unless the workspace builds and its tests pass unmutated. One run per daemon at a time."
+	return "Prove an assertion is real: apply an explicit mutant (file_path + exact-once old_string/new_string), check it COMPILES, run a scoped test set, classify, and restore the file. KILLED = compiled and a test failed (the assertion is real). SURVIVED = compiled and every test passed (the assertion is VACUOUS). INVALID = did not apply, compile, start or finish (proves nothing; never counted as a kill). Scope with test_target (ask topology_affected) and test_run. Runs the stored, trust-gated run_task slots from the git work tree holding the file; mutants spanning work trees are refused. Restoration is guaranteed and SHA-verified on every exit path. Refuses a file with uncommitted changes (untracked included, no override), and refuses to start unless the workspace builds and its tests pass unmutated. One run per daemon: a second call is refused, not queued."
 }
 
 // mutationPlan is the resolved, ready-to-run command pair for a whole run. Both

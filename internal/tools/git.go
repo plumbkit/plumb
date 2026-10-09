@@ -36,7 +36,7 @@ var gitSchema = json.RawMessage(`{
     },
     "repo": {
       "type": "string",
-      "description": "A path inside the target repository (default: the attached workspace, never the daemon's directory). For a submodule, pass a path inside it; run from the superproject, git records only its pointer."
+      "description": "A path inside the target repository (default: the attached workspace; refused if none, never the daemon's directory). For a submodule, pass a path inside it; run from the superproject, git records only its pointer."
     },
     "confirm": {
       "type": "boolean",

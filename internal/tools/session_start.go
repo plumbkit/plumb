@@ -34,11 +34,11 @@ var sessionStartSchema = json.RawMessage(`{
     "scope": {
       "type": "string",
       "enum": ["agent", "connection"],
-      "description": "What a re-pin moves: 'agent' (default, your own shard) or 'connection' (peers that never chose a root follow; needs force when an explicit pin holds it)."
+      "description": "What a re-pin moves: 'agent' (default, your own shard) or 'connection' (peers that never chose a root follow, and their reads and undo reset; needs an identity, and force when an explicit pin holds it)."
     },
     "force": {
       "type": "boolean",
-      "description": "Re-pin away from a pin an explicit session_start already holds."
+      "description": "Required to re-pin away from a pin an explicit session_start already holds; refused otherwise."
     },
     "purpose": {
       "type": "string",
