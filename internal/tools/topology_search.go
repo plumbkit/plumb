@@ -15,30 +15,30 @@ var topologySearchSchema = json.RawMessage(`{
   "properties": {
     "query": {
       "type": "string",
-      "description": "Search query. Terms are OR-matched against symbol names, tokenised identifiers (camelCase/snake_case split), qualified names, signatures, and docstrings."
+      "description": "Terms, OR-matched against names, split identifiers (camelCase, snake_case), qualified names, signatures and docstrings."
     },
     "kinds": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Optional filter by node kinds: function, method, type, class, constant, variable, import, package, test."
+      "description": "Node kinds: function, method, type, class, constant, variable, import, package, test."
     },
     "language": {
       "type": "string",
-      "description": "Optional filter by language (e.g. 'go', 'python')."
+      "description": "Language, e.g. 'go'."
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum number of results to return. Default 20.",
+      "description": "Results returned (default 20).",
       "default": 20
     },
     "include_snippets": {
       "type": "boolean",
-      "description": "Include a short snippet showing the matching text. Default true.",
+      "description": "Include a matching snippet (default true).",
       "default": true
     },
     "rerank": {
       "type": "boolean",
-      "description": "Re-rank FTS5 results by semantic similarity to the query (needs [semantics] enabled + an API key). Defaults to the [semantics].enabled config; pass false to force the plain FTS5 ranking, true to force re-rank when configured."
+      "description": "Re-rank by semantic similarity (needs [semantics] and an API key). Defaults to [semantics].enabled."
     }
   },
   "required": ["query"],
@@ -77,14 +77,7 @@ func (t *TopologySearch) semanticConfig() SemanticRerankConfig {
 func (*TopologySearch) Name() string                 { return "topology_search" }
 func (*TopologySearch) InputSchema() json.RawMessage { return topologySearchSchema }
 func (*TopologySearch) Description() string {
-	return "Ranked FTS5 search over the topology index. Narrow a broad query first: kinds, language, limit, include_snippets=false. " +
-		"Finds symbols, functions, types, " +
-		"classes, and other named entities by name, tokenised identifier (camelCase/snake_case), " +
-		"qualified name, signature, or docstring. Results include kind, file path, line range, " +
-		"match field, score, and optional snippet. Source is 'topology' (approximate; use " +
-		"search_in_files for exact filesystem matches). Code-structure corpus only — for ranked " +
-		"discovery that also spans docs and memories, use workspace_search (this tool is one of " +
-		"its backends). Returns a clear message when the index is disabled or empty."
+	return "Ranked full-text search of the code-structure index: symbols, functions, types and other named entities by name, split identifier, qualified name, signature or docstring. Returns kind, path, line range, match field, score and an optional snippet. Narrow a broad query with kinds, language or limit. Approximate (source=topology): use search_in_files for exact matches, and workspace_search to include docs and memories."
 }
 
 type topologySearchArgs struct {

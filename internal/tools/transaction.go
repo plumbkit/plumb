@@ -24,29 +24,29 @@ var transactionApplySchema = json.RawMessage(`{
   "properties": {
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow editing files that have uncommitted changes in their git repository. Default false — the transaction is refused if any target file is dirty. Pass true to proceed anyway."
+      "description": "Allow files with uncommitted git changes (default false: refused)."
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, wait for the language server to re-analyse each written file and append a labelled per-file diagnostics block with a machine-readable 'diagnostics delta' line. Default false."
+      "description": "Wait for the language server and append a labelled 'diagnostics delta' per written file. Default false."
     },
     "fail_on_new_errors": {
       "type": "boolean",
-      "description": "When true (implies await_diagnostics), roll the WHOLE transaction back if any written file is CONFIRMED to have gained new errors — all-or-nothing. An unconfirmed check never rolls back; nor do warnings or pre-existing errors. Default false."
+      "description": "Roll the WHOLE transaction back if any written file is CONFIRMED to have new errors; unconfirmed checks and warnings never roll back. Implies await_diagnostics."
     },
     "operations": {
       "type": "array",
-      "description": "Ordered list of per-file edit groups. Every file is validated first; only if all validate do any writes happen.",
+      "description": "Per-file edit groups; all are validated before any write.",
       "items": {
         "type": "object",
         "properties": {
           "file_path": {
             "type": "string",
-            "description": "Absolute path, file:// URI, or workspace-relative path of the file to edit."
+            "description": "File: absolute path, file:// URI, or workspace-relative."
           },
           "edits": {
             "type": "array",
-            "description": "str_replace edits applied in order. Same semantics as edit_file: each old_string must appear EXACTLY ONCE.",
+            "description": "str_replace edits in order; each old_string must appear EXACTLY ONCE.",
             "items": {
               "type": "object",
               "properties": {
@@ -60,11 +60,11 @@ var transactionApplySchema = json.RawMessage(`{
           },
           "expected_mtime": {
             "type": "string",
-            "description": "Optional RFC3339Nano mtime previously returned by read_file. If provided, the operation is rejected if the file's current mtime differs."
+            "description": "mtime from read_file; refuse if the file changed since."
           },
           "expected_sha": {
             "type": "string",
-            "description": "Optional hex-encoded SHA-256 previously returned by read_file. If provided, the operation is rejected if the file's current content hash differs."
+            "description": "sha256 from read_file; refuse if the content changed since."
           }
         },
         "required": ["file_path", "edits"],
@@ -103,13 +103,9 @@ func NewTransactionApply(deps WriteDeps) *TransactionApply {
 func (*TransactionApply) Name() string                 { return "transaction_apply" }
 func (*TransactionApply) InputSchema() json.RawMessage { return transactionApplySchema }
 func (*TransactionApply) Description() string {
-	return "Apply str_replace edits across multiple files atomically. Every operation is " +
-		"validated against the on-disk content first; if any old_string is missing or " +
-		"ambiguous, NO files are written. If writes start succeeding but one fails partway, " +
-		"the already-written files are rolled back to their pre-transaction content. " +
-		"Per-path locks prevent interleaving with other write tools. Use for refactors " +
-		"that must land as one unit. Up to 50 operations per call; the response lists " +
-		"each file with a unified diff unless show_write_diff is off."
+	return "Apply str_replace edits across several files as one unit. Every operation is validated first: if any " +
+		"old_string is missing or ambiguous, NO file is written, and a failure mid-write rolls the written files " +
+		"back. Per-path locked. Up to 50 operations; returns a unified diff per file unless show_write_diff is off."
 }
 
 type txOperation struct {

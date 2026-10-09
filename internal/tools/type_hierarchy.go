@@ -17,24 +17,24 @@ var typeHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path containing the type"
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "line": {
       "type": "integer",
-      "description": "Zero-based line number of the type. Required when symbol_name is not provided."
+      "description": "Zero-based line; only without symbol_name."
     },
     "character": {
       "type": "integer",
-      "description": "Zero-based character offset within the line. Required when symbol_name is not provided."
+      "description": "Zero-based column; only without symbol_name."
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
+      "description": "Preferred over line/character: a plain name or Type.Method, resolved against the file's symbols."
     },
     "direction": {
       "type": "string",
       "enum": ["supertypes", "subtypes", "both"],
-      "description": "Which direction to traverse: parent types (supertypes), child types (subtypes), or both. Defaults to both."
+      "description": "supertypes, subtypes, or both (default)."
     }
   },
   "required": ["uri"],
@@ -79,11 +79,7 @@ func (t *TypeHierarchy) WithContested(fn ContestedFn) *TypeHierarchy {
 func (t *TypeHierarchy) Name() string                 { return "type_hierarchy" }
 func (t *TypeHierarchy) InputSchema() json.RawMessage { return typeHierarchySchema }
 func (t *TypeHierarchy) Description() string {
-	return "Show the type hierarchy for a type: its supertypes (interfaces it implements, embedded types) and subtypes (types that implement or embed it). " +
-		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position for you, " +
-		"avoiding off-by-one errors; a raw file position (uri + line + character) is the fallback " +
-		"and, when it lands off an identifier, is snapped to the enclosing symbol. " +
-		"Useful for understanding inheritance and polymorphism."
+	return "Supertypes (implemented interfaces, embedded types) and subtypes (implementers, embedders) of a type. Prefer uri + symbol_name; a raw position is the fallback and snaps to the enclosing symbol."
 }
 
 type typeHierarchyArgs struct {

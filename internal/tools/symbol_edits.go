@@ -23,10 +23,10 @@ import (
 //   3. Apply the edit (atomic write) unless dry_run.
 
 const symbolEditCommonSchema = `
-"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
-"name_path":{"type":"string","description":"Slash-separated symbol path within the file (e.g. \"ClassName/methodName\", or just \"funcName\" for top-level)."},
-"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write."},
-"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing a file with uncommitted changes. Default false — review/commit first, or pass true to proceed."}
+"uri":{"type":"string","description":"File: absolute path, file:// URI, or workspace-relative."},
+"name_path":{"type":"string","description":"Symbol path in the file, e.g. \"Class/method\" or \"func\"."},
+"dry_run":{"type":"boolean","default":true,"description":"Preview only, no write (default true)."},
+"dirty_ok":{"type":"boolean","default":false,"description":"Allow a file with uncommitted git changes (default false)."}
 `
 
 type symbolEditArgs struct {
@@ -50,7 +50,7 @@ type symbolEditArgs struct {
 // topology fallback and line-scans with docCommentStart, which stops at the
 // first non-comment line — a decorator or an export keyword — and so can never
 // extend past the declaration.
-const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"If true, extend the operation to cover any contiguous comment lines (//, #, /*, *) directly above the symbol declaration. Lets you replace/delete a function together with its doc comment, or insert a new block above an existing doc comment instead of between the comment and its symbol. A WRAPPED declaration (an exported ES declaration under its export statement, a decorated Python def under its @decorator) keeps its doc comment above the wrapper, so WHEN SUCH A COMMENT EXISTS insert_before_symbol and replace_symbol_body extend past the wrapper — replacement content must then reproduce the export keyword or the decorator, or it is dropped. With no doc comment above the wrapper the range starts at the declaration and the wrapper is untouched; safe_delete_symbol never extends past the declaration at all."}`
+const docCommentSchemaFragment = `,"include_doc_comment":{"type":"boolean","default":false,"description":"Also cover the contiguous comment lines (//, #, /*, *) directly above the declaration. On a wrapped declaration (ES export, Python @decorator) with a comment above the wrapper, insert_before_symbol and replace_symbol_body extend past the wrapper, so replacement content must repeat the export or decorator; safe_delete_symbol never extends past the declaration."}`
 
 // docCommentStart walks upward from symStart to find the first line of any
 // contiguous comment block flush against the symbol. Returns symStart if no
@@ -208,15 +208,7 @@ func (t *InsertBeforeSymbol) WithShowWriteDiff(fn func() bool) *InsertBeforeSymb
 func (*InsertBeforeSymbol) Name() string { return "insert_before_symbol" }
 
 func (*InsertBeforeSymbol) Description() string {
-	return `Insert text immediately before a symbol's declaration.
-
-Useful for adding a new function/method before an existing one, or prepending a doc comment. Locates the symbol via the LSP document symbol tree (no manual line counting). Provide the full text to insert in 'content' — include trailing newline if appropriate.
-
-Set include_doc_comment=true to insert before any existing leading doc comment instead of between the comment and the symbol — useful when adding a new function (with its own doc comment) above a function that already has one.
-
-The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
-
-Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
+	return `Insert text immediately before a symbol's declaration, located by name_path (no line counting): a new function, say, or a doc comment. End content with a newline. include_doc_comment=true inserts above the symbol's existing doc comment instead of between it and the symbol. Returns a unified diff (a preview in dry-run) unless show_write_diff is off. With a cold or failing language server it locates the symbol by tree-sitter (line-granular, noted in the output).`
 }
 
 func (*InsertBeforeSymbol) InputSchema() json.RawMessage {
@@ -326,13 +318,7 @@ func (t *InsertAfterSymbol) WithShowWriteDiff(fn func() bool) *InsertAfterSymbol
 func (*InsertAfterSymbol) Name() string { return "insert_after_symbol" }
 
 func (*InsertAfterSymbol) Description() string {
-	return `Insert text immediately after a symbol's declaration.
-
-Useful for adding a new method to a struct (insert after an existing one), or appending a related helper. Provide the full text to insert in 'content' — include leading newline if appropriate.
-
-The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
-
-Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
+	return `Insert text immediately after a symbol's declaration, located by name_path: a new method after an existing one, say. Start content with a newline. Returns a unified diff (a preview in dry-run) unless show_write_diff is off. With a cold or failing language server it locates the symbol by tree-sitter (line-granular, noted in the output).`
 }
 
 func (*InsertAfterSymbol) InputSchema() json.RawMessage {
@@ -437,17 +423,7 @@ func (t *ReplaceSymbolBody) WithShowWriteDiff(fn func() bool) *ReplaceSymbolBody
 func (*ReplaceSymbolBody) Name() string { return "replace_symbol_body" }
 
 func (*ReplaceSymbolBody) Description() string {
-	return `Replace the entire declaration of a symbol with new content.
-
-The replacement spans the symbol's full Range as reported by the LSP — for a function, this is from 'func' keyword through the closing '}'. Provide the complete new declaration (signature + body) in 'content'.
-
-Set include_doc_comment=true to also cover any contiguous doc comment above the symbol — gopls and most LSP servers report the symbol range starting at the declaration keyword, so without this flag the old doc comment is left orphaned. With it on, your 'content' must include the new doc comment too (or the symbol will have none).
-
-Use rename_symbol if you only want to change the symbol's name. Use this tool when changing logic, signature, or both — addressed by name_path, no line/character coordinates to compute like edit_file's range mode.
-
-The response includes a unified diff of the change — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.
-
-Works even when the language server is cold or cannot parse the file: it then locates the symbol via a fresh tree-sitter parse (line-granular range, annotated in the output).`
+	return `Replace a symbol's whole declaration (signature and body, e.g. 'func' through the closing '}') with content, located by name_path, with no coordinates to compute. With include_doc_comment=true the range also covers the doc comment above, so content must carry the new comment; without it the old comment stays. To change only the name, use rename_symbol. Returns a unified diff (a preview in dry-run) unless show_write_diff is off. With a cold or failing language server it locates the symbol by tree-sitter (line-granular, noted in the output).`
 }
 
 func (*ReplaceSymbolBody) InputSchema() json.RawMessage {

@@ -65,28 +65,7 @@ func NewShareFindings(deps ShareFindingsDeps) *ShareFindings { return &ShareFind
 func (*ShareFindings) Name() string { return "share_findings" }
 
 func (*ShareFindings) Description() string {
-	return "Hand off what you have just learned to other agents on this workspace " +
-		"as a durable, searchable memory — RIGHT NOW, instead of waiting for the " +
-		"idle summary to fire when your session ends.\n\n" +
-		"Use it after you have mapped a subsystem, pinned down a gotcha, or worked " +
-		"out how something fits together, so a peer working in parallel can pick it " +
-		"up immediately. The finding is written through plumb's generated-memory " +
-		"pipeline: it is secret-scrubbed before storage, stamped with your session " +
-		"and the date as its provenance, and indexed for search. Peers discover it " +
-		"through the ordinary channels — search_memories, workspace_search, " +
-		"relevant_memories, memory hint injection, and the next session_start.\n\n" +
-		"This is AGENT-GENERATED content: it is labelled lower-confidence than a " +
-		"user-written memory and never displaces one in a capped hint slot. It " +
-		"counts against the same [memory] generated_memory_keep retention as an idle " +
-		"episodic summary. Nothing here is an LLM summary — you supply the text.\n\n" +
-		"Requires [collab] knowledge_handoff = true; otherwise the call is refused. " +
-		"Strictly per-workspace.\n\n" +
-		"Parameters:\n" +
-		"  summary     — a one- or two-line headline of the finding (required).\n" +
-		"  description — optional longer detail appended below the summary.\n" +
-		"  paths       — optional workspace-relative globs the finding is about " +
-		"(e.g. [\"internal/tools/ratelimit*\"]); stored as frontmatter so " +
-		"relevant_memories and hint injection route it to those files."
+	return "Hand what you just learned (a subsystem mapped, a gotcha pinned) to peers on this workspace now, as a durable searchable memory, instead of waiting for the idle summary. Secret-scrubbed, stamped with your session and date, indexed, and found through search_memories, workspace_search, relevant_memories, hints and session_start. Labelled agent-generated: lower confidence than a user memory, never displacing one, and subject to [memory] generated_memory_keep. You supply the text. Requires [collab] knowledge_handoff; per-workspace."
 }
 
 func (*ShareFindings) InputSchema() json.RawMessage {
@@ -95,16 +74,16 @@ func (*ShareFindings) InputSchema() json.RawMessage {
   "properties": {
     "summary": {
       "type": "string",
-      "description": "A one- or two-line headline of the finding. Stored as the memory body and indexed for search."
+      "description": "One- or two-line headline of the finding; the indexed memory body."
     },
     "description": {
       "type": "string",
-      "description": "Optional longer detail, appended below the summary in the memory body."
+      "description": "Longer detail, appended below the summary."
     },
     "paths": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Optional workspace-relative globs the finding is about; stored as frontmatter so relevant_memories and hint injection route it to those files."
+      "description": "Workspace-relative globs the finding is about; routes it to those files in relevant_memories and hints."
     }
   },
   "required": ["summary"],

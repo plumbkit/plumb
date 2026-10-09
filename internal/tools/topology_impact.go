@@ -15,59 +15,59 @@ var topologyImpactSchema = json.RawMessage(`{
   "properties": {
     "name": {
       "type": "string",
-      "description": "Symbol name or qualified name to analyse. Must exist in the topology index. Required unless mode=\"reachability\"."
+      "description": "Symbol or qualified name in the topology index (not needed for reachability)."
     },
     "depth": {
       "type": "integer",
-      "description": "BFS depth for both traversals. Default 3, max 4.",
+      "description": "BFS depth both ways (default 3, max 4).",
       "default": 3
     },
     "max_nodes": {
       "type": "integer",
-      "description": "Maximum neighbour nodes per direction. Default 100, max 200.",
+      "description": "Neighbours per direction (default 100, max 200).",
       "default": 100
     },
     "max_bytes": {
       "type": "integer",
-      "description": "Approximate byte budget per direction. Default 30000, max 100000.",
+      "description": "Byte budget per direction (default 30000, max 100000).",
       "default": 30000
     },
     "edge_kinds": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Optional filter on edge kinds: calls, imports, contains, defines, inherits, implements. Defaults to imports, calls.",
+      "description": "Edge kinds to follow: calls, imports, contains, defines, inherits, implements (default imports, calls).",
       "default": ["imports","calls"]
     },
     "path": {
       "type": "string",
-      "description": "Optional file-path substring to disambiguate when several indexed symbols share this name (case-insensitive)."
+      "description": "File-path substring to pick among same-named symbols."
     },
     "kind": {
       "type": "string",
-      "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
+      "description": "Node kind to pick among same-named symbols: function, method, type, class, …"
     },
     "mode": {
       "type": "string",
-      "description": "Optional. \"reachability\" switches from the default single-symbol blast-radius analysis to entry-point reachability. Go-only for now; roots/path_to/layers require this mode."
+      "description": "\"reachability\" for entry-point reachability (Go only); roots, path_to and layers need it."
     },
     "granularity": {
       "type": "string",
       "enum": ["package", "function"],
       "default": "package",
-      "description": "Requires mode=\"reachability\". Default package follows production import edges. function follows the admitted Go call graph outward from exact callable roots; test-file callers are excluded and unresolved/dynamic calls are disclosed."
+      "description": "Reachability: package (default; production imports) or function (admitted call graph; test callers excluded, dynamic calls disclosed)."
     },
     "roots": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Requires mode=\"reachability\". package granularity accepts package directories or \"main\". function granularity accepts exact file.go#Symbol selectors or \"main\"; omit for defaults (package main roots plus candidate-seeded topology_routes roots)."
+      "description": "Reachability roots: package dirs or \"main\" (package); file.go#Symbol or \"main\" (function). Default: main plus topology_routes roots."
     },
     "path_to": {
       "type": "string",
-      "description": "Requires mode=\"reachability\". When set, the response is the single shortest root -> target chain; use a package directory for package granularity or file.go#Symbol for function granularity."
+      "description": "Reachability: return one shortest root-to-target chain (package dir or file.go#Symbol)."
     },
     "layers": {
       "type": "boolean",
-      "description": "Requires mode=\"reachability\". When true, the response is an SCC condensation of the reachable subgraph — package import cycles or function recursion depending on granularity — instead of the summary."
+      "description": "Reachability: return an SCC condensation (import or recursion cycles) instead of the summary."
     }
   },
   "required": [],
@@ -101,25 +101,7 @@ func (t *TopologyImpact) WithCrossFileCallers(fn CrossFileCallersFunc) *Topology
 func (*TopologyImpact) Name() string                 { return "topology_impact" }
 func (*TopologyImpact) InputSchema() json.RawMessage { return topologyImpactSchema }
 func (*TopologyImpact) Description() string {
-	return "Bidirectional BFS blast-radius analysis around a named symbol. " +
-		"Returns two sections: 'depends on' (outward — what the symbol depends on) and " +
-		"'depended on by' (inward — what depends on this symbol). " +
-		"Primary use: assess blast radius before a refactor. Source is 'topology' (approximate); " +
-		"the topology call graph is intra-file, so for a function/method the inward section is " +
-		"augmented with a 'cross-file callers' block resolved via the language server (source=lsp) " +
-		"when one is available. " +
-		"mode=\"reachability\" switches to entry-point reachability. The default package " +
-		"granularity follows production import edges from package-main roots plus candidate-seeded " +
-		"topology_routes roots; Go _test.go importers are excluded, and unsupported/polyglot " +
-		"workspaces are refused rather than reported as falsely unreachable. " +
-		"Set granularity=\"function\" for the additive Go-only admitted partial static call graph: " +
-		"it uses exact callable roots, production callers, durable derived cross-file edges, and " +
-		"the full reachable closure. Unresolved receiver/dynamic calls, test callers, unsupported " +
-		"languages, and unindexed roots remain outside that lower-bound answer. " +
-		"Each granularity supports the default summary, path_to (one shortest root-to-target chain), " +
-		"and layers (SCC condensation; import cycles for package or recursion cycles for function). " +
-		"All outputs disclose their scope and known limitations, and responses are byte-capped. " +
-		"Returns a clear message when topology is disabled or the symbol is not in the index."
+	return "Blast radius around a named symbol: 'depends on' (outward) and 'depended on by' (inward), for assessing a refactor. Approximate (source=topology); for a function the inward side adds LSP-resolved cross-file callers (source=lsp) when available. mode=\"reachability\" answers entry-point reachability instead (Go only). Package granularity (default) follows production imports from main and topology_routes roots. granularity=\"function\" follows the admitted call graph from exact roots over production callers and durable derived cross-file edges to the full reachable closure: a lower bound that excludes test callers and unresolved dynamic calls. Both support path_to (one shortest chain) and layers (SCC condensation). Unsupported workspaces are refused, not reported unreachable. Outputs state their scope and limits and are byte-capped."
 }
 
 type topologyImpactArgs struct {

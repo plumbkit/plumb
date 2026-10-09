@@ -21,19 +21,19 @@ var renameFileSchema = json.RawMessage(`{
   "properties": {
     "from": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the source file."
+      "description": "Source file (absolute, file:// URI, or workspace-relative)."
     },
     "to": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the destination file. Parent directories are created automatically."
+      "description": "Destination (absolute, file:// URI, or workspace-relative); parent directories are created."
     },
     "overwrite": {
       "type": "boolean",
-      "description": "Allow overwriting an existing destination file. Default false."
+      "description": "Allow replacing an existing destination (default false)."
     },
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow moving a file that has uncommitted changes in its git repository. Default false — the move is refused if the source file is dirty. Pass true to proceed anyway."
+      "description": "Allow a source with uncommitted git changes (default false: refused)."
     }
   },
   "required": ["from", "to"],
@@ -56,15 +56,7 @@ func NewRenameFile(deps WriteDeps) *RenameFile { return &RenameFile{deps: deps} 
 func (*RenameFile) Name() string                 { return "rename_file" }
 func (*RenameFile) InputSchema() json.RawMessage { return renameFileSchema }
 func (*RenameFile) Description() string {
-	return "Move (rename) a file. " +
-		"Parent directories of `to` are created if missing. " +
-		"Refuses to overwrite an existing destination unless overwrite=true. The LSP server " +
-		"is notified with FileDeleted (source) and FileCreated (destination) so symbol " +
-		"indexes and diagnostics update immediately. " +
-		"A rename changes no content, so the response shows a diff only when the move destroyed an " +
-		"existing destination (that destination's content), gated by [edits].show_write_diff. " +
-		"To duplicate a file without removing the source, use copy_file instead. " +
-		"For LSP-semantic identifier renames across files, use rename_symbol instead."
+	return "Move or rename a file, creating missing parent directories. Refuses to replace an existing destination unless overwrite=true. Notifies the language server of the delete and create. Shows a diff only when the move destroyed an existing destination. To keep the source, use copy_file; to rename an identifier across files, use rename_symbol."
 }
 
 type renameFileArgs struct {

@@ -20,19 +20,19 @@ var copyFileSchema = json.RawMessage(`{
   "properties": {
     "from": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the source file."
+      "description": "Source file (absolute, file:// URI, or workspace-relative)."
     },
     "to": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the destination. Parent directories are created automatically."
+      "description": "Destination (absolute, file:// URI, or workspace-relative); parent directories are created."
     },
     "overwrite": {
       "type": "boolean",
-      "description": "Allow overwriting an existing destination file. Default false."
+      "description": "Allow replacing an existing destination (default false)."
     },
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow copying a file that has uncommitted changes. Default false."
+      "description": "Allow a source with uncommitted changes (default false)."
     }
   },
   "required": ["from", "to"],
@@ -56,14 +56,7 @@ func NewCopyFile(deps WriteDeps) *CopyFile { return &CopyFile{deps: deps} }
 func (*CopyFile) Name() string                 { return "copy_file" }
 func (*CopyFile) InputSchema() json.RawMessage { return copyFileSchema }
 func (*CopyFile) Description() string {
-	return "Copy a file to a new path, preserving file permissions. " +
-		"Parent directories of `to` are created if missing. " +
-		"Refuses to overwrite an existing destination unless overwrite=true. " +
-		"Cross-device copies are supported. " +
-		"Notifies the LSP server with FileCreated so diagnostics update immediately. " +
-		"The response shows the diff of what landed at the destination — every line added, plus the " +
-		"destination it replaced when overwrite=true — gated by [edits].show_write_diff. " +
-		"To move or rename a file, use rename_file instead."
+	return "Copy a file to a new path, keeping its permissions and creating missing parent directories; cross-device copies work. Refuses to replace an existing destination unless overwrite=true. Notifies the language server. Shows a diff of what landed at the destination. To move instead, use rename_file."
 }
 
 type copyFileArgs struct {

@@ -31,20 +31,20 @@ var structuralQuerySchema = json.RawMessage(`{
   "properties": {
     "query": {
       "type": "string",
-      "description": "Which structural check to run: \"undocumented-exports\", \"long-functions\", or \"unused-context\".",
+      "description": "\"undocumented-exports\", \"long-functions\", or \"unused-context\".",
       "enum": ["undocumented-exports", "long-functions", "unused-context"]
     },
     "language": {
       "type": "string",
-      "description": "Optional filter by language (e.g. 'go', 'python'). unused-context is Go-only regardless."
+      "description": "Language filter, e.g. 'go' (unused-context is Go-only)."
     },
     "min_lines": {
       "type": "integer",
-      "description": "For long-functions: minimum line span to flag. Default 80."
+      "description": "long-functions threshold in lines (default 80)."
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum number of findings to return. Default 50."
+      "description": "Findings returned (default 50)."
     }
   },
   "required": ["query"],
@@ -71,14 +71,7 @@ func NewStructuralQuery(storeFn func() *topology.Store, ws WorkspaceFn) *Structu
 func (*StructuralQuery) Name() string                 { return "structural_query" }
 func (*StructuralQuery) InputSchema() json.RawMessage { return structuralQuerySchema }
 func (*StructuralQuery) Description() string {
-	return "Run a curated structural check over the topology index — find symbols by SHAPE, not name. " +
-		"Complements topology_search (find by name) and search_in_files (find by text) with audits useful " +
-		"for review and refactor prep. Named queries (no raw tree-sitter queries are exposed): " +
-		"\"undocumented-exports\" (exported functions/methods/types/constants with no doc comment), " +
-		"\"long-functions\" (functions over min_lines, default 80), " +
-		"\"unused-context\" (Go functions taking context.Context whose body never references it). " +
-		"Results are approximate (source=topology) and confidence-labelled where the check is heuristic. " +
-		"Returns a clear message when the index is disabled or empty."
+	return "Find symbols by SHAPE rather than name or text, for review and refactor prep: \"undocumented-exports\" (exported declarations without a doc comment), \"long-functions\" (over min_lines, default 80), or \"unused-context\" (Go functions taking a context.Context they never use). Curated checks only, no raw tree-sitter queries. Approximate (source=topology) and confidence-labelled where heuristic."
 }
 
 type structuralQueryArgs struct {

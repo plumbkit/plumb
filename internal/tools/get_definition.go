@@ -18,21 +18,21 @@ var getDefinitionSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the document"
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "line": {
       "type": "integer",
-      "description": "Zero-based line number. Required when symbol_name is not provided.",
+      "description": "Zero-based line; only without symbol_name.",
       "minimum": 0
     },
     "character": {
       "type": "integer",
-      "description": "Zero-based character offset. Required when symbol_name is not provided.",
+      "description": "Zero-based column; only without symbol_name.",
       "minimum": 0
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
+      "description": "Preferred over line/character: a plain name or Type.Method, resolved against the file's symbols."
     }
   },
   "required": ["uri"],
@@ -107,12 +107,7 @@ func (t *GetDefinition) WithLSPWarmup(fn LSPWarmupFn) *GetDefinition {
 func (t *GetDefinition) Name() string                 { return "get_definition" }
 func (t *GetDefinition) InputSchema() json.RawMessage { return getDefinitionSchema }
 func (t *GetDefinition) Description() string {
-	return "Returns the SOURCE LOCATION (file path + line number) of where a symbol is defined. " +
-		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
-		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +
-		"is the fallback and, when it lands off an identifier, is snapped to the enclosing symbol. " +
-		"Use when you need to navigate to the implementation of a symbol. " +
-		"For documentation or type signatures at the same position, use explain_symbol instead."
+	return "Where a symbol is defined (file + line). Prefer uri + symbol_name; a raw position is the fallback and snaps to the enclosing symbol. For docs or a signature use explain_symbol."
 }
 
 type getDefinitionArgs struct {

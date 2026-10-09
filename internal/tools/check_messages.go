@@ -32,24 +32,7 @@ func NewCheckMessages(deps CollabDeps) *CheckMessages { return &CheckMessages{de
 func (*CheckMessages) Name() string { return "check_messages" }
 
 func (*CheckMessages) Description() string {
-	return "Read messages other agents have sent you, optionally waiting for one to " +
-		"arrive. Receive half of plumb's mailbox; leave_note is the send half. " +
-		"Full etiquette — addressing, delivery, the exchange cap, cross-project " +
-		"rules: the plumb-chat skill.\n\n" +
-		"Omit wait_seconds (or 0) to return immediately with whatever is waiting. " +
-		"A positive wait_seconds BLOCKS until a message arrives or the wait " +
-		"expires — hand your turn to a peer instead of polling. Capped by " +
-		"[collab] max_wait_seconds, kept below the client's own call timeout.\n\n" +
-		"Each message is handed over exactly ONCE, by this tool or session_start; " +
-		"re-calling will not redeliver it. The block on other tool results only PREVIEWS " +
-		"a message — it marks nothing read, so a client that hides it loses nothing. " +
-		"Every message carries a conversation_id; quote it in leave_note to reply in thread.\n\n" +
-		"Also reports your OWN unread mail — anything you sent that nobody has taken " +
-		"delivery of yet, with its age. Listing is a read; it never consumes the " +
-		"message on the recipient's behalf.\n\n" +
-		"Requires [collab] mailbox = true.\n\n" +
-		"Parameters: wait_seconds — block up to this long for a message (default " +
-		"0, no wait)."
+	return "Read messages other agents sent you, optionally waiting for one: the receive half of plumb's mailbox (leave_note sends). A positive wait_seconds BLOCKS until a message arrives; prefer that to polling. Each message is handed over exactly ONCE, here or by session_start; a preview on another tool's result marks nothing read. Quote a message's conversation_id in leave_note to reply. Also lists your own sent mail nobody has taken yet, without consuming it. Requires [collab] mailbox. Etiquette: the plumb-chat skill."
 }
 
 func (*CheckMessages) InputSchema() json.RawMessage {
@@ -59,7 +42,7 @@ func (*CheckMessages) InputSchema() json.RawMessage {
     "wait_seconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "Block up to this many seconds waiting for a message. 0 (default) returns immediately. Capped by [collab] max_wait_seconds."
+      "description": "Block up to this long for a message (default 0: return at once). Capped by [collab] max_wait_seconds."
     }
   },
   "additionalProperties": false

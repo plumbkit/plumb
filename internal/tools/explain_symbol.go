@@ -18,21 +18,21 @@ var explainSymbolSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the document"
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "line": {
       "type": "integer",
-      "description": "Zero-based line number. Required when symbol_name is not provided.",
+      "description": "Zero-based line; only without symbol_name.",
       "minimum": 0
     },
     "character": {
       "type": "integer",
-      "description": "Zero-based character offset. Required when symbol_name is not provided.",
+      "description": "Zero-based column; only without symbol_name.",
       "minimum": 0
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
+      "description": "Preferred over line/character: a plain name or Type.Method, resolved against the file's symbols."
     }
   },
   "required": ["uri"],
@@ -80,12 +80,7 @@ func (t *ExplainSymbol) WithContested(fn ContestedFn) *ExplainSymbol {
 func (t *ExplainSymbol) Name() string                 { return "explain_symbol" }
 func (t *ExplainSymbol) InputSchema() json.RawMessage { return explainSymbolSchema }
 func (t *ExplainSymbol) Description() string {
-	return "Returns DOCUMENTATION and type information (LSP hover content: function signature, doc comment, often in Markdown) for the symbol at the given position or by name. " +
-		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position for you, " +
-		"avoiding off-by-one errors; a raw file position (uri + line + character) is the fallback " +
-		"and, when it lands off an identifier, is snapped to the enclosing symbol. " +
-		"Use when you need to understand what a symbol is without navigating to its source. " +
-		"For the file location of where the symbol is defined, use get_definition instead."
+	return "Hover docs and type info (signature, doc comment) for a symbol, without navigating to it. Prefer uri + symbol_name; a raw position is the fallback and snaps to the enclosing symbol. For the definition's location use get_definition."
 }
 
 type explainSymbolArgs struct {

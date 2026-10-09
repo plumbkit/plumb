@@ -24,6 +24,18 @@
 
 ### Changed
 
+- **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
+  client pays for `tools/list` in discovery, prompt cache and, without
+  deferred tool loading, on each step. Tool and parameter descriptions were
+  rewritten to say each contract once: repeated boilerplate went (the
+  symbol-position prose shared by six LSP tools, the doc-comment and
+  write-guard text shared by the editing tools, "Parameters:" blocks that
+  restated the schema), and the remaining prose was tightened. No tool, argument
+  or validation rule was removed, and every refusal, concurrency, privacy and
+  destructive-action rule is still stated on the tool it governs. The full
+  59-tool payload went from 113,668 to 72,913 bytes (−36%; −33% against the
+  108,332-byte baseline PLAN-413 set), and the pinned set from 43,598 to
+  27,969 bytes.
 - **`topology_routes` recovers route → handler bindings from registration
   sites instead of guessing from symbol names.** It reads the call sites the
   index records: Go `net/http`, gorilla/mux, chi, gin and echo registrations

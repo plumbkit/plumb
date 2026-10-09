@@ -59,16 +59,16 @@ var agentConfigSchema = json.RawMessage(`{
     "op": {
       "type": "string",
       "enum": ["describe", "set"],
-      "description": "describe: list the config keys you are allowed to write (always available). set: write a batch of key/value pairs (only when the user has enabled [agent_config_writes])."
+      "description": "describe: list the keys you may write (always available). set: write a batch (only with [agent_config_writes] enabled)."
     },
     "set": {
       "type": "object",
-      "description": "For op=set: a map of dotted config key to value, e.g. {\"tasks.go.test\": \"go test ./...\", \"log_level\": \"warn\"}. Validated and applied atomically (all-or-nothing) to the project config; a key outside the allowlist is refused."
+      "description": "For set: dotted key to value, e.g. {\"tasks.go.test\": \"go test ./...\"}. Validated and applied all or nothing; keys outside the allowlist are refused."
     },
     "scope": {
       "type": "string",
       "enum": ["project"],
-      "description": "Write scope. Only \"project\" (the workspace's .plumb/config.toml) is supported; global writes are out of scope."
+      "description": "Only \"project\" (the workspace's .plumb/config.toml)."
     }
   },
   "required": ["op"],
@@ -78,9 +78,7 @@ var agentConfigSchema = json.RawMessage(`{
 func (t *AgentConfig) Name() string                 { return "agent_config" }
 func (t *AgentConfig) InputSchema() json.RawMessage { return agentConfigSchema }
 func (t *AgentConfig) Description() string {
-	return "Read and (when enabled) write a small allowlist of plumb config keys on the user's behalf — task commands ([tasks.<lang>]), log level, theme, topology excludes, quality analysers. " +
-		"op=describe lists exactly what you may write (always available); op=set writes a batch to the project's .plumb/config.toml, validated and applied all-or-nothing, tagged provenance=agent and one-step revertible (plumb config unset). " +
-		"Writing is OFF unless the user enabled [agent_config_writes]; safety-critical keys (git tiers, workspace roots, strict mode, API keys, the enable knob itself) are never writable. Use it to set up a repo's build/test commands from what you can read in the project."
+	return "Read and, when the user has enabled [agent_config_writes], write a small allowlist of plumb config keys: task commands ([tasks.<lang>]), log level, theme, topology excludes, quality analysers. op=describe lists what you may write; op=set writes a batch to .plumb/config.toml all or nothing, tagged provenance=agent and revertible with plumb config unset. Safety-critical keys (git tiers, workspace roots, strict mode, API keys, the enable switch) are never writable. Use it to set up a repo's build and test commands."
 }
 
 type agentConfigArgs struct {

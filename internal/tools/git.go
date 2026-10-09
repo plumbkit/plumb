@@ -18,33 +18,33 @@ var gitSchema = json.RawMessage(`{
   "properties": {
     "subcommand": {
       "type": "string",
-      "description": "Git subcommand to run. Read (always): diff, log, show, blame, status, shortlog, check-ignore, plus branch/tag/stash listing. Write (needs allow_writes, default on): add, commit, switch, mv, merge, branch/tag create, stash push/pop. Destructive (needs allow_destructive + confirm): reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, branch/tag delete, stash drop. Network (needs allow_push + confirm): push, fetch, pull."
+      "description": "Git subcommand. Read: diff, log, show, blame, status, shortlog, check-ignore, branch/tag/stash listing. Write: add, commit, switch, mv, merge, branch/tag create, stash push/pop. Destructive: reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, branch/tag delete, stash drop. Network: push, fetch, pull."
     },
     "args": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Flags and arguments passed directly to git for all subcommands except add and commit. Examples: [\"--oneline\", \"-10\"] for log; [\"--cached\"] or [\"--staged\"] for diff (shows staged changes ready to commit); [\"--staged\"] for restore. Ignored when subcommand is \"add\" (use files) or \"commit\" (use message)."
+      "description": "Arguments passed to git, e.g. [\"--oneline\",\"-10\"] for log or [\"--staged\"] for diff. Not for add or commit."
     },
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Paths to act on. For subcommand \"add\": paths to stage (-A semantics — new, modified, and deleted entries all staged). For subcommand \"commit\": optional path-limited commit — commits ONLY these tracked paths (git commit -m <message> -- <files>), ignoring any unrelated staged changes already in the index; omit to commit the whole index. No glob expansion. Ignored by other subcommands."
+      "description": "add: paths to stage (-A semantics). commit: commit ONLY these tracked paths, ignoring other staged changes; omit for the whole index. No globs."
     },
     "message": {
       "type": "string",
-      "description": "Commit message — only used for subcommand \"commit\". Maps to -m; pre-commit hooks always run. Combine with files to commit only specific paths. Not used by any other subcommand."
+      "description": "Commit message (-m); pre-commit hooks always run."
     },
     "repo": {
       "type": "string",
-      "description": "Path to any file or directory inside the repository. Omit to use the attached workspace; if no workspace is attached the call is refused (git never falls back to the daemon's working directory). To operate on a nested git submodule, set this to a path inside the submodule — git resolves to the submodule's own root, so add/commit land there; a command run against the superproject only records the submodule's commit pointer, never its file contents."
+      "description": "A path inside the target repository (default: the attached workspace, never the daemon's directory). For a submodule, pass a path inside it; run from the superproject, git records only its pointer."
     },
     "confirm": {
       "type": "boolean",
-      "description": "Required (true) for destructive and network subcommands. Also required to override the cross-session ref-movement guard: when a DIFFERENT plumb session moved this repo's HEAD/branch since this session last observed it, a write/destructive/network op is refused until re-run with confirm:true."
+      "description": "Required for destructive and network subcommands, and to override the cross-session HEAD guard."
     },
     "expected_head": {
       "type": "string",
-      "description": "Optimistic-concurrency guard for write, destructive, and network subcommands (mirrors edit_file's expected_mtime): any git revision (full/short SHA, branch, tag) naming the commit HEAD must be at. When supplied and HEAD resolves elsewhere — or resolves to nothing — the operation is refused before running, regardless of which session (or external tool) moved it. Ignored by read subcommands only. Omit for no check."
+      "description": "Revision HEAD must resolve to, or a write, destructive or network op is refused."
     }
   },
   "required": ["subcommand"],
@@ -138,25 +138,7 @@ func (t *Git) projectGitStatus() ProjectGitStatus {
 func (t *Git) Name() string                 { return "git" }
 func (t *Git) InputSchema() json.RawMessage { return gitSchema }
 func (t *Git) Description() string {
-	return "Run git through one tiered, policy-gated tool (no shell, no agent-supplied " +
-		"command line). Read subcommands (status, log, diff, show, blame, " +
-		"shortlog, branch/tag/stash listing) always run. Write (add, commit, " +
-		"switch, mv, merge, branch/tag create, stash push/pop) needs [git] allow_writes " +
-		"(default on). Destructive (reset, clean, checkout, restore, rebase, " +
-		"revert, cherry-pick, branch/tag delete, stash drop) needs " +
-		"allow_destructive AND confirm:true. Network (push, fetch, pull) needs " +
-		"allow_push AND confirm:true; force-pushing a protected branch or using " +
-		"an ad-hoc URL/remote is always refused.\n\n" +
-		"add and commit are typed: add stages with -A semantics; commit takes " +
-		"message, plus an optional files list for a path-limited commit. Every " +
-		"other subcommand uses args.\n\n" +
-		"Cross-session guard refuses a write/destructive/network op if a " +
-		"DIFFERENT session moved this repo's HEAD/branch since observed (override " +
-		"with confirm:true). expected_head pins the exact HEAD commit those ops " +
-		"must be at.\n\n" +
-		"Full tier table, the cross-session guard, commit attribution, and the " +
-		"narrower plumb tool to prefer over a destructive git call: the plumb-git " +
-		"skill."
+	return "Policy-gated git, no shell. Reads always run. Writes need [git] allow_writes (default on). Destructive subcommands need allow_destructive and confirm:true; push, fetch and pull need allow_push and confirm:true. Force-pushing a protected branch or using an ad-hoc remote is always refused. add (-A) and commit (message, optional files) are typed; others take args. A write is refused if a DIFFERENT session moved HEAD since you looked (confirm:true overrides). Details: the plumb-git skill."
 }
 
 type gitToolArgs struct {

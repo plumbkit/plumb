@@ -15,15 +15,15 @@ var topologyRoutesSchema = json.RawMessage(`{
   "properties": {
     "framework": {
       "type": "string",
-      "description": "Optional framework: 'net/http', 'mux' (net/http + gorilla), 'chi', 'gin', 'echo', 'cobra', 'flask', 'fastapi', or the name-match-only 'vapor' / 'argument-parser'. Omit for all."
+      "description": "One framework: 'net/http', 'mux' (net/http + gorilla), 'chi', 'gin', 'echo', 'cobra', 'flask', 'fastapi', or name-match-only 'vapor' / 'argument-parser'. Omit for all."
     },
     "path_prefix": {
       "type": "string",
-      "description": "Optional prefix filter: a route string ('/api'), or a Cobra command path ('plumb config'). Name-match candidates, which have no route, are filtered by symbol name/signature substring instead."
+      "description": "Route prefix ('/api') or Cobra command path ('plumb config'); name-match candidates filter by symbol name instead."
     },
     "limit": {
       "type": "integer",
-      "description": "Maximum HTTP routes and maximum commands to list (each). Default 50.",
+      "description": "Maximum routes and maximum commands listed (default 50 each).",
       "default": 50
     }
   },
@@ -47,13 +47,7 @@ func NewTopologyRoutes(storeFn func() *topology.Store) *TopologyRoutes {
 func (*TopologyRoutes) Name() string                 { return "topology_routes" }
 func (*TopologyRoutes) InputSchema() json.RawMessage { return topologyRoutesSchema }
 func (*TopologyRoutes) Description() string {
-	return "Recovers entry points from REGISTRATION sites in the topology index: route string -> handler " +
-		"for Go net/http, gorilla/mux, chi, gin and echo, and Python Flask/FastAPI decorators; and the " +
-		"Cobra command tree (Use -> Run/RunE, linked through AddCommand). A site counts only when its file " +
-		"imports that framework. Each handler is labelled resolved / same-package / decorated / name-match " +
-		"/ ambiguous / external / unresolved; none is type-checked, and router group/mount prefixes are not " +
-		"composed. Swift (Vapor, ArgumentParser), and any framework with no recovered site, fall back to " +
-		"name/signature candidates labelled name-match — those are guesses, not bindings."
+	return "Entry points recovered from REGISTRATION sites in the topology index: route -> handler for Go net/http, gorilla/mux, chi, gin and echo and Python Flask/FastAPI decorators, plus the Cobra command tree (Use -> Run/RunE via AddCommand). A site counts only when its file imports that framework. Handlers are labelled resolved, same-package, decorated, name-match, ambiguous, external or unresolved; none is type-checked, and group prefixes are not composed. Frameworks with no recovered site (Swift Vapor, ArgumentParser) fall back to name-match candidates, which are guesses."
 }
 
 // routeEntry is a name-match candidate: a symbol whose name or signature looks

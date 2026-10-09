@@ -48,54 +48,54 @@ var searchInFilesSchema = json.RawMessage(`{
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Plain text to search for by default; regular expression when use_regex is true."
+      "description": "Text to find; a regex when use_regex is true."
     },
     "use_regex": {
       "type": "boolean",
       "default": false,
-      "description": "Treat pattern as a regular expression (Go RE2). Default false — pattern is literal text."
+      "description": "Treat pattern as Go RE2 (default false)."
     },
     "path": {
       "type": "string",
-      "description": "Directory to search in (absolute path, file:// URI, or workspace-relative path). Defaults to the workspace root."
+      "description": "Directory to search (default: the workspace root)."
     },
     "glob": {
       "type": "string",
-      "description": "Glob to restrict which files are searched, e.g. '*.go' or '**/*_test.go'"
+      "description": "Files to search, e.g. '*.go' or '**/*_test.go'."
     },
     "exclude": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Glob patterns for paths to exclude, e.g. [\"vendor\", \"*.pb.go\", \"testdata/**\"]. Matched against the entry's base name and relative path. Matching directories are pruned from the walk; matching files are skipped."
+      "description": "Globs to skip (base name or relative path), e.g. [\"vendor\", \"*.pb.go\"]; matching directories are pruned."
     },
     "case_sensitive": {
       "type": "boolean",
-      "description": "Force case-sensitive matching. Default (omitted): smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise. Pass false to force case-INSENSITIVE matching even for an uppercase pattern."
+      "description": "Default smart-case (insensitive when pattern is all lowercase); false forces insensitive."
     },
     "context_lines": {
       "type": "integer",
-      "description": "Number of lines of context to show before and after each match (like rg -C). Default 0. Total output is capped at 200 KiB regardless, and truncation is labelled.",
+      "description": "Context lines around each match (default 0). Output is capped at 200 KiB, labelled.",
       "minimum": 0,
       "maximum": 50
     },
     "max_results": {
       "type": "integer",
-      "description": "Maximum number of matching lines to return. Default 200.",
+      "description": "Matching lines returned (default 200).",
       "minimum": 1,
       "maximum": 2000
     },
     "include_hidden": {
       "type": "boolean",
-      "description": "Include hidden files and directories (starting with '.'). Default false."
+      "description": "Include dot-files and dot-directories (default false)."
     },
     "max_file_bytes": {
       "type": "integer",
-      "description": "Skip files larger than this many bytes. Default 52428800 (50 MiB).",
+      "description": "Skip larger files (default 50 MiB).",
       "minimum": 1
     },
     "include_enclosing_symbol": {
       "type": "boolean",
-      "description": "When true and an LSP is available, annotate each match with the deepest enclosing symbol (function, method, type, etc.) from the language server. One LSP query per distinct matched file; results cached within the call. Silently omitted when the LSP is unavailable."
+      "description": "Annotate each match with its enclosing function or type from the language server, when available."
     }
   },
   "required": ["pattern"],
@@ -133,12 +133,7 @@ func (t *SearchInFiles) WithContested(fn ContestedFn) *SearchInFiles {
 func (t *SearchInFiles) Name() string                 { return "search_in_files" }
 func (t *SearchInFiles) InputSchema() json.RawMessage { return searchInFilesSchema }
 func (t *SearchInFiles) Description() string {
-	return "Exact scan of current file contents — literal text by default, regex when use_regex=true. " +
-		"Use search_in_files when you need every occurrence, exact verification, audits, or safe replacement prep. " +
-		"Unlike shell grep/rg, results are confined to the active project (no .git/, node_modules/, build artefacts, or anything else .gitignore excludes), " +
-		"binary files are skipped (null-byte sniff of the first 8 KB), files larger than max_file_bytes (50 MiB default) are skipped before opening, " +
-		"globs with a literal directory prefix (e.g. \"src/**/*.go\") prune sibling directories from the walk. " +
-		"Smart-case (case-insensitive when the pattern is all lowercase), supports context lines and glob file filters."
+	return "Exact scan of current file contents, literal or regex: for finding every occurrence, verification, audits, or preparing a safe replacement. Confined to the project and .gitignore-aware (no .git, node_modules or build output); binary and oversized files are skipped. Smart-case, with context lines and glob filters; a glob with a directory prefix prunes the walk."
 }
 
 type searchInFilesArgs struct {

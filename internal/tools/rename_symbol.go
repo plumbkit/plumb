@@ -118,27 +118,21 @@ func (t *RenameSymbol) WithWriteDeps(deps WriteDeps) *RenameSymbol {
 func (*RenameSymbol) Name() string { return "rename_symbol" }
 
 func (*RenameSymbol) Description() string {
-	return `Rename a symbol throughout the workspace using LSP semantic refactoring.
-
-The language server identifies every reference across all files and applies a precise edit set atomically. Safer than text find-and-replace: it understands scope, shadowing, and types, so it won't rename unrelated identifiers that share the name.
-
-Prefer symbol_name to identify the symbol; plumb resolves it through the document-symbol tree and queries the language server at the exact identifier position. Raw line/character remains supported and recovers from narrow "no identifier" misses by snapping once to the enclosing symbol. Runs in dry_run mode by default; set dry_run=false to apply. The response appends a per-file unified diff (a preview in dry-run, the applied change otherwise), capped at 20 files, unless show_write_diff is disabled.
-
-If the language server cannot compute the rename (an error, or an empty edit set — common with sourcekit-lsp before the build graph resolves), pass structural_fallback=true to attempt a best-effort identifier-boundary text rename via find_replace (still dry_run by default). The fallback is NOT scope-aware — it renames every whole-word occurrence in same-extension files — so review the preview before applying.`
+	return "Rename a symbol everywhere through the language server: scope-, shadowing- and type-aware, so same-named unrelated identifiers are untouched, applied atomically. Prefer symbol_name; a raw position is the fallback and snaps to the enclosing symbol. Dry-run by default; returns per-file diffs (up to 20 files) unless show_write_diff is off. If the server cannot compute it (an error or an empty edit set, common with sourcekit-lsp before the build graph resolves), structural_fallback=true tries a whole-word text rename across same-extension files, which is NOT scope-aware, so review the preview."
 }
 
 func (*RenameSymbol) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 			"type":"object",
 			"properties":{
-				"uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path."},
-				"line":{"type":"integer","minimum":0,"description":"Zero-based line of the identifier. Required when symbol_name is not provided."},
-				"character":{"type":"integer","minimum":0,"description":"Zero-based character offset within the line. Required when symbol_name is not provided."},
-				"symbol_name":{"type":"string","description":"Symbol name to rename instead of a raw position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. When provided, line and character are not needed."},
-				"new_name":{"type":"string","description":"Replacement identifier name."},
-				"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing target files with uncommitted changes. Default false — review/commit first, or pass true to proceed."},
-				"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview changes only."},
-				"structural_fallback":{"type":"boolean","default":false,"description":"If true, and the language server cannot compute the rename, attempt a best-effort, identifier-boundary text rename via find_replace (NOT scope-aware; honours dry_run). Default false."}
+				"uri":{"type":"string","description":"File: absolute path, file:// URI, or workspace-relative."},
+				"line":{"type":"integer","minimum":0,"description":"Zero-based line; only without symbol_name."},
+				"character":{"type":"integer","minimum":0,"description":"Zero-based column; only without symbol_name."},
+				"symbol_name":{"type":"string","description":"Preferred over line/character: a plain name or Type.Method."},
+				"new_name":{"type":"string","description":"The new identifier."},
+				"dirty_ok":{"type":"boolean","default":false,"description":"Allow target files with uncommitted git changes (default false)."},
+				"dry_run":{"type":"boolean","default":true,"description":"Preview only (default true)."},
+				"structural_fallback":{"type":"boolean","default":false,"description":"When the language server cannot rename, fall back to a whole-word text rename via find_replace (NOT scope-aware; honours dry_run). Default false."}
 			},
 			"required":["uri","new_name"],
 	  "additionalProperties": false

@@ -100,23 +100,19 @@ func (t *MoveSymbol) WithWriteDeps(deps WriteDeps) *MoveSymbol {
 func (*MoveSymbol) Name() string { return "move_symbol" }
 
 func (*MoveSymbol) Description() string {
-	return `Move a top-level declaration (function, method, type, const, or var) from one file to another within the SAME directory/package, atomically. The symbol's full source — declaration plus, by default, its leading doc comment (include_doc_comment) — moves from source_uri to destination_uri in one all-or-nothing operation: if the destination write fails the source is rolled back. Locates the symbol via the LSP document-symbol tree, falling back to tree-sitter when the language server is cold.
-
-Scope (v1, conservative): source and destination must be in the SAME directory — plumb does not rewrite references or imports, so a move that would change a symbol's package or import path is REFUSED. destination_uri must already exist unless create_destination=true. Also refuses an ambiguous symbol (disambiguate with name_path), a path outside the workspace, or (Go) mismatched build constraints between source and destination.
-
-Dry-run by default (dry_run=true): previews the unified diff without writing; set dry_run=false to apply. Undo is per-file — reverting a move takes two undo_edit calls. Scope rationale: the plumb-refactor skill.`
+	return "Move a top-level declaration (with its doc comment by default) to another file in the SAME directory, all or nothing: a failed destination write rolls the source back. Plumb does not rewrite references or imports, so a move that would change the symbol's package is REFUSED, as are an ambiguous name, a path outside the workspace, and (Go) mismatched build constraints. The destination must exist unless create_destination=true. Dry-run by default. Undo takes two undo_edit calls, one per file. Rationale: the plumb-refactor skill."
 }
 
 var moveSymbolSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "source_uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path of the file currently holding the symbol."},
-    "name_path":{"type":"string","description":"Slash-separated symbol path within the source file (e.g. \"ClassName/methodName\", or just \"funcName\" for a top-level declaration)."},
-    "destination_uri":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path of the file to move the declaration into. Must be in the SAME directory (package) as source_uri."},
-    "include_doc_comment":{"type":"boolean","default":true,"description":"Move the symbol's contiguous leading doc comment along with it. Default true — a relocated declaration should keep its documentation. Where the declaration is WRAPPED (an exported ES declaration under its export statement, a decorated Python def under its @decorator) its doc comment sits above the wrapper, so the moved range covers the wrapper too — which is what keeps @property with the method it decorates."},
-    "create_destination":{"type":"boolean","default":false,"description":"Create destination_uri if it does not exist. Default false (the destination must already exist). A newly created Go file is seeded with the source file's package clause."},
-    "dry_run":{"type":"boolean","default":true,"description":"If true (default), preview the diff of both files only; do not write."},
-    "dirty_ok":{"type":"boolean","default":false,"description":"Allow moving when either file has uncommitted changes. Default false — review/commit first, or pass true to proceed."}
+    "source_uri":{"type":"string","description":"File holding the symbol (absolute, file:// URI, or workspace-relative)."},
+    "name_path":{"type":"string","description":"Symbol path in the source file, e.g. \"Class/method\" or \"func\"."},
+    "destination_uri":{"type":"string","description":"File to move it into, in the SAME directory (package) as source_uri."},
+    "include_doc_comment":{"type":"boolean","default":true,"description":"Move the leading doc comment too (default true). For a wrapped declaration (ES export, Python @decorator) the range covers the wrapper, keeping @property with its method."},
+    "create_destination":{"type":"boolean","default":false,"description":"Create destination_uri if missing (default false); a new Go file gets the source's package clause."},
+    "dry_run":{"type":"boolean","default":true,"description":"Preview the diff of both files only (default true)."},
+    "dirty_ok":{"type":"boolean","default":false,"description":"Allow either file to have uncommitted git changes (default false)."}
   },
   "required":["source_uri","name_path","destination_uri"],
   "additionalProperties":false

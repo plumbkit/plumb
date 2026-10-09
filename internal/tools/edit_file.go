@@ -18,49 +18,49 @@ var editFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the file to edit."
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "start_anchor": {
       "type": "string",
-      "description": "Anchor-bounded edit mode (alternative to edits): a unique substring marking the START of the span to replace. Must appear EXACTLY ONCE. Combine with end_anchor + new_string. Mutually exclusive with edits. CRLF / display-only gutter (\"<n>\\t\") tolerated."
+      "description": "Anchor mode (instead of edits): unique substring, exactly once, starting the span. Tolerates CRLF and a pasted \"<n>\\t\" gutter."
     },
     "end_anchor": {
       "type": "string",
-      "description": "Anchor-bounded edit mode: a unique substring marking the END of the span to replace. Must appear EXACTLY ONCE and after start_anchor. Combine with start_anchor + new_string."
+      "description": "Anchor mode: unique substring, exactly once, after start_anchor, ending the span."
     },
     "new_string": {
       "type": "string",
-      "description": "Anchor-bounded edit mode: the replacement text for the span between (or, with include_anchors, including) the two anchors. Empty string deletes the span. Only used when start_anchor/end_anchor are set."
+      "description": "Anchor mode: replacement for the span; empty deletes it."
     },
     "include_anchors": {
       "type": "boolean",
-      "description": "Anchor-bounded edit mode: when true the anchors are part of the replaced span; when false (default) only the text strictly between them is replaced and both are preserved."
+      "description": "Anchor mode: false (default) KEEPS both anchors and replaces only the text between them; true replaces the anchors too."
     },
     "edits": {
       "type": "array",
-      "description": "Ordered list of str_replace edits to apply sequentially. Mutually exclusive with the start_anchor/end_anchor mode.",
+      "description": "Edits applied in order, all or nothing (instead of anchor mode).",
       "items": {
         "type": "object",
         "properties": {
           "old_string": {
             "type": "string",
-            "description": "Exact string to find. Required when start_line is not set. Must appear EXACTLY ONCE in the current file content — edit is rejected if absent or ambiguous. CRLF / LF differences are tolerated automatically."
+            "description": "Exact text, matched EXACTLY ONCE or the edit is refused (CRLF/LF tolerated). Not used with start_line."
           },
           "new_string": {
             "type": "string",
-            "description": "Replacement text. Use empty string to delete. With start_line set it replaces (or, at -1, appends) whole lines: a missing trailing newline is added unless at EOF of a file that has none."
+            "description": "Replacement; empty deletes. With start_line it replaces whole lines (adding a missing trailing newline)."
           },
           "start_line": {
             "type": "integer",
-            "description": "First line to replace (1-based, inclusive); old_string is then unused. -1 appends new_string at EOF; end_line: -1 runs the range to the last line."
+            "description": "Range mode: first line, 1-based; -1 appends at EOF. Prefer range for big multi-line replacements."
           },
           "end_line": {
             "type": "integer",
-            "description": "Last line to replace (1-based, inclusive). Defaults to start_line when absent (single-line operation). Use -1 for end of file. Only used when start_line is set."
+            "description": "Range mode: last line, inclusive (default start_line; -1 = EOF)."
           },
           "replace_all": {
             "type": "boolean",
-            "description": "str_replace mode only: when true, replace EVERY occurrence of old_string instead of requiring it to appear exactly once. Use for mechanical rename-this-token-everywhere edits. Ignored in range mode (start_line set). Default false."
+            "description": "Replace every occurrence instead of requiring exactly one (default false)."
           }
         },
         "required": ["new_string"],
@@ -70,31 +70,31 @@ var editFileSchema = json.RawMessage(`{
     },
     "expected_mtime": {
       "type": "string",
-      "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the edit is rejected if the file's current mtime differs — fast optimistic-concurrency check."
+      "description": "mtime from read_file; refuse if the file changed since."
     },
     "expected_sha": {
       "type": "string",
-      "description": "Optional. Hex-encoded SHA-256 previously returned by read_file. If provided, the edit is rejected if the file's current content hash differs — stronger than expected_mtime, survives mtime aliasing."
+      "description": "sha256 from read_file; refuse if the content changed since (stronger than mtime)."
     },
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow editing a file that has uncommitted changes in its git repository. Default false — the edit is refused if the target file is dirty. Pass true to proceed anyway."
+      "description": "Allow a file with uncommitted git changes (default false: refused)."
     },
     "apply_partial": {
       "type": "boolean",
-      "description": "When true, apply each edit independently and continue on failure instead of rolling back the entire batch. Returns a per-edit result list showing which edits succeeded and which failed. Incompatible with strict mode — not safe when concurrent agents share the file."
+      "description": "Apply each edit independently and report per-edit results instead of rolling back the batch. Not with strict mode; unsafe when agents share the file."
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file, and append a machine-readable 'diagnostics delta' line (fresh, new_errors, resolved, pre_existing). The block is always labelled — authoritative, pre-write snapshot, unverified, or not-analysed — so a stale result is never dressed as fresh. Default false (fast adaptive window; the result may predate the write)."
+      "description": "Wait a few seconds for the language server and append a labelled 'diagnostics delta' line (new_errors, resolved, pre_existing). Default false."
     },
     "fail_on_new_errors": {
       "type": "boolean",
-      "description": "When true (implies await_diagnostics), roll this edit back if the language server CONFIRMS it introduced new errors here, leaving the file byte-for-byte unchanged and returning the delta as the error. An unconfirmed check never rolls back; nor do warnings, pre-existing errors, or breakage elsewhere. Not with apply_partial, or over 1 MiB. Default false."
+      "description": "Roll the edit back (file unchanged) if the language server CONFIRMS new errors in this file; unconfirmed checks, warnings and errors elsewhere never roll back. Implies await_diagnostics; not with apply_partial or over 1 MiB."
     },
     "reconcile": {
       "type": "boolean",
-      "description": "When true, do NOT reject the edit if the file changed since your read (expected_mtime / expected_sha mismatch); apply against the current on-disk content instead, relying on the exact-once old_string match for safety. Use it for the edit→format→edit loop, where a formatter bumped the mtime but your anchors still match. Default false."
+      "description": "Apply despite an expected_mtime/sha mismatch, relying on the exact-once match, e.g. after a formatter touched the file. Default false."
     }
   },
   "required": ["file_path"],
@@ -145,23 +145,16 @@ func (t *EditFile) isStrict() bool { return strictEnabled(t.deps.Strict) }
 func (*EditFile) Name() string                 { return "edit_file" }
 func (*EditFile) InputSchema() json.RawMessage { return editFileSchema }
 func (*EditFile) Description() string {
-	return "Apply one or more edits to an existing file (use this over a native edit " +
-		"tool — see the Edit lane note in session_start). Two mutually exclusive " +
-		"request shapes: an edits array, or start_anchor + end_anchor + new_string.\n\n" +
-		"Each edits entry is str_replace (default: old_string must appear EXACTLY " +
-		"ONCE) or range (start_line/end_line, 1-based; -1 appends or runs to EOF). " +
-		"Prefer range for a big multi-line replacement — old_string/anchors must " +
-		"match character-for-character inside a JSON string, so escaping and size " +
-		"can defeat str_replace where a line range needs neither.\n\n" +
-		"Anchor mode replaces the span BETWEEN two unique anchors (each exactly " +
-		"once); include_anchors=true replaces the whole inclusive span. " +
-		"Character-precise — an anchor quoted without its trailing newline joins " +
-		"that line onto new_string (flagged in the response).\n\n" +
-		"Writes apply atomically and crash-durably under a per-path lock. Pass " +
-		"expected_mtime (from a read_file header) when a concurrent writer may " +
-		"touch the file. For a whole named declaration prefer replace_symbol_body / " +
-		"insert_before_symbol / insert_after_symbol / safe_delete_symbol. Mode " +
-		"choice in depth: the plumb-refactor skill."
+	return "Edit an existing file (use this over a native edit tool). Two exclusive shapes: an edits " +
+		"array, or start_anchor + end_anchor + new_string.\n\n" +
+		"An edits entry is str_replace (old_string must appear EXACTLY ONCE) or a line range " +
+		"(start_line/end_line). Prefer a range for a big multi-line change: escaping inside a JSON " +
+		"string often defeats an exact match. Anchor mode replaces the text BETWEEN two unique " +
+		"anchors, keeping them unless include_anchors=true; an anchor quoted without its newline " +
+		"joins that line onto new_string (flagged).\n\n" +
+		"Atomic, crash-durable, per-path locked. Pass expected_mtime from read_file when another " +
+		"writer may touch the file. For a whole declaration prefer replace_symbol_body and its " +
+		"siblings; mode choice in depth: the plumb-refactor skill."
 }
 
 type strEdit struct {

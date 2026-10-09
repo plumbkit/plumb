@@ -26,20 +26,20 @@ var deleteFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the file or empty directory to delete. Use paths instead to delete several in one call."
+      "description": "File or empty directory to delete (absolute, file:// URI, or workspace-relative)."
     },
     "paths": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Several files and/or empty directories to delete in one call (max 100). Same per-path rules as file_path — this batches round-trips, it does NOT delete recursively. Every path is validated before any is removed, and directories are removed after files, deepest first, so naming a tree's files and its directories together works in one call."
+      "description": "Up to 100 files and empty directories in one call. Not recursive: all are validated first, then files go before directories, deepest first."
     },
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow deleting a file that has uncommitted changes in its git repository. Default false — deletion is refused if the file is dirty. Pass true to proceed anyway."
+      "description": "Allow a file with uncommitted git changes (default false: refused)."
     },
     "allow_dir": {
       "type": "boolean",
-      "description": "Allow deleting an empty directory. Default false — deletion is refused for any directory. The directory must be empty; non-empty directories are rejected even with allow_dir: true."
+      "description": "Allow deleting an EMPTY directory (default false). Non-empty directories are always refused."
     }
   },
   "additionalProperties": false
@@ -57,17 +57,7 @@ func NewDeleteFile(deps WriteDeps) *DeleteFile { return &DeleteFile{deps: deps} 
 func (*DeleteFile) Name() string                 { return "delete_file" }
 func (*DeleteFile) InputSchema() json.RawMessage { return deleteFileSchema }
 func (*DeleteFile) Description() string {
-	return "Delete files and empty directories. Pass file_path for one, or paths for several in a single call " +
-		"(max 100). Refuses to delete directories unless allow_dir: true is set — and even then only an EMPTY " +
-		"directory is accepted (non-empty directories are always rejected; there is no recursive delete). " +
-		"To remove a whole tree, list its files with find_files and pass them plus their directories in one " +
-		"paths batch with allow_dir: true — every path is validated before anything is removed, and " +
-		"directories go last, deepest first, so they are empty by the time their turn comes. The LSP server " +
-		"is notified with FileDeleted so symbol indexes and diagnostics update immediately. Per-path locking " +
-		"serialises against any concurrent write_file/edit_file targeting the same path. The response reports " +
-		"the line and byte count removed (bytes only for a binary or oversized file), then the diff of what " +
-		"was deleted, gated by [edits].show_write_diff; a path matching [history] sensitive_globs reports " +
-		"the withholding instead of its content."
+	return "Delete files and empty directories: file_path for one, paths for up to 100. Directories need allow_dir and must be EMPTY; there is no recursive delete. To remove a tree, list it with find_files and pass its files and directories together in paths. Per-path locked; notifies the language server. Reports the lines and bytes removed and, under show_write_diff, the deleted content, except for a path matching [history] sensitive_globs."
 }
 
 type deleteFileArgs struct {

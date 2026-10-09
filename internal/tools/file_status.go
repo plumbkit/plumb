@@ -19,7 +19,7 @@ var fileStatusSchema = json.RawMessage(`{
       "items": { "type": "string" },
       "minItems": 1,
       "maxItems": 50,
-      "description": "Files to report on. Each is an absolute path, file:// URI, or workspace-relative path."
+      "description": "Files to report on (absolute, file:// URI, or workspace-relative)."
     }
   },
   "required": ["paths"],
@@ -98,18 +98,7 @@ func (t *FileStatus) Name() string                 { return "file_status" }
 func (t *FileStatus) InputSchema() json.RawMessage { return fileStatusSchema }
 
 func (t *FileStatus) Description() string {
-	return "Lightweight, read-only \"did this file change under me?\" check. For each path " +
-		"reports, without reading content: git_dirty (uncommitted changes vs git HEAD/index — " +
-		"untracked counts as dirty), changed_since_plumb_wrote (the on-disk mtime advanced since " +
-		"plumb last wrote it this session — a peer or external process edited it), last_writer " +
-		"(plumb = plumb wrote it last this session and it is unchanged; external = plumb wrote it " +
-		"but it has since changed on disk; unknown = plumb has not written it this session), plus " +
-		"mtime and size. " +
-		"Use before re-editing a file you read or wrote earlier to confirm your view is still " +
-		"current, instead of a blind re-read; pair changed_since_plumb_wrote / last_writer with a " +
-		"read_file to refresh when it reports drift. Missing files are reported, not an error. " +
-		"This is a status probe, not a content read — it does not satisfy strict mode's " +
-		"read-before-edit requirement."
+	return "Read-only \"did this file change under me?\" probe, without reading content. Per path: git_dirty (untracked counts), changed_since_plumb_wrote (mtime advanced since plumb's last write this session), last_writer (plumb, external, or unknown), mtime and size. Use it before re-editing to decide whether to re-read. Missing files are reported, not errors. It does not count as a read for strict mode."
 }
 
 type fileStatusArgs struct {

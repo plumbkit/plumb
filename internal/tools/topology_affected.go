@@ -28,22 +28,22 @@ var topologyAffectedSchema = json.RawMessage(`{
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Workspace-relative file paths to treat as change roots."
+      "description": "Workspace-relative changed files."
     },
     "symbols": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Symbol names to treat as change roots."
+      "description": "Changed symbol names."
     },
     "max_results": {
       "type": "integer",
-      "description": "Maximum packages to return. Default 50; changed package always sorts first.",
+      "description": "Packages returned (default 50; the changed package sorts first).",
       "default": 50
     },
     "detail": {
       "type": "string",
       "enum": ["compact", "detailed"],
-      "description": "Detail level: 'compact' (package summary, no test names) or 'detailed' (default, includes test names).",
+      "description": "'compact' (package summary only) or 'detailed' (default, with test names).",
       "default": "detailed"
     }
   },
@@ -93,19 +93,7 @@ func (t *TopologyAffected) testScope(ctx context.Context) TestScope {
 func (*TopologyAffected) Name() string                 { return "topology_affected" }
 func (*TopologyAffected) InputSchema() json.RawMessage { return topologyAffectedSchema }
 func (*TopologyAffected) Description() string {
-	return "After you change code, ask this which tests to run instead of running the whole " +
-		"suite. Given changed files or symbols, it answers with packages to run — one row " +
-		"each with the test count and why the package is implicated, plus the individual " +
-		"test names in the package the change landed in. Where the workspace's test runner " +
-		"takes a positional path (go, python), each row leads with a ready target to hand " +
-		"straight to run_task(slot:\"test\"), expressed relative to " +
-		"[tasks.<lang>].working_dir so it works from the directory that command runs in. " +
-		"Where the runner scopes by name or by a project-specific flag (rust, typescript, " +
-		"swift, zig), the directory is named and no command is guessed. " +
-		"A package is reached either by containing the change or importing a package that does. " +
-		"Within a reached package every test is counted (recall-biased). Results are heuristic; " +
-		"verify before relying. max_results bounds the packages (changed package sorts first). " +
-		"Returns a clear message when topology is disabled."
+	return "After a change, ask which tests to run instead of the whole suite. Given changed files or symbols it lists the packages to run, each with its test count and why it is implicated, plus the test names in the changed package. For go and python each row starts with a target to pass to run_task(slot:\"test\"), relative to the task's working_dir; for rust, typescript, swift and zig the directory is named and no command is guessed. A package is reached by containing the change or importing one that does, and every test in it is counted (recall-biased). Heuristic: verify before relying on it."
 }
 
 type topologyAffectedArgs struct {

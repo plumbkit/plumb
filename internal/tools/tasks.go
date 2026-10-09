@@ -211,11 +211,7 @@ var runTaskSchema = json.RawMessage(`{
 func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
-	return "Run a stored per-language task command — build, lint, test, e2e, verify, or a project-defined slot — configured in [tasks.<lang>]. " +
-		"It executes only the command the user saved (no shell, no agent-supplied command line), for this workspace's primary language or the one you name in `language`. " +
-		"Runs from the workspace root or [tasks.<lang>] working_dir, with its env. " +
-		"A project-supplied (.plumb/config.toml) command must be trusted first (run `plumb trust`); the shipped defaults and global-config commands always run. Output and runtime are bounded. " +
-		"Pairs with topology_affected (which says WHICH tests to run; this runs them)."
+	return "Run a stored [tasks.<lang>] command (build, lint, test, e2e, verify, or a project-defined slot): only the command the user saved, with no shell and no agent-supplied command line, for the primary language or the one named in language. Runs from the workspace root or the task's working_dir. A project-config command must be trusted first (plumb trust); shipped and global commands always run. Output and runtime are bounded. topology_affected says which tests to run; this runs them."
 }
 
 type runTaskArgs struct {

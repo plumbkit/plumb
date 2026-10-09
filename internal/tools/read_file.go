@@ -20,50 +20,50 @@ var readFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the file to read."
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "start_line": {
       "type": "integer",
-      "description": "First line to return (1-based, inclusive). Omit to start from the beginning.",
+      "description": "First line, 1-based inclusive (default 1).",
       "minimum": 1
     },
     "end_line": {
       "type": "integer",
-      "description": "Last line to return (1-based, inclusive). Omit to read to the end of the file.",
+      "description": "Last line, 1-based inclusive (default: end of file).",
       "minimum": 1
     },
     "offset": {
       "type": "integer",
-      "description": "First line to read, 1-based (Claude Code-style alias for start_line; start_line wins if both are given).",
+      "description": "Alias for start_line (start_line wins).",
       "minimum": 1
     },
     "limit": {
       "type": "integer",
-      "description": "Number of lines to return starting at the first line (Claude Code-style window; first line defaults to 1). Mutually exclusive with end_line. Not usable together with pattern (search mode) — use max_matches instead.",
+      "description": "Number of lines from the first line. Not with end_line or pattern.",
       "minimum": 1
     },
     "pattern": {
       "type": "string",
-      "description": "Search the file for this pattern instead of returning a window: returns each matching line with its 1-based line number (and optional context), bounded output. Literal text by default; a regular expression when use_regex is true. The whole file is scanned line-by-line regardless of size, so an over-cap file stays searchable. Combine with start_line/end_line to restrict the search to that line window; not usable with limit."
+      "description": "Search the whole file instead of windowing: returns matching lines with line numbers. Literal unless use_regex. Narrow with start_line/end_line; not with limit."
     },
     "use_regex": {
       "type": "boolean",
       "default": false,
-      "description": "Treat pattern as a Go RE2 regular expression. Default false — pattern is literal text. Only consulted when pattern is set."
+      "description": "Treat pattern as Go RE2 (default false)."
     },
     "case_sensitive": {
       "type": "boolean",
-      "description": "Force case-sensitive matching for pattern. Default (omitted): smart-case — case-insensitive when pattern is all lowercase, case-sensitive otherwise. Pass false to force case-INSENSITIVE matching even for an uppercase pattern. Only consulted when pattern is set."
+      "description": "Default smart-case (insensitive when pattern is all lowercase); false forces insensitive."
     },
     "context_lines": {
       "type": "integer",
-      "description": "Lines of context to show before and after each match (like rg -C). Default 0. Only consulted when pattern is set.",
+      "description": "Context lines around each match (default 0).",
       "minimum": 0,
       "maximum": 50
     },
     "max_matches": {
       "type": "integer",
-      "description": "Maximum number of matching lines to return in search mode. Default 200. Output is truncated (and labelled) beyond this. Only consulted when pattern is set.",
+      "description": "Matching lines returned (default 200; truncation is labelled).",
       "minimum": 1,
       "maximum": 2000
     }
@@ -225,18 +225,7 @@ func (t *ReadFile) outlineSupported(path string) bool {
 func (t *ReadFile) Name() string                 { return "read_file" }
 func (t *ReadFile) InputSchema() json.RawMessage { return readFileSchema }
 func (t *ReadFile) Description() string {
-	return "Read the text contents of a file (absolute path, file:// URI, or workspace-relative path). " +
-		"Use start_line/end_line to stream a slice of a large file. " +
-		"Each line is prefixed with a 1-based line number + tab (cat -n style) for exact range math; this gutter " +
-		"is display-only — strip the leading '<n>\\t' before reusing a line as an edit_file/find_replace old_string. " +
-		"Binary files are rejected; output is capped at 200 KiB (use line ranges on large files). " +
-		"The header carries the file's mtime (RFC3339Nano) and SHA-256 — pass them back as expected_mtime/" +
-		"expected_sha on edit_file for optimistic-concurrency checks. " +
-		"Pass pattern to search WITHIN the file instead of windowing: it returns each matching line with its " +
-		"1-based line number (and optional context_lines), so an over-cap file stays searchable in one tool — " +
-		"literal text by default (smart-case: case-insensitive when all lowercase), Go RE2 regex when use_regex; " +
-		"output is bounded by max_matches (default 200) and labelled when truncated. Combine pattern with " +
-		"start_line/end_line to restrict the search to a line window; pattern with limit is rejected."
+	return "Read a text file, or a 1-based line window of it. Lines carry a display-only '<n>\\t' gutter; strip it before reusing a line as an old_string. Binary files are refused; output is capped at 200 KiB. The header's mtime and sha256 go back to edit_file as expected_mtime/expected_sha. pattern searches within the file instead, so an over-cap file stays searchable."
 }
 
 type readFileArgs struct {

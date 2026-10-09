@@ -26,25 +26,25 @@ var minimalDiffReviewSchema = json.RawMessage(`{
   "properties": {
     "base_ref": {
       "type": "string",
-      "description": "Git ref to diff against (default HEAD, i.e. review uncommitted changes)."
+      "description": "Git ref to diff against (default HEAD: uncommitted changes)."
     },
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Restrict the review to these paths (workspace-relative or absolute). Strongly recommended in a shared worktree so unrelated peer-agent edits are excluded."
+      "description": "Limit the review to these paths; recommended in a shared worktree, to exclude peers' edits."
     },
     "mode": {
       "type": "string",
       "enum": ["changed", "staged"],
-      "description": "changed (default) reviews the working tree vs base_ref (all uncommitted changes); staged reviews only the index vs base_ref."
+      "description": "changed (default: working tree vs base_ref) or staged (index only)."
     },
     "max_findings": {
       "type": "integer",
-      "description": "Cap on findings returned (default 20, max 100)."
+      "description": "Findings returned (default 20, max 100)."
     },
     "include_suggestions": {
       "type": "boolean",
-      "description": "Include a concrete smaller-alternative line per finding (default true)."
+      "description": "Add a smaller-alternative line per finding (default true)."
     }
   },
   "additionalProperties": false
@@ -92,11 +92,7 @@ func (t *MinimalDiffReview) WithContested(fn ContestedFn) *MinimalDiffReview {
 func (*MinimalDiffReview) Name() string                 { return "minimal_diff_review" }
 func (*MinimalDiffReview) InputSchema() json.RawMessage { return minimalDiffReviewSchema }
 func (*MinimalDiffReview) Description() string {
-	return "Reviews a diff for signs of over-building — findings NEVER block a write, they are hints. " +
-		"Deterministic, no LLM: it flags a single-use abstraction, a thin forwarding wrapper, a new dependency with a well-known stdlib equivalent, a possible duplicate helper, and a logic change with no accompanying test change. " +
-		"Evidence is asymmetric: a check stays silent unless it can point at concrete evidence and (where defensible) a smaller alternative, so silence is NOT proof a change is minimal. " +
-		"Findings are labelled by confidence: high = proven from the diff text; low = leans on the topology index, which is approximate (its call graph is intra-file — unlike find_references' exact cross-file lookup) and may be a few edits stale. " +
-		"Reviews the working-tree diff vs base_ref (default HEAD); pass `files` to scope it to your change in a shared worktree. Degrades cleanly outside a git repository."
+	return "Review a diff for over-building; findings are hints and NEVER block a write. Deterministic, no LLM: flags a single-use abstraction, a thin forwarding wrapper, a new dependency with a stdlib equivalent, a likely duplicate helper, and a logic change without a test change. A check speaks only with concrete evidence, so silence is NOT proof of minimality. high confidence = proven from the diff; low = leans on the approximate, possibly stale topology index. Diffs the working tree against base_ref (default HEAD)."
 }
 
 type minimalDiffReviewArgs struct {
