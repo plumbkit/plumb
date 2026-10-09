@@ -78,12 +78,19 @@ type fsWatcher struct {
 	workspace string
 	sink      indexSink
 
-	// events and lost are the OS watcher's channels, and closeOS stops it. They
-	// are fields rather than a *fswatch.Watcher so tests can drive consume with
-	// channels of their own.
+	// events, lost and failed are the OS watcher's channels, and closeOS stops
+	// it. They are fields rather than a *fswatch.Watcher so tests can drive
+	// consume with channels of their own.
 	events  <-chan fswatch.Event
 	lost    <-chan struct{}
+	failed  <-chan struct{}
 	closeOS func()
+
+	// fallbackEvery is the periodic resync to run if the OS watcher fails for
+	// good: the store suppresses its own periodic resync while watching, so
+	// without this a dead watcher would leave the index blind. Zero (the user's
+	// resync_interval_minutes = 0) means none.
+	fallbackEvery time.Duration
 
 	// excludePatterns is the sanitised [topology] exclude_patterns list, applied
 	// here for the same reason the resync walk applies it: without it a write to
@@ -126,6 +133,7 @@ func newFSWatcher(workspace string, sink indexSink, excludePatterns []string) (*
 		sink:            sink,
 		events:          w.Events(),
 		lost:            w.Lost(),
+		failed:          w.Failed(),
 		closeOS:         w.Close,
 		excludePatterns: excludePatterns,
 		done:            make(chan struct{}),
@@ -150,14 +158,36 @@ func (fw *fsWatcher) Stop() {
 	fw.wg.Wait()
 }
 
-// consume drains the watcher's event and loss channels until Stop. A loss
-// signal means individual changes may never arrive (an OS queue overflow, a
-// rescan request, a full buffer), so the whole tree is reconciled.
+// consume drains the watcher's channels until Stop. A loss signal means
+// individual changes may never arrive (an OS queue overflow, a rescan request,
+// a full buffer), so the whole tree is reconciled. A failed watcher delivers
+// nothing more, so from then on the tree is reconciled every fallbackEvery.
 func (fw *fsWatcher) consume() {
+	failed := fw.failed
+	var fallback <-chan time.Time
+	var ticker *time.Ticker
+	defer func() {
+		if ticker != nil {
+			ticker.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-fw.done:
 			return
+		case <-failed:
+			failed = nil
+			if fw.fallbackEvery <= 0 {
+				slog.Warn("topology: file watcher failed and resync_interval_minutes is 0; the index will not see external changes until the next start",
+					"workspace", fw.workspace)
+				continue
+			}
+			slog.Warn("topology: file watcher failed; falling back to periodic resync",
+				"workspace", fw.workspace, "every", fw.fallbackEvery)
+			ticker = time.NewTicker(fw.fallbackEvery)
+			fallback = ticker.C
+		case <-fallback:
+			fw.sink.Resync()
 		case ev, ok := <-fw.events:
 			if !ok {
 				return

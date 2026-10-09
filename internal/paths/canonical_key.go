@@ -82,6 +82,10 @@ var caseFoldCacheLen atomic.Int64
 
 const caseFoldCacheMax = 4096
 
+// FoldsCase reports whether the filesystem holding dir is case-insensitive,
+// from the same cached probe CanonicalKey uses.
+func FoldsCase(dir string) bool { return foldsCase(dir) }
+
 // foldsCase reports whether the filesystem holding dir is case-insensitive.
 func foldsCase(dir string) bool {
 	if v, ok := caseFoldCache.Load(dir); ok {

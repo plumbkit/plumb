@@ -152,8 +152,11 @@ func liveDatabase(t *testing.T, root string) (*sql.DB, [3]string) {
 
 // TestWatcher_KeepsSQLiteLocks is the PLAN-488 regression. It covers a source
 // file symlinked to the live database and to its shared-memory file (a
-// backend that opened entries would open the database through them), and
-// repeated start/stop cycles, the way pool hibernation churns watchers.
+// backend that opened entries would open the database through them), a new
+// symlink to the database created and removed while each watcher runs (an
+// expansion or an event handler that followed it would open the database), a
+// directory swapped for a symlink to .plumb, and repeated start/stop cycles,
+// the way pool hibernation churns watchers.
 func TestWatcher_KeepsSQLiteLocks(t *testing.T) {
 	root := t.TempDir()
 	db, files := liveDatabase(t, root)
@@ -211,6 +214,29 @@ func TestWatcher_KeepsSQLiteLocks(t *testing.T) {
 			w.Close()
 			t.Fatalf("cycle %d: the watcher delivered no event, so it cannot be shown established", cycle)
 		}
+		// While it runs: a new alias of the database, and a directory that
+		// becomes a symlink to .plumb (expanded on Create/Rename).
+		alias := filepath.Join(src, fmt.Sprintf("alias%d.db", cycle))
+		if err := os.Symlink(files[0], alias); err != nil {
+			t.Fatal(err)
+		}
+		swap := filepath.Join(root, fmt.Sprintf("swap%d", cycle))
+		if err := os.Mkdir(swap, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(swap); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(root, ".plumb"), swap); err != nil {
+			t.Fatal(err)
+		}
+		if !waitFor(func() bool { return c.count(alias, 0) > 0 }, 10*time.Second) {
+			t.Errorf("cycle %d: the new alias of the database was not reported under its own name", cycle)
+		}
+		if err := os.Remove(alias); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond) // let the removal and the swap be handled
 		for i, f := range files {
 			if n := descriptorsOn(t, f) - base[i]; n != 0 {
 				t.Errorf("cycle %d: the watcher holds %d descriptor(s) on %s", cycle, n, filepath.Base(f))

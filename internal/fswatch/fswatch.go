@@ -14,23 +14,34 @@
 //
 // The backends are therefore:
 //
-//   - darwin: FSEvents through github.com/fswatcher/fswatcher, which calls
-//     CoreServices via purego and so needs no cgo. One recursive stream per
-//     root; it opens nothing in the tree. Release builds (CGO_ENABLED=0) and
-//     local cgo builds run the same code.
+//   - darwin: FSEvents through plumb's own binding (fsevents_darwin.go), which
+//     calls CoreServices via purego and so needs no cgo. One recursive stream
+//     per root; it opens nothing in the tree. Release builds (CGO_ENABLED=0)
+//     and local cgo builds run the same code.
 //   - linux, windows: github.com/sgtdi/fswatcher (inotify,
-//     ReadDirectoryChangesW). Neither opens the files it watches. sgtdi is kept
-//     here rather than fswatcher/fswatcher because the latter's inotify backend
-//     drops IN_Q_OVERFLOW silently and never registers a populated directory
-//     moved into the tree.
+//     ReadDirectoryChangesW). Neither opens the files it watches.
 //   - everything else: no watcher. New returns an error that names the
 //     hazard, and callers fall back to periodic resync. The BSDs only offer
 //     kqueue, which would reintroduce the lock loss.
+//
+// Every backend keeps the same contract, and the tests hold each to it:
+//
+//   - It never opens a file under the root.
+//   - Event paths are absolute, under the root as the caller spelled it, and
+//     name the entry that changed: a symlink is reported under its own name,
+//     not its target's.
+//   - Whenever it cannot report changes one by one (a queue overflow, a
+//     rescan request, a directory too large to expand, the root itself being
+//     removed or replaced, a full buffer), it says so on Lost instead of
+//     staying silent.
+//   - It keeps watching the root PATH: a root directory renamed away and
+//     recreated, or replaced by another, is watched again.
 package fswatch
 
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -90,15 +101,19 @@ const eventBuffer = 4096
 
 // Watcher watches one root recursively.
 //
-// Concurrency: New starts the backend's goroutines; Events and Lost may be read
-// from any goroutine. The backend is the only sender on both channels, and it
-// never blocks on a consumer: a full Events buffer is reported on Lost instead.
-// Close stops the backend, waits for its goroutines, then closes both channels.
-// Close is safe to call more than once and from any goroutine.
+// Concurrency: New starts the backend's goroutines; Events, Lost and Failed may
+// be read from any goroutine. The backend is the only sender on Events and Lost,
+// and it never blocks on a consumer: a full Events buffer is reported on Lost
+// instead. Close stops the backend, waits for its goroutines, then closes Events
+// and Lost. Close is safe to call more than once and from any goroutine.
 type Watcher struct {
 	root   string
 	events chan Event
 	lost   chan struct{}
+
+	// failed is closed, once, by a backend that has stopped for good. Only the
+	// sgtdi supervisor can (backend_sgtdi.go); FSEvents streams do not die.
+	failed chan struct{}
 
 	exclude     *regexp.Regexp // Options.ExcludeRegex, nil when empty
 	expandLimit int            // maxExpand, smaller in tests
@@ -117,6 +132,14 @@ func New(root string, opts Options) (*Watcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fswatch: %s: %w", root, err)
 	}
+	// Checked here rather than left to the backend: FSEvents happily watches a
+	// path that does not exist, while inotify refuses, and a caller should get
+	// the same answer on every platform.
+	if fi, err := os.Stat(abs); err != nil {
+		return nil, fmt.Errorf("fswatch: %w", err)
+	} else if !fi.IsDir() {
+		return nil, fmt.Errorf("fswatch: %s is not a directory", abs)
+	}
 	if opts.Cooldown < 0 {
 		return nil, fmt.Errorf("fswatch: negative cooldown %v", opts.Cooldown)
 	}
@@ -130,6 +153,7 @@ func New(root string, opts Options) (*Watcher, error) {
 		root:        filepath.Clean(abs),
 		events:      make(chan Event, eventBuffer),
 		lost:        make(chan struct{}, 1),
+		failed:      make(chan struct{}),
 		exclude:     exclude,
 		expandLimit: maxExpand,
 		done:        make(chan struct{}),
@@ -150,6 +174,14 @@ func (w *Watcher) Events() <-chan Event { return w.events }
 // losses. The only sound response is to reconcile the whole tree. It is closed
 // by Close.
 func (w *Watcher) Lost() <-chan struct{} { return w.lost }
+
+// Failed is closed if the backend stops for good on its own: no further events
+// will arrive from this Watcher, ever. It is a degraded state, not a loss to
+// reconcile once. Lost is signalled too, but a single reconcile restores
+// nothing after it, so a consumer relying on events for freshness must fall back
+// to something periodic. A lost root is NOT a failure: the Watcher waits for the
+// root to return. Close does not close Failed.
+func (w *Watcher) Failed() <-chan struct{} { return w.failed }
 
 // Close stops watching and waits for the backend to finish.
 func (w *Watcher) Close() {

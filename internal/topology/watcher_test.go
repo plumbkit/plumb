@@ -103,6 +103,48 @@ func TestFSWatcher_LostEscalatesToResync(t *testing.T) {
 	fw.Stop()
 }
 
+// TestFSWatcher_FailedFallsBackToPeriodicResync: a watcher that has failed for
+// good delivers nothing more, and the store suppressed its own periodic resync
+// while watching, so the consumer must reconcile on the configured interval
+// from then on, and must not when that interval is 0.
+func TestFSWatcher_FailedFallsBackToPeriodicResync(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		every    time.Duration
+		wantMore bool
+	}{
+		{"configured interval", 20 * time.Millisecond, true},
+		{"resync_interval_minutes = 0", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failed := make(chan struct{})
+			sink := &lockedFakeSink{}
+			fw := &fsWatcher{
+				workspace: t.TempDir(), sink: sink,
+				events: make(chan fswatch.Event), lost: make(chan struct{}), failed: failed,
+				fallbackEvery: tc.every, done: make(chan struct{}),
+			}
+			fw.Start()
+			t.Cleanup(fw.Stop)
+			time.Sleep(60 * time.Millisecond)
+			if n := sink.resyncCount(); n != 0 {
+				t.Fatalf("%d resyncs before the watcher failed", n)
+			}
+			close(failed)
+			if tc.wantMore {
+				if !waitFor(func() bool { return sink.resyncCount() >= 3 }, 5*time.Second) {
+					t.Errorf("resyncs = %d after the watcher failed, want a steady fallback", sink.resyncCount())
+				}
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+			if n := sink.resyncCount(); n != 0 {
+				t.Errorf("%d resyncs with resync_interval_minutes = 0", n)
+			}
+		})
+	}
+}
+
 // lockedFakeSink is a fakeSink safe to read while the consumer goroutine runs.
 type lockedFakeSink struct {
 	mu      sync.Mutex

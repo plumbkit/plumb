@@ -60,8 +60,10 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 		default:
 			// Event-driven freshness replaces time-based polling: suppress the
 			// periodic resync. A full resync still runs once at startup (Indexer.Start)
-			// and whenever the OS reports dropped/overflowed events.
+			// and whenever the OS reports dropped/overflowed events. Should the
+			// watcher fail for good, it falls back to the configured interval.
 			idx.resyncMins = 0
+			w.fallbackEvery = time.Duration(cfg.ResyncIntervalMinutes) * time.Minute
 			s.watcher = w
 			watcher = w
 		}

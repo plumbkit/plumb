@@ -15,6 +15,7 @@ func testWatcher(root string, buffer int) *Watcher {
 		root:        root,
 		events:      make(chan Event, buffer),
 		lost:        make(chan struct{}, 1),
+		failed:      make(chan struct{}),
 		exclude:     regexp.MustCompile(ExcludeDirsRegex(root, "vendor")),
 		expandLimit: maxExpand,
 		done:        make(chan struct{}),

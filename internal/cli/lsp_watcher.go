@@ -34,9 +34,11 @@ type lspFSWatcher struct {
 	workspace string
 	client    *clientProxy
 
-	// events and lost are the OS watcher's channels, and closeOS stops it.
+	// events, lost and failed are the OS watcher's channels, and closeOS stops
+	// it.
 	events  <-chan fswatch.Event
 	lost    <-chan struct{}
+	failed  <-chan struct{}
 	closeOS func()
 
 	done     chan struct{}
@@ -57,6 +59,7 @@ func newLSPFSWatcher(workspace string, client *clientProxy) (*lspFSWatcher, erro
 		client:    client,
 		events:    w.Events(),
 		lost:      w.Lost(),
+		failed:    w.Failed(),
 		closeOS:   w.Close,
 		done:      make(chan struct{}),
 	}, nil
@@ -78,10 +81,14 @@ func (fw *lspFSWatcher) Stop() {
 }
 
 func (fw *lspFSWatcher) consume() {
+	failed := fw.failed
 	for {
 		select {
 		case <-fw.done:
 			return
+		case <-failed:
+			failed = nil
+			slog.Warn("lsp: file watcher failed; the language server will not hear of external changes until the workspace is reopened", "workspace", fw.workspace)
 		case ev, ok := <-fw.events:
 			if !ok {
 				return

@@ -3,13 +3,9 @@
 package fswatch
 
 import (
-	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/fswatcher/fswatcher"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -20,84 +16,89 @@ import (
 // the deadline out again and nothing is ever delivered.
 const maxHoldFactor = 5
 
-// startBackend runs one FSEvents stream over the root. fswatcher/fswatcher
-// reaches CoreServices through purego, so this holds in CGO_ENABLED=0 builds;
-// the stream reports paths and opens no file under the root.
+// fseLossFlags mark a record that stands for changes FSEvents could not report
+// one by one: a subtree to rescan because events were dropped (by the kernel,
+// by fseventsd, or for this client), a volume mounted or unmounted inside the
+// tree, or the root path changing (only reported with WatchRoot, which the
+// stream does not use, but never ignored if it appears).
+const fseLossFlags = fseMustScanSubDirs | fseUserDropped | fseKernelDropped | fseRootChanged | fseMount | fseUnmount
+
+// startBackend runs one FSEvents stream over the root (fsevents_darwin.go). It
+// reports paths and opens nothing under the root, in every build.
 func (w *Watcher) startBackend(opts Options) error {
-	src, err := fswatcher.NewWatcher()
+	s, err := openFSEventStream(w.root)
 	if err != nil {
-		return fmt.Errorf("fswatch: %w", err)
+		return err
 	}
-	if err := src.AddRecursive(w.root, fswatcher.All); err != nil {
-		_ = src.Close()
-		return fmt.Errorf("fswatch: %w", err)
-	}
-	// FSEvents reports resolved paths (/private/var/... for /var/...), and the
-	// library resolves symlinks in every event path besides; callers relate
-	// events to the root they passed, so map the resolved prefix back.
+	canon := paths.Canonical(w.root)
 	p := &fseventsPump{
 		w:     w,
-		canon: paths.Canonical(w.root),
+		canon: canon,
+		fold:  paths.FoldsCase(canon),
 		deb:   newDebouncer(opts.Cooldown),
 	}
-	// The library blocks its FSEvents dispatch queue while its channels are
-	// full, so they are drained here without pause; whatever plumb's consumer
-	// does, this goroutine never waits on it.
-	w.wg.Go(func() { p.run(src.Events, src.Errors) })
-	w.stop = func() { _ = src.Close() }
+	// The callback waits on this goroutine to take each batch, so it reads
+	// without pause; whatever plumb's consumer does, it never waits on it.
+	w.wg.Go(func() { p.run(s.batches) })
+	w.stop = s.close
 	return nil
 }
 
-// fseventsPump moves events from the library to the Watcher: rebased onto the
-// caller's root, filtered, debounced, and delivered without blocking.
+// fseventsPump moves FSEvents records to the Watcher: rebased onto the caller's
+// root, filtered, debounced, and delivered without blocking.
 type fseventsPump struct {
 	w     *Watcher
-	canon string // the root with symlinks resolved
+	canon string // the root with symlinks resolved, as FSEvents reports it
+	fold  bool   // the root's volume is case-insensitive
 	deb   *debouncer
 }
 
-// run drains evs and errs until both are closed (the library closes them when
-// it is closed) or the Watcher is closed. Every value on errs means events may
-// be missing; the library sends one for FSEvents' MustScanSubDirs, which is how
-// the kernel and fseventsd report dropped events, and treating any error alike
-// keeps that from hinging on its message text.
-func (p *fseventsPump) run(evs <-chan fswatcher.Event, errs <-chan error) {
+// run drains batches until the Watcher is closed.
+func (p *fseventsPump) run(batches <-chan []rawEvent) {
 	var tick <-chan time.Time
 	if p.deb.cooldown > 0 {
 		t := time.NewTicker(flushInterval(p.deb.cooldown))
 		defer t.Stop()
 		tick = t.C
 	}
-	for evs != nil || errs != nil {
+	for {
 		select {
 		case <-p.w.done:
 			return
-		case ev, ok := <-evs:
-			if !ok {
-				evs = nil
-				continue
+		case batch := <-batches:
+			now := time.Now()
+			for _, ev := range batch {
+				p.accept(ev, now)
 			}
-			p.accept(ev, time.Now())
-		case err, ok := <-errs:
-			if !ok {
-				errs = nil
-				continue
-			}
-			slog.Debug("fswatch: FSEvents reported possible loss", "root", p.w.root, "err", err)
-			p.w.signalLost()
 		case now := <-tick:
 			p.deb.flush(now, p.w.deliver)
 		}
 	}
 }
 
-// accept takes one library event through rebasing, exclusion and debouncing.
-func (p *fseventsPump) accept(ev fswatcher.Event, now time.Time) {
-	op := opFromLibrary(ev.Op)
+// accept takes one FSEvents record through loss detection, rebasing,
+// exclusion, debouncing and directory expansion.
+func (p *fseventsPump) accept(ev rawEvent, now time.Time) {
+	if ev.flags&fseLossFlags != 0 {
+		p.w.signalLost()
+	}
+	op := opFromFlags(ev.flags)
 	if op == 0 {
 		return
 	}
-	path := p.rebase(ev.Name)
+	path := p.rebase(ev.path)
+	if path == p.w.root {
+		// The root directory itself was removed, renamed away, recreated, or
+		// replaced by another moved into its place. The stream watches the PATH
+		// and keeps reporting for whatever directory lives there, but nothing
+		// reports the contents of one that arrived whole, nor what left with the
+		// old one: only a reconcile can. The root's own metadata changes (a
+		// Chmod, a Write to the directory) need nothing.
+		if op.Has(Create | Remove | Rename) {
+			p.w.signalLost()
+		}
+		return
+	}
 	if p.w.excluded(path) {
 		return
 	}
@@ -116,38 +117,61 @@ func (p *fseventsPump) emit(path string, op Op, now time.Time) {
 }
 
 // rebase rewrites a path under the resolved root onto the caller's spelling of
-// the root. A path outside it (a symlink the library resolved to its target
-// elsewhere) is returned unchanged; callers drop it when it is not under root.
+// the root: FSEvents reports /private/var/... for a root given as /var/....
+// On a case-insensitive volume (the APFS and HFS+ default) the prefix is also
+// matched case-insensitively, because FSEvents spells the root as it is on disk
+// and the caller may not have; on a case-sensitive one a differently cased
+// prefix is another directory and is never rewritten. A path outside the root
+// is returned unchanged; callers drop it.
 func (p *fseventsPump) rebase(path string) string {
-	if p.canon == p.w.root {
+	rest, ok := cutRoot(path, p.canon, p.fold)
+	if !ok {
 		return path
 	}
-	if path == p.canon {
+	if rest == "" {
 		return p.w.root
 	}
-	if rest, ok := strings.CutPrefix(path, p.canon+string(filepath.Separator)); ok {
-		return filepath.Join(p.w.root, rest)
-	}
-	return path
+	return filepath.Join(p.w.root, rest)
 }
 
-// opFromLibrary maps the library's bits onto Op explicitly, so a reordering of
-// its constants cannot silently change what plumb sees.
-func opFromLibrary(in fswatcher.Op) Op {
+// cutRoot reports whether path is root or lies beneath it, and the part after
+// root's separator ("" for root itself). fold compares the prefix
+// case-insensitively.
+func cutRoot(path, root string, fold bool) (string, bool) {
+	if len(path) < len(root) {
+		return "", false
+	}
+	if head := path[:len(root)]; head != root && (!fold || !strings.EqualFold(head, root)) {
+		return "", false
+	}
+	rest := path[len(root):]
+	if rest == "" {
+		return "", true
+	}
+	if rest[0] != filepath.Separator {
+		return "", false // a sibling sharing the root's name as a prefix
+	}
+	return rest[1:], true
+}
+
+// opFromFlags maps FSEvents item flags onto Op. The flags of one record
+// accumulate everything that happened to the path within the stream's latency,
+// so several bits are common.
+func opFromFlags(f uint32) Op {
 	var op Op
-	if in.Has(fswatcher.Create) {
+	if f&fseItemCreated != 0 {
 		op |= Create
 	}
-	if in.Has(fswatcher.Write) {
+	if f&fseItemModified != 0 {
 		op |= Write
 	}
-	if in.Has(fswatcher.Remove) {
+	if f&fseItemRemoved != 0 {
 		op |= Remove
 	}
-	if in.Has(fswatcher.Rename) {
+	if f&fseItemRenamed != 0 {
 		op |= Rename
 	}
-	if in.Has(fswatcher.Chmod) {
+	if f&(fseItemInodeMetaMod|fseItemFinderInfoMod|fseItemChangeOwner|fseItemXattrMod) != 0 {
 		op |= Chmod
 	}
 	return op
