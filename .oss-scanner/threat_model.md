@@ -45,7 +45,8 @@ Most:
 - The project-config trust boundary: `internal/config` (`project_classification.go`,
   `trust.go`), which decides what a cloned `.plumb/config.toml` may change.
 - Execution: `internal/tools/run_command.go`, `tasks.go`, the sandbox
-  (`sandbox_linux.go` uses `bwrap`, installed in this image), the git policy
+  (`sandbox_linux.go` uses `bwrap`, installed in this image; it needs user
+  namespaces, and plumb checks only that the binary is on `PATH`), the git policy
   (`internal/tools/git*.go`), and language-server spawning (`internal/lsp`).
 - The proxy and protocol edge: `internal/cli` (serve proxy framing, pin replay,
   resume-credential strip), `internal/mcp` (argument guard, logical-agent
