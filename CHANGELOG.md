@@ -153,6 +153,14 @@
 
 ### Fixed
 
+- **`edit_file`'s near-match hint no longer prints a sensitive path's content
+  (PLAN-456).** When `old_string` was not found, the hint rendered the file's
+  current lines (the `+` side of a labelled diff) — for a path matching
+  `[history] sensitive_globs` too, so an error response was a way around the
+  withholding the write response applies. The hint now asks the same resolver
+  (`SensitivePathFn`) and, for a sensitive path, keeps only what reveals no
+  content: the closest-match line number and the RANGE-mode retry call. A path
+  the gate does not match renders the diff exactly as before.
 - **On macOS the daemon no longer loses its SQLite locks to its own config
   watchers (PLAN-485).** The project config watcher watched
   `<workspace>/.plumb`, and the global one watched the global config directory,

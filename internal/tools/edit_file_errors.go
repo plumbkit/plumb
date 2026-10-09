@@ -63,7 +63,11 @@ func (t *EditFile) notFoundError(ctx context.Context, i int, path, sent, searche
 	if looksGuttered(searched) {
 		b.WriteString("\n  Hint: old_string appears to include the display-only line-number gutter from read_file/read_symbol (\"<n>\\t\" at line start) — strip the gutter and retry.")
 	}
-	if diff := closestMatchDiff(content, searched, path); diff != "" {
+	// #588's D2 residual, closed: a sensitive path's content is withheld from the
+	// write response, and this error response was the other way out — so it asks the
+	// same resolver, and keeps only what reveals no content (the line number and the
+	// RANGE-mode retry route).
+	if diff := closestMatchDiff(content, searched, path, t.deps.withholdsResponse(ctx, path)); diff != "" {
 		b.WriteString("\n")
 		b.WriteString(diff)
 	}
