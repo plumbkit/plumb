@@ -142,6 +142,43 @@ func TestGit_WorktreeRemoveRefusesAnOrphanedDetachedHead(t *testing.T) {
 	}
 }
 
+// TestGit_WorktreeRemoveAllowsAReachableDetachedHead is the control review round
+// 1 asked for: a detached HEAD whose commit a branch already names has nothing to
+// orphan, so a plain remove works. Without it, a guard that refused EVERY
+// detached HEAD would still pass the orphan tests above.
+func TestGit_WorktreeRemoveAllowsAReachableDetachedHead(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	wt := filepath.Join(t.TempDir(), "detached-reachable")
+	gitRun(t, repo, "worktree", "add", "--detach", wt, "HEAD") // no new commit here
+
+	tool := NewGit(WriteDeps{}, func() GitPolicy { return GitPolicy{AllowWrites: true} })
+	if _, err := callGit(t, tool, map[string]any{
+		"subcommand": "worktree", "args": []string{"remove", wt}, "repo": repo,
+	}); err != nil {
+		t.Fatalf("a detached HEAD whose commit a branch reaches needs no confirmation: %v", err)
+	}
+	if _, statErr := os.Stat(wt); !os.IsNotExist(statErr) {
+		t.Errorf("the worktree still exists after removal: %v", statErr)
+	}
+}
+
+// TestGit_WorktreeRepairPathsAreConfined covers the reviewer's finding that
+// `worktree repair <path>...` writes a `.git` FILE inside each named worktree, so
+// its arguments are paths plumb must confine.
+func TestGit_WorktreeRepairPathsAreConfined(t *testing.T) {
+	_, repo, deps := boundaryGitFixture(t)
+	tool := NewGit(deps, func() GitPolicy { return GitPolicy{AllowDestructive: true} })
+	outside := t.TempDir()
+
+	_, err := callGit(t, tool, map[string]any{
+		"subcommand": "worktree", "args": []string{"repair", outside}, "repo": repo, "confirm": true,
+	})
+	if err == nil || !IsWorkspaceBoundaryError(err) {
+		t.Fatalf("worktree repair outside the workspace = %v, want a boundary refusal", err)
+	}
+}
+
 // TestGit_WorktreeRemoveAllowsACleanBranchWorktree is the control for the guard
 // above: a worktree on a branch has nothing orphaned, so a plain remove works
 // with no confirmation at all.

@@ -331,11 +331,15 @@ func classifyWorktree(args []string) gitTier {
 		return tierRead
 	case "add":
 		// -B/--force-create resets an existing branch to the start point, which
-		// discards its commits exactly as `checkout -B` does; refineRefReset
-		// lowers it back to a write for a branch that does not exist yet. -f/--force
-		// lets two worktrees hold the SAME branch (git refuses that without it), so
-		// the branch can then be committed to from either checkout — destructive
-		// for the same reason `checkout -B` is.
+		// discards its commits exactly as `checkout -B` does. -f/--force lets two
+		// worktrees hold the SAME branch (git refuses that without it), so the branch
+		// can then be committed to from either checkout — destructive for the same
+		// reason `checkout -B` is.
+		//
+		// Neither is lowered back to a write for a branch that does not exist yet:
+		// refResetForm (git_ref_reset.go) recognises switch, checkout and tag, and the
+		// `branch -f` precedent is that a forced BRANCH operation is never lowered —
+		// worktree add is a branch operation, so it keeps the higher tier.
 		if worktreeGrammar.has(args, "Bf", "force-create", "force") {
 			return tierDestructive
 		}

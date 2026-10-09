@@ -33,11 +33,13 @@ func (t *Git) checkGitWorktree(ctx context.Context, a gitToolArgs) error {
 }
 
 // worktreeConfinedPaths returns the arguments of a worktree sub-verb that name a
-// path on disk: the directory `add` creates, the worktree `remove` deletes, and
-// both the worktree `move` leaves and the path it enters. `list`, `lock`,
-// `unlock`, `prune` and `repair` name no path plumb must confine — lock and
-// unlock address a worktree the repository already knows, and the rest touch
-// only git's own administration inside the repository.
+// path on disk: the directory `add` creates, the worktree `remove` deletes, both
+// the worktree `move` leaves and the path it enters, and every directory
+// `repair` rewrites (repair writes a `.git` FILE inside each named worktree, so
+// its arguments are paths in exactly the sense this function means). `list`,
+// `lock`, `unlock` and `prune` name no path plumb must confine — lock and unlock
+// address a worktree the repository already knows, and prune touches only git's
+// own administration inside the repository.
 //
 // `add`'s optional trailing argument is a commit-ish, not a path, so it is not
 // returned: `git worktree add [-b branch] <path> [<commit-ish>]`.
@@ -51,6 +53,8 @@ func worktreeConfinedPaths(args []string) []string {
 		return pos[1:2]
 	case "move":
 		return pos[1:min(3, len(pos))]
+	case "repair":
+		return pos[1:]
 	default:
 		return nil
 	}
