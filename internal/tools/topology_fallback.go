@@ -172,9 +172,13 @@ func formatTopologyMatches(note, header string, nodes []topology.Node) string {
 const topologyFillNote = "[topology fill — the language server returned no matches; supplementing from the index. source=topology, mode=indexed-approximate]"
 
 // formatTopologyFill renders index hits that supplement an empty LSP result.
-func formatTopologyFill(header string, nodes []topology.Node) string {
+//
+// A fill's hits ARE the answer (the server is up, it simply had not analysed the
+// file yet), so a failing index makes them exactly as untrustworthy as a fallback's:
+// the stale-index clause goes inside the banner for the same reason (PLAN-490).
+func formatTopologyFill(store *topology.Store, header string, nodes []topology.Node) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n%s:\n\n", topologyFillNote, header)
+	fmt.Fprintf(&sb, "%s%s\n%s:\n\n", topologyFillNote, staleIndexSuffixFor(store, time.Now()), header)
 	for _, n := range nodes {
 		fmt.Fprintf(&sb, "- %s (%s) at %s:%d\n", n.Name, string(n.Kind), n.Path, n.StartLine)
 	}

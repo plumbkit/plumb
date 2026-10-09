@@ -152,7 +152,7 @@ func (t *WorkspaceSymbols) topologyFillTreeSitter(ctx context.Context, query str
 	if len(nodes) == 0 {
 		return "", false
 	}
-	return formatTopologyFill(fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
+	return formatTopologyFill(activeTopology(t.topo), fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
 func hasSwiftWorkspaceSymbol(symbols []protocol.SymbolInformation) bool {
