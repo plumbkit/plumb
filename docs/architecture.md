@@ -886,12 +886,21 @@ share.
 
 The recursive workspace watchers (the topology index and the LSP
 `didChangeWatchedFiles` feed) obey the same rule through `internal/fswatch`,
-the one place an OS backend is chosen: FSEvents on macOS via purego (no cgo, so
-release builds get it too), sgtdi/fswatcher's inotify and ReadDirectoryChangesW
-backends on Linux and Windows, and nothing elsewhere. None of these opens a
-watched file. Release builds used to get sgtdi/fswatcher's kqueue backend on
-macOS, which opened every file in the tree, `.plumb`'s databases included, and
-released their locks whenever a watcher stopped (PLAN-488).
+the one place an OS backend is chosen: on macOS plumb's own FSEvents binding
+(`fsevents_darwin.go`, via purego, so no cgo and release builds get it too),
+sgtdi/fswatcher's inotify and ReadDirectoryChangesW backends on Linux and
+Windows, and nothing elsewhere. None of these opens a watched file. Release
+builds used to get sgtdi/fswatcher's kqueue backend on macOS, which opened every
+file in the tree, `.plumb`'s databases included, and released their locks
+whenever a watcher stopped (PLAN-488).
+
+Every backend keeps one contract (`internal/fswatch/fswatch.go`, tested by
+`scenarios_test.go` on each platform): event paths are the changed entry's own
+(a symlink is never reported under its target), anything it cannot report one
+by one is signalled on `Lost` (consumers then resync), a root directory that is
+renamed away, recreated or replaced is watched again, and a backend that stops
+for good closes `Failed`, on which the topology index falls back to
+`resync_interval_minutes`.
 
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.

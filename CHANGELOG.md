@@ -140,18 +140,35 @@
   next process to open a database could checkpoint and unlink a WAL the daemon
   was still writing. Local `make install` builds use cgo, and so FSEvents, which
   is why this went unseen.
-  - The watchers now go through `internal/fswatch`. On macOS it uses FSEvents
-    via `github.com/fswatcher/fswatcher` v0.1.0, which reaches CoreServices
-    through purego, so release and cgo builds run the same backend and nothing
-    in the tree is opened. Linux and Windows keep sgtdi/fswatcher (inotify and
-    ReadDirectoryChangesW open nothing either; fswatcher/fswatcher's inotify
-    backend drops queue overflows silently). Other platforms, whose only
+  - The watchers now go through `internal/fswatch`. On macOS it uses plumb's
+    own FSEvents binding, which reaches CoreServices through purego (no cgo),
+    so release and cgo builds run the same backend and nothing in the tree is
+    opened. Linux and Windows keep sgtdi/fswatcher (inotify and
+    ReadDirectoryChangesW open nothing either). Other platforms, whose only
     recursive watcher is kqueue, now refuse to watch and fall back to periodic
     resync.
+  - Event paths are reported as the OS gives them, so creating or renaming a
+    symlink inside the workspace is reported under the link's own name and the
+    topology index picks it up. (github.com/fswatcher/fswatcher, tried first,
+    resolved every path to the link's target, and dropped its stream for good
+    when the workspace directory was renamed.)
+  - A workspace directory that is renamed away and recreated, or replaced by
+    another, is watched again on every platform, with a full resync, instead
+    of the watcher going silently dead. On Linux this was already broken before
+    this release: inotify's watch followed the old directory.
+  - A watcher that stops for good on its own (Linux and Windows, e.g. at the
+    inotify watch limit) now says so: the topology index falls back to its
+    `resync_interval_minutes`, and the LSP watcher logs a warning.
   - A watcher also uses far fewer descriptors on macOS release builds: a
     500-file tree went from about 520 descriptors per watcher to about 12.
-  - A populated directory moved into a workspace now has its files reported on
-    macOS; FSEvents reports only the directory, which the topology index skips.
+  - A populated directory moved into a workspace now has its files reported;
+    FSEvents reports only the directory, which the topology index skips, and
+    inotify misses files created in a new directory before it watches it.
+  - Accepted behaviour change for macOS release builds: editing the target of
+    an indexed in-workspace symlink no longer re-indexes the symlink until the
+    next resync. kqueue happened to report the link too, because opening it
+    opened the target; FSEvents and inotify report only the target, as cgo
+    builds and Linux always have. Tracked as PLAN-502.
   - The LSP watcher's exclusion is now anchored at the workspace, as the
     topology watcher's already was. Its unanchored pattern matched a
     dot-prefixed directory the workspace merely lives under (`~/.config/app`,

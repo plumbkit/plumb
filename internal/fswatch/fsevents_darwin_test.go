@@ -195,9 +195,9 @@ func TestFSEventStream_SymlinkKeepsItsOwnName(t *testing.T) {
 	}
 }
 
-// TestFSEventStream_RootRenamedAndRecreated: without WatchRoot, the stream
-// watches the PATH. A root renamed away and recreated, and then a root replaced
-// in place by a populated directory, keep being reported.
+// TestFSEventStream_RootRenamedAndRecreated: an FSEvents stream watches the
+// PATH, and the binding never drops one. A root renamed away and recreated, and
+// then a root replaced in place by a populated directory, keep being reported.
 func TestFSEventStream_RootRenamedAndRecreated(t *testing.T) {
 	base := resolvedTempDir(t)
 	root := filepath.Join(base, "ws")

@@ -10,18 +10,21 @@ package fswatch
 //
 // It replaces github.com/fswatcher/fswatcher, whose darwin backend this follows
 // for the CoreFoundation, CoreServices and libdispatch calls (MIT licence,
-// Copyright (c) 2026 Yasuhiro Matsumoto). Two of that library's choices
-// broke plumb, and are the reason this file exists (PLAN-488):
+// Copyright (c) 2026 Yasuhiro Matsumoto; see NOTICE.md). Two of that library's
+// choices broke plumb, and are the reason this file exists (PLAN-488):
 //
 //   - It resolves symlinks in every event path. Creating alias.go -> real.go
 //     then arrives as a change to real.go, and the topology index, which keeps
 //     an in-workspace symlink under its own name, never learns of the alias.
 //     Here the path is FSEvents' own: the link's.
-//   - It creates its stream with kFSEventStreamCreateFlagWatchRoot and drops the
-//     stream the first time the root is renamed, so a workspace directory that is
-//     moved away and recreated is never watched again and nothing says so. A
-//     stream without that flag watches a PATH: it keeps reporting for whatever
-//     directory lives there.
+//   - It removes its stream when the root is renamed (it creates the stream
+//     with kFSEventStreamCreateFlagWatchRoot and reacts to the RootChanged
+//     notice that brings), so a workspace directory moved away and recreated is
+//     never watched again and nothing says so. FSEvents itself watches a PATH
+//     and keeps reporting for whatever directory lives there; this binding
+//     never drops a stream, and the pump turns any change to the root itself
+//     into a reconcile. (WatchRoot alone is harmless, which a mutant adding it
+//     confirms; it is left off because the pump does not need its notice.)
 
 import (
 	"errors"
@@ -55,7 +58,7 @@ const (
 )
 
 // FSEvents stream creation flags (kFSEventStreamCreateFlag*). WatchRoot (0x04)
-// is deliberately absent; see the file comment.
+// is not used: the root's own records already say when it changes.
 const (
 	fseCreateNoDefer    = 0x02
 	fseCreateFileEvents = 0x10
