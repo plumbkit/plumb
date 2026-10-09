@@ -176,10 +176,12 @@ func TestPinnedSetMatchesPinnedTools(t *testing.T) {
 // and 3,157 bytes respectively, driven by per-parameter documentation the
 // description-budget work in this card does not touch. Measured (not guessed,
 // same discipline as maxDescriptionChars above): the full 20-tool
-// PinnedTools payload is ~42,700 bytes today. The cap below is that
-// measurement plus modest headroom — a ratchet against payload growth, not an
-// aspirational target this card's description trims could ever reach alone.
-const maxPinnedBytes = 45000
+// PinnedTools payload was ~42,700 bytes then. PLAN-413's compaction (#612)
+// brought it to 28,170, so the cap is ratcheted down to that measurement plus
+// about 6% headroom. It is a ratchet against payload growth: lower it after a
+// trim, raise it only with a reviewed reason. TestCatalogueBudget guards the
+// full catalogue the same way.
+const maxPinnedBytes = 30000
 
 // TestPinnedToolsSupersetsBootstrapAndMailbox is the structural guard for the
 // invariant PinnedTools' doc comment promises (and docs/configuration.md

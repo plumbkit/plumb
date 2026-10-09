@@ -29,6 +29,13 @@
   every step, and its `tool-select` is broken headless. The Kimi test is a
   tripwire that fails when an upstream fix lands, so the matrix gets
   re-measured.
+- **A byte budget for the whole tool catalogue, and `make tool-sizes`
+  (PLAN-413).** `TestCatalogueBudget` caps the full 59-tool `tools/list`
+  payload at 77,000 bytes (73,361 today, after the compaction), and the pinned
+  set's cap is ratcheted from 45,000 to 30,000 bytes (28,170 today), so one
+  verbose tool cannot quietly undo the compaction. `make tool-sizes` prints the
+  per-tool report, largest first, split into name, description and schema
+  bytes, with the pinned tools marked.
 - **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
   package-level affected test summaries with counts, reasons, and concrete `run_task`
   targets without printing individual test rows. `detail: "detailed"` remains the
