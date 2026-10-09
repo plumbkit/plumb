@@ -216,13 +216,13 @@ func (t *TopologyAffected) Execute(ctx context.Context, raw json.RawMessage) (st
 	}
 	result, runErr := t.run(ctx, store, a)
 	if runErr != nil {
-		return "", runErr
+		return "", withIndexHealthErr(store, runErr)
 	}
 	out := formatAffectedResult(result, a, t.testScope(ctx))
 	if t.ws != nil {
 		out += relatedMemoriesSection(t.ws(ctx), affectedRefs(a, result))
 	}
-	return out, nil
+	return withIndexHealth(store, out), nil
 }
 
 // affectedRefs builds the CodeRef set for the memories join: the changed

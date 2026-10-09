@@ -204,6 +204,10 @@ type Status struct {
 	IndexerState      string
 	Languages         []string
 	LastError         string
+	// Failing reports that the most recent completed indexing cycle ended in
+	// error, so the index may be missing changes made since LastSync. LastError
+	// alone cannot say this: it is kept after a later cycle succeeds.
+	Failing bool
 	// FileErrors is a bounded sample (most recently touched first) of the
 	// files counted by SkippedFiles, capped at maxStatusFileErrors.
 	FileErrors []FileError

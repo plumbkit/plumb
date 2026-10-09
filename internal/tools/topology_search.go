@@ -113,7 +113,7 @@ func (t *TopologySearch) Execute(ctx context.Context, raw json.RawMessage) (stri
 
 	results, runErr := t.run(ctx, store, a, fetchLimit)
 	if runErr != nil {
-		return "", runErr
+		return "", withIndexHealthErr(store, runErr)
 	}
 	reranked := false
 	if doRerank {
@@ -122,7 +122,7 @@ func (t *TopologySearch) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if len(results) > a.Limit {
 		results = results[:a.Limit]
 	}
-	return formatTopologySearchResults(results, a, reranked), nil
+	return withIndexHealth(store, formatTopologySearchResults(results, a, reranked)), nil
 }
 
 func parseTopologySearchArgs(raw json.RawMessage) (topologySearchArgs, error) {

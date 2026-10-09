@@ -357,7 +357,16 @@ func (t *WorkspaceSearch) searchMemory(ctx context.Context, a workspaceSearchArg
 // or errored indexer may be serving an out-of-date snapshot (stale), and
 // anything else is mid-build.
 func topologyIndexStatus(store *topology.Store) string {
-	switch store.Status().IndexerState {
+	return indexFreshness(store.Health())
+}
+
+func indexFreshness(h topology.Health) string {
+	if h.Failing {
+		// A retry cycle after a failure reports "running"; it is still serving
+		// the pre-failure snapshot, which is stale, not building.
+		return "stale"
+	}
+	switch h.State {
 	case "idle":
 		return "fresh"
 	case "stopped", "error":

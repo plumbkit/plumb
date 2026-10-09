@@ -297,6 +297,12 @@ func (s *Store) Status() Status {
 	return Report(s.db, s.workspace, s.idx)
 }
 
+// Health returns the indexer's liveness without Status's database census, so a
+// tool can check it on every call.
+func (s *Store) Health() Health {
+	return healthOf(s.idx)
+}
+
 // AdmitCallGraph reports whether function-level, cross-file call answers are
 // available for a subject in this workspace, and carries the wording to show
 // when they are not. See callgraph.go for the rule.
