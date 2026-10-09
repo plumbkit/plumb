@@ -15,72 +15,66 @@ import (
 // is working in (PLAN-494). Work in a worktree used to fall back to native `make`
 // and `go test` in a shell, losing run_task's bounded output and trust gate.
 //
-// The move is deliberately narrow. RESOLUTION stays where it was: the language,
-// the [tasks.<lang>] command and its trust all come from the pinned workspace's
-// config, never from the destination. A work-tree is a checkout of some branch,
-// so resolving there would let that branch supply its own commands and have them
-// run as trusted — the trust hash would bind to the wrong file. Only the
-// EXECUTION moves, and with it the {workspace} root the task env expands.
+// The move is deliberately narrow in two directions.
+//
+// Resolution stays where it was: the language, the [tasks.<lang>] command and
+// its trust all come from the pinned workspace's config, never from the
+// destination. A work-tree is a checkout of some branch, so resolving there
+// would let that branch supply its own commands and have them run as trusted —
+// the trust hash would bind to the wrong file.
+//
+// The destination stays inside the workspace, through the SAME boundary every
+// other plumb tool uses (symlinks resolved, no lexical-only ".."): a stored
+// trusted command may not run wherever it likes on the machine. An earlier
+// version also accepted any work-tree of the same repository wherever it lived,
+// which review round 1 refused (PLAN-494 B1) — the boundary is the invariant
+// every other tool holds, and a [tasks.<lang>] working_dir could already point
+// anywhere inside it anyway.
 //
 // The git questions — which work-tree contains this directory, whether it is a
 // linked work-tree, which repository it belongs to across checkouts — are asked
-// with mutation_test's primitives (probeGitDir, gitTree, sameGitPath, pathWithin
-// in mutationtest_root.go), so both tools agree on what a work-tree is rather
-// than each asking git its own way.
+// with mutation_test's primitives (probeGitDir, gitTree, pathWithin in
+// mutationtest_root.go), so both tools agree on what a work-tree is rather than
+// each asking git its own way.
 
 // rerootForPath returns cmd with its working directory moved into path.
 //
-// A destination is accepted when it is the same repository as the directory the
-// command would have run in (every work-tree of it qualifies, the linked ones
-// included) or when it lies inside the workspace — which is what admits a
-// work-tree of a repository the workspace contains, such as a submodule's
-// (`<ws>/.git/modules/<name>` is under the workspace, and a checkout of that
-// submodule's work-tree is where this batch's own items are built).
-func rerootForPath(ctx context.Context, ws string, cmd TaskCommand, path string) (TaskCommand, error) {
+// path may be absolute, or relative to the directory the command would have run
+// in. It must exist, be a directory, and lie inside the workspace. Whether it is
+// a git work-tree only decides the extra care taken around it: the {workspace}
+// root follows it into the same work-tree, and an argument naming an absolute
+// path in the tree being LEFT is refused, because that argument would be left
+// pointing at the wrong checkout.
+func (t *Tasks) rerootForPath(ctx context.Context, ws string, cmd TaskCommand, path string) (TaskCommand, error) {
 	target, err := resolveTaskPath(ws, cmd, path)
 	if err != nil {
 		return cmd, err
 	}
+	// The gate. checkBoundary is the same resolver the file tools and the git
+	// tool use, and it is what makes "inside the workspace" mean the filesystem's
+	// answer rather than a lexical one.
+	if err := t.deps.checkBoundary(ctx, target); err != nil {
+		return cmd, fmt.Errorf("run_task: %w", err)
+	}
 	dest := probeGitDir(ctx, target)
-	switch dest.place {
-	case placeNoRepo:
-		return cmd, fmt.Errorf("run_task: path %s is not in a git work-tree, so there is no repository to run %s in. "+
-			"Pass a directory inside a checkout of this workspace's repository", target, cmd.Slot)
-	case placeUnknown:
-		return cmd, fmt.Errorf("run_task: path %s: git could not say which work-tree it belongs to (%s). Nothing was run",
-			target, dest.reason)
-	}
 	runDir := runDirOf(ws, cmd)
-	from := probeGitDir(ctx, runDir)
-	if from.place != placeTree {
-		reason := from.reason
-		if from.place == placeNoRepo {
-			reason = "it is not in a git work-tree"
+	if dest.place == placeTree {
+		target = filepath.Join(dest.tree.top, filepath.FromSlash(dest.tree.prefix))
+		// The cross-tree checks need BOTH ends placed. A run directory outside any
+		// work-tree (a plain directory inside the workspace) has nothing to compare
+		// and nothing to re-root, so the move is simply the directory change.
+		if from := probeGitDir(ctx, runDir); from.place == placeTree {
+			if arg, ok := argNamingTree(cmd, from.tree.top, dest.tree.top); ok {
+				return cmd, fmt.Errorf("run_task: the stored %s command names the path %q, which is in the work-tree being left (%s); "+
+					"running it in %s would leave that argument pointing at the wrong tree. Use a path relative to the working directory, or run it where it is. Nothing was run",
+					cmd.Slot, arg, from.tree.top, dest.tree.top)
+			}
+			cmd.Root = rerootedRoot(cmd.Root, from.tree.top, dest.tree.top)
 		}
-		return cmd, fmt.Errorf("run_task: this workspace's %s command would run in %s, which plumb cannot place in a git work-tree (%s), "+
-			"so it cannot tell whether path %s is a work-tree of the same repository. Nothing was run", cmd.Slot, runDir, reason, target)
 	}
-	// The repository test compares COMMON git directories, not work-tree roots: a
-	// linked work-tree's root differs from the main checkout's, which is the whole
-	// point of it, while every work-tree of one repository shares a common git
-	// directory (mutationtest_root.go's gitTree.common says the same). The key
-	// field is deliberately not used here — it is set by gitProbes.chain, which
-	// this path does not run, and an unset key compares equal to anything.
-	if !sameGitPath(dest.tree.common, from.tree.common) && !pathWithin(ws, dest.tree.top) {
-		return cmd, fmt.Errorf("run_task: path %s is in the work-tree %s of another repository (%s), and it is not inside this workspace (%s). "+
-			"Resolution and trust bind to the workspace's config, so plumb runs this command only in that repository or inside the workspace. Nothing was run",
-			target, dest.tree.top, dest.tree.common, ws)
-	}
-	if arg, ok := argNamingTree(cmd, from.tree.top, dest.tree.top); ok {
-		return cmd, fmt.Errorf("run_task: the stored %s command names the path %q, which is in the work-tree being left (%s); "+
-			"running it in %s would leave that argument pointing at the wrong tree. Use a path relative to the working directory, or run it where it is. Nothing was run",
-			cmd.Slot, arg, from.tree.top, dest.tree.top)
-	}
-	moved := filepath.Join(dest.tree.top, filepath.FromSlash(dest.tree.prefix))
-	cmd.WorkingDir = moved
-	cmd.Root = rerootedRoot(cmd.Root, from.tree.top, dest.tree.top)
+	cmd.WorkingDir = target
 	cmd.Notes = append(cmd.Notes, fmt.Sprintf("running in %s (path): resolution language, command and trust are the pinned workspace's (%s)",
-		moved, ws))
+		target, ws))
 	return cmd, nil
 }
 

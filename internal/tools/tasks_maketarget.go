@@ -1,13 +1,14 @@
-package cli
+package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// conn_tasks_maketarget.go answers the "no command configured for this slot" refusal
+// tasks_maketarget.go answers the "no command configured for this slot" refusal
 // with the thing the workspace itself already has (PLAN-494).
 //
 // The friction: `run_task slot:"vuln"` was refused with a config recipe while
@@ -22,23 +23,50 @@ import (
 // fail on every machine without it. Naming the project's own target fixes the
 // whole family of missing slots — any verb the Makefile already defines — with
 // no new slot vocabulary and no new dependency.
+//
+// It lives here rather than at the cli seam because the directory that matters
+// is the one the command would RUN IN, and only this layer knows that: review
+// round 1 caught the first version looking in the workspace root alone, which
+// misses plumb-ops's own case (its `vuln` target is in plumb/Makefile, reached
+// through `[tasks.go] working_dir`, or through `path`).
 
 // makefileNames are the files GNU make reads, in its own precedence order.
 var makefileNames = []string{"GNUmakefile", "makefile", "Makefile"}
 
-// makeTargetRemedy returns the sentence a refusal should carry when the
-// workspace's Makefile defines a target named after the missing slot, or "" when
-// it does not. It never inspects anything outside the workspace root.
+// unconfiguredSlotRemedy returns the sentence the refusal should carry for a slot
+// with no command, or "" when the files it would name are not there. dir is the
+// directory the command would have run in; path is the caller's `path`, if any,
+// which takes precedence because that is where they asked to run.
+//
+// Best-effort by design: the call is already being refused, so a path that
+// cannot be resolved changes nothing except that the remedy falls back to the
+// directory the command would otherwise have used.
+func (t *Tasks) unconfiguredSlotRemedy(ctx context.Context, ws string, cmd TaskCommand, path, slot string) string {
+	dir := runDirOf(ws, cmd)
+	if path != "" {
+		if resolved, err := resolveTaskPath(ws, cmd, path); err == nil && t.deps.checkBoundary(ctx, resolved) == nil {
+			dir = resolved
+			if dest := probeGitDir(ctx, resolved); dest.place == placeTree {
+				dir = filepath.Join(dest.tree.top, filepath.FromSlash(dest.tree.prefix))
+			}
+		}
+	}
+	return makeTargetRemedy(dir, slot)
+}
+
+// makeTargetRemedy returns the sentence a refusal should carry when dir's
+// Makefile defines a target named after the missing slot, or "" when it does
+// not. It never inspects anything outside dir.
 //
 // The candidates are matched against the directory's ACTUAL entries rather than
 // read by name: macOS and Windows filesystems are case-insensitive, so reading
 // "makefile" finds a file spelled "Makefile" and the remedy would then name a
 // file the user does not have.
-func makeTargetRemedy(ws, slot string) string {
-	if ws == "" || slot == "" {
+func makeTargetRemedy(dir, slot string) string {
+	if dir == "" || slot == "" {
 		return ""
 	}
-	entries, err := os.ReadDir(ws)
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""
 	}
@@ -52,14 +80,14 @@ func makeTargetRemedy(ws, slot string) string {
 		if !present[name] {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(ws, name))
+		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil || !makefileHasTarget(string(data), slot) {
 			continue
 		}
-		return fmt.Sprintf("This workspace's %s defines a %q target — the project's own gate for this verb: "+
+		return fmt.Sprintf("This workspace's %s (in %s) defines a %q target — the project's own gate for this verb: "+
 			"run `make %s` in the project shell, or wire it into run_task with [tasks.<lang>] %s = \"make %s\" "+
 			"(then `plumb trust`, since that command would come from the project's config).",
-			name, slot, slot, slot, slot)
+			name, dir, slot, slot, slot, slot)
 	}
 	return ""
 }

@@ -15,14 +15,16 @@
 
 - **`run_task` can run a slot in a work-tree, and an unconfigured slot names the
   project's own Make target (PLAN-494).** `path` moves the command's working
-  directory into a git work-tree of the same repository — or a directory inside
-  the workspace — while the language, the `[tasks.<lang>]` command and its trust
-  still resolve against the pinned workspace's config, so a branch cannot supply
-  its own trusted commands; `{workspace}` follows the command, and an argument
-  naming an absolute path in the tree being left is refused rather than left
-  pointing at the wrong checkout. When a slot has no command and the workspace's
-  Makefile defines a target named after it, the refusal now says so (`make vuln`,
-  the project's own gate) instead of stopping at the config recipe.
+  directory into a directory INSIDE THE WORKSPACE — the same boundary every other
+  tool uses, so a work-tree of the same repository that lives outside it is
+  refused — while the language, the `[tasks.<lang>]` command and its trust still
+  resolve against the pinned workspace's config, so a branch cannot supply its own
+  trusted commands; `{workspace}` follows the command, and an argument naming an
+  absolute path in the tree being left is refused rather than left pointing at the
+  wrong checkout. When a slot has no command and the Makefile in the directory the
+  command would have run in defines a target named after it, the refusal now says
+  so (`make vuln`, the project's own gate) instead of stopping at the config
+  recipe.
 - **`git` can amend, and can wait for a slow hook (PLAN-493).** `commit` takes
   `amend: true` to fold the staged changes into HEAD (`--amend`), keeping HEAD's
   message when no `message` is given, and is refused when HEAD is already
@@ -92,10 +94,10 @@
   `confirm: true`, naming what would be discarded; it also refuses a worktree on
   a detached HEAD whose commits no branch, tag or remote reaches, because the
   reflog naming them is deleted with the directory (`--force` does not help
-  there). `add`, `move` and `remove` are confined to the workspace through the
-  same boundary every other tool uses — an outside path is refused, and `confirm`
-  does not lift that — and `add -f/--force` joins `-B` at the destructive tier,
-  since it lets two worktrees hold one branch.
+  there). `add`, `move`, `remove` and `repair` are confined to the workspace
+  through the same boundary every other tool uses — an outside path is refused,
+  and `confirm` does not lift that — and `add -f/--force` joins `-B` at the
+  destructive tier, since it lets two worktrees hold one branch.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were

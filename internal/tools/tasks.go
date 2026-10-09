@@ -291,15 +291,21 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	if err != nil {
 		return "", err
 	}
+	ws := cmd.Root
+	if ws == "" {
+		ws = t.workspace(ctx)
+	}
 	if len(cmd.Steps) == 0 {
+		// The remedy is looked up in the directory the command WOULD have run in —
+		// the `path` destination when the caller named one, else its working_dir, else
+		// the workspace. Review round 1 caught the first version reading the workspace
+		// root alone, which misses plumb-ops's own case: its `vuln` target lives in
+		// plumb/Makefile, not in the root Makefile.
+		cmd.Remedy = t.unconfiguredSlotRemedy(ctx, ws, cmd, a.Path, a.Slot)
 		return "", noCommandError(cmd, a.Slot)
 	}
 	if a.Path != "" {
-		ws := cmd.Root
-		if ws == "" {
-			ws = t.workspace(ctx)
-		}
-		if cmd, err = rerootForPath(ctx, ws, cmd, a.Path); err != nil {
+		if cmd, err = t.rerootForPath(ctx, ws, cmd, a.Path); err != nil {
 			return "", err
 		}
 	}

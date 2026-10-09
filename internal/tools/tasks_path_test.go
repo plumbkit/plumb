@@ -12,9 +12,10 @@ import (
 )
 
 // tasks_path_test.go covers run_task's `path` re-root (PLAN-494): the resolved
-// command keeps its argv, language and provenance, and only the working
-// directory moves — into a work-tree of the same repository, or a directory the
-// workspace contains, and nowhere else.
+// command keeps its argv, language, provenance and trust, and only the working
+// directory moves — inside the workspace, through the same boundary every other
+// tool uses (review round 1, B1: a work-tree of the same repository OUTSIDE the
+// workspace is refused).
 
 func callRunTask(t *testing.T, tool *Tasks, args map[string]any) (string, error) {
 	t.Helper()
@@ -25,22 +26,39 @@ func callRunTask(t *testing.T, tool *Tasks, args map[string]any) (string, error)
 	return tool.Execute(context.Background(), raw)
 }
 
-// linkedWorktreeFixture builds a repository with one committed file and a
-// `git worktree add` checkout of a topic branch beside it.
-func linkedWorktreeFixture(t *testing.T) (ws, wt string) {
+// pathFixture builds a workspace holding a repository with one commit and a
+// linked work-tree INSIDE that workspace, and a Tasks tool whose boundary is the
+// workspace — the shape every other plumb tool is tested against.
+func pathFixture(t *testing.T) (ws, repo, wt string, tool *Tasks) {
 	t.Helper()
 	requireGit(t)
-	ws = initTestRepo(t)
-	wt = filepath.Join(t.TempDir(), "wt")
-	gitRun(t, ws, "worktree", "add", "-b", "topic", wt)
-	return ws, wt
+	ws = t.TempDir()
+	repo = filepath.Join(ws, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "init", "-q")
+	gitRun(t, repo, "config", "user.email", "t@example.com")
+	gitRun(t, repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, repo, "add", "f.txt")
+	gitRun(t, repo, "commit", "-qm", "init")
+	wt = filepath.Join(ws, "wt")
+	gitRun(t, repo, "worktree", "add", "-b", "topic", wt)
+	tool = NewTasks(WriteDeps{
+		Boundary:    testBoundaryGuard(ws),
+		WorkspaceFn: func(context.Context) string { return ws },
+	}, nil)
+	return ws, repo, wt, tool
 }
 
 func TestRerootForPath_LinkedWorktree(t *testing.T) {
-	ws, wt := linkedWorktreeFixture(t)
-	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "build", "./..."}}, WorkingDir: ws, Root: ws, Provenance: "default"}
+	ws, repo, wt, tool := pathFixture(t)
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "build", "./..."}}, WorkingDir: repo, Root: repo, Provenance: "default"}
 
-	got, err := rerootForPath(context.Background(), ws, cmd, wt)
+	got, err := tool.rerootForPath(context.Background(), ws, cmd, wt)
 	if err != nil {
 		t.Fatalf("re-rooting into a linked work-tree: %v", err)
 	}
@@ -61,50 +79,66 @@ func TestRerootForPath_LinkedWorktree(t *testing.T) {
 	}
 }
 
-func TestRerootForPath_AcceptsARepositoryInsideTheWorkspace(t *testing.T) {
-	ws, _ := linkedWorktreeFixture(t)
+// TestRerootForPath_RefusesAWorktreeOutsideTheWorkspace is B1's regression: a
+// work-tree of the SAME repository is still refused when it lives outside the
+// workspace, because every other plumb tool confines itself to the workspace and
+// a stored trusted command is not an exception.
+func TestRerootForPath_RefusesAWorktreeOutsideTheWorkspace(t *testing.T) {
+	ws, repo, _, tool := pathFixture(t)
+	outside := filepath.Join(t.TempDir(), "far")
+	gitRun(t, repo, "worktree", "add", "-b", "far", outside)
+
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
+	_, err := tool.rerootForPath(context.Background(), ws, cmd, outside)
+	if err == nil {
+		t.Fatal("a work-tree outside the workspace must be refused, same repository or not")
+	}
+	if !IsWorkspaceBoundaryError(err) {
+		t.Errorf("want a workspace-boundary refusal, got: %v", err)
+	}
+}
+
+func TestRerootForPath_RefusesADirectoryOutsideTheWorkspace(t *testing.T) {
+	ws, repo, _, tool := pathFixture(t)
+	elsewhere := t.TempDir() // a real directory, just not inside the workspace
+
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
+	if _, err := tool.rerootForPath(context.Background(), ws, cmd, elsewhere); err == nil || !IsWorkspaceBoundaryError(err) {
+		t.Fatalf("a directory outside the workspace = %v, want a boundary refusal", err)
+	}
+}
+
+// TestRerootForPath_AcceptsADirectoryInsideTheWorkspace pins the breadth the
+// boundary rule buys: any directory inside the workspace is runnable, whether or
+// not it is its own repository — the same breadth a [tasks.<lang>] working_dir
+// already has.
+func TestRerootForPath_AcceptsADirectoryInsideTheWorkspace(t *testing.T) {
+	ws, repo, _, tool := pathFixture(t)
 	nested := filepath.Join(ws, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, nested, "init", "-q")
 
-	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: ws, Root: ws}
-	got, err := rerootForPath(context.Background(), ws, cmd, nested)
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
+	got, err := tool.rerootForPath(context.Background(), ws, cmd, nested)
 	if err != nil {
-		t.Fatalf("a repository inside the workspace must be runnable inside it: %v", err)
+		t.Fatalf("a directory inside the workspace must be runnable: %v", err)
 	}
 	if want := paths.Canonical(nested); got.WorkingDir != want {
 		t.Errorf("WorkingDir = %q, want %q", got.WorkingDir, want)
 	}
 }
 
-func TestRerootForPath_RefusesAnotherRepositoryOutsideTheWorkspace(t *testing.T) {
-	ws, _ := linkedWorktreeFixture(t)
-	elsewhere := initTestRepo(t) // its own temporary repository, outside ws
-
-	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: ws, Root: ws}
-	_, err := rerootForPath(context.Background(), ws, cmd, elsewhere)
-	if err == nil {
-		t.Fatal("running the workspace's command in an unrelated repository must be refused")
-	}
-	for _, want := range []string{"another repository", "not inside this workspace", "Nothing was run"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("refusal is missing %q; got: %v", want, err)
-		}
-	}
-}
-
 func TestRerootForPath_RefusesAPathThatIsNotThere(t *testing.T) {
-	ws, _ := linkedWorktreeFixture(t)
-	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: ws, Root: ws}
+	ws, repo, _, tool := pathFixture(t)
+	cmd := TaskCommand{Slot: "test", Steps: [][]string{{"go", "version"}}, WorkingDir: repo, Root: repo}
 
-	if _, err := rerootForPath(context.Background(), ws, cmd, filepath.Join(ws, "missing")); err == nil ||
+	if _, err := tool.rerootForPath(context.Background(), ws, cmd, filepath.Join(ws, "missing")); err == nil ||
 		!strings.Contains(err.Error(), "does not exist") {
 		t.Errorf("a missing path = %v, want a refusal naming it", err)
 	}
-	file := filepath.Join(ws, "init.txt")
-	if _, err := rerootForPath(context.Background(), ws, cmd, file); err == nil ||
+	file := filepath.Join(repo, "f.txt")
+	if _, err := tool.rerootForPath(context.Background(), ws, cmd, file); err == nil ||
 		!strings.Contains(err.Error(), "not a directory") {
 		t.Errorf("a file as path = %v, want a refusal naming it", err)
 	}
@@ -114,12 +148,12 @@ func TestRerootForPath_RefusesAPathThatIsNotThere(t *testing.T) {
 // stored command honest: an argv element holding an absolute path inside the
 // tree being left would point at the wrong checkout once the command moves.
 func TestRerootForPath_RefusesAnArgumentNamingTheOldTree(t *testing.T) {
-	ws, wt := linkedWorktreeFixture(t)
+	ws, repo, wt, tool := pathFixture(t)
 	cmd := TaskCommand{
-		Slot: "test", WorkingDir: ws, Root: ws,
-		Steps: [][]string{{"go", "test", filepath.Join(ws, "internal", "tools")}},
+		Slot: "test", WorkingDir: repo, Root: repo,
+		Steps: [][]string{{"go", "test", filepath.Join(repo, "internal", "tools")}},
 	}
-	_, err := rerootForPath(context.Background(), ws, cmd, wt)
+	_, err := tool.rerootForPath(context.Background(), ws, cmd, wt)
 	if err == nil {
 		t.Fatal("an argument naming the tree being left must be refused")
 	}
@@ -134,13 +168,16 @@ func TestRerootForPath_RefusesAnArgumentNamingTheOldTree(t *testing.T) {
 // command actually runs with the work-tree as its working directory, and the
 // report says so.
 func TestRunTask_PathRunsTheCommandInTheWorktree(t *testing.T) {
-	ws, wt := linkedWorktreeFixture(t)
+	ws, repo, wt, _ := pathFixture(t)
 	sawPath := false
-	tool := NewTasks(WriteDeps{}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
+	tool := NewTasks(WriteDeps{
+		Boundary:    testBoundaryGuard(ws),
+		WorkspaceFn: func(context.Context) string { return ws },
+	}, func(_ context.Context, req TaskRequest) (TaskCommand, error) {
 		sawPath = req.Path == wt
 		return TaskCommand{
 			Slot: "test", Steps: [][]string{{"git", "rev-parse", "--show-toplevel"}},
-			WorkingDir: ws, Root: ws, Provenance: "default",
+			WorkingDir: repo, Root: repo, Provenance: "default",
 		}, nil
 	})
 
@@ -160,9 +197,8 @@ func TestRunTask_PathRunsTheCommandInTheWorktree(t *testing.T) {
 }
 
 // TestNoCommandError_RendersTheMakefileRemedy pins the rendering half of the
-// PLAN-494 remedy: the resolver supplies the sentence, the refusal carries it,
-// and an unconfigured slot with nothing workspace-specific to say stays as it
-// was.
+// PLAN-494 remedy: the tool supplies the sentence, the refusal carries it, and a
+// slot with nothing workspace-specific to say stays as it was.
 func TestNoCommandError_RendersTheMakefileRemedy(t *testing.T) {
 	withRemedy := noCommandError(TaskCommand{
 		Language: "go", Configured: []string{"build"},
