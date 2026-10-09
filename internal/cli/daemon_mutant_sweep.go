@@ -41,6 +41,6 @@ func sweepKilledMutants() {
 		// that may not be there (PLAN-459 SHOULD-FIX 2).
 		slog.Error("daemon: a killed mutation_test left a mutant and the file has changed since — leaving it alone; "+
 			"the pre-mutation content is kept in the journal entry under the plumb state dir (mutant-journal)",
-			"path", path)
+			"path", path, "journal_entry", tools.MutantJournalEntryFor(path))
 	}
 }

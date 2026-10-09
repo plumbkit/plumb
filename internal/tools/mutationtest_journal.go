@@ -107,6 +107,18 @@ func journalMutant(tgt mutationTarget, mutated string) error {
 	return nil
 }
 
+// MutantJournalEntryFor names the file holding a target's pre-mutation bytes. Entries are
+// named by target hash, so a log line that says only "the journal entry under the state dir"
+// leaves the reader to find it by eye — this is what makes the recovery path a path.
+// Returns "" when the state dir cannot be resolved, in which case the caller logs no entry.
+func MutantJournalEntryFor(target string) string {
+	dir, err := mutantJournalDir()
+	if err != nil {
+		return ""
+	}
+	return journalPathFor(dir, target)
+}
+
 // clearMutantJournal forgets a target's entry: the file is back to the state the
 // entry describes, or no mutant was ever applied to it.
 func clearMutantJournal(target string) {
