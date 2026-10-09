@@ -57,11 +57,34 @@ func roundedDuration(d time.Duration) time.Duration {
 	return d.Round(time.Millisecond)
 }
 
+// staleIndexSuffix appends the stale-index notice to a fallback banner when the
+// index's most recent cycle failed (PLAN-490), or returns "" when it succeeded.
+//
+// It reuses indexHealthNote rather than restating the wording, so the six
+// topology_* query tools and these fallbacks can never drift apart about what a
+// failing index means. health is passed in rather than read here so the rule is
+// testable without a store.
+func staleIndexSuffix(health topology.Health, now time.Time) string {
+	if note := indexHealthNote(health, now); note != "" {
+		return " " + note
+	}
+	return ""
+}
+
+// staleIndexSuffixFor is staleIndexSuffix for a store accessor: a nil or absent
+// store says nothing about index health, so the banner stays as it was.
+func staleIndexSuffixFor(store *topology.Store, now time.Time) string {
+	if store == nil {
+		return ""
+	}
+	return staleIndexSuffix(store.Health(), now)
+}
+
 // topologyFallbackNoteFor picks the fallback banner for a symbol-query tool
 // that has no attempt budget to report — the server answered, just not with
 // anything usable. See topologyFallbackNoteWhen for the timed-out variant.
-func topologyFallbackNoteFor(fn LSPWarmupFn, uri string) string {
-	return topologyFallbackNoteWhen(fallbackLSPUnavailable, fn, uri, 0)
+func topologyFallbackNoteFor(store *topology.Store, fn LSPWarmupFn, uri string) string {
+	return topologyFallbackNoteWhen(fallbackLSPUnavailable, store, fn, uri, 0)
 }
 
 // topologyFallbackNoteWhen picks the fallback banner for a symbol-query tool
@@ -78,18 +101,19 @@ func topologyFallbackNoteFor(fn LSPWarmupFn, uri string) string {
 // previously have answered — now yields an approximate index result. Calling
 // that "LSP unavailable" argues for exactly the wrong conclusion (the server is
 // broken, stop using semantic tools) instead of the right one (retry shortly).
-func topologyFallbackNoteWhen(reason symbolFallbackReason, fn LSPWarmupFn, uri string, waited time.Duration) string {
+func topologyFallbackNoteWhen(reason symbolFallbackReason, store *topology.Store, fn LSPWarmupFn, uri string, waited time.Duration) string {
 	warming, elapsed := lspWarmup(fn, uri)
+	stale := staleIndexSuffixFor(store, time.Now())
 	switch {
 	case warming:
 		return fmt.Sprintf("[topology fallback — LSP still warming%s; results are approximate and may be stale; "+
-			"semantic tools will answer once it is ready — retry shortly. source=topology, mode=indexed-approximate]",
-			warmupElapsedSuffix(elapsed))
+			"semantic tools will answer once it is ready — retry shortly. source=topology, mode=indexed-approximate]%s",
+			warmupElapsedSuffix(elapsed), stale)
 	case reason == fallbackLSPTimedOut && waited > 0:
 		return fmt.Sprintf("[topology fallback — LSP did not answer within %s; results are approximate and may be "+
-			"stale. source=topology, mode=indexed-approximate]", roundedDuration(waited))
+			"stale. source=topology, mode=indexed-approximate]%s", roundedDuration(waited), stale)
 	default:
-		return topologyFallbackNote
+		return topologyFallbackNote + stale
 	}
 }
 
@@ -167,15 +191,16 @@ const topologyDefinitionNote = "[topology fallback — language server unavailab
 // warming variant when the server that would own uri is still completing its
 // handshake, else topologyDefinitionNote — byte-identical to the historical
 // text — for the genuinely-unavailable case.
-func topologyDefinitionNoteFor(fn LSPWarmupFn, uri string) string {
+func topologyDefinitionNoteFor(store *topology.Store, fn LSPWarmupFn, uri string) string {
 	warming, elapsed := lspWarmup(fn, uri)
+	stale := staleIndexSuffixFor(store, time.Now())
 	if !warming {
-		return topologyDefinitionNote
+		return topologyDefinitionNote + stale
 	}
 	return fmt.Sprintf("[topology fallback — language server still warming%s; located by symbol name, "+
 		"declaration line not cursor offset; semantic tools will answer once it is ready — retry shortly. "+
-		"source=topology, mode=indexed-approximate]",
-		warmupElapsedSuffix(elapsed))
+		"source=topology, mode=indexed-approximate]%s",
+		warmupElapsedSuffix(elapsed), stale)
 }
 
 // topologyDefinitionFallback resolves name to its declaration site(s) in the

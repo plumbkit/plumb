@@ -122,7 +122,7 @@ func (t *WorkspaceSymbols) topologyFallback(ctx context.Context, reason symbolFa
 	}
 	// The workspace-wide search has no single target file, so the warm-up probe
 	// inspects the connection primary (empty uri).
-	note := topologyFallbackNoteWhen(reason, t.warmup, "", waited)
+	note := topologyFallbackNoteWhen(reason, activeTopology(t.topo), t.warmup, "", waited)
 	return formatTopologyMatches(note, fmt.Sprintf("Found %d symbol(s) matching %q", len(nodes), query), nodes), true
 }
 
@@ -279,7 +279,7 @@ func (t *WorkspaceSymbols) topologyFallbackInFile(ctx context.Context, reason sy
 		return "", false
 	}
 	matches := filterTopologyByName(nodes, query)
-	note := topologyFallbackNoteWhen(reason, t.warmup, uri, waited)
+	note := topologyFallbackNoteWhen(reason, activeTopology(t.topo), t.warmup, uri, waited)
 	return formatTopologyMatches(note, fmt.Sprintf("Symbols matching %q in %s", query, uri), matches), true
 }
 

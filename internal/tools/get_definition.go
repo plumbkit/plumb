@@ -149,7 +149,7 @@ func (t *GetDefinition) Execute(ctx context.Context, args json.RawMessage) (stri
 func (t *GetDefinition) executeByName(ctx context.Context, uri, name string) (string, error) {
 	result, err := t.lspDefinitionByName(ctx, uri, name)
 	if err != nil {
-		if fb, ok := topologyDefinitionFallback(t.topo, topologyDefinitionNoteFor(t.warmup, uri), name); ok {
+		if fb, ok := topologyDefinitionFallback(t.topo, topologyDefinitionNoteFor(activeTopology(t.topo), t.warmup, uri), name); ok {
 			return fb, nil
 		}
 		return "", err
