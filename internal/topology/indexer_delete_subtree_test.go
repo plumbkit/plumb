@@ -53,14 +53,16 @@ func countRows(t *testing.T, db *sql.DB, table string) int {
 
 // seedSubtreeIndex indexes (in the database only) a tree whose names press on
 // every edge of the subtree range: a sibling file and a sibling directory
-// sharing the prefix, SQL LIKE wildcards in directory names, and a nested
-// directory of the same name elsewhere. Every file gets two nodes joined by an
-// edge, so the cleanup of each table can be counted.
+// sharing the prefix, SQL LIKE wildcards in directory names, names whose bytes
+// sort high (multibyte UTF-8, '~') inside and beside the subtree, a sibling
+// differing only in case, and a nested directory of the same name elsewhere.
+// Every file gets two nodes joined by an edge, so the cleanup of each table can
+// be counted.
 func seedSubtreeIndex(t *testing.T, db *sql.DB) []string {
 	t.Helper()
 	paths := []string{
-		"a/x.go", "a/y/z.go", "a/y/deeper/w.go",
-		"a.go", "a-b/v.go", "ab/u.go", "a%/p.go", "a_/q.go", "b/a/r.go",
+		"a/x.go", "a/y/z.go", "a/y/deeper/w.go", "a/é/ü.go", "a/日本/語.go", "a/~t.go",
+		"a.go", "a-b/v.go", "ab/u.go", "a%/p.go", "a_/q.go", "aé/k.go", "A/c.go", "b/a/r.go",
 	}
 	for _, p := range paths {
 		rel := filepath.FromSlash(p)
@@ -79,11 +81,13 @@ func TestIndexer_ProcessDelete_Subtree(t *testing.T) {
 		wantChanged bool
 		wantGone    []string
 	}{
-		{"a directory takes every file below it", "a", true, []string{"a/x.go", "a/y/z.go", "a/y/deeper/w.go"}},
+		{"a directory takes every file below it", "a", true, []string{"a/x.go", "a/y/z.go", "a/y/deeper/w.go", "a/é/ü.go", "a/日本/語.go", "a/~t.go"}},
 		{"a nested directory takes only its own subtree", "a/y", true, []string{"a/y/z.go", "a/y/deeper/w.go"}},
+		{"a multibyte directory takes its own subtree", "a/日本", true, []string{"a/日本/語.go"}},
 		{"an exact file takes only itself", "a.go", true, []string{"a.go"}},
 		{"a percent sign is not a wildcard", "a%", true, []string{"a%/p.go"}},
 		{"an underscore is not a wildcard", "a_", true, []string{"a_/q.go"}},
+		{"a case-only sibling is another directory", "A", true, []string{"A/c.go"}},
 		{"a directory of the same name elsewhere is untouched", "b/a", true, []string{"b/a/r.go"}},
 		{"a path never indexed changes nothing", "zzz", false, nil},
 		{"a prefix that is not a whole name changes nothing", "a/x", false, nil},

@@ -36,9 +36,16 @@
 //     staying silent.
 //   - It keeps watching the root PATH: a root directory renamed away and
 //     recreated, or replaced by another, is watched again.
-//   - New returns only once the root is watched, so a consumer's first full
-//     scan made after it cannot miss a change. A Lost that follows a root's
-//     return is likewise signalled only once the new watch is in place.
+//   - New returns only once the backend has finished adding its initial
+//     watches, so a consumer's first full scan made after it cannot finish
+//     inside an unwatched gap. A Lost that follows a root's return is likewise
+//     signalled only once the new run has finished adding its watches.
+//   - When it can no longer see every change, it closes Failed for good: the
+//     backend stopped on its own, or (on Linux) the inotify watch limit left
+//     part of the tree unwatched. A consumer then falls back to periodic
+//     reconciliation; the backend keeps delivering what it still watches.
+//     A directory created later, at the limit, is not detected: sgtdi
+//     discards that error.
 //   - A directory that arrives whole (created, or moved in) is reported with
 //     its contents. A directory moved away is reported under its own name
 //     only: no OS reports the entries it took with it, so a consumer drops

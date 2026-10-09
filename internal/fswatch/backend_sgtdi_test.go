@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,11 +20,15 @@ import (
 type fakeSgtdi struct {
 	fswatcher.Watcher
 	events, dropped chan fswatcher.WatchEvent
+	partial         atomic.Int64 // directories the walk could not watch
 }
 
 func (f *fakeSgtdi) Events() <-chan fswatcher.WatchEvent  { return f.events }
 func (f *fakeSgtdi) Dropped() <-chan fswatcher.WatchEvent { return f.dropped }
 func (f *fakeSgtdi) Close()                               {}
+func (f *fakeSgtdi) Stats() fswatcher.WatcherStats {
+	return fswatcher.WatcherStats{EventsPartial: f.partial.Load()}
+}
 
 // fakeRun is a run whose readiness the test controls. Cancelling it (as close
 // does) stops it, as cancelling sgtdi's Watch does.
@@ -151,7 +156,7 @@ func TestStartSupervised_WaitsForReadiness(t *testing.T) {
 	w := testWatcher(t.TempDir(), 8)
 	start, runs := fakeStarts()
 	returned := make(chan error, 1)
-	go func() { returned <- w.startSupervised(Options{}, start) }()
+	go func() { returned <- w.startSupervised(Options{}, start, time.Minute) }()
 	run := nextRun(t, runs, "New")
 	select {
 	case err := <-returned:
@@ -182,9 +187,86 @@ func TestStartSupervised_StoppedBeforeReadyFails(t *testing.T) {
 	run := fakeRun()
 	run.err = cause
 	run.cancel()
-	err := w.startSupervised(Options{}, func(string, Options) (*sgtdiRun, error) { return run, nil })
+	err := w.startSupervised(Options{}, func(string, Options) (*sgtdiRun, error) { return run, nil }, time.Minute)
 	if !errors.Is(err, cause) {
 		t.Fatalf("New = %v, want the backend's own error", err)
+	}
+}
+
+// TestStartSupervised_WalkThatHangsFailsNew: a walk that never finishes (a
+// stalled network mount, say) fails New within the bound instead of hanging
+// the consumer's start, and the run is cancelled.
+func TestStartSupervised_WalkThatHangsFailsNew(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	run := fakeRun()
+	returned := make(chan error, 1)
+	go func() {
+		returned <- w.startSupervised(Options{}, func(string, Options) (*sgtdiRun, error) { return run, nil }, 100*time.Millisecond)
+	}()
+	select {
+	case err := <-returned:
+		if err == nil {
+			t.Fatal("New succeeded although the backend never became ready")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("New hung on a walk that never finished")
+	}
+	if !isClosed(run.stopped) {
+		t.Error("the run New gave up on was not cancelled")
+	}
+}
+
+// TestSuperviseSgtdi_PartialWalkIsDegraded: sgtdi skips a directory it cannot
+// watch at the inotify watch limit and still reports ready. That Watcher can no
+// longer see every change, so it reports Failed and Lost, and keeps delivering
+// what it does watch. A later failure must not close Failed a second time.
+func TestSuperviseSgtdi_PartialWalkIsDegraded(t *testing.T) {
+	root := t.TempDir()
+	w := testWatcher(root, 8)
+	start, _ := fakeStarts()
+	first := fakeRun()
+	first.src.(*fakeSgtdi).partial.Store(3)
+	finished := supervise(t, w, first, start)
+
+	awaitLost(t, w, "a partial walk")
+	if !isClosed(w.failed) {
+		t.Fatal("a partial walk did not close Failed")
+	}
+	first.src.(*fakeSgtdi).events <- fswatcher.WatchEvent{Path: filepath.Join(root, "a.go"), Types: []fswatcher.EventType{fswatcher.EventMod}}
+	select {
+	case <-w.events:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a degraded Watcher stopped delivering what it does watch")
+	}
+
+	first.err = errors.New("inotify read failed")
+	first.cancel() // the run then stops on its own, with the root in place
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the supervisor did not return after the run failed")
+	}
+}
+
+// TestSuperviseSgtdi_PartialRestartIsDegraded: the same holds for a run started
+// after the root came back.
+func TestSuperviseSgtdi_PartialRestartIsDegraded(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	start, runs := fakeStarts()
+	first := fakeRun()
+	supervise(t, w, first, start)
+	loseRoot(t, w, first)
+	second := nextRun(t, runs, "restart")
+	second.src.(*fakeSgtdi).partial.Store(1)
+	close(second.ready)
+	awaitLost(t, w, "the partial restart became ready")
+	deadline := time.After(5 * time.Second)
+	for !isClosed(w.failed) {
+		select {
+		case <-deadline:
+			t.Fatal("a partial restart did not close Failed")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -223,9 +305,10 @@ func TestSuperviseSgtdi_RestartWaitsForReadiness(t *testing.T) {
 	}
 }
 
-// TestSuperviseSgtdi_CloseWhileRestartIsPending: Close does not wait for a run
-// that is still putting its watches in place; that run is stopped, and nothing
-// is reported for it.
+// TestSuperviseSgtdi_CloseWhileRestartIsPending: Close does not wait for a
+// pending run to become ready; it stops the run, and nothing is reported for it.
+// (A real sgtdi run returns only once its initial walk ends, which cannot be
+// interrupted; this fake returns as soon as it is cancelled.)
 func TestSuperviseSgtdi_CloseWhileRestartIsPending(t *testing.T) {
 	w := testWatcher(t.TempDir(), 8)
 	start, runs := fakeStarts()

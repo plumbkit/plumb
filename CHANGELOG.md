@@ -156,9 +156,12 @@
     another, is watched again on every platform, with a full resync, instead
     of the watcher going silently dead. On Linux this was already broken before
     this release: inotify's watch followed the old directory.
-  - A watcher that stops for good on its own (Linux and Windows, e.g. at the
-    inotify watch limit) now says so: the topology index falls back to its
-    `resync_interval_minutes`, and the LSP watcher logs a warning.
+  - A watcher that can no longer see every change now says so: on Linux and
+    Windows when the backend stops on its own, and on Linux when the inotify
+    watch limit leaves part of the tree unwatched (sgtdi skips those
+    directories and carries on). The topology index then falls back to its
+    `resync_interval_minutes`, and the LSP watcher logs a warning. A
+    directory created later, at the limit, is still not detected.
   - A watcher also uses far fewer descriptors on macOS release builds: a
     500-file tree went from about 520 descriptors per watcher to about 12.
   - A populated directory moved into a workspace now has its files reported;
@@ -169,11 +172,13 @@
     directory's own name, so deleting that path now also removes every file
     indexed below it, in one transaction. Before, those files stayed
     searchable until the next resync, which the running watcher suppresses.
-  - On Linux and Windows, starting a watcher now waits until sgtdi has put
-    every initial watch in place, and the full resync after the workspace
-    directory returns is requested only once its new watches are in place.
-    Before, a resync could finish while watches were still being added, and a
-    change made in that gap was never seen.
+  - On Linux and Windows, starting a watcher now waits until sgtdi has
+    finished adding its initial watches (for at most a minute, so a walk
+    stalled on a network mount fails the watcher instead of hanging the
+    index's start), and the full resync after the workspace directory returns
+    is requested only once the new watches are added. Before, a resync could
+    finish while watches were still being added, and a change made in that
+    gap was never seen.
   - Accepted behaviour change for macOS release builds: editing the target of
     an indexed in-workspace symlink no longer re-indexes the symlink until the
     next resync. kqueue happened to report the link too, because opening it

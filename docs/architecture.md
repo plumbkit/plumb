@@ -898,13 +898,14 @@ Every backend keeps one contract (`internal/fswatch/fswatch.go`, tested by
 `scenarios_test.go` on each platform): event paths are the changed entry's own
 (a symlink is never reported under its target), anything it cannot report one
 by one is signalled on `Lost` (consumers then resync), a root directory that is
-renamed away, recreated or replaced is watched again, and a backend that stops
-for good closes `Failed`, on which the topology index falls back to
-`resync_interval_minutes`. `New` returns, and the `Lost` after a root's return
-is signalled, only once the watch is in place, so a resync that follows cannot
-finish inside an unwatched gap. A directory moved away is reported under its
-own name only, so deleting a path in the topology index also deletes every file
-indexed below it.
+renamed away, recreated or replaced is watched again, and a backend that can no
+longer see every change (it stopped, or on Linux the inotify watch limit left
+part of the tree unwatched) closes `Failed`, on which the topology index falls
+back to `resync_interval_minutes`. `New` returns, and the `Lost` after a root's
+return is signalled, only once the backend has finished adding its watches, so
+a resync that follows cannot finish inside an unwatched gap. A directory moved
+away is reported under its own name only, so deleting a path in the topology
+index also deletes every file indexed below it.
 
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.

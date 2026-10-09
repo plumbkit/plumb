@@ -21,11 +21,17 @@ const (
 	rootRetryMax = 10 * time.Second
 )
 
+// readyWithin bounds how long New waits for sgtdi's initial walk. It is
+// generous (50,000 directories take under a second), and exists so a walk
+// that hangs, on a stalled network mount say, fails New instead of hanging
+// the consumer's own start.
+const readyWithin = time.Minute
+
 // sgtdiRun is one running sgtdi watcher.
 type sgtdiRun struct {
 	src     fswatcher.Watcher
 	cancel  context.CancelFunc
-	ready   chan struct{} // closed by sgtdi once every initial watch is in place
+	ready   chan struct{} // closed by sgtdi once its initial walk has added every watch it could
 	stopped chan struct{} // closed when Watch returns
 	err     error         // Watch's result; read only after stopped is closed
 }
@@ -61,17 +67,19 @@ func startSgtdi(root string, opts Options) (*sgtdiRun, error) {
 	return r, nil
 }
 
-// close stops the run and waits for its Watch to return.
+// close stops the run and waits for its Watch to return. sgtdi cannot
+// interrupt its initial walk, so a run stopped mid-walk returns when the walk
+// ends.
 func (r *sgtdiRun) close() {
 	r.cancel()
 	r.src.Close()
 	<-r.stopped
 }
 
-// awaitReady waits until sgtdi has every initial watch in place: it walks the
-// tree adding them after Watch starts, and a change made before a directory's
-// watch exists is never reported. It reports false, with the run closed, when
-// the run stopped first or done closed.
+// awaitReady waits until sgtdi's initial walk has added its watches: the walk
+// runs after Watch starts, and a change made before a directory's watch exists
+// is never reported. It reports false, with the run closed, when the run
+// stopped first or done closed; it never waits for readiness after done.
 func (r *sgtdiRun) awaitReady(done <-chan struct{}) bool {
 	select {
 	case <-r.ready:
@@ -83,6 +91,13 @@ func (r *sgtdiRun) awaitReady(done <-chan struct{}) bool {
 	return false
 }
 
+// partial reports whether the walk left directories unwatched. sgtdi counts a
+// directory it could not watch at the inotify watch limit, skips it and its
+// subtree, and still reports ready.
+func (r *sgtdiRun) partial() bool {
+	return r.src.Stats().EventsPartial > 0
+}
+
 // failure is why a run stopped, for the log.
 func (r *sgtdiRun) failure() error {
 	if r.err != nil {
@@ -92,19 +107,30 @@ func (r *sgtdiRun) failure() error {
 }
 
 func (w *Watcher) startBackend(opts Options) error {
-	return w.startSupervised(opts, startSgtdi)
+	return w.startSupervised(opts, startSgtdi, readyWithin)
 }
 
-// startSupervised returns once the first run's watches are in place, so a
+// startSupervised returns once the first run's initial walk is done, so a
 // consumer's first full scan, made after New returns, cannot miss a change
-// made while sgtdi was still adding them.
-func (w *Watcher) startSupervised(opts Options, start startFunc) error {
+// made while sgtdi was still adding watches. A walk that does not finish
+// within the given bound fails New: the run is cancelled without waiting for it,
+// since the walk cannot be interrupted, and returns whenever the walk does.
+func (w *Watcher) startSupervised(opts Options, start startFunc, within time.Duration) error {
 	run, err := start(w.root, opts)
 	if err != nil {
 		return err
 	}
-	if !run.awaitReady(w.done) {
+	timeout := time.NewTimer(within)
+	defer timeout.Stop()
+	select {
+	case <-run.ready:
+	case <-run.stopped:
+		run.close()
 		return fmt.Errorf("fswatch: watching %s: %w", w.root, run.failure())
+	case <-timeout.C:
+		run.cancel()
+		run.src.Close()
+		return fmt.Errorf("fswatch: watching %s: the initial watches were not in place within %v", w.root, within)
 	}
 	w.wg.Go(func() { w.superviseSgtdi(opts, run, start) })
 	return nil
@@ -125,29 +151,34 @@ const (
 // the watch follows the old directory or dies, and a directory recreated at the
 // root path is never watched: the watcher would go silently dead. Instead a lost
 // root asks for a reconcile, waits for the root to be a directory again, starts
-// a fresh run, and once that run's watches are all in place asks for another
+// a fresh run, and once that run's initial walk is done asks for another
 // reconcile, which covers whatever was made in the root while it was unwatched.
 // Asked any earlier, a consumer could finish reconciling before a watch existed
 // and miss a change made in between for good.
 //
 // A run that stops on its own with the root still in place is not restarted:
-// it would most likely fail the same way (an inotify watch limit, say) and turn
-// into a reconcile loop. The Watcher is degraded for good instead.
+// it would most likely fail the same way (the root itself at an inotify watch
+// limit, say) and turn into a reconcile loop. The Watcher is degraded for good
+// instead. So is a run whose walk left directories unwatched, though it keeps
+// delivering what it does watch.
 func (w *Watcher) superviseSgtdi(opts Options, run *sgtdiRun, start startFunc) {
 	for {
+		if run.partial() {
+			w.degrade("fswatch: the inotify watch limit left part of the tree unwatched; changes there will not be seen (raise fs.inotify.max_user_watches)", nil)
+		}
 		end := pumpSgtdi(w, run.src.Events(), run.src.Dropped(), run.stopped)
 		run.close()
 		switch end {
 		case endClosed:
 			return
 		case endFailed:
-			w.degrade(run.failure())
+			w.degrade("fswatch: watcher stopped; changes will not be seen until it is restarted", run.failure())
 			return
 		}
 		w.signalLost()
 		next, err := w.restartSgtdi(opts, start)
 		if err != nil {
-			w.degrade(err)
+			w.degrade("fswatch: watcher stopped; changes will not be seen until it is restarted", err)
 			return
 		}
 		if next == nil {
@@ -158,12 +189,17 @@ func (w *Watcher) superviseSgtdi(opts Options, run *sgtdiRun, start startFunc) {
 	}
 }
 
-// degrade reports a backend that will not run again: on Failed, so a consumer
-// can fall back to periodic reconciliation, and on Lost for the changes already
-// missed. Only the supervisor calls it, once, as it returns.
-func (w *Watcher) degrade(err error) {
-	slog.Warn("fswatch: watcher stopped; changes will not be seen until it is restarted", "root", w.root, "err", err)
-	close(w.failed)
+// degrade reports a Watcher that can no longer see every change: on Failed, so
+// a consumer can fall back to periodic reconciliation, and on Lost for what was
+// already missed. Failed is closed once; only the supervisor calls degrade, so
+// the check before closing cannot race.
+func (w *Watcher) degrade(msg string, err error) {
+	slog.Warn(msg, "root", w.root, "err", err)
+	select {
+	case <-w.failed:
+	default:
+		close(w.failed)
+	}
 	w.signalLost()
 }
 
