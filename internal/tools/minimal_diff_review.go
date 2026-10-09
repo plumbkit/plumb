@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/minchange"
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -142,7 +143,7 @@ func (t *MinimalDiffReview) Execute(ctx context.Context, raw json.RawMessage) (s
 		return "", err
 	}
 	report := t.review(ctx, diffText, a, len(capped) > 0)
-	return formatReview(report, a, capped), nil
+	return formatReview(report, a, capped, activeTopology(t.storeFn)), nil
 }
 
 // notAGitRepoMessage renders the degrade-cleanly response for a workspace that
@@ -392,6 +393,13 @@ func (t *MinimalDiffReview) callerCountAt(ctx context.Context, name, path, kind 
 	if store == nil {
 		return 0, minchange.SymbolRef{}, false
 	}
+	if store.Health().Failing {
+		// PLAN-490: a caller count from a failing index is not evidence of anything,
+		// and presenting it at the usual low confidence is precisely the absence answer
+		// that misleads. The report's header says the index is failing (formatReview),
+		// so withholding the count here hides nothing from the reader.
+		return 0, minchange.SymbolRef{}, false
+	}
 	cands, err := store.ResolveNodes(ctx, name, topology.NodeHint{PathSubstr: path, Kind: kind})
 	if err != nil || len(cands) == 0 {
 		return 0, minchange.SymbolRef{}, false
@@ -523,11 +531,18 @@ func writeCappedFiles(sb *strings.Builder, capped []cappedFile) {
 }
 
 // formatReview renders the report as a bounded, human-readable advisory block.
-func formatReview(r minchange.Report, a minimalDiffReviewArgs, capped []cappedFile) string {
+func formatReview(r minchange.Report, a minimalDiffReviewArgs, capped []cappedFile, store *topology.Store) string {
 	var sb strings.Builder
 	sb.WriteString("minimal_diff_review — advisory (findings never block writes)\n")
 	fmt.Fprintf(&sb, "scope: mode=%s, base_ref=%s, %d file(s) reviewed\n", a.Mode, a.BaseRef, r.FilesReviewed)
 	sb.WriteString("source: git diff + topology index. Evidence is asymmetric — silence is not proof a change is minimal.\n")
+	// PLAN-490: this review's topology-backed evidence is only as good as the index,
+	// and the header is where a reader looks before trusting a finding. callerCountAt
+	// withholds its counts while the index is failing, so this line is also the reason
+	// a caller-count finding is missing rather than merely a caveat.
+	if stale := staleIndexSuffixFor(store, time.Now()); stale != "" {
+		sb.WriteString(strings.TrimPrefix(stale, " ") + "\n")
+	}
 	writeCappedFiles(&sb, capped)
 	sb.WriteString("\n")
 
