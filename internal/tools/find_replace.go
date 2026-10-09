@@ -59,32 +59,24 @@ func NewFindReplace(deps ...WriteDeps) *findReplaceTool {
 func (*findReplaceTool) Name() string { return "find_replace" }
 
 func (*findReplaceTool) Description() string {
-	return `Grep-equivalent: find text across files with optional replacement. Search and replace text across files in a directory tree.
-
-Defaults to dry_run=true so you can preview the diff before committing. Set dry_run=false to write changes.
-
-When the [edits].show_write_diff config flag is on (the default), the response appends a per-file unified diff — in both preview and applied modes — for up to the first 20 changed files, with a "+N more file(s)" summary beyond that. Set show_write_diff=false to suppress it.
-
-Skips binary files (detected via null-byte sniff of the first 8 KB). Skips files larger than max_file_bytes (50 MiB default). Honours .gitignore. Use 'glob' to limit which files to touch (e.g. "*.go", "**/*.md"); a glob with a literal directory prefix (e.g. "src/**/*.go") prunes sibling directories from the walk entirely. Files are processed in parallel; output is sorted by path.
-
-For identifier refactors use rename_symbol (scope- and type-aware); find_replace is for plain-text edits (doc strings, license headers, hostnames, version strings, non-code files).`
+	return "Find and replace text across a directory tree, .gitignore-aware, skipping binary and oversized files. dry_run defaults to true: preview the per-file diff, then pass false to write. Limit with glob; a glob with a directory prefix prunes the walk. For identifier renames use rename_symbol (scope- and type-aware); this tool is for plain text such as docs, headers, hostnames and version strings."
 }
 
 func (*findReplaceTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"path":{"type":"string","description":"Directory to walk, or a single file. Absolute path, file:// URI, or workspace-relative path; defaults relative to the workspace root."},
-			"pattern":{"type":"string","description":"Search pattern. Plain text by default; regex if use_regex=true."},
-			"replacement":{"type":"string","description":"Replacement text. With regex, supports $1, $2 backreferences."},
-			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as a regular expression (Go RE2). Default false — pattern is literal text, so regex syntax such as | or \\. matches itself."},
-			"glob":{"type":"string","description":"File glob filter, e.g. '*.go' or '**/*.md'. Empty = all non-binary files."},
-			"case_sensitive":{"type":"boolean","description":"Default: smart-case (case-insensitive iff pattern is all lowercase)."},
-			"dry_run":{"type":"boolean","default":true,"description":"If true (default), preview only; do not write files."},
-			"dirty_ok":{"type":"boolean","default":false,"description":"Allow editing files that have uncommitted changes in their git repository. Default false — the replacement is refused if any target file is dirty. Pass true to proceed anyway."},
-			"max_files":{"type":"integer","default":100,"description":"Cap on number of files modified."},
-			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip files larger than this many bytes. Default 50 MiB."},
-			"format_after":{"type":"boolean","default":false,"description":"After writing changes, run the workspace formatter (gofumpt for Go, ruff format for Python) on each modified file. Formatter errors are reported as warnings and do not fail the call."}
+			"path":{"type":"string","description":"Directory to walk, or one file (default: the workspace root)."},
+			"pattern":{"type":"string","description":"Text to find; a regex when use_regex is true."},
+			"replacement":{"type":"string","description":"Replacement text; with a regex, $1 and $2 are backreferences."},
+			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as Go RE2 (default false: | or \\. match themselves)."},
+			"glob":{"type":"string","description":"Files to touch, e.g. '*.go' or '**/*.md' (default: all text files)."},
+			"case_sensitive":{"type":"boolean","description":"Default smart-case (insensitive when pattern is all lowercase)."},
+			"dry_run":{"type":"boolean","default":true,"description":"Preview only, no write (default true)."},
+			"dirty_ok":{"type":"boolean","default":false,"description":"Allow files with uncommitted git changes (default false: refused)."},
+			"max_files":{"type":"integer","default":100,"description":"Cap on files modified."},
+			"max_file_bytes":{"type":"integer","default":52428800,"description":"Skip larger files (default 50 MiB)."},
+			"format_after":{"type":"boolean","default":false,"description":"Run the workspace formatter (gofumpt, ruff format) on each modified file; formatter errors are warnings."}
 		},
 		"required":["path","pattern","replacement"],
   "additionalProperties": false

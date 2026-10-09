@@ -27,24 +27,7 @@ func NewLeaveNote(deps CollabDeps) *LeaveNote { return &LeaveNote{deps: deps} }
 func (*LeaveNote) Name() string { return "leave_note" }
 
 func (*LeaveNote) Description() string {
-	return "Send a message to another agent — a named peer session, or \"next\" " +
-		"(whoever attaches to this workspace next). Send half of plumb's mailbox; " +
-		"check_messages is the receive half. Full etiquette — addressing, " +
-		"delivery, the exchange cap, cross-project rules: the plumb-chat skill.\n\n" +
-		"Every message belongs to a thread: omit conversation_id to start one (the " +
-		"reply carries its id), or quote an id you were given to reply into that " +
-		"thread (to may then be omitted). A thread is capped at [collab] " +
-		"max_exchanges messages; once spent, replies are refused.\n\n" +
-		"Delivery is by polling only: check_messages or session_start hands it over, " +
-		"exactly once. A peer idle on its human has not seen " +
-		"the message; silence is not refusal, so do not re-send.\n\n" +
-		"Messages are bound to the exact SESSION when it is connected; a " +
-		"disconnected peer, or \"next\", is delivered by name instead. " +
-		"Cross-project sends need the recipient project's opt-in. Requires " +
-		"[collab] mailbox = true; the body is secret-scrubbed.\n\n" +
-		"Parameters: body (required); to (peer session name or \"next\" — omitted " +
-		"means \"next\" on a new thread, the other participant on a reply); " +
-		"conversation_id (reply into an existing thread)."
+	return "Send a message to a named peer session, or \"next\" (whoever attaches next). This is the send half of plumb's mailbox; check_messages is the receive half. Every message belongs to a thread: omit conversation_id to start one, or quote it to reply. A thread is capped at [collab] max_exchanges. Delivery is by polling: check_messages or session_start hands it over, exactly once. A peer idle on its human has not seen it, so silence is not refusal; do not re-send. Requires [collab] mailbox; the body is secret-scrubbed. Etiquette: the plumb-chat skill."
 }
 
 func (*LeaveNote) InputSchema() json.RawMessage {
@@ -53,15 +36,15 @@ func (*LeaveNote) InputSchema() json.RawMessage {
   "properties": {
     "body": {
       "type": "string",
-      "description": "The message to send (free text)."
+      "description": "The message (free text)."
     },
     "to": {
       "type": "string",
-      "description": "A peer session name, or \"next\" for whoever attaches to this workspace next. Omitting it defaults to \"next\" when you are starting a thread; when you pass a conversation_id it instead resolves to that thread's other participant, and the send is refused if the thread has no other participant or more than one. A name belonging to a session in another workspace is refused up front unless that project has already opted in to cross-project messages."
+      "description": "A peer session name, or \"next\" for whoever attaches next. Default: \"next\" on a new thread, the other participant on a reply. Another project's session needs that project's opt-in."
     },
     "conversation_id": {
       "type": "string",
-      "description": "Reply into an existing thread by quoting the conversation id you were given. Omit to start a new thread."
+      "description": "Reply into this thread; omit to start one."
     }
   },
   "required": ["body"],

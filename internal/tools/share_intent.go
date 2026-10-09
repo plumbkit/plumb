@@ -27,26 +27,7 @@ func NewShareIntent(deps CollabDeps) *ShareIntent { return &ShareIntent{deps: de
 func (*ShareIntent) Name() string { return "share_intent" }
 
 func (*ShareIntent) Description() string {
-	return "Broadcast what you are working on to other agents active on this " +
-		"workspace RIGHT NOW, so they can steer around your in-progress work " +
-		"instead of colliding with it (e.g. \"refactoring the rate limiter — " +
-		"avoid internal/tools/ratelimit*\").\n\n" +
-		"This is ADVISORY and a CLAIM, not a lock: it never blocks anyone's write, " +
-		"and what you say you are doing is not the same as what the daemon observes " +
-		"you did (that is workspace_sessions' recent_writes). Peers see your intent " +
-		"in workspace_sessions, and a peer whose write touches a path matching your " +
-		"path_globs gets a bounded advisory hint labelled as an unverified claim.\n\n" +
-		"You have at most ONE live intent — calling this again replaces it. The " +
-		"intent expires after ttl_minutes (default from [collab] intent_ttl_minutes) " +
-		"and is cleared automatically when your session ends. Delivery is by polling " +
-		"and hint injection only; plumb does not push to another agent.\n\n" +
-		"Requires [collab] intents = true; otherwise the call is refused. " +
-		"Strictly per-workspace; the body is secret-scrubbed before storage.\n\n" +
-		"Parameters:\n" +
-		"  body        — what you are doing (required, free text).\n" +
-		"  path_globs  — optional workspace-relative globs for the area you are " +
-		"working on (e.g. [\"internal/tools/ratelimit*\"]); drives peer write hints.\n" +
-		"  ttl_minutes — optional expiry override; defaults to [collab] intent_ttl_minutes."
+	return "Tell peers on this workspace what you are working on now, so they can steer around it (e.g. \"refactoring the rate limiter — avoid internal/tools/ratelimit*\"). ADVISORY and a claim, not a lock: it never blocks a write. Peers see it in workspace_sessions, and a peer writing a matching path gets a hint labelled unverified. One live intent per session (a new call replaces it); it expires after ttl_minutes or when your session ends. Requires [collab] intents; per-workspace; secret-scrubbed."
 }
 
 func (*ShareIntent) InputSchema() json.RawMessage {
@@ -55,16 +36,16 @@ func (*ShareIntent) InputSchema() json.RawMessage {
   "properties": {
     "body": {
       "type": "string",
-      "description": "What you are working on (free text). Rendered to peers as an unverified claim."
+      "description": "What you are working on; shown to peers as an unverified claim."
     },
     "path_globs": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Optional workspace-relative globs for the area being worked on; a peer write matching one gets an advisory hint."
+      "description": "Workspace-relative globs for your area; a peer write matching one gets an advisory hint."
     },
     "ttl_minutes": {
       "type": "integer",
-      "description": "Optional expiry in minutes; defaults to [collab] intent_ttl_minutes.",
+      "description": "Expiry in minutes (default [collab] intent_ttl_minutes).",
       "minimum": 1
     }
   },

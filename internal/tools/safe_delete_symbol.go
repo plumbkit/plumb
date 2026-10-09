@@ -68,13 +68,7 @@ func (t *SafeDeleteSymbol) WithShowWriteDiff(fn func() bool) *SafeDeleteSymbol {
 func (*SafeDeleteSymbol) Name() string { return "safe_delete_symbol" }
 
 func (*SafeDeleteSymbol) Description() string {
-	return `Delete a symbol's declaration only if it has no remaining references.
-
-Calls LSP textDocument/references first. If any reference outside the declaration itself is found, the deletion is rejected with the list of referencing locations so the caller can decide what to do. This prevents accidental deletion of code that's still in use.
-
-Set include_doc_comment=true to also delete any contiguous doc comment above the symbol — otherwise the comment is left orphaned, pointing at whatever ends up next in the file.
-
-The response includes a unified diff of the deletion — a preview in dry-run, the applied change otherwise — unless show_write_diff is disabled.`
+	return `Delete a symbol's declaration only if LSP finds no references outside it; otherwise refuse and list the referencing locations. include_doc_comment=true also deletes the doc comment above (otherwise it is left orphaned). Returns a unified diff of the deletion (a preview in dry-run) unless show_write_diff is off.`
 }
 
 func (*SafeDeleteSymbol) InputSchema() json.RawMessage {

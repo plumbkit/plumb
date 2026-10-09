@@ -18,18 +18,18 @@ var workspaceSearchSchema = json.RawMessage(`{
   "properties": {
     "query": {
       "type": "string",
-      "description": "Free-text discovery query, e.g. \"daemon locking\" or \"workspace pool\". Token-aware and ranked; not a regex and not an exact scan."
+      "description": "Free-text question, e.g. \"daemon locking\"; ranked, token-aware, not a regex."
     },
     "corpora": {
       "type": "array",
       "items": {"type": "string", "enum": ["code", "docs", "memory"]},
-      "description": "Restrict the search to these corpora. Omit to search all three: code (indexed symbols), docs (indexed Markdown/HTML sections), memory (project memories)."
+      "description": "Corpora to search: code, docs, memory (default all three)."
     },
     "limit": {
       "type": "integer",
       "minimum": 1,
       "maximum": 100,
-      "description": "Maximum number of merged results to return. Default 20."
+      "description": "Merged results returned (default 20)."
     }
   },
   "required": ["query"],
@@ -63,10 +63,7 @@ func (*WorkspaceSearch) Name() string                 { return "workspace_search
 func (*WorkspaceSearch) InputSchema() json.RawMessage { return workspaceSearchSchema }
 
 func (*WorkspaceSearch) Description() string {
-	return "Ranked discovery across the workspace's indexed corpora: code symbols, doc sections (Markdown/HTML), and project memories. " +
-		"Use workspace_search when you have a conceptual question (\"where is daemon locking handled?\") and want likely starting points. " +
-		"Approximate by design and never a proof of absence — the exact lane is search_in_files (literal or regex over current file contents). " +
-		"Results are FTS5-ranked within each corpus and interleaved; every hit is labelled with corpus, source, field, score, and why it matched, and the header reports per-corpus index freshness (exact_match=false always)."
+	return "Ranked discovery across indexed code symbols, doc sections (Markdown, HTML) and project memories, for a conceptual question such as \"where is daemon locking handled?\". Each hit is labelled with corpus, source, field, score and why it matched, and the header reports each index's freshness. Approximate by design and never proof of absence: for exact matches use search_in_files."
 }
 
 type workspaceSearchArgs struct {

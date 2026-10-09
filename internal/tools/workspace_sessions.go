@@ -147,33 +147,7 @@ func (t *WorkspaceSessions) WithCollab(policy func() (intents, mailbox bool), st
 func (*WorkspaceSessions) Name() string { return "workspace_sessions" }
 
 func (*WorkspaceSessions) Description() string {
-	return "Returns same-workspace session awareness: who else is actively connected to " +
-		"this project and what files they recently edited.\n\n" +
-		"**you** — this session's name.\n\n" +
-		"**active_sessions** — sessions on this workspace right now (name, client, " +
-		"how long since their last tool call). A single entry whose is_self field is " +
-		"true means you are the only active session — your view of the workspace is " +
-		"authoritative. Multiple entries mean concurrent agents are working here; " +
-		"treat any file a peer recently touched as potentially changed.\n\n" +
-		"**recent_writes** — the last N write operations (write_file, edit_file, " +
-		"rename_file, git commit, …) by all sessions on this workspace. " +
-		"The file path (when available), session name, operation, and age are shown. " +
-		"Only operations that could modify the workspace are listed: read-only git " +
-		"subcommands (status, log, diff, …) and dry-run previews never appear. A " +
-		"call that failed or was refused is kept but marked " +
-		"'[failed — no change applied]' — evidence the peer is working in that file " +
-		"even though nothing landed on disk. " +
-		"A successful git commit is attributed in full: its line carries the session " +
-		"name, the commit's short SHA and subject, and the repository, so a peer's " +
-		"commit is traceable to the session that authored it. " +
-		"When [collab] peer_awareness is on and the topology index has the file, each " +
-		"entry is annotated with its enclosing package/symbol (best-effort, source=topology).\n\n" +
-		"Use this before editing a file that another session may have recently " +
-		"modified: if it appears in recent_writes, re-read it first.\n\n" +
-		"Parameters:\n" +
-		"  recent_limit  — max recent-write entries to return (default 10, max 50).\n\n" +
-		"Workspace boundary: workspace_sessions is scoped to the caller's pinned " +
-		"workspace; it never reveals sessions from a different project."
+	return "Who else is working on this workspace: you, the active sessions (name, client, time since last call; is_self alone means your view is authoritative), and the recent writes by every session (path, session, operation, age). Only state-changing operations appear; a failed or refused write is kept and marked '[failed — no change applied]', and a commit shows its short SHA, subject and repository. With [collab] peer_awareness, entries are annotated with their enclosing symbol (source=topology). Before editing a file listed here, re-read it. Never shows other projects."
 }
 
 func (*WorkspaceSessions) InputSchema() json.RawMessage {
@@ -182,7 +156,7 @@ func (*WorkspaceSessions) InputSchema() json.RawMessage {
   "properties": {
     "recent_limit": {
       "type": "integer",
-      "description": "Maximum recent-write entries to return (1–50; default 10).",
+      "description": "Recent-write entries to return (1–50, default 10).",
       "minimum": 1,
       "maximum": 50
     }

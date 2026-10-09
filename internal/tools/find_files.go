@@ -45,53 +45,53 @@ var findFilesSchema = json.RawMessage(`{
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Glob (or regex if use_regex=true) matched against the file/directory name. When the pattern contains '/' it matches the full relative path. OPTIONAL — omit it to list every entry. A literal \".\" only matches a file named \".\"."
+      "description": "Glob (regex with use_regex) on the name, or on the relative path when it contains '/'. Optional: omit to list everything."
     },
     "path": {
       "type": "string",
-      "description": "Directory to search in (absolute path, file:// URI, or workspace-relative path). Defaults to the workspace root."
+      "description": "Directory to search (default: the workspace root)."
     },
     "type": {
       "type": "string",
       "enum": ["file", "dir", "any"],
-      "description": "Restrict to files, directories, or both. Default: 'file'."
+      "description": "file (default), dir, or any."
     },
     "extension": {
       "type": "string",
-      "description": "Filter by file extension, e.g. 'go' or '.go'."
+      "description": "File extension, e.g. 'go'."
     },
     "exclude": {
       "type": "array",
       "items": { "type": "string" },
-      "description": "Glob patterns to exclude from the walk. Matching directories are pruned without descending; matching files are skipped. Matched against relative paths and base names (supports **)."
+      "description": "Globs to skip (relative path or base name, ** supported); matching directories are pruned."
     },
     "max_depth": {
       "type": "integer",
-      "description": "Maximum directory depth to descend. 1 lists one level only, like ls. Default: unlimited.",
+      "description": "Depth limit; 1 lists one level like ls (default unlimited).",
       "minimum": 1
     },
     "max_results": {
       "type": "integer",
-      "description": "Maximum number of results to return. Default 500.",
+      "description": "Results returned (default 500).",
       "minimum": 1,
       "maximum": 5000
     },
     "include_hidden": {
       "type": "boolean",
-      "description": "Include hidden files and directories (starting with '.'). Default false."
+      "description": "Include dot-files and dot-directories (default false)."
     },
     "include_details": {
       "type": "boolean",
-      "description": "Render each entry with a [FILE]/[DIR]/[LINK] marker, its size and last-modified time (symlinks as 'name -> target') instead of a bare path list. Default false."
+      "description": "Show a [FILE]/[DIR]/[LINK] marker, size and modified time per entry (default false)."
     },
     "sort_by": {
       "type": "string",
       "enum": ["name", "size", "modified"],
-      "description": "Order of the result list: 'name' (directories first, then path), 'size' (largest first), 'modified' (newest first). Default: name."
+      "description": "name (directories first), size (largest first) or modified (newest first). Default name."
     },
     "use_regex": {
       "type": "boolean",
-      "description": "Treat pattern as a regular expression instead of a glob. Default false."
+      "description": "Treat pattern as a regex instead of a glob (default false)."
     }
   },
   "additionalProperties": false
@@ -123,12 +123,7 @@ func (t *FindFiles) WithContested(fn ContestedFn) *FindFiles {
 func (t *FindFiles) Name() string                 { return "find_files" }
 func (t *FindFiles) InputSchema() json.RawMessage { return findFilesSchema }
 func (t *FindFiles) Description() string {
-	return "Workspace-scoped file/directory finder and directory lister. Unlike shell find/fd/ls, " +
-		"results are confined to the active project (no .git/, node_modules/, build output, or anything else .gitignore excludes), " +
-		"every call is recorded in the project's stats, and the pattern semantics are consistent across hosts. " +
-		"pattern is optional — omit it to list everything. Supports glob and regex patterns, extension and type (file/dir/any) filters, " +
-		"depth limits (max_depth=1 lists one level, like ls), sort_by name/size/modified, and include_details for a per-entry " +
-		"[FILE]/[DIR]/[LINK] marker, size, and modified time."
+	return "Find files and directories, or list a directory, within the project only (.gitignore-aware: no .git, node_modules or build output). Optional glob or regex pattern; filters for extension and type; max_depth=1 lists one level like ls; sort by name, size or modified; include_details adds type, size and time."
 }
 
 type findFilesArgs struct {

@@ -15,39 +15,39 @@ var readMultipleFilesSchema = json.RawMessage(`{
   "properties": {
     "paths": {
       "type": "array",
-      "description": "Absolute paths, file:// URIs, or workspace-relative paths of files to read.",
+      "description": "Files: absolute paths, file:// URIs, or workspace-relative (up to 20).",
       "items": { "type": "string" },
       "minItems": 1,
       "maxItems": 20
     },
     "start_line": {
       "type": "integer",
-      "description": "First line to return (1-based, inclusive) from EVERY path in this call — same semantics as read_file's start_line, applied uniformly. Omit to start from the beginning of each file.",
+      "description": "First line, 1-based, applied to EVERY path.",
       "minimum": 1
     },
     "end_line": {
       "type": "integer",
-      "description": "Last line to return (1-based, inclusive) from EVERY path in this call. Omit to read to the end of each file.",
+      "description": "Last line, 1-based, applied to every path.",
       "minimum": 1
     },
     "pattern": {
       "type": "string",
-      "description": "Search EVERY path in this call for this pattern instead of returning a window — same semantics as read_file's pattern (literal by default, smart-case, Go RE2 regex when use_regex). Combine with start_line/end_line to restrict the search to that line window in every file."
+      "description": "Search every path instead of windowing, as read_file's pattern."
     },
     "use_regex": {
       "type": "boolean",
       "default": false,
-      "description": "Treat pattern as a Go RE2 regular expression. Only consulted when pattern is set."
+      "description": "Treat pattern as Go RE2."
     },
     "context_lines": {
       "type": "integer",
-      "description": "Lines of context around each match (like rg -C), applied to every path. Default 0. Only consulted when pattern is set.",
+      "description": "Context lines around each match (default 0).",
       "minimum": 0,
       "maximum": 50
     },
     "max_matches": {
       "type": "integer",
-      "description": "Maximum matching lines to return per file in search mode. Default 200. Only consulted when pattern is set.",
+      "description": "Matching lines per file (default 200).",
       "minimum": 1,
       "maximum": 2000
     }
@@ -170,19 +170,7 @@ func (t *ReadMultipleFiles) ReadDeps() (tracker, readsFor, writes, client bool) 
 func (*ReadMultipleFiles) Name() string                 { return "read_multiple_files" }
 func (*ReadMultipleFiles) InputSchema() json.RawMessage { return readMultipleFilesSchema }
 func (*ReadMultipleFiles) Description() string {
-	return "Read up to 20 files in a single call. Each file's content is returned " +
-		"under a '### <path>' heading, followed by that file's own read_file header " +
-		"(mtime, sha256, line and byte counts) so it can be edited without re-reading " +
-		"— reads ARE recorded per file, exactly like read_file, so edit_file works " +
-		"under [edits] strict mode with no re-read. Errors for individual " +
-		"files are reported inline — one unreadable file doesn't block the others. " +
-		"Accepts absolute paths, file:// URIs, or workspace-relative paths. Binary files are detected and skipped. " +
-		"Each file is subject to the same 200 KiB cap as read_file. " +
-		"Pass start_line/end_line or pattern (with use_regex/context_lines/max_matches) to slice or search EVERY " +
-		"path in the call uniformly — same semantics as read_file's own parameters, applied per file; there is no " +
-		"per-path override, so a windowed batch read still records EACH file's full mtime/sha in the read tracker " +
-		"(identical to read_file's own ranged-read behaviour — strict mode is mtime-based, not range-based, so a " +
-		"later edit anywhere in the file is still covered). The 20-path cap is unchanged by slicing."
+	return "Read up to 20 files in one call, each under a '### <path>' heading with its own read_file header (mtime, sha256). Each read is recorded, so edit_file works on any of them without a re-read, even in strict mode. One unreadable file does not block the others; binary files are skipped; each file has read_file's 200 KiB cap. start_line/end_line or pattern apply to every path."
 }
 
 type readMultipleFilesArgs struct {

@@ -21,24 +21,24 @@ var callHierarchySchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path containing the symbol"
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "line": {
       "type": "integer",
-      "description": "Zero-based line number of the symbol. Required when symbol_name is not provided."
+      "description": "Zero-based line; only without symbol_name."
     },
     "character": {
       "type": "integer",
-      "description": "Zero-based character offset within the line. Required when symbol_name is not provided."
+      "description": "Zero-based column; only without symbol_name."
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
+      "description": "Preferred over line/character: a plain name or Type.Method, resolved against the file's symbols."
     },
     "direction": {
       "type": "string",
       "enum": ["incoming", "outgoing", "both"],
-      "description": "Which call direction to return: callers (incoming), callees (outgoing), or both. Defaults to both."
+      "description": "callers (incoming), callees (outgoing), or both (default)."
     }
   },
   "required": ["uri"],
@@ -92,13 +92,7 @@ func (t *CallHierarchy) WithContested(fn ContestedFn) *CallHierarchy {
 func (t *CallHierarchy) Name() string                 { return "call_hierarchy" }
 func (t *CallHierarchy) InputSchema() json.RawMessage { return callHierarchySchema }
 func (t *CallHierarchy) Description() string {
-	return "Show the call hierarchy for a symbol: who calls it (incoming) and what it calls (outgoing). " +
-		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position for you, " +
-		"avoiding off-by-one errors; a raw file position (uri + line + character) is the fallback " +
-		"and, when it lands off an identifier, is snapped to the enclosing symbol. " +
-		"Useful for understanding control flow and assessing the impact of changes. " +
-		"When the language server provides no call hierarchy for the file (e.g. zls for Zig), " +
-		"falls back to the topology call graph, annotated source=topology (approximate)."
+	return "Callers (incoming) and callees (outgoing) of a symbol. Prefer uri + symbol_name; a raw position is the fallback and snaps to the enclosing symbol. Without LSP call-hierarchy support (e.g. zls) it falls back to the topology call graph, marked source=topology (approximate)."
 }
 
 type callHierarchyArgs struct {

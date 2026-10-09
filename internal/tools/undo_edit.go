@@ -17,8 +17,8 @@ import (
 var undoEditSchema = json.RawMessage(`{
   "type":"object",
   "properties":{
-    "file_path":{"type":"string","description":"Absolute path, file:// URI, or workspace-relative path of the file to revert."},
-    "force":{"type":"boolean","description":"Revert even if the file changed since plumb's last write to it (an external or peer edit). Default false — the undo is refused in that case so it cannot silently discard someone else's change."}
+    "file_path":{"type":"string","description":"File to revert (absolute, file:// URI, or workspace-relative)."},
+    "force":{"type":"boolean","description":"Revert even if the file changed since plumb's last write (default false: refused, so another's change is not discarded)."}
   },
   "required":["file_path"],
   "additionalProperties":false
@@ -49,12 +49,7 @@ func NewUndoEdit(deps WriteDeps) *UndoEdit { return &UndoEdit{deps: deps} }
 func (*UndoEdit) Name() string                 { return "undo_edit" }
 func (*UndoEdit) InputSchema() json.RawMessage { return undoEditSchema }
 func (*UndoEdit) Description() string {
-	return "Revert plumb's most recent write to a file — the safe alternative to `git checkout <file>`, which discards EVERY uncommitted change in the file. " +
-		"undo_edit restores only what plumb's last edit_file/write_file changed, and refuses by default if the file was modified since (an external or peer edit), so it never silently clobbers someone else's work (pass force:true to override). " +
-		"If the last write created the file, undo removes it. Single-level per file: it undoes the last write; a fresh write re-arms it. Undo history is per session and cleared on a workspace switch. " +
-		"Very large files (pre-write content over 1 MiB) are not snapshotted, so undo is unavailable for them. " +
-		"Both the restore and the removal of a file the write created return a diff of what the undo changed, " +
-		"gated by [edits].show_write_diff."
+	return "Revert plumb's most recent write to a file: the safe alternative to git checkout, which discards EVERY uncommitted change. Restores only what the last edit_file or write_file changed, and refuses if the file has changed since (force overrides); a write that created the file is undone by removing it. One level per file, per session, cleared on a workspace switch; not available when the pre-write content exceeded 1 MiB. Returns a diff of the undo."
 }
 
 type undoEditArgs struct {

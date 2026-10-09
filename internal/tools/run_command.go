@@ -56,11 +56,11 @@ var runCommandSchema = json.RawMessage(`{
   "properties": {
     "name": {
       "type": "string",
-      "description": "The name of an entry in the [[command]] allow-list (in global or project .plumb/config.toml). You cannot pass an arbitrary command line — only a configured name."
+      "description": "A name from the [[command]] allow-list (global or project config); not a command line."
     },
     "target": {
       "type": "string",
-      "description": "Optional value substituted for the single {target} token in the command's fixed argv (e.g. a test name or package). Restricted to one shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has no {target}."
+      "description": "Fills the command's single {target} token: one shell-safe argument ([A-Za-z0-9._/:@-]); refused if there is no {target}."
     }
   },
   "required": ["name"],
@@ -70,11 +70,7 @@ var runCommandSchema = json.RawMessage(`{
 func (t *RunCommand) Name() string                 { return "run_command" }
 func (t *RunCommand) InputSchema() json.RawMessage { return runCommandSchema }
 func (t *RunCommand) Description() string {
-	return "Run a named command from the workspace's [[command]] allow-list (build/test/lint/scripts) without leaving plumb. " +
-		"It runs only the exact fixed argv the user configured (no shell, no agent-supplied command line); the optional target fills a single {target} placeholder with one shell-safe argument. " +
-		"A command from a project's .plumb/config.toml must be trusted first (run `plumb trust`); a command from your global config always runs. " +
-		"The command runs under an OS sandbox (a write jail) when one is available. Output and runtime are bounded. " +
-		"For an ordinary build/lint/test, prefer run_task and its [tasks.<lang>] slots — those ship with defaults."
+	return "Run a named command from the workspace's [[command]] allow-list: exactly the argv the user configured, with no shell and no agent-supplied command line; target fills one {target} placeholder. A project-config command must be trusted first (plumb trust); global ones always run. Sandboxed in a write jail where available; output and runtime are bounded. For ordinary build, lint and test prefer run_task."
 }
 
 type runCommandArgs struct {

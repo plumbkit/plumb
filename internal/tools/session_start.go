@@ -21,33 +21,33 @@ var sessionStartSchema = json.RawMessage(`{
   "properties": {
     "workspace": {
       "type": "string",
-      "description": "Absolute workspace path. Use this to pin the project for clients that do not report a folder (e.g. Claude Desktop). Passing it re-pins — see force and scope for what that moves and when it is refused. Defaults to the daemon's already-resolved workspace."
+      "description": "Absolute path to pin when the client reports no folder (e.g. Claude Desktop). Re-pins; see force and scope."
     },
     "session_id": {
       "type": "string",
-      "description": "A stable id for THIS agent: the client's conversation id, or 'conversation/agent' for a subagent. Pass it every time: it attributes this call (a re-pin moves your own pin) and carries your session name across a restart (same id, ended under 24 h ago). Later calls need per-call identity: Claude Code's hook adds both."
+      "description": "Stable id for THIS agent: the conversation id, or 'conversation/agent' for a subagent. Pass it every time: it attributes the call and keeps your session name across a restart."
     },
     "language": {
       "type": "string",
-      "description": "Optional override for the workspace's primary language when automatic detection cannot infer it — e.g. an Xcode app that has .swift sources but no SwiftPM Package.swift, so no root marker resolves. Pass the [lsp.<lang>] key (e.g. 'swift', 'typescript', 'rust') to force that language server as the primary, so workspace_symbols and the call/type hierarchies work. The server must be installed and enabled; an unknown, uninstalled, or disabled language is refused, naming the reason and the remedy, not silently ignored. Honoured on the connection's current workspace, or alongside an explicit 'workspace' arg."
+      "description": "Force the primary language server ([lsp.<lang>] key, e.g. 'swift') when detection fails, such as an Xcode app without Package.swift. It must be installed and enabled."
     },
     "scope": {
       "type": "string",
       "enum": ["agent", "connection"],
-      "description": "Which pin a workspace re-pin moves. 'agent' (default) moves only your own shard, leaving peers where they are. 'connection' moves the connection's pin, which peers that never chose a root then follow; it needs force: true when an explicit pin holds the connection, and an identity, since it resets peers' workspace, reads and undo."
+      "description": "What a re-pin moves: 'agent' (default, your own shard) or 'connection' (peers that never chose a root follow; needs force when an explicit pin holds it)."
     },
     "force": {
       "type": "boolean",
-      "description": "Override the sticky-pin guard: a re-pin away from a pin an explicit session_start already holds is refused unless force is true. Use it when you are deliberately moving this pin — see scope for whether that is your own shard or the whole connection."
+      "description": "Re-pin away from a pin an explicit session_start already holds."
     },
     "purpose": {
       "type": "string",
-      "description": "Optional human-readable tag describing what this session is for (e.g. 'deploy-fix', 'feature-auth'). Surfaced in the TUI session list, daemon_info, and workspace_sessions so an operator can tell concurrent sessions apart. Allowed characters: letters, digits, and hyphens; max 32 characters. An invalid value is rejected with a clear error."
+      "description": "Short tag shown to operators for this session (letters, digits, hyphens; up to 32)."
     },
     "detail": {
       "type": "string",
       "enum": ["brief", "full"],
-      "description": "Orientation packet size. 'brief' (≤1.5 KB) returns workspace path, language, branch, a one-line git policy, diagnostics and active-peer COUNTS, memory NAMES only (no descriptions/sizes), and the edit-lane rule where it applies — cheap re-orientation for a subagent that does not need the full packet. 'full' returns the complete packet documented above. Defaults to 'full', except this default flips to 'brief' automatically when the supplied session_id was already seen by this daemon within the last 24h (a resumed conversation); an explicit value always wins over the automatic default."
+      "description": "'brief' (≤1.5 KB: counts, memory names, the edit-lane rule) or 'full'. Defaults to full, or to brief when this session_id was seen in the last 24 h."
     }
   },
   "additionalProperties": false
@@ -348,16 +348,7 @@ func NewSessionStart(ws WorkspaceFn, diag diagnosticsSource, roots RootsResolver
 func (*SessionStart) Name() string { return "session_start" }
 
 func (*SessionStart) Description() string {
-	return "Bootstrap tool — call this first at the start of every session. " +
-		"Returns one-shot orientation: workspace path, language, current git branch, " +
-		"first 200 lines of .plumb/context.md, all saved memory names/descriptions, " +
-		"top-5 most-used tools, 5 most recently-modified files, 3 most recent commits, " +
-		"the live git tool policy (whether commits/destructive/push are enabled), " +
-		"and any active LSP errors/warnings. If no workspace is resolved yet, pass an " +
-		"absolute `workspace` to pin it — clients like Claude Desktop do not report the " +
-		"folder automatically. A subagent that just needs cheap re-orientation should pass " +
-		"`detail: \"brief\"` for a ≤1.5 KB summary instead of the full packet. " +
-		"Idempotent — safe to call multiple times."
+	return "Call first in every session. Returns orientation: workspace, language, git branch, .plumb/context.md, saved memory names, recent files and commits, the git tool policy, and LSP diagnostics. Pass an absolute workspace when the client reports no folder. detail:\"brief\" (≤1.5 KB) suits a subagent. Idempotent."
 }
 
 func (*SessionStart) InputSchema() json.RawMessage { return sessionStartSchema }

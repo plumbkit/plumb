@@ -99,14 +99,14 @@ var mutationTestSchema = json.RawMessage(`{
       "type": "array",
       "minItems": 1,
       "maxItems": 20,
-      "description": "The mutants to test, applied and restored ONE AT A TIME. Each is an exact-once str_replace in the style of edit_file.",
+      "description": "Mutants, applied and restored one at a time.",
       "items": {
         "type": "object",
         "properties": {
-          "file_path": {"type": "string", "description": "Absolute path, file:// URI, or workspace-relative path of the file to mutate."},
-          "old_string": {"type": "string", "description": "Exact text to replace. Must appear EXACTLY ONCE in the file — zero or several occurrences is reported invalid (nothing is mutated), never a kill."},
-          "new_string": {"type": "string", "description": "The mutation. Must differ from old_string. Empty string deletes the matched text — the classic 'delete the guard and see if anything fails' mutant."},
-          "label": {"type": "string", "description": "Optional short name for this mutant, echoed in the report (e.g. \"drop the addressee check\")."}
+          "file_path": {"type": "string", "description": "File: absolute path, file:// URI, or workspace-relative."},
+          "old_string": {"type": "string", "description": "Exact text, EXACTLY ONCE in the file (otherwise invalid, never a kill)."},
+          "new_string": {"type": "string", "description": "The mutation; must differ. Empty deletes the match (the drop-the-guard mutant)."},
+          "label": {"type": "string", "description": "Short name echoed in the report."}
         },
         "required": ["file_path", "old_string", "new_string"],
         "additionalProperties": false
@@ -114,25 +114,25 @@ var mutationTestSchema = json.RawMessage(`{
     },
     "test_task": {
       "type": "string",
-      "description": "Which stored [tasks.<lang>] slot runs the tests. Default \"test\". The built-ins are build, lint, test, e2e and verify; a project-defined slot works here too."
+      "description": "Stored [tasks.<lang>] slot that runs the tests (default \"test\")."
     },
     "test_target": {
       "type": "string",
-      "description": "Optional value for the test command's {target} placeholder — THE way to scope the run to the affected package or test instead of the whole suite (ask topology_affected which). The shipped go/python/rust test defaults carry a defaulted placeholder, so this works with no config edit; a hand-written test command needs a {target} token of its own or the target is refused. Scoping matters: each mutant costs a full compile+test cycle, so the whole suite per mutant is the difference between minutes and tens of minutes. One shell-safe argument ([A-Za-z0-9._/:@-])."
+      "description": "The test command's {target}: scope the run to the affected package (ask topology_affected); each mutant costs a compile+test cycle. One shell-safe argument."
     },
     "test_run": {
       "type": "string",
-      "description": "Optional test-name filter for the test command's {run} placeholder (go -run, pytest -k), to run only the tests that should kill the mutants, e.g. TestFoo|TestBar. Same rules as run_task's run."
+      "description": "Test-name filter for {run} (go -run, pytest -k), e.g. TestFoo|TestBar."
     },
     "compile_task": {
       "type": "string",
-      "description": "Which stored slot proves the mutant COMPILES before its tests are trusted. Default \"build\". It always runs unscoped (no {target}) — a whole-module compile catches breakage a scoped test never reaches. Cannot be disabled: without it a non-compiling mutant looks exactly like a kill. The built-ins are build, lint, test, e2e and verify; a project-defined slot works here too."
+      "description": "Stored slot proving the mutant compiles (default \"build\"; always unscoped; cannot be skipped)."
     },
     "timeout_seconds": {
       "type": "integer",
       "minimum": 1,
       "maximum": 3600,
-      "description": "Per-step timeout for the compile and test commands. Default 600."
+      "description": "Per-step timeout for compile and test (default 600)."
     }
   },
   "required": ["mutants"],
@@ -143,16 +143,7 @@ func (*MutationTest) Name() string                 { return "mutation_test" }
 func (*MutationTest) InputSchema() json.RawMessage { return mutationTestSchema }
 
 func (*MutationTest) Description() string {
-	return "Mutation-test your own assertions: apply an explicit mutant, prove it still COMPILES, run a scoped test set, classify the result, and restore the file — the check that tells a real assertion from a vacuous one. " +
-		"Takes explicit mutants only (file_path + exact-once old_string/new_string, like edit_file); it does not generate them. " +
-		"Three outcomes: KILLED (mutant compiled and a test failed — the assertion is real), SURVIVED (mutant compiled and every test still passed — the assertion is VACUOUS, the finding that matters), and INVALID (the mutant did not apply, did not compile, could not be started, or timed out — it proves nothing and is NEVER reported as a kill; that false kill is why the compile gate exists). " +
-		"Scope the run with test_target ({target}; topology_affected says which package) and test_run (the {run} test-name filter). " +
-		"Commands are the stored, trust-gated [tasks.<lang>] slots run_task uses; you cannot pass a command line. " +
-		"They run from the git work-tree holding the mutated file: a file in another worktree of the commands' repository re-roots them there (same relative working_dir). Mutants spanning work-trees, or in a linked worktree they can't move into, are refused, never run on the wrong tree. " +
-		"Restoration is guaranteed on every exit path (including panic and cancellation): the pre-mutation bytes are snapshotted, rewritten under the per-path lock, and SHA-256-verified before the run is reported clean. " +
-		"It REFUSES a file with uncommitted changes (untracked included), no override — a clean file means `git checkout` recovers it if the daemon dies mid-run. " +
-		"It also refuses to start unless the workspace BUILDS and its tests PASS unmutated: a kill means \"green before, red after\", so against an already-red suite every mutant reads as killed for a reason unrelated to it. The refusal says which: suite red, timed out, or could not start — only the first is about your code. " +
-		"One mutation run at a time per daemon; a second call is refused rather than queued."
+	return "Prove an assertion is real: apply an explicit mutant (file_path + exact-once old_string/new_string), check it COMPILES, run a scoped test set, classify, and restore the file. KILLED = compiled and a test failed (the assertion is real). SURVIVED = compiled and every test passed (the assertion is VACUOUS). INVALID = did not apply, compile, start or finish (proves nothing; never counted as a kill). Scope with test_target (ask topology_affected) and test_run. Runs the stored, trust-gated run_task slots from the git work tree holding the file; mutants spanning work trees are refused. Restoration is guaranteed and SHA-verified on every exit path. Refuses a file with uncommitted changes, and refuses to start unless the workspace builds and its tests pass unmutated. One run per daemon at a time."
 }
 
 // mutationPlan is the resolved, ready-to-run command pair for a whole run. Both

@@ -237,20 +237,7 @@ func NewDaemonInfoFunc(sessID func() string, name func() string, daemonVersion s
 func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
-	return "Returns metadata about the current MCP session and daemon process: " +
-		"session name (e.g. swift-falcon), session ID, daemon version, the version of the serve " +
-		"proxy this session arrived through (a DIFFERENT binary, which a daemon restart does not " +
-		"update — check it before concluding a proxy-side fix is live), the source commit the binary " +
-		"was built from (with a dirty marker, or an explicit unknown), Go runtime, OS/arch, " +
-		"start timestamp, and uptime, " +
-		"plus the MCP protocol revision negotiated with this client (and, on a mismatch, " +
-		"the revision it offered and the capabilities it advertised), " +
-		"plus live config-store state (generation, last reload time, and whether a restart is needed " +
-		"for a pending restart-bound change), and — when available — this connection's workspace-pin " +
-		"provenance (how, when, and from where the pin was last set). " +
-		"It also reports this session's total tool-call count and its slowest calls " +
-		"(per-call durations from recorded stats). " +
-		"Use this to identify which session you are operating in or to verify the daemon state."
+	return "Metadata about this session and the daemon: session name and ID, daemon version and build commit, the serve proxy's own version (a separate binary that a daemon restart does not update, so check it before assuming a proxy-side fix is live), Go runtime, OS, uptime, the negotiated MCP protocol revision, config-store state (generation, last reload, restart needed), workspace-pin provenance, and this session's call count and slowest calls."
 }
 
 func (t *daemonInfo) InputSchema() json.RawMessage {

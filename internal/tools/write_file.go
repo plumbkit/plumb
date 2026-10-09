@@ -19,7 +19,7 @@ var writeFileSchema = json.RawMessage(`{
   "properties": {
     "file_path": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the file to write."
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "content": {
       "type": "string",
@@ -27,31 +27,31 @@ var writeFileSchema = json.RawMessage(`{
     },
     "create_dirs": {
       "type": "boolean",
-      "description": "Create parent directories if they do not exist. Default true."
+      "description": "Create missing parent directories (default true)."
     },
     "dirty_ok": {
       "type": "boolean",
-      "description": "Allow writing a file that has uncommitted changes in its git repository. Default false — the write is refused if the target file is dirty. Pass true to overwrite anyway."
+      "description": "Allow a file with uncommitted git changes (default false: refused)."
     },
     "overwrite_changed": {
       "type": "boolean",
-      "description": "Allow overwriting a file that changed on disk since this session read it (a peer agent or human edited it after your read). Default false — the write is refused so a stale full-content overwrite cannot silently discard that change. Re-read to merge, or pass true to overwrite anyway. Only consulted when neither expected_mtime nor expected_sha is given (those guards take precedence)."
+      "description": "Overwrite a file someone changed since this session read it (default false: refused, so a stale overwrite cannot discard their change; re-read and merge instead). Ignored when expected_mtime/sha is given."
     },
     "expected_mtime": {
       "type": "string",
-      "description": "Optional. RFC3339Nano mtime previously returned by read_file. If provided, the write is rejected if the file's current mtime differs — fast optimistic-concurrency check, so a full-content overwrite never silently clobbers a change made since you read it."
+      "description": "mtime from read_file; refuse if the file changed since."
     },
     "expected_sha": {
       "type": "string",
-      "description": "Optional. Hex-encoded SHA-256 previously returned by read_file. If provided, the write is rejected if the file's current content hash differs — stronger than expected_mtime, survives mtime aliasing."
+      "description": "sha256 from read_file; refuse if the content changed since (stronger than mtime)."
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "When true, block up to a few seconds for the language server to finish re-analysing this file, and append a machine-readable 'diagnostics delta' line (fresh, new_errors, resolved, pre_existing). The block is always labelled — authoritative, pre-write snapshot, unverified, or not-analysed — so a stale result is never dressed as fresh. Default false (fast adaptive window; the result may predate the write)."
+      "description": "Wait a few seconds for the language server and append a labelled 'diagnostics delta' line (new_errors, resolved, pre_existing). Default false."
     },
     "fail_on_new_errors": {
       "type": "boolean",
-      "description": "When true (implies await_diagnostics), roll this write back if the language server CONFIRMS it introduced new errors here, leaving the file byte-for-byte unchanged and returning the delta as the error. An unconfirmed check never rolls back; nor do warnings, pre-existing errors, or breakage elsewhere. Not over 1 MiB. Default false."
+      "description": "Roll the write back (file unchanged) if the language server CONFIRMS new errors in this file; unconfirmed checks, warnings and errors elsewhere never roll back. Implies await_diagnostics; not over 1 MiB."
     }
   },
   "required": ["file_path", "content"],
@@ -79,16 +79,10 @@ func NewWriteFile(deps WriteDeps) *WriteFile { return &WriteFile{deps: deps} }
 func (*WriteFile) Name() string                 { return "write_file" }
 func (*WriteFile) InputSchema() json.RawMessage { return writeFileSchema }
 func (*WriteFile) Description() string {
-	return "Create or overwrite a file with the given content. The write is atomic and crash-durable (temp file " +
-		"fsynced, renamed, parent directory fsynced before the call returns — never partially written); parent " +
-		"directories are created automatically and the LSP " +
-		"server is notified so diagnostics and symbols update immediately. " +
-		"Pass expected_mtime or expected_sha (from a read_file header) to reject the write if the file changed " +
-		"since you read it, so a full-content overwrite never silently clobbers a concurrent change. " +
-		"If the call fails with a transport/connection error, the atomic temp+rename guarantees the file " +
-		"is either fully written or untouched — never partially written; re-read to confirm which side of " +
-		"the rename it landed on. " +
-		"Use edit_file for targeted edits to an existing file."
+	return "Create or overwrite a file with content. Atomic and crash-durable (temp file, fsync, rename): after a transport error " +
+		"the file is either fully written or untouched, so re-read to see which. Creates parent directories and notifies " +
+		"the language server. Pass expected_mtime or expected_sha from read_file so a full overwrite cannot clobber a " +
+		"change made since you read it. For targeted edits use edit_file."
 }
 
 type writeFileArgs struct {

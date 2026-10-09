@@ -16,40 +16,40 @@ var topologyExploreSchema = json.RawMessage(`{
   "properties": {
     "name": {
       "type": "string",
-      "description": "Symbol name or qualified name to explore. Must exist in the topology index."
+      "description": "Symbol or qualified name in the topology index."
     },
     "depth": {
       "type": "integer",
-      "description": "BFS depth from the centre node. Default 2, max 4.",
+      "description": "BFS depth (default 2, max 4).",
       "default": 2
     },
     "max_nodes": {
       "type": "integer",
-      "description": "Maximum number of neighbour nodes to return. Default 50, max 200.",
+      "description": "Neighbours returned (default 50, max 200).",
       "default": 50
     },
     "max_bytes": {
       "type": "integer",
-      "description": "Approximate byte budget for neighbour data. Default 30000, max 100000.",
+      "description": "Byte budget for neighbours (default 30000, max 100000).",
       "default": 30000
     },
     "include_source": {
       "type": "string",
-      "description": "How much source detail to include per symbol: none (name and path only), signatures (default, includes signature), or docstrings (signature plus docstring first line). 'snippets' and 'full' are accepted as backward-compatible aliases for 'docstrings'. (To read complete function bodies, use read_symbol instead).",
+      "description": "none (name and path), signatures (default), or docstrings (plus the first docstring line; 'snippets' and 'full' are aliases). For whole bodies use read_symbol.",
       "default": "signatures"
     },
     "edge_kinds": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Optional filter on edge kinds: calls, imports, contains, defines, inherits, implements."
+      "description": "Edge kinds to follow: calls, imports, contains, defines, inherits, implements."
     },
     "path": {
       "type": "string",
-      "description": "Optional file-path substring to disambiguate when several indexed symbols share this name (case-insensitive)."
+      "description": "File-path substring to pick among same-named symbols."
     },
     "kind": {
       "type": "string",
-      "description": "Optional node kind to disambiguate a shared name: function, method, type, class, constant, variable, field, …"
+      "description": "Node kind to pick among same-named symbols: function, method, type, class, …"
     }
   },
   "required": ["name"],
@@ -80,17 +80,7 @@ func (t *TopologyExplore) WithMemories(ws WorkspaceFn) *TopologyExplore {
 func (*TopologyExplore) Name() string                 { return "topology_explore" }
 func (*TopologyExplore) InputSchema() json.RawMessage { return topologyExploreSchema }
 func (*TopologyExplore) Description() string {
-	return "Bounded BFS neighbourhood around a named symbol in the topology index. " +
-		"NARROW IT FIRST on a large file or an unfamiliar language: include_source=\"none\" returns names only " +
-		"(the default, \"signatures\", is several times larger), and depth=1 with max_nodes=15 answers " +
-		"\"what touches this?\" in a fraction of the default budget (depth 2, 50 nodes, 30000 bytes) — " +
-		"raise them once you know what you are looking for. " +
-		"Returns the centre node, neighbour nodes, connecting edges, and members (for types) up to depth/max_nodes/max_bytes. " +
-		"Source detail covers names, signatures, and docstrings (include_source=\"docstrings\", with \"snippets\"/\"full\" as aliases); " +
-		"to read complete function source bodies, call read_symbol. " +
-		"Reports truncation when limits are hit. Source is 'topology' (approximate — use LSP semantic " +
-		"tools for authoritative reference and definition lookups). Returns an error when topology is " +
-		"disabled or the symbol is not in the index."
+	return "Bounded neighbourhood around a named symbol in the topology index: the centre, neighbours, edges and, for a type, its members. Narrow it first on a large file or unfamiliar language: include_source=\"none\" is several times smaller than the default signatures, and depth=1 with max_nodes=15 answers \"what touches this?\" cheaply. Approximate (source=topology): use the LSP tools for authoritative references and definitions, and read_symbol for whole bodies. Reports truncation."
 }
 
 type topologyExploreArgs struct {

@@ -23,23 +23,23 @@ var findReferencesSchema = json.RawMessage(`{
   "properties": {
     "uri": {
       "type": "string",
-      "description": "Absolute path, file:// URI, or workspace-relative path of the document containing the symbol"
+      "description": "File: absolute path, file:// URI, or workspace-relative."
     },
     "line": {
       "type": "integer",
-      "description": "Zero-based line number. Required when symbol_name is not provided."
+      "description": "Zero-based line; only without symbol_name."
     },
     "character": {
       "type": "integer",
-      "description": "Zero-based character offset. Required when symbol_name is not provided."
+      "description": "Zero-based column; only without symbol_name."
     },
     "symbol_name": {
       "type": "string",
-      "description": "Symbol name to look up instead of a position — PREFERRED over line/character. Accepts plain name or ReceiverType.MethodName form. plumb resolves it against the file's symbols, avoiding the off-by-one and 'no identifier found' errors of a hand-computed position. When provided, line and character are not needed."
+      "description": "Preferred over line/character: a plain name or Type.Method, resolved against the file's symbols."
     },
     "include_declaration": {
       "type": "boolean",
-      "description": "Include the symbol's own declaration in results (default true)"
+      "description": "Include the symbol's own declaration (default true)."
     }
   },
   "required": ["uri"],
@@ -104,11 +104,7 @@ func (t *FindReferences) WithContested(fn ContestedFn) *FindReferences {
 func (t *FindReferences) Name() string                 { return "find_references" }
 func (t *FindReferences) InputSchema() json.RawMessage { return findReferencesSchema }
 func (t *FindReferences) Description() string {
-	return "Find all references to a symbol across the entire workspace. " +
-		"Returns file path, line number, and the source line at each reference site. " +
-		"PREFER a name (uri + symbol_name) — plumb resolves the exact identifier position " +
-		"for you, avoiding off-by-one errors; a raw file position (uri + line + character) " +
-		"is the fallback and, when it lands off an identifier, is snapped to the enclosing symbol."
+	return "Every reference to a symbol across the workspace: path, line and source line per site. Prefer uri + symbol_name; a raw position is the fallback and snaps to the enclosing symbol."
 }
 
 type findReferencesArgs struct {

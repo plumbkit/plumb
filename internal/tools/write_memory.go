@@ -64,11 +64,7 @@ func (t *writeMemoryTool) recordHistory(ctx context.Context, c history.Change) {
 func (*writeMemoryTool) Name() string { return "write_memory" }
 
 func (*writeMemoryTool) Description() string {
-	return `Write or overwrite a memory in a workspace's .plumb/memories/ directory.
-
-The memory is a markdown file at <workspace>/.plumb/memories/<name>.md. If 'description' or 'paths' is provided, frontmatter is prepended automatically — list_memories will surface the description, and relevant_memories / hint injection use paths globs to attach the memory to files.
-
-Memory names must match [A-Za-z0-9_-]+. Choose specific names that describe the memory's topic (e.g. 'auth-architecture', 'test-conventions', 'gotchas-cache-invalidation').`
+	return "Write or overwrite a memory: a markdown file at <workspace>/.plumb/memories/<name>.md. description and paths become frontmatter, so list_memories shows the summary and relevant_memories and hints attach it to matching files. Names match [A-Za-z0-9_-]+; choose a specific topic name such as 'auth-architecture' or 'gotchas-cache-invalidation'."
 }
 
 func (*writeMemoryTool) InputSchema() json.RawMessage {
@@ -77,9 +73,9 @@ func (*writeMemoryTool) InputSchema() json.RawMessage {
 		"properties":{
 			"name":{"type":"string","description":"Memory name (alphanumeric, _, - only)."},
 			"content":{"type":"string","description":"Markdown body to save."},
-			"description":{"type":"string","description":"One-line summary (optional). Stored as frontmatter."},
-			"paths":{"type":"array","items":{"type":"string"},"description":"Optional workspace-relative file globs this memory applies to, e.g. internal/auth/** or cmd/server/*.go. Stored as frontmatter and used by relevant_memories plus hint injection."},
-			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
+			"description":{"type":"string","description":"One-line summary, stored as frontmatter."},
+			"paths":{"type":"array","items":{"type":"string"},"description":"Workspace-relative globs this memory applies to, e.g. internal/auth/**; drives relevant_memories and hints."},
+			"workspace":{"type":"string","description":"Absolute workspace path (default: the resolved workspace)."}
 		},
 		"required":["name","content"],
   "additionalProperties": false

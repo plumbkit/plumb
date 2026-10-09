@@ -35,22 +35,18 @@ func (t *searchMemoriesTool) WithIndex(fn func() *memory.Index) *searchMemoriesT
 func (*searchMemoriesTool) Name() string { return "search_memories" }
 
 func (*searchMemoriesTool) Description() string {
-	return `Search saved memories for a workspace.
-
-When the FTS5 memory index is available and fresh, returns ranked hits (by relevance, with a bonus for user-authored memories) annotated source=memory-fts. Otherwise falls back to a deterministic grep over the markdown files, returning each match with the memory name and line. Smart-case (case-insensitive if 'pattern' is all lowercase) unless 'case_sensitive' is set; 'use_regex' forces the grep path. 'mode' (auto|fts|grep) overrides the choice; default auto.
-
-Memory-only corpus with a deterministic grep fallback — for ranked discovery across code, docs, AND memories in one call, use workspace_search instead. Useful when you don't know which memory contains a piece of context — much faster than reading every memory.`
+	return "Search this workspace's saved memories when you do not know which one holds the context. Ranked full-text hits (user-written memories ranked higher, source=memory-fts) when the index is fresh, otherwise a deterministic grep with memory name and line. Smart-case. To search code, docs and memories together, use workspace_search."
 }
 
 func (*searchMemoriesTool) InputSchema() json.RawMessage {
 	return json.RawMessage(`{
 		"type":"object",
 		"properties":{
-			"pattern":{"type":"string","description":"Text or regex pattern to search for."},
-			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as a regex. Forces the grep path (FTS is not regex)."},
-			"case_sensitive":{"type":"boolean","description":"Default: smart-case. Setting this forces the grep path (FTS is case-insensitive)."},
-			"mode":{"type":"string","enum":["auto","fts","grep"],"description":"Search strategy. auto (default): ranked FTS when the index is fresh, falling back to grep when the index is stale OR FTS finds no hits (FTS matches whole tokens, grep matches substrings). fts: force ranked FTS (reindex if stale; keeps an empty result). grep: force literal/regex grep."},
-			"workspace":{"type":"string","description":"Absolute workspace path. Defaults to the daemon's resolved workspace."}
+			"pattern":{"type":"string","description":"Text or regex to find."},
+			"use_regex":{"type":"boolean","default":false,"description":"Treat pattern as a regex (forces grep)."},
+			"case_sensitive":{"type":"boolean","description":"Default smart-case; setting it forces grep."},
+			"mode":{"type":"string","enum":["auto","fts","grep"],"description":"auto (default: ranked FTS when fresh, else or on no hits grep), fts, or grep. FTS matches whole tokens; grep matches substrings."},
+			"workspace":{"type":"string","description":"Absolute workspace path (default: the resolved workspace)."}
 		},
 		"required":["pattern"],
   "additionalProperties": false
