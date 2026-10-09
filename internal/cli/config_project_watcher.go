@@ -18,16 +18,19 @@ package cli
 // daemon log and via healthy().
 //
 // What is watched: the workspace ROOT (always present for a pinned session)
-// plus <root>/.plumb when it exists, each on its own OS watcher. Watching the
-// root is what makes a .plumb directory created AFTER attach visible, and
-// watching .plumb directly is what survives the inode swaps of atomic editor
-// saves on config.toml. They cannot share one watcher: on kqueue the root
-// watcher's reader registers .plumb itself when it appears, without a lock, so
-// an Add of .plumb on that watcher races the registration (see
-// projectWatchLoop.plumbWatcher). Events
-// are filtered to the config file (and the .plumb dir entry itself, whose
-// create/remove swaps what the config resolves to) and coalesced over a short
-// debounce window, matching the global watcher's contract.
+// plus <root>/.plumb/config.toml when it exists, each on its own OS watcher.
+// Watching the root makes a .plumb directory created or removed AFTER attach
+// visible at once. The config file is watched as a FILE, never through its
+// directory: on kqueue a directory watch opens every file in .plumb, which
+// strips the daemon's SQLite locks on the databases there (PLAN-485, see
+// configFileWatch). The file watch re-arms after an atomic save swaps the
+// inode, and a one-second stat tick attaches a config.toml created inside an
+// existing .plumb. They cannot share one watcher: on kqueue the root watcher's
+// reader registers .plumb itself when it appears, without a lock, and an Add
+// on that watcher would race the registration (#568). Events are filtered to
+// the config file (and the .plumb dir entry itself, whose create/remove swaps
+// what the config resolves to) and coalesced over a short debounce window,
+// matching the global watcher's contract.
 //
 // Self-trigger safety: dispatch only re-reads the file; no apply path writes
 // the project config back, so a reload never produces a new event.
@@ -285,6 +288,8 @@ func (m *projectConfigWatchManager) run(ctx context.Context, w *projectConfigWat
 		<-l.timer.C
 	}
 	defer l.timer.Stop()
+	l.tick = time.NewTicker(configFileTick)
+	defer l.tick.Stop()
 	l.serve(ctx, w, m.testErrs, func() { m.dispatch(root) })
 }
 
@@ -297,24 +302,20 @@ type projectWatchLoop struct {
 
 	recreateInterval time.Duration
 
-	// watcher watches the root; plumbWatcher watches .plumb and nothing else.
-	// They are separate because on kqueue (macOS, the BSDs) the root watcher's
-	// reader registers every directory created in the root on its own, and
-	// fsnotify checks for an existing registration and opens the directory
-	// without holding a lock. An Add of .plumb on the root watcher can
-	// therefore interleave with the reader's registration of it, and under
-	// load it does: both open the directory and one descriptor is never closed
-	// (#568). The same interleaving lets the reader re-register the directory
-	// with its own narrower flags after the Add, dropping NOTE_WRITE, so later
-	// config.toml edits go unseen while the watch still reports healthy.
-	// plumbWatcher's reader never registers .plumb, because nothing it
-	// watches contains it, so the Add has no one to race. It costs one more
-	// OS watcher per workspace.
-	watcher      *fsnotify.Watcher
-	plumbWatcher *fsnotify.Watcher
-	plumbWatched bool
-	timer        *time.Timer
-	recreatedAt  time.Time
+	// watcher watches the root; config watches .plumb/config.toml on an OS
+	// watcher of its own and nothing else. They are separate because on kqueue
+	// (macOS, the BSDs) the root watcher's reader registers every directory
+	// created in the root on its own, and fsnotify checks for an existing
+	// registration and opens the path without holding a lock, so an Add on the
+	// root watcher for anything inside .plumb could interleave with that
+	// registration (#568). config's reader never registers anything it was not
+	// asked to, so its Add has no one to race. It costs one more OS watcher
+	// per workspace.
+	watcher     *fsnotify.Watcher
+	config      configFileWatch
+	timer       *time.Timer
+	tick        *time.Ticker
+	recreatedAt time.Time
 }
 
 // serve runs the loop until ctx ends or the watch cannot continue: it filters
@@ -330,7 +331,7 @@ func (l *projectWatchLoop) serve(ctx context.Context, w *projectConfigWatch, tes
 				return
 			}
 			l.onEvent(event, false)
-		case event, ok := <-l.plumbWatcher.Events:
+		case event, ok := <-l.config.events():
 			if !ok {
 				return
 			}
@@ -339,7 +340,7 @@ func (l *projectWatchLoop) serve(ctx context.Context, w *projectConfigWatch, tes
 			if !l.keepRunning(w, err, ok) {
 				return
 			}
-		case err, ok := <-l.plumbWatcher.Errors:
+		case err, ok := <-l.config.errs():
 			if !l.keepRunning(w, err, ok) {
 				return
 			}
@@ -347,10 +348,13 @@ func (l *projectWatchLoop) serve(ctx context.Context, w *projectConfigWatch, tes
 			if !l.onError(w, err) {
 				return
 			}
+		case <-l.tick.C:
+			l.config.handleTick(l.timer, l.debounce)
 		case <-l.timer.C:
-			// Attach .plumb before dispatching, so the reload reads the file
-			// with the watch already live and a later edit cannot slip between.
-			l.attachPlumbDir()
+			// Attach config.toml before dispatching, so the reload reads the
+			// file with the watch already live and a later edit cannot slip
+			// between.
+			l.config.attach()
 			dispatch()
 		}
 	}
@@ -364,9 +368,10 @@ func (l *projectWatchLoop) keepRunning(w *projectConfigWatch, err error, ok bool
 }
 
 // open creates the OS watchers and attaches them. The root always exists for a
-// pinned workspace; .plumb may not. Watching the root (non-recursive) catches
-// the .plumb dir itself being created, renamed or removed — the case where a
-// project gains (or loses) its whole config after sessions attached.
+// pinned workspace; .plumb/config.toml may not. Watching the root
+// (non-recursive) catches the .plumb dir itself being created, renamed or
+// removed — the case where a project gains (or loses) its whole config after
+// sessions attached.
 //
 // An attach that fails because a descriptor was closed underneath it
 // (fsWatcherLost) says nothing about the workspace, so it gets one immediate
@@ -388,62 +393,43 @@ func (l *projectWatchLoop) openOnce() error {
 		closeFSWatcher(watcher)
 		return err
 	}
-	plumbWatcher, err := l.newWatcher()
+	configWatcher, err := l.newWatcher()
 	if err != nil {
 		closeFSWatcher(watcher)
 		return err
 	}
-	l.watcher, l.plumbWatcher = watcher, plumbWatcher
-	l.plumbWatched = watchPlumbDir(plumbWatcher, l.plumbDir, false)
+	l.watcher = watcher
+	l.config = configFileWatch{path: filepath.Join(l.plumbDir, "config.toml"), newWatcher: l.newWatcher, watcher: configWatcher}
+	l.config.attach()
 	return nil
 }
 
 // close closes the current OS watchers, if any, and waits for their readers
 // to stop delivering (see closeFSWatcher).
 func (l *projectWatchLoop) close() {
-	closeFSWatcher(l.plumbWatcher)
+	closeFSWatcher(l.config.watcher)
 	closeFSWatcher(l.watcher)
-	l.watcher, l.plumbWatcher = nil, nil
+	l.watcher = nil
+	l.config = configFileWatch{path: l.config.path, newWatcher: l.newWatcher}
 }
 
 // onEvent filters one fsnotify event and re-arms the debounce timer for a
-// reload-worthy one. fromPlumbWatcher says which watcher delivered it.
-func (l *projectWatchLoop) onEvent(event fsnotify.Event, fromPlumbWatcher bool) {
-	if filepath.Clean(event.Name) == l.plumbDir {
-		// The .plumb entry itself changed. A remove/rename of the directory
-		// kills the OS watch on the old inode, so drop the latch — otherwise
-		// every later config.toml edit stays silently invisible (and failed is
-		// never set, so the poll fallback never engages either). Then reload:
-		// removing .plumb revokes what its config granted.
-		//
-		// Only plumbWatcher's report drops the latch. Its reader forgets its
-		// watch on the old directory before it delivers the event, so the
-		// re-Add that follows opens the new directory. The root watcher can
-		// report the removal first, and an Add made then would find
-		// plumbWatcher still holding the dead inode, keep it, and latch a
-		// watch that sees nothing. This covers the directory only: on kqueue,
-		// watches fsnotify made on files inside a .plumb that was renamed
-		// away, not deleted, outlive it and can hide a new config.toml of the
-		// same name. That is fsnotify state plumb cannot reset safely (#595).
-		if fromPlumbWatcher && event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
-			l.plumbWatched = false
-		}
-		rearmProjectTimer(l.timer, l.debounce)
+// reload-worthy one. fromConfigWatcher says which watcher delivered it.
+func (l *projectWatchLoop) onEvent(event fsnotify.Event, fromConfigWatcher bool) {
+	if fromConfigWatcher {
+		l.config.handleEvent(event, l.timer, l.debounce)
 		return
 	}
-	if projectConfigEvent(event.Name, l.plumbDir, event.Op) {
+	if filepath.Clean(event.Name) == l.plumbDir {
+		// The .plumb entry itself changed: reload, because removing .plumb
+		// revokes what its config granted. A .plumb renamed away takes the
+		// watched config.toml with it and raises no event on the file, so
+		// check now whether the name still leads to the watched inode; the
+		// timer fire then attaches whatever has the name. (The tick would
+		// notice too, a second later.)
+		l.config.check()
 		rearmProjectTimer(l.timer, l.debounce)
 	}
-}
-
-// attachPlumbDir (re-)arms the .plumb directory watch on plumbWatcher if it is
-// not attached: a no-op while the latch says it is, and when .plumb does not
-// exist the failed Add leaves the latch clear for the next attempt. The timer
-// fire is the only caller, so a burst of .plumb events attaches once. Anything
-// written to .plumb before this lands is picked up by the dispatch that
-// follows it, which re-reads the file.
-func (l *projectWatchLoop) attachPlumbDir() {
-	l.plumbWatched = watchPlumbDir(l.plumbWatcher, l.plumbDir, l.plumbWatched)
 }
 
 // onError handles one fsnotify error and reports whether the loop should keep
@@ -488,30 +474,6 @@ func (l *projectWatchLoop) onError(w *projectConfigWatch, err error) bool {
 	slog.Warn("daemon: project config watcher lost its OS handle — recreated", "workspace", l.root, "err", err)
 	rearmProjectTimer(l.timer, l.debounce)
 	return true
-}
-
-// watchPlumbDir attaches the .plumb subdirectory watch unless the latch says
-// it is already attached, returning the new latch state. A false result means
-// the directory does not exist yet — the root watch will see it appear.
-func watchPlumbDir(watcher *fsnotify.Watcher, plumbDir string, watched bool) bool {
-	if watched {
-		return true
-	}
-	return watcher.Add(plumbDir) == nil
-}
-
-// projectConfigEvent reports whether an event under .plumb refers to
-// config.toml and is reload-worthy. Wider than the global watcher's
-// shouldReload by one op: REMOVE. A deleted project config is a REVOCATION
-// event — applyProjectConfig fails closed to the global policy — so it must
-// dispatch like any write (deleting the file was previously a way to keep
-// what it granted). The global watcher keeps its narrower set: a missing
-// global file resolves to compiled defaults, which a reload cannot improve on.
-func projectConfigEvent(name, plumbDir string, op fsnotify.Op) bool {
-	if filepath.Dir(name) != plumbDir || filepath.Base(name) != "config.toml" {
-		return false
-	}
-	return op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) != 0
 }
 
 // rearmProjectTimer restarts the debounce window without leaking a stale

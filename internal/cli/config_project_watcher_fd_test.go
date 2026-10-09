@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
-
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -93,40 +91,22 @@ func descriptorsOn(t *testing.T, path string) int {
 // its descriptor, and only there does it need to.
 var perWatchDescriptors = slices.Contains([]string{"darwin", "ios", "freebsd", "openbsd", "netbsd", "dragonfly"}, runtime.GOOS)
 
-// attached reports whether the .plumb watcher holds a completed watch on the
-// CURRENT plumbDir. Its WatchList alone cannot say: fsnotify keeps listing a
-// user watch until its reader handles the directory's removal, so for a moment
-// it still names the old, deleted directory. On kqueue the descriptor count
-// settles it, provided the root watcher's reader has finished its own
-// registration (rootRegistered), so that it holds exactly one descriptor on
-// the new inode: a second is the .plumb watcher's. The count is read before
-// WatchList on purpose. fsnotify records a user watch only after registering
-// it, so a WatchList naming plumbDir, read after a second descriptor appeared,
-// is the new watch and is complete, not the old one or one half made.
-func attached(t *testing.T, plumbWatcher *fsnotify.Watcher, plumbDir string) bool {
-	t.Helper()
-	if perWatchDescriptors && descriptorsOn(t, plumbDir) < 2 {
-		return false
-	}
-	return slices.Equal(plumbWatcher.WatchList(), []string{plumbDir})
-}
-
 // TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs pins #568. On kqueue
 // (macOS and the BSDs) fsnotify watches every directory created inside a
 // watched one, and the watch loop's own Add of a new .plumb, on that same
 // watcher, ran at the same moment. The two race inside fsnotify, both open the
 // directory, and when the directory goes away one of the descriptors is never
 // closed: one leaked descriptor per .plumb created while a session is
-// attached. The loop now adds .plumb on a watcher of its own, which
+// attached. The loop now never adds .plumb at all — it watches only
+// .plumb/config.toml, on a watcher of its own (PLAN-485) — which
 // TestProjectWatchManager_PlumbDirNeverSharesTheRootWatcher pins directly;
-// this test is the symptom check, and catches the race only under load.
+// this test is the symptom check, and catches a race only under load.
 //
-// With .plumb present the process may hold one descriptor for it per watcher:
-// the root watcher's reader registers it, and the .plumb watcher holds the
-// loop's Add. A third means one of them registered it twice. After 50
-// create/remove cycles the descriptor count must not have grown by anything
-// near 50. Where descriptors are not per-watch (Linux inotify) both bounds
-// hold trivially.
+// With .plumb present the process may hold one descriptor for it: the root
+// watcher's reader registers it. A second means something else opened it.
+// After 50 create/remove cycles the descriptor count must not have grown by
+// anything near 50. Where descriptors are not per-watch (Linux inotify) both
+// bounds hold trivially.
 //
 // A path removed moments after it appears trips a different kqueue race in
 // fsnotify (#595): the reader opens the new path and only then registers it,
@@ -153,7 +133,7 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 	built := captureWatchers(m)
 	ws := watchedTempDir(t, m)
 	m.acquire(ws) // a pinned workspace root with no .plumb yet
-	_, plumbWatcher := nextLoopWatchers(t, built)
+	_, configWatcher := nextLoopWatchers(t, built)
 
 	// await runs change, then waits for the watch loop to dispatch for it: the
 	// loop dispatches only after it has handled the events that preceded the
@@ -224,19 +204,11 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 		if perWatchDescriptors {
 			rootRegistered(i)
 		}
-		// The attach can trail that dispatch: when the .plumb watcher reports
-		// the previous directory's removal only after the new one appeared,
-		// the dispatch finds the latch still set, and the re-attach follows
-		// that report with a dispatch of its own. So wait for the attach
-		// rather than assume it.
-		for deadline := time.Now().Add(10 * time.Second); !attached(t, plumbWatcher, plumbDir); {
-			if time.Now().After(deadline) {
-				t.Fatalf("cycle %d: .plumb not attached 10s after it appeared: .plumb watcher watches %v, %d descriptors on it", i, plumbWatcher.WatchList(), descriptorsOn(t, plumbDir))
-			}
-			time.Sleep(2 * time.Millisecond)
+		if held := descriptorsOn(t, plumbDir); held > 1 {
+			t.Fatalf("cycle %d: %d descriptors held for the new .plumb directory, want at most 1 (the root watcher's): it was opened twice", i, held)
 		}
-		if held := descriptorsOn(t, plumbDir); held > 2 {
-			t.Fatalf("cycle %d: %d descriptors held for the new .plumb directory, want at most 2 (one per watcher): it was registered twice", i, held)
+		if got := configWatcher.WatchList(); len(got) != 0 {
+			t.Fatalf("cycle %d: the config watcher watches %v with no config.toml present", i, got)
 		}
 		await(func() { mustDo(os.Remove(plumbDir)) })
 	}
@@ -259,7 +231,7 @@ func TestProjectWatchManager_PlumbDirChurnDoesNotLeakFDs(t *testing.T) {
 	}
 
 	// Positive control: the attach still happens. A fix that simply never
-	// watched .plumb would pass the counts above and go blind to config edits.
+	// watched the config would pass the counts above and go blind to edits.
 	await(func() { writeProjectCfg(t, ws, "[edits]\nstrict = false\n") })
 	await(func() { writeProjectCfg(t, ws, "[edits]\nstrict = true\n") })
 }
@@ -308,9 +280,12 @@ func TestProjectWatchManager_PlumbDirNeverSharesTheRootWatcher(t *testing.T) {
 			if slices.Contains(rootWatcher.WatchList(), plumbDir) {
 				t.Fatalf(".plumb was added to the watcher that watches the root (%v): that Add races the watcher's own registration of the directory", rootWatcher.WatchList())
 			}
-			plumbWatcher := nextWatcher(t, built)
-			if got := plumbWatcher.WatchList(); !slices.Equal(got, []string{plumbDir}) {
-				t.Fatalf("second watcher watches %v, want only %s", got, plumbDir)
+			// The config watcher watches the FILE, never .plumb itself: on
+			// kqueue a .plumb watch opens every database in it (PLAN-485).
+			configWatcher := nextWatcher(t, built)
+			cfg := filepath.Join(plumbDir, "config.toml")
+			if got := configWatcher.WatchList(); !slices.Equal(got, []string{cfg}) {
+				t.Fatalf("second watcher watches %v, want only %s", got, cfg)
 			}
 			// And it is live: an edit inside .plumb still dispatches. Drain
 			// whatever the setup's burst still has in flight first, so the

@@ -859,8 +859,10 @@ flowchart LR
 
 The global base config is held in a live `config.Store` (`internal/config/store.go`)
 and **hot-reloaded** without a daemon restart. Three inputs trigger a reload: an
-fsnotify watch on the global `config.toml` (debounced; the directory is watched so
-the reload survives `config.Save`'s atomic temp-file→rename), the `reload-config`
+fsnotify watch on the global `config.toml` (debounced; the FILE is watched, never
+its directory, and re-attached after `config.Save`'s atomic temp-file→rename
+swaps the inode, with a one-second stat tick for a file that appears or moves
+without an event), the `reload-config`
 control-socket command (used by `plumb config reload`), and the TUI settings editor
 after a save. Each MCP session subscribes to the store and re-merges its per-project
 view on a change, so `[edits]`, `[git]`, `[walk]`, and the rate limit apply live;
@@ -869,6 +871,16 @@ the daemon cannot apply live — LSP server definitions (`[lsp.*]`), `[cache]`, 
 `log_format` (`config.RestartSensitiveEqual`) — are reported as restart-needed by
 `Store.RestartNeeded()`: a daemon WARN on the offending reload, a line in the
 `daemon_info` tool, and a "Reload behaviour" legend in `plumb config show`.
+
+Neither config watcher ever watches a directory. On kqueue (macOS, the BSDs)
+fsnotify opens every file in a watched directory, and closing any descriptor to
+a file releases every fcntl lock the process holds on it — the locks SQLite's
+WAL mode depends on. `<workspace>/.plumb` holds `collab.db`, `topology.db` and
+`memory.db`, and the global config directory can be the data directory, so a
+directory watch silently stripped the daemon's database locks; another process
+then checkpointed and unlinked a WAL the daemon was still writing (PLAN-485).
+`internal/cli/config_file_watch.go` holds the single-file watch both watchers
+share.
 
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.

@@ -260,6 +260,26 @@ func TestProjectWatchManager_ConfigCreatedAfterAttach(t *testing.T) {
 	awaitDispatch(t, sig, paths.Canonical(ws))
 }
 
+// TestProjectWatchManager_ConfigCreatedInExistingPlumbDir covers the common
+// case the root watch cannot see: .plumb already exists (it holds the
+// databases) and config.toml appears inside it later. The config watcher
+// watches only the file (PLAN-485), so the stat tick attaches it.
+func TestProjectWatchManager_ConfigCreatedInExistingPlumbDir(t *testing.T) {
+	m, sig := testWatchManager(t, nil)
+	ws := watchedTempDir(t, m)
+	if err := os.MkdirAll(filepath.Join(ws, ".plumb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m.acquire(ws)
+
+	writeProjectCfg(t, ws, "[edits]\nstrict = true\n")
+	awaitDispatch(t, sig, paths.Canonical(ws))
+	// And the attach is live: a later in-place edit dispatches too.
+	noDispatchWithin(t, sig, 2*m.debounce)
+	writeProjectCfg(t, ws, "[edits]\nstrict = false\n")
+	awaitDispatch(t, sig, paths.Canonical(ws))
+}
+
 func TestProjectWatchManager_DebounceBurstCollapsesToOneDispatch(t *testing.T) {
 	m, sig := testWatchManager(t, nil)
 	ws := watchedTempDir(t, m)

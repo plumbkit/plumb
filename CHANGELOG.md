@@ -80,6 +80,24 @@
 
 ### Fixed
 
+- **On macOS the daemon no longer loses its SQLite locks to its own config
+  watchers (PLAN-485).** The project config watcher watched
+  `<workspace>/.plumb`, and the global one watched the global config directory,
+  which on a fresh macOS install is also the data directory. On kqueue a
+  directory watch opens every file in it, and closing any descriptor to a file
+  releases every fcntl lock the process holds on it. So each time a watch was
+  dropped (a WAL sidecar deleted, a watcher closed when the last session left a
+  workspace), the daemon silently lost its locks on `collab.db`,
+  `topology.db`, `memory.db` or the global databases. The next process to open
+  one read-write then believed itself alone, checkpointed, and unlinked the WAL
+  the daemon was still writing.
+  Everything written afterwards lived only in an unlinked file: lost on a hard
+  exit, and invisible to every other reader, which is how a Stop hook kept
+  reporting a message `check_messages` had already delivered. Both watchers now
+  watch `config.toml` itself, re-attach after an atomic save swaps the inode,
+  and use a one-second stat tick to pick up a `config.toml` created inside an
+  existing `.plumb`. A regression test holds an fcntl lock on a database in
+  `.plumb` and checks from a second process that it survives the watcher.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered
