@@ -4,50 +4,65 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/sgtdi/fswatcher"
-
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
-const (
-	lspWatchCooldown = 200 * time.Millisecond
-	// Directory-name regex only; no credentials are embedded here.
-	lspWatchExcludeRegex = `(^|/)(\.[^/]+|vendor|node_modules|testdata|dist|build|target|out|__pycache__)(/|$)` //nolint:gosec // G101: an exclusion regex naming build/cache directories, not a credential
-)
+const lspWatchCooldown = 200 * time.Millisecond
 
+// lspWatchExcludeRegexFor builds the OS watcher's source exclusion for one
+// workspace: the directories lspWatchShouldSkipPath skips, plus every
+// dot-prefixed directory. It is anchored at the workspace
+// (fswatch.ExcludeDirsRegex): the unanchored pattern it replaces matched a
+// dot-prefixed ANCESTOR of the workspace too, so a checkout under ~/.config, or
+// a test under a dot-prefixed cache, never delivered a single event.
+// lspWatchShouldSkipPath stays the authoritative, workspace-relative filter.
+func lspWatchExcludeRegexFor(workspace string) string {
+	return fswatch.ExcludeDirsRegex(workspace, "vendor", "node_modules", "testdata", "dist", "build", "target", "out", "__pycache__")
+}
+
+// lspFSWatcher forwards file changes under one workspace to its language
+// server as workspace/didChangeWatchedFiles.
+//
+// Concurrency: the OS watcher runs from construction; Start launches the
+// consumer; Stop signals it, closes the OS watcher and joins. Idempotent.
 type lspFSWatcher struct {
 	workspace string
 	client    *clientProxy
-	w         fswatcher.Watcher
 
-	cancel   context.CancelFunc
+	// events and lost are the OS watcher's channels, and closeOS stops it.
+	events  <-chan fswatch.Event
+	lost    <-chan struct{}
+	closeOS func()
+
 	done     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
 func newLSPFSWatcher(workspace string, client *clientProxy) (*lspFSWatcher, error) {
-	w, err := fswatcher.New(
-		fswatcher.WithSeverity(fswatcher.SeverityNone),
-		fswatcher.WithCooldown(lspWatchCooldown),
-		fswatcher.WithExcRegex(lspWatchExcludeRegex),
-		fswatcher.WithPath(workspace, fswatcher.WithDepth(fswatcher.WatchNested)),
-	)
+	w, err := fswatch.New(workspace, fswatch.Options{
+		Cooldown:     lspWatchCooldown,
+		ExcludeRegex: lspWatchExcludeRegexFor(workspace),
+	})
 	if err != nil {
 		return nil, err
 	}
-	return &lspFSWatcher{workspace: workspace, client: client, w: w, done: make(chan struct{})}, nil
+	return &lspFSWatcher{
+		workspace: workspace,
+		client:    client,
+		events:    w.Events(),
+		lost:      w.Lost(),
+		closeOS:   w.Close,
+		done:      make(chan struct{}),
+	}, nil
 }
 
 func (fw *lspFSWatcher) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
-	fw.cancel = cancel
-	fw.wg.Go(func() { _ = fw.w.Watch(ctx) })
 	fw.wg.Go(fw.consume)
 	slog.Info("lsp: file watcher started", "workspace", fw.workspace)
 }
@@ -55,40 +70,33 @@ func (fw *lspFSWatcher) Start() {
 func (fw *lspFSWatcher) Stop() {
 	fw.stopOnce.Do(func() {
 		close(fw.done)
-		if fw.cancel != nil {
-			fw.cancel()
+		if fw.closeOS != nil {
+			fw.closeOS()
 		}
-		fw.w.Close()
 	})
 	fw.wg.Wait()
 }
 
 func (fw *lspFSWatcher) consume() {
-	events := fw.w.Events()
-	dropped := fw.w.Dropped()
 	for {
 		select {
 		case <-fw.done:
 			return
-		case ev, ok := <-events:
+		case ev, ok := <-fw.events:
 			if !ok {
 				return
 			}
 			fw.handle(ev)
-		case _, ok := <-dropped:
+		case _, ok := <-fw.lost:
 			if !ok {
 				return
 			}
-			slog.Warn("lsp: file watcher dropped events; language-server snapshot may need a daemon restart", "workspace", fw.workspace)
+			slog.Warn("lsp: file watcher lost events; language-server snapshot may need a daemon restart", "workspace", fw.workspace)
 		}
 	}
 }
 
-func (fw *lspFSWatcher) handle(ev fswatcher.WatchEvent) {
-	if lspWatchHasOverflow(ev) {
-		slog.Warn("lsp: file watcher overflow; language-server snapshot may need a daemon restart", "workspace", fw.workspace)
-		return
-	}
+func (fw *lspFSWatcher) handle(ev fswatch.Event) {
 	rel, err := filepath.Rel(fw.workspace, ev.Path)
 	if err != nil || lspWatchShouldSkipPath(rel) {
 		return
@@ -99,16 +107,12 @@ func (fw *lspFSWatcher) handle(ev fswatcher.WatchEvent) {
 		if err := c.DidChangeWatchedFiles(ctx, protocol.DidChangeWatchedFilesParams{
 			Changes: []protocol.FileEvent{{
 				URI:  protocol.FileURI(ev.Path),
-				Type: lspFileChangeType(ev),
+				Type: lspFileChangeType(ev.Op),
 			}},
 		}); err != nil {
 			slog.Warn("lsp: file watcher notification failed", "path", ev.Path, "err", err)
 		}
 	}
-}
-
-func lspWatchHasOverflow(ev fswatcher.WatchEvent) bool {
-	return slices.Contains(ev.Types, fswatcher.EventOverflow)
 }
 
 func lspWatchShouldSkipPath(rel string) bool {
@@ -130,11 +134,13 @@ func lspWatchShouldSkipPath(rel string) bool {
 	return false
 }
 
-func lspFileChangeType(ev fswatcher.WatchEvent) protocol.FileChangeType {
-	if slices.Contains(ev.Types, fswatcher.EventRemove) {
+// lspFileChangeType maps a possibly coalesced Op onto one LSP change type: a
+// removal wins, then a creation; anything else is a change.
+func lspFileChangeType(op fswatch.Op) protocol.FileChangeType {
+	if op.Has(fswatch.Remove) {
 		return protocol.FileDeleted
 	}
-	if slices.Contains(ev.Types, fswatcher.EventCreate) {
+	if op.Has(fswatch.Create) {
 		return protocol.FileCreated
 	}
 	return protocol.FileChanged

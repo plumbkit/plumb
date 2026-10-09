@@ -37,6 +37,7 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/topology` | SQLite/FTS5 semantic graph; background indexer; Go AST + pure-Go tree-sitter (gotreesitter — most languages incl. TypeScript/TSX/JSX) + canonical-grammar WASM via wazero for Swift (`extractors/{golang,treesitter,wasmts}`); search + BFS explore/impact/affected/routes |
 | `internal/render` | Shared, pure CLI/TUI presentation helpers (leaf-level: stdlib + rendering libs only) |
 | `internal/fsguard` | Guards filesystem walks against macOS TCC false-positive prompts on protected dirs ($HOME, Desktop, Documents, …) |
+| `internal/fswatch` | Recursive OS file watching for the topology and LSP watchers; picks a backend that never opens watched files (FSEvents via purego on macOS, inotify on Linux, none on kqueue-only platforms) so `.plumb`'s SQLite locks survive a watcher stopping |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
 | `internal/lsp` | `lsp.Client` interface (23 methods), process supervisor |
@@ -882,6 +883,15 @@ directory watch silently stripped the daemon's database locks; another process
 then checkpointed and unlinked a WAL the daemon was still writing (PLAN-485).
 `internal/cli/config_file_watch.go` holds the single-file watch both watchers
 share.
+
+The recursive workspace watchers (the topology index and the LSP
+`didChangeWatchedFiles` feed) obey the same rule through `internal/fswatch`,
+the one place an OS backend is chosen: FSEvents on macOS via purego (no cgo, so
+release builds get it too), sgtdi/fswatcher's inotify and ReadDirectoryChangesW
+backends on Linux and Windows, and nothing elsewhere. None of these opens a
+watched file. Release builds used to get sgtdi/fswatcher's kqueue backend on
+macOS, which opened every file in the tree, `.plumb`'s databases included, and
+released their locks whenever a watcher stopped (PLAN-488).
 
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.

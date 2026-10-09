@@ -129,6 +129,37 @@
   Previously a tight budget removed the section outright, and a partial cut
   left a header that counted only the members it listed.
 
+- **macOS release builds no longer strip the daemon's SQLite locks when a
+  file watcher stops (PLAN-488).** Release and Homebrew builds are
+  `CGO_ENABLED=0`, where sgtdi/fswatcher's macOS backend is kqueue: it opened
+  a descriptor on every file in the workspace, `.plumb/collab.db`,
+  `topology.db`, `memory.db` and their `-wal`/`-shm` included, and its
+  exclusions only filtered events. On macOS, closing any descriptor to a file
+  releases every fcntl lock the process holds on it, so each time the topology
+  or LSP watcher stopped (pool hibernation, idle reap, workspace close), the
+  next process to open a database could checkpoint and unlink a WAL the daemon
+  was still writing. Local `make install` builds use cgo, and so FSEvents, which
+  is why this went unseen.
+  - The watchers now go through `internal/fswatch`. On macOS it uses FSEvents
+    via `github.com/fswatcher/fswatcher` v0.1.0, which reaches CoreServices
+    through purego, so release and cgo builds run the same backend and nothing
+    in the tree is opened. Linux and Windows keep sgtdi/fswatcher (inotify and
+    ReadDirectoryChangesW open nothing either; fswatcher/fswatcher's inotify
+    backend drops queue overflows silently). Other platforms, whose only
+    recursive watcher is kqueue, now refuse to watch and fall back to periodic
+    resync.
+  - A watcher also uses far fewer descriptors on macOS release builds: a
+    500-file tree went from about 520 descriptors per watcher to about 12.
+  - A populated directory moved into a workspace now has its files reported on
+    macOS; FSEvents reports only the directory, which the topology index skips.
+  - The LSP watcher's exclusion is now anchored at the workspace, as the
+    topology watcher's already was. Its unanchored pattern matched a
+    dot-prefixed directory the workspace merely lives under (`~/.config/app`,
+    `.testcache`), so such a workspace sent the language server no file events
+    at all.
+  - When the watcher is unavailable and `resync_interval_minutes` is 0, the
+    topology index now warns that it will not see external changes until the
+    next start.
 - **Topology recovery guidance no longer says to delete the index under a
   running daemon, and `plumb doctor` now reports an index with a corrupt
   header or schema.** (PLAN-467)

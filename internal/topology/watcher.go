@@ -1,18 +1,14 @@
 package topology
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/sgtdi/fswatcher"
-
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/ignore"
 )
 
@@ -29,36 +25,21 @@ const watchCooldown = 200 * time.Millisecond
 // shouldSkipDir; shouldSkipPath is the authoritative guard applied before every
 // enqueue, so a regex miss only costs a filtered event, never a wrong index.
 //
-// Two things about it are deliberate, and both were bugs in the fixed string it
-// replaces (`(^|/)(\.[^/]+|vendor|…)(/|$)`).
+// fswatch.ExcludeDirsRegex explains the two deliberate properties: it is
+// anchored at the workspace root (so a workspace under ~/.config or a
+// dot-prefixed test cache still gets events), and its dot branch needs a
+// trailing separator (so the base name ".gitignore" is not excluded and ignore
+// edits reach handle — see TestFSWatcher_ThroughOSWatcher, which drives real
+// filesystem events).
 //
-// It is ANCHORED AT THE WORKSPACE ROOT. fswatcher tests the exclusion against
-// the absolute event path, so an unanchored dot-component branch also matched
-// the directories a workspace merely LIVES under: a checkout at ~/.config/app
-// or under a dot-prefixed test cache had every one of its events excluded and
-// the watcher delivered nothing at all.
-//
-// The dot branch requires a TRAILING SEPARATOR, so it excludes dot DIRECTORIES
-// inside the tree and not a dot component at the end of a path. fswatcher
-// matches an exclusion against both the full path and the base name
-// (filters.go: patternFilter.ShouldInclude), so the old `(/|$)` anchor matched
-// the base name ".gitignore" and the OS watcher NEVER delivered an event for an
-// ignore file. Anything reacting to .gitignore edits would have passed a direct
-// unit test of handle() and fired zero times in production — see
-// TestFSWatcher_ThroughOSWatcher, which drives real filesystem events.
-//
-// Relaxing the dot branch cannot widen what is WATCHED: fswatcher applies the
-// filter to events only, never to watch registration (inotify's recursive add
-// walks every subdirectory regardless; FSEvents streams whole subtrees), so the
-// cost is at most a few extra events that shouldSkipPath then drops — a dot FILE
-// such as .env or .DS_Store. Every `/.git/…` and `/.plumb/…` event is still
-// excluded at the source, so the self-trigger loop stays closed.
+// The exclusion filters events, never what is WATCHED, so relaxing the dot
+// branch costs at most a few extra events that shouldSkipPath then drops — a dot
+// FILE such as .env or .DS_Store. Every `/.git/…` and `/.plumb/…` event is still
+// excluded at the source, so the self-trigger loop stays closed. What is watched
+// must never include an open descriptor on .plumb's databases; that is
+// fswatch's backend choice, not this filter's job.
 func watchExcludeRegexFor(workspace string) string {
-	// Both separators, because the event path's separator is the platform's and
-	// the quoted root carries whichever filepath.Clean produced.
-	const sep = `[\\/]`
-	root := regexp.QuoteMeta(filepath.Clean(workspace))
-	return `^` + root + sep + `(?:.*` + sep + `)?(?:(?:vendor|node_modules|testdata|dist|build|__pycache__)(?:` + sep + `|$)|\.[^\\/]+` + sep + `)`
+	return fswatch.ExcludeDirsRegex(workspace, "vendor", "node_modules", "testdata", "dist", "build", "__pycache__")
 }
 
 // watcherIgnoreCacheMax bounds the per-directory ignore-stack cache. Reached
@@ -90,13 +71,19 @@ type indexSink interface {
 // time-based polling. Lost events (overflow/dropped) escalate to a full resync,
 // so the index can never silently drift even though there is no periodic poll.
 //
-// Concurrency: Start launches two goroutines (the fswatcher pump and the event
-// consumer); Stop signals them and joins. All sink calls happen on the consumer
-// goroutine. Safe to Stop once; a second Stop is a no-op.
+// Concurrency: the OS watcher runs from construction; Start launches the event
+// consumer; Stop signals it, closes the OS watcher and joins. All sink calls
+// happen on the consumer goroutine. Safe to Stop once; a second Stop is a no-op.
 type fsWatcher struct {
 	workspace string
 	sink      indexSink
-	w         fswatcher.Watcher
+
+	// events and lost are the OS watcher's channels, and closeOS stops it. They
+	// are fields rather than a *fswatch.Watcher so tests can drive consume with
+	// channels of their own.
+	events  <-chan fswatch.Event
+	lost    <-chan struct{}
+	closeOS func()
 
 	// excludePatterns is the sanitised [topology] exclude_patterns list, applied
 	// here for the same reason the resync walk applies it: without it a write to
@@ -118,7 +105,6 @@ type fsWatcher struct {
 	ignoreMu    sync.Mutex
 	ignoreCache map[string]ignore.Stack
 
-	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -128,61 +114,56 @@ type fsWatcher struct {
 // watching until Start is called. An error here (e.g. the platform watcher
 // cannot be created) lets the caller fall back to periodic resync.
 func newFSWatcher(workspace string, sink indexSink, excludePatterns []string) (*fsWatcher, error) {
-	w, err := fswatcher.New(
-		fswatcher.WithSeverity(fswatcher.SeverityNone), // plumb does its own logging
-		fswatcher.WithCooldown(watchCooldown),
-		fswatcher.WithExcRegex(watchExcludeRegexFor(workspace)),
-		fswatcher.WithPath(workspace, fswatcher.WithDepth(fswatcher.WatchNested)),
-	)
+	w, err := fswatch.New(workspace, fswatch.Options{
+		Cooldown:     watchCooldown,
+		ExcludeRegex: watchExcludeRegexFor(workspace),
+	})
 	if err != nil {
 		return nil, err
 	}
 	return &fsWatcher{
 		workspace:       filepath.Clean(workspace),
 		sink:            sink,
-		w:               w,
+		events:          w.Events(),
+		lost:            w.Lost(),
+		closeOS:         w.Close,
 		excludePatterns: excludePatterns,
 		done:            make(chan struct{}),
 	}, nil
 }
 
-// Start launches the watcher pump and the event consumer.
+// Start launches the event consumer. Events that arrived since construction
+// are buffered by the OS watcher and handled now.
 func (fw *fsWatcher) Start() {
-	ctx, cancel := context.WithCancel(context.Background())
-	fw.cancel = cancel
-	fw.wg.Go(func() { _ = fw.w.Watch(ctx) })
 	fw.wg.Go(fw.consume)
 	slog.Info("topology: file watcher started", "workspace", fw.workspace)
 }
 
-// Stop ends watching and joins the goroutines. Idempotent.
+// Stop ends watching and joins the consumer. Idempotent.
 func (fw *fsWatcher) Stop() {
 	fw.stopOnce.Do(func() {
 		close(fw.done)
-		if fw.cancel != nil {
-			fw.cancel()
+		if fw.closeOS != nil {
+			fw.closeOS()
 		}
-		fw.w.Close()
 	})
 	fw.wg.Wait()
 }
 
-// consume drains the watcher's event and dropped channels until Stop. A dropped
-// event means the OS queue overflowed and individual changes were lost, so the
-// whole tree is reconciled.
+// consume drains the watcher's event and loss channels until Stop. A loss
+// signal means individual changes may never arrive (an OS queue overflow, a
+// rescan request, a full buffer), so the whole tree is reconciled.
 func (fw *fsWatcher) consume() {
-	events := fw.w.Events()
-	dropped := fw.w.Dropped()
 	for {
 		select {
 		case <-fw.done:
 			return
-		case ev, ok := <-events:
+		case ev, ok := <-fw.events:
 			if !ok {
 				return
 			}
 			fw.handle(ev)
-		case _, ok := <-dropped:
+		case _, ok := <-fw.lost:
 			if !ok {
 				return
 			}
@@ -191,16 +172,11 @@ func (fw *fsWatcher) consume() {
 	}
 }
 
-// handle maps one watch event to an indexer action: an overflow escalates to a
-// full resync; a change to an ignore file escalates to one too; an excluded
-// path is dropped; anything else enqueues an incremental re-index of that path
-// (Enqueue routes a now-missing file to a delete, so removals and renames need
-// no special case).
-func (fw *fsWatcher) handle(ev fswatcher.WatchEvent) {
-	if watchHasOverflow(ev) {
-		fw.sink.Resync()
-		return
-	}
+// handle maps one watch event to an indexer action: a change to an ignore file
+// escalates to a full resync; an excluded path is dropped; anything else
+// enqueues an incremental re-index of that path (Enqueue routes a now-missing
+// file to a delete, so removals and renames need no special case).
+func (fw *fsWatcher) handle(ev fswatch.Event) {
 	rel, err := filepath.Rel(fw.workspace, ev.Path)
 	if err != nil {
 		return
@@ -325,12 +301,6 @@ func (fw *fsWatcher) dropIgnoreCache() {
 	fw.ignoreMu.Lock()
 	fw.ignoreCache = nil
 	fw.ignoreMu.Unlock()
-}
-
-// watchHasOverflow reports whether the event carries an overflow marker (the OS
-// event buffer filled and changes were dropped).
-func watchHasOverflow(ev fswatcher.WatchEvent) bool {
-	return slices.Contains(ev.Types, fswatcher.EventOverflow)
 }
 
 // shouldSkipPath reports whether a workspace-relative path lies under any

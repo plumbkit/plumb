@@ -2,9 +2,11 @@ package topology
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
-	"github.com/sgtdi/fswatcher"
+	"github.com/plumbkit/plumb/internal/fswatch"
 )
 
 // fakeSink records the watcher's actions so handle() can be tested without a
@@ -19,22 +21,22 @@ func (f *fakeSink) Resync()             { f.resyncs++ }
 
 func TestFSWatcher_Handle(t *testing.T) {
 	ws := filepath.FromSlash("/work/repo")
-	ev := func(rel string, types ...fswatcher.EventType) fswatcher.WatchEvent {
-		return fswatcher.WatchEvent{Path: filepath.Join(ws, filepath.FromSlash(rel)), Types: types}
+	ev := func(rel string, op fswatch.Op) fswatch.Event {
+		return fswatch.Event{Path: filepath.Join(ws, filepath.FromSlash(rel)), Op: op}
 	}
 	tests := []struct {
 		name        string
-		ev          fswatcher.WatchEvent
+		ev          fswatch.Event
 		wantEnqueue string // "" means no enqueue expected
 		wantResync  int
 	}{
-		{"modify enqueues", ev("internal/foo/bar.go", fswatcher.EventMod), filepath.FromSlash("internal/foo/bar.go"), 0},
-		{"create enqueues", ev("main.go", fswatcher.EventCreate), "main.go", 0},
-		{"remove enqueues (Enqueue routes to delete)", ev("old.go", fswatcher.EventRemove), "old.go", 0},
-		{"under .plumb ignored (self-trigger guard)", ev(".plumb/topology.db", fswatcher.EventMod), "", 0},
-		{"under node_modules ignored", ev("node_modules/pkg/index.js", fswatcher.EventMod), "", 0},
-		{"under .git ignored", ev(".git/index", fswatcher.EventMod), "", 0},
-		{"overflow escalates to resync", ev("anything.go", fswatcher.EventOverflow), "", 1},
+		{"modify enqueues", ev("internal/foo/bar.go", fswatch.Write), filepath.FromSlash("internal/foo/bar.go"), 0},
+		{"create enqueues", ev("main.go", fswatch.Create), "main.go", 0},
+		{"remove enqueues (Enqueue routes to delete)", ev("old.go", fswatch.Remove), "old.go", 0},
+		{"rename enqueues", ev("moved.go", fswatch.Rename), "moved.go", 0},
+		{"under .plumb ignored (self-trigger guard)", ev(".plumb/topology.db", fswatch.Write), "", 0},
+		{"under node_modules ignored", ev("node_modules/pkg/index.js", fswatch.Write), "", 0},
+		{"under .git ignored", ev(".git/index", fswatch.Write), "", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -74,6 +76,45 @@ func TestShouldSkipPath(t *testing.T) {
 			t.Errorf("shouldSkipPath(%q) = true, want false", p)
 		}
 	}
+}
+
+// TestFSWatcher_LostEscalatesToResync: a loss signal from the OS watcher (an
+// overflow, a rescan request, a full buffer) must reconcile the whole tree,
+// because the changes it stands for will never arrive as events. A closed loss
+// channel ends the consumer rather than spinning.
+func TestFSWatcher_LostEscalatesToResync(t *testing.T) {
+	events := make(chan fswatch.Event)
+	lost := make(chan struct{}, 1)
+	sink := &lockedFakeSink{}
+	fw := &fsWatcher{workspace: t.TempDir(), sink: sink, events: events, lost: lost, done: make(chan struct{})}
+	fw.Start()
+	lost <- struct{}{}
+	if !waitFor(func() bool { return sink.resyncCount() == 1 }, 5*time.Second) {
+		t.Fatalf("resyncs = %d after a loss signal, want 1", sink.resyncCount())
+	}
+	close(lost)
+	done := make(chan struct{})
+	go func() { fw.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the consumer did not return when the loss channel closed")
+	}
+	fw.Stop()
+}
+
+// lockedFakeSink is a fakeSink safe to read while the consumer goroutine runs.
+type lockedFakeSink struct {
+	mu      sync.Mutex
+	resyncs int
+}
+
+func (f *lockedFakeSink) Enqueue(string) {}
+func (f *lockedFakeSink) Resync()        { f.mu.Lock(); f.resyncs++; f.mu.Unlock() }
+func (f *lockedFakeSink) resyncCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resyncs
 }
 
 // TestFSWatcher_StartStop exercises the real platform watcher's lifecycle: it
