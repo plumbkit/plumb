@@ -19,6 +19,23 @@ func TestStatusForWorkspace_MissingDB(t *testing.T) {
 	}
 }
 
+// TestStatusForWorkspace_UnreadableDBIsAnError: a file SQLite cannot read must
+// be reported as an error, not as an empty index. Report swallows per-query
+// errors, so without the probe this returned a zero Status and doctor said
+// "initial indexing may still be in progress" for a corrupt database.
+func TestStatusForWorkspace_UnreadableDBIsAnError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Dir(DBPath(dir)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(DBPath(dir), []byte("this is not a SQLite database, just text long enough to have a header\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StatusForWorkspace(dir); err == nil || os.IsNotExist(err) {
+		t.Fatalf("StatusForWorkspace on a non-database file: err = %v, want a read error", err)
+	}
+}
+
 func TestStatusForWorkspace_Populated(t *testing.T) {
 	dir := t.TempDir()
 	db, err := openDB(DBPath(dir))

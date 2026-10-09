@@ -396,6 +396,16 @@ func projectPolicyTrustResult(ws string, st config.ProjectPolicyStatus) checkRes
 	}
 }
 
+// resetDBFix is the remedy doctor offers for a database it cannot open. The
+// daemon holds these files open, so deleting them under it leaves it writing to
+// unlinked inodes, nothing recreated until it restarts, and any WAL it had not
+// checkpointed lost: stop it first, and take the -wal/-shm sidecars with the
+// main file.
+func resetDBFix(subject, dbPath, outcome string) string {
+	return subject + " may be corrupt — stop the daemon (`plumb stop`), then remove " +
+		contractConfigPath(dbPath) + " and its -wal/-shm files " + outcome
+}
+
 // checkStatsDB verifies the global stats DB is readable.
 func checkStatsDB(ws string) []checkResult {
 	dbPath := stats.DBPathFor()
@@ -412,7 +422,7 @@ func checkStatsDB(ws string) []checkResult {
 			name:   "stats db",
 			ok:     false,
 			detail: err.Error(),
-			fix:    "the DB may be corrupt — remove " + contractConfigPath(dbPath) + " to reset",
+			fix:    resetDBFix("the DB", dbPath, "to reset it"),
 		}}
 	}
 	filter := stats.Filter{}
@@ -441,7 +451,7 @@ func checkHistoryDB() []checkResult {
 	}
 	r, err := history.OpenReadOnlyAt(dbPath)
 	if err != nil {
-		fix := "the database may be corrupt — remove " + contractConfigPath(dbPath) + " to reset (write history is lost)"
+		fix := resetDBFix("the database", dbPath, "to reset it (write history is lost)")
 		if errors.Is(err, history.ErrNewerSchema) {
 			fix = "upgrade plumb: history.db was written by a newer version, and this one will not write to it"
 		}

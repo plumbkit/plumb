@@ -81,6 +81,14 @@ func StatusForWorkspace(ws string) (Status, error) {
 		return Status{}, fmt.Errorf("topology: open db read-only: %w", err)
 	}
 	defer db.Close()
+	// Opening is lazy and Report swallows per-query errors on purpose (a partial
+	// census beats none), so a file SQLite cannot read would otherwise come back
+	// as an empty index, which `plumb doctor` reads as "still indexing" rather
+	// than "rebuild it". One schema read separates the two.
+	var tables int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&tables); err != nil {
+		return Status{}, fmt.Errorf("topology: read index: %w", err)
+	}
 	return Report(db, ws, nil), nil
 }
 

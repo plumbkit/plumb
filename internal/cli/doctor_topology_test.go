@@ -61,6 +61,30 @@ func TestCheckTopology_EnabledButNoIndex(t *testing.T) {
 	}
 }
 
+// TestCheckTopology_UnreadableIndexFixStopsTheDaemonFirst: doctor's remedy for
+// an index it cannot open must say to stop the daemon before deleting, and to
+// take the WAL sidecars too. Deleting the database under a running daemon
+// leaves it writing to an unlinked file with nothing rebuilt until it restarts
+// (PLAN-467/PLAN-485).
+func TestCheckTopology_UnreadableIndexFixStopsTheDaemonFirst(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	writeProjectTopologyConfig(t, ws, true)
+	if err := os.WriteFile(topology.DBPath(ws), []byte("this is not a SQLite database, just text long enough to have a header\n"), 0o644); err != nil {
+		t.Fatalf("write corrupt index: %v", err)
+	}
+
+	res := checkTopology(ws)
+	if len(res) != 1 || res[0].ok {
+		t.Fatalf("an unreadable index should fail one check, got %+v", res)
+	}
+	for _, want := range []string{"plumb stop", "-wal/-shm", "topology.db"} {
+		if !strings.Contains(res[0].fix, want) {
+			t.Errorf("fix = %q, want it to mention %q", res[0].fix, want)
+		}
+	}
+}
+
 func TestTopologyIndexHealth(t *testing.T) {
 	cases := []struct {
 		name      string

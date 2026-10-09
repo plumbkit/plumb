@@ -193,6 +193,30 @@ unproven semantics, build the selected scheme once in Xcode; Plumb will not do s
 automatically. `session_start`, `workspace_symbols`, `get_definition`, and
 `find_references` repeat lifecycle-aware guidance when applicable.
 
+## `topology_status` shows `FAILING`, or answers carry `⚠ STALE INDEX`
+
+An indexing cycle failed (typically a SQLite I/O error) and no full resync has
+succeeded since. The topology tools are answering from the last good snapshot,
+which may be missing recent changes, so an empty result is not evidence of
+absence. `topology_status` shows the last error and the last good sync.
+
+1. **Wait first.** The indexer retries on its own with a full resync, backing off
+   from 30 seconds to 30 minutes, and a successful resync clears the flag.
+2. **If it persists, restart gracefully.** Run `plumb stop`. It sends SIGTERM
+   and waits for the daemon to exit, and unlike `plumb restart` it never
+   escalates to SIGKILL. Check that it reports the daemon stopped, then
+   reconnect a client: the next `serve` starts a fresh daemon.
+3. **If it still fails after a clean restart, rebuild the index.** With the
+   daemon stopped, delete `.plumb/topology.db` and its `topology.db-wal` and
+   `topology.db-shm` sidecars. Then start again. The index is derived data, and
+   a full rebuild of a large repository takes a few minutes.
+
+Never delete or replace the database files while the daemon is running. The
+daemon keeps writing to the deleted file, nothing rebuilds until it restarts,
+and a SQLite WAL removed under a live writer loses whatever it held. For the
+same reason, inspect the index with `topology_status` or `plumb doctor`, not by
+opening the live `.plumb/*.db` files with `sqlite3` or other tools.
+
 ## Too much (or too little) log output
 
 Change the running daemon's level instantly, no restart:
