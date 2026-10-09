@@ -44,11 +44,9 @@ type connRegistry struct {
 	// (conn_clear_markers.go). Daemon-wide because the announcement cannot know which
 	// connection that will be.
 	clears *clearMarkers
-	// stopMailSeen bounds unchanged Stop notifications without consuming mail.
-	stopMailSeen map[string]string
-	// stopMailGate serialises Stop snapshot/notification decisions; a bounded
-	// context limits contention without holding mu during a database query.
-	stopMailGate chan struct{}
+	// stopMailSeen bounds both recipient gates and unchanged Stop notices.
+	// No database query or recipient policy resolution runs under mu.
+	stopMailSeen map[string]*stopMailboxState
 }
 
 func newConnRegistry() *connRegistry {

@@ -93,6 +93,17 @@ func (p *collabPool) getGlobalResult() (*collab.Store, error) {
 	return store, err
 }
 
+// probeGlobalResult observes only an already pooled handle. A cache miss checks
+// absence without opening SQLite, so hook probes never run schema migrations.
+func (p *collabPool) probeGlobalResult() (*collab.Store, error) {
+	if p == nil || !p.mu.TryLock() {
+		return nil, errors.New("collab: mailbox pool unavailable")
+	}
+	store := p.global
+	p.mu.Unlock()
+	return probeCachedStore(store, collab.GlobalDBPath())
+}
+
 // openGlobalLocked returns the cached global store or opens a new one. Must hold
 // p.mu.
 func (p *collabPool) openGlobalLocked() *collab.Store {
@@ -152,6 +163,31 @@ func (p *collabPool) getResult(workspace string) (*collab.Store, error) {
 		p.stores[workspace] = store
 	}
 	return store, err
+}
+
+// probeResult never waits for a concurrent pool open or opens its own handle.
+// Metadata-only absence checks run without the pool mutex. An existing cold
+// database is unavailable to hooks until an ordinary daemon read opens it.
+func (p *collabPool) probeResult(workspace string) (*collab.Store, error) {
+	if p == nil || workspace == "" || !p.mu.TryLock() {
+		return nil, errors.New("collab: mailbox pool unavailable")
+	}
+	store := p.stores[workspace]
+	p.mu.Unlock()
+	return probeCachedStore(store, collab.DBPath(workspace))
+}
+
+func probeCachedStore(store *collab.Store, dbPath string) (*collab.Store, error) {
+	if store != nil {
+		return store, nil
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return nil, errors.New("collab: mailbox handle not pooled")
 }
 
 // openLocked returns the cached store or opens a new one. Must hold p.mu.
