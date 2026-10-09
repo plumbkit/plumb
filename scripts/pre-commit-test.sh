@@ -37,7 +37,7 @@ cat >"$work/bin/golangci-lint" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$STUB_LOG"
 case "${1:-}" in
---version) echo "golangci-lint has version 2.13.2 built with go1.27.1"; exit 0 ;;
+--version) echo "golangci-lint has version 2.14.0 built with go1.27.1"; exit 0 ;;
 run) ;;
 *) exit 0 ;;
 esac

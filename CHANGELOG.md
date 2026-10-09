@@ -57,6 +57,18 @@
 
 ### Changed
 
+- **Dependencies updated to their latest releases.**
+  - Go: bubbletea v2.0.10 → v2.1.0, charmbracelet/x/ansi v0.11.8 →
+    v0.11.9, golang.org/x/sys v0.48.0 → v0.49.0, and the indirect
+    ultraviolet, regexp2 v2.8.4, go-runewidth v0.0.31 and x/sync v0.24.0
+    modules. gotreesitter and purego are already at their latest; the Go toolchain
+    stays on go1.26.9, the newest 1.26 patch (moving to Go 1.27 would raise
+    the macOS minimum of release binaries, so it is a separate decision).
+  - Web UI: svelte 5.57.1 → 5.57.2 and vite 8.3.2 → 8.3.4, with the
+    lockfile refreshed; the embedded bundle is rebuilt with Node 22, as CI
+    checks it. `npm audit` reports no vulnerabilities.
+  - CI's golangci-lint pin moves v2.13.2 → v2.14.0, matching the release
+    developers run locally; the tree already lints clean under it.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were
