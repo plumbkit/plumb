@@ -98,7 +98,7 @@ func (t *FileStatus) Name() string                 { return "file_status" }
 func (t *FileStatus) InputSchema() json.RawMessage { return fileStatusSchema }
 
 func (t *FileStatus) Description() string {
-	return "Read-only \"did this file change under me?\" probe, without reading content. Per path: git_dirty (untracked counts), changed_since_plumb_wrote (mtime advanced since plumb's last write this session), last_writer (plumb, external, or unknown), mtime and size. Use it before re-editing to decide whether to re-read. Missing files are reported, not errors. It does not count as a read for strict mode."
+	return "Read-only \"did this file change under me?\" probe, without reading content. Per path: git_dirty (untracked counts), changed_since_plumb_wrote (mtime advanced since plumb's last write this session), last_writer (plumb = unchanged since plumb wrote it; external = changed since; unknown = plumb has not written it this session), mtime and size. Use it before re-editing to decide whether to re-read. Missing files are reported, not errors. It does not count as a read for strict mode."
 }
 
 type fileStatusArgs struct {

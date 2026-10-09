@@ -33,9 +33,9 @@
   restated the schema), and the remaining prose was tightened. No tool, argument
   or validation rule was removed, and every refusal, concurrency, privacy and
   destructive-action rule is still stated on the tool it governs. The full
-  59-tool payload went from 113,668 to 72,913 bytes (−36%; −33% against the
+  59-tool payload went from 113,668 to 73,361 bytes (−35%; −32% against the
   108,332-byte baseline PLAN-413 set), and the pinned set from 43,598 to
-  27,969 bytes.
+  28,170 bytes.
 - **`topology_routes` recovers route → handler bindings from registration
   sites instead of guessing from symbol names.** It reads the call sites the
   index records: Go `net/http`, gorilla/mux, chi, gin and echo registrations

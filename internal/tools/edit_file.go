@@ -38,7 +38,7 @@ var editFileSchema = json.RawMessage(`{
     },
     "edits": {
       "type": "array",
-      "description": "Edits applied in order, all or nothing (instead of anchor mode).",
+      "description": "Edits applied in order, all or nothing unless apply_partial (instead of anchor mode).",
       "items": {
         "type": "object",
         "properties": {
@@ -86,7 +86,7 @@ var editFileSchema = json.RawMessage(`{
     },
     "await_diagnostics": {
       "type": "boolean",
-      "description": "Wait a few seconds for the language server and append a labelled 'diagnostics delta' line (new_errors, resolved, pre_existing). Default false."
+      "description": "Wait a few seconds for the language server and append a labelled 'diagnostics delta' line (new_errors, resolved, pre_existing). Default false: a fast window whose result may predate the write."
     },
     "fail_on_new_errors": {
       "type": "boolean",

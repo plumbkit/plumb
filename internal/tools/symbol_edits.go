@@ -26,7 +26,7 @@ const symbolEditCommonSchema = `
 "uri":{"type":"string","description":"File: absolute path, file:// URI, or workspace-relative."},
 "name_path":{"type":"string","description":"Symbol path in the file, e.g. \"Class/method\" or \"func\"."},
 "dry_run":{"type":"boolean","default":true,"description":"Preview only, no write (default true)."},
-"dirty_ok":{"type":"boolean","default":false,"description":"Allow a file with uncommitted git changes (default false)."}
+"dirty_ok":{"type":"boolean","default":false,"description":"Allow a file with uncommitted git changes (default false: refused)."}
 `
 
 type symbolEditArgs struct {

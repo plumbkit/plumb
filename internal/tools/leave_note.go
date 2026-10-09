@@ -27,7 +27,7 @@ func NewLeaveNote(deps CollabDeps) *LeaveNote { return &LeaveNote{deps: deps} }
 func (*LeaveNote) Name() string { return "leave_note" }
 
 func (*LeaveNote) Description() string {
-	return "Send a message to a named peer session, or \"next\" (whoever attaches next). This is the send half of plumb's mailbox; check_messages is the receive half. Every message belongs to a thread: omit conversation_id to start one, or quote it to reply. A thread is capped at [collab] max_exchanges. Delivery is by polling: check_messages or session_start hands it over, exactly once. A peer idle on its human has not seen it, so silence is not refusal; do not re-send. Requires [collab] mailbox; the body is secret-scrubbed. Etiquette: the plumb-chat skill."
+	return "Send a message to a named peer session, or \"next\" (whoever attaches next). This is the send half of plumb's mailbox; check_messages is the receive half. Every message belongs to a thread: omit conversation_id to start one, or quote it to reply. A thread is capped at [collab] max_exchanges; once spent, replies are refused. Delivery is by polling: check_messages or session_start hands it over, exactly once. A peer idle on its human has not seen it, so silence is not refusal; do not re-send. Requires [collab] mailbox; the body is secret-scrubbed. Etiquette: the plumb-chat skill."
 }
 
 func (*LeaveNote) InputSchema() json.RawMessage {

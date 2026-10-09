@@ -112,7 +112,7 @@ var moveSymbolSchema = json.RawMessage(`{
     "include_doc_comment":{"type":"boolean","default":true,"description":"Move the leading doc comment too (default true). For a wrapped declaration (ES export, Python @decorator) the range covers the wrapper, keeping @property with its method."},
     "create_destination":{"type":"boolean","default":false,"description":"Create destination_uri if missing (default false); a new Go file gets the source's package clause."},
     "dry_run":{"type":"boolean","default":true,"description":"Preview the diff of both files only (default true)."},
-    "dirty_ok":{"type":"boolean","default":false,"description":"Allow either file to have uncommitted git changes (default false)."}
+    "dirty_ok":{"type":"boolean","default":false,"description":"Allow either file to have uncommitted git changes (default false: refused)."}
   },
   "required":["source_uri","name_path","destination_uri"],
   "additionalProperties":false
