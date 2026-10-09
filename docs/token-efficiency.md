@@ -113,8 +113,7 @@ cannot observe that from the server side. The `clients_conformance` harness
 measures it on the wire with a scripted model provider, recording only names
 and byte counts (`TestCodexWireCapture`, `TestKimiWireCapture` in
 `cmd/clientsmoke`; set `CLIENTSMOKE_WIRE_REPORT` /
-`CLIENTSMOKE_KIMI_WIRE_REPORT` for JSON). Results as of 2026-10-09, measured
-against the pre-compaction catalogue (~114 KB, 59 tools):
+`CLIENTSMOKE_KIMI_WIRE_REPORT` for JSON). Results as of 2026-10-09:
 
 | Client | Configuration | What reaches the model |
 |---|---|---|
@@ -122,6 +121,15 @@ against the pre-compaction catalogue (~114 KB, 59 tools):
 | Kimi Code 0.38.0 | default | Every step carries all 59 plumb schemas in `tools[]`. |
 | Kimi Code 0.38.0 | `[experimental] tool-select`, model without `dynamically_loaded_tools` | Same as default (it correctly falls back to eager). |
 | Kimi Code 0.38.0 | `tool-select` with a capable model, headless (`-p`) | **Plumb is unreachable**: every MCP schema is removed, but `select_tools` is never registered. Upstream defect [MoonshotAI/kimi-code#2381](https://github.com/MoonshotAI/kimi-code/issues/2381), still open. `plumb setup kimi-code` does not enable `tool-select`; do not enable it for headless use. |
+
+Median plumb schema bytes per model step, measured on the wire before and
+after the description compaction of plumb#612:
+
+| Client / configuration | Before | After |
+|---|---|---|
+| Kimi Code 0.38.0, default | 115,057 | 74,750 (−35%) |
+| Codex 0.161, after the first `tool_search` | 114,454 | 74,147 (−35%) |
+| Codex 0.161, lean profile | 47,124 | 29,925 (−36%) |
 
 So on today's clients the catalogue is paid on (nearly) every step, minus
 whatever prompt caching recovers. Shrinking the catalogue itself is the lever
