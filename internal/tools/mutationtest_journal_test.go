@@ -158,22 +158,73 @@ func TestSweepMutantJournal_ForgetsAnEntryWhoseFileIsGone(t *testing.T) {
 	}
 }
 
-// TestMutantJournalPaths_ListsWhatIsStillOutThere is the read-only query the
-// reconnect note uses (PLAN-459): a resolved entry must vanish from it, and an
-// entry the sweep refused to touch must stay.
-func TestMutantJournalPaths_ListsWhatIsStillOutThere(t *testing.T) {
+// TestMutantJournalStates_ClassifiesEveryEntry is the read-only query the reconnect
+// note uses (PLAN-459). It must tell apart the four things a journalled file can be:
+// still holding the mutant (say so, so the caller re-reads it), already back (there is
+// nothing to undo), gone, or a third party's edit — the one case the sweep leaves alone.
+func TestMutantJournalStates_ClassifiesEveryEntry(t *testing.T) {
+	const original, mutant = "func f() int { return 1 }\n", "func f() int { return 2 }\n"
+	const theirs = "func f() int { return 3 } // someone else's edit\n"
+	cases := []struct {
+		name  string
+		leave func(t *testing.T, path string)
+		want  MutantJournalState
+	}{
+		{"still applied", func(t *testing.T, _ string) { t.Helper() }, MutantStillApplied},
+		{"already back", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, MutantAlreadyBack},
+		{"someone else's edit", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.WriteFile(path, []byte(theirs), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, MutantFileChanged},
+		{"the file is gone", func(t *testing.T, path string) {
+			t.Helper()
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}, MutantFileGone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := journalFixture(t, original, mutant)
+			tc.leave(t, path)
+
+			states, err := MutantJournalStates()
+			if err != nil {
+				t.Fatalf("MutantJournalStates: %v", err)
+			}
+			if len(states) != 1 || states[0].Path != path {
+				t.Fatalf("states = %v, want exactly one entry for %s", states, path)
+			}
+			if states[0].State != tc.want {
+				t.Errorf("state = %d, want %d (%s)", states[0].State, tc.want, tc.name)
+			}
+		})
+	}
+}
+
+// TestMutantJournalStates_SaysWhenAFileMatchesNeitherSide covers the entry the sweep
+// refuses to touch: it survives, and the note must report it in the state whose wording
+// says plumb left the file exactly as it was.
+func TestMutantJournalStates_SaysWhenAFileMatchesNeitherSide(t *testing.T) {
 	path := journalFixture(t, "func f() int { return 1 }\n", "func f() int { return 2 }\n")
 	const theirs = "func f() int { return 3 } // someone else's edit\n"
 	if err := os.WriteFile(path, []byte(theirs), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	paths, err := MutantJournalPaths()
+	states, err := MutantJournalStates()
 	if err != nil {
-		t.Fatalf("MutantJournalPaths: %v", err)
+		t.Fatalf("MutantJournalStates: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != path {
-		t.Fatalf("paths = %v, want exactly [%s]", paths, path)
+	if len(states) != 1 || states[0].Path != path || states[0].State != MutantFileChanged {
+		t.Fatalf("states = %v, want exactly [{%s %d}]", states, path, MutantFileChanged)
 	}
 
 	// The sweep leaves that entry alone (the file matches neither side), so it is
@@ -181,19 +232,44 @@ func TestMutantJournalPaths_ListsWhatIsStillOutThere(t *testing.T) {
 	if _, needAttention, err := SweepMutantJournal(); err != nil || len(needAttention) != 1 {
 		t.Fatalf("sweep = (%v, %v), want the one path needing attention", needAttention, err)
 	}
-	if paths, err = MutantJournalPaths(); err != nil || len(paths) != 1 {
-		t.Errorf("after the sweep the entry must survive for the note: %v / %v", paths, err)
+	if states, err = MutantJournalStates(); err != nil || len(states) != 1 || states[0].State != MutantFileChanged {
+		t.Errorf("after the sweep the entry must survive for the note: %v / %v", states, err)
 	}
 }
 
-func TestMutantJournalPaths_IsEmptyWhenNothingIsJournalled(t *testing.T) {
+func TestMutantJournalStates_IsEmptyWhenNothingIsJournalled(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	paths, err := MutantJournalPaths()
+	states, err := MutantJournalStates()
 	if err != nil {
-		t.Fatalf("MutantJournalPaths: %v", err)
+		t.Fatalf("MutantJournalStates: %v", err)
 	}
-	if len(paths) != 0 {
-		t.Errorf("paths = %v, want none", paths)
+	if len(states) != 0 {
+		t.Errorf("states = %v, want none", states)
+	}
+}
+
+// TestMutantJournalStates_SkipsEntriesItCannotRead keeps this query to what it can
+// prove: an entry that will not unmarshal is the SWEEP's to report, and the note is
+// never told about a file the classifier could not even name.
+func TestMutantJournalStates_SkipsEntriesItCannotRead(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir, err := mutantJournalDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "garbage.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "not-an-entry.txt"), []byte("ignored"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := MutantJournalStates()
+	if err != nil {
+		t.Fatalf("MutantJournalStates: %v", err)
+	}
+	if len(states) != 0 {
+		t.Errorf("states = %v, want none", states)
 	}
 }
 
@@ -271,12 +347,13 @@ func TestMutantJournal_AKilledRunLeavesAMutantTheSweepCanRestore(t *testing.T) {
 	if got := env.content(t); got != mutant {
 		t.Fatalf("the file must still hold the mutant a killed run left: %q, want %q", got, mutant)
 	}
-	paths, err := MutantJournalPaths()
+	states, err := MutantJournalStates()
 	if err != nil {
-		t.Fatalf("MutantJournalPaths: %v", err)
+		t.Fatalf("MutantJournalStates: %v", err)
 	}
-	if len(paths) != 1 || paths[0] != env.file {
-		t.Fatalf("the journal must hold the killed run's entry: %v, want exactly [%s]", paths, env.file)
+	if len(states) != 1 || states[0].Path != env.file || states[0].State != MutantStillApplied {
+		t.Fatalf("the journal must hold the killed run's entry, still applied: %v, want exactly [{%s %d}]",
+			states, env.file, MutantStillApplied)
 	}
 
 	// The next daemon start: the file goes back to its pre-run content and the
@@ -319,8 +396,8 @@ func TestMutantJournal_AnOrdinaryRunLeavesNoEntry(t *testing.T) {
 	if n := journalEntryCount(t); n != 0 {
 		t.Errorf("a run whose restore was verified must clear its entry (have %d)", n)
 	}
-	if paths, err := MutantJournalPaths(); err != nil || len(paths) != 0 {
-		t.Errorf("the reconnect note must have nothing to report: %v / %v", paths, err)
+	if states, err := MutantJournalStates(); err != nil || len(states) != 0 {
+		t.Errorf("the reconnect note must have nothing to report: %v / %v", states, err)
 	}
 }
 

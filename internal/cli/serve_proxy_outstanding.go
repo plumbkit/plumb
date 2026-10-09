@@ -123,24 +123,86 @@ func calledTool(e rpcEnvelope) string {
 // request. For a mutation_test it names what the mutant journal still holds, because
 // that tool can leave a source file holding a mutant when the daemon is killed, and
 // "re-read the file" without a path is exactly the advice PLAN-459 was filed about.
+//
+// Each entry's own state is worded for what is true of it: a file still holding the
+// mutant needs a re-read, one already back does not, and only a file matching neither
+// side is one plumb deliberately left alone. Saying "matches neither side" for a file
+// that simply still holds the mutant is the lie this classifier exists to prevent.
 func proxyRestartMessage(tool string) string {
 	const base = "plumb daemon restarted mid-request; this request's outcome is unconfirmed — for a write, re-read the file to check whether it landed before retrying"
 	if tool != "mutation_test" {
 		return base
 	}
-	paths, err := tools.MutantJournalPaths()
+	states, err := tools.MutantJournalStates()
 	if err != nil {
 		return base + ". This was a mutation_test; plumb could not read its mutant journal to say which file was involved"
 	}
-	switch len(paths) {
-	case 0:
+	if len(states) == 0 {
 		return base + ". This was a mutation_test: nothing is left journalled, so any mutant it had applied has been put back"
-	case 1:
-		return base + ". This was a mutation_test, and a mutant is still journalled for " + paths[0] +
-			" — the file matches neither side, so plumb left it exactly as it was. Re-read it before retrying"
-	default:
-		return base + ". This was a mutation_test, and mutants are still journalled for " + strings.Join(paths, ", ") +
-			" — those files match neither side, so plumb left them exactly as they were. Re-read them before retrying"
+	}
+	// One sentence per state, so a group is never described as something it is not.
+	var msg strings.Builder
+	msg.WriteString(base)
+	msg.WriteByte('.')
+	for _, group := range groupMutantJournalStates(states) {
+		msg.WriteString(mutantJournalClause(group.state, group.paths))
+	}
+	return msg.String()
+}
+
+// mutantJournalGroup is one state's share of the journal: every path in it is in the
+// same state, so one sentence can be true of all of them.
+type mutantJournalGroup struct {
+	state tools.MutantJournalState
+	paths []string
+}
+
+// groupMutantJournalStates gathers paths by state, keeping the order they arrived in
+// (the journal is read in sorted file-name order), so the message is deterministic
+// rather than map-ordered. A state with no paths contributes no sentence.
+func groupMutantJournalStates(states []tools.MutantJournalStatus) []mutantJournalGroup {
+	var groups []mutantJournalGroup
+	at := make(map[tools.MutantJournalState]int, 4)
+	for _, s := range states {
+		i, ok := at[s.State]
+		if !ok {
+			at[s.State] = len(groups)
+			groups = append(groups, mutantJournalGroup{state: s.State, paths: []string{s.Path}})
+			continue
+		}
+		groups[i].paths = append(groups[i].paths, s.Path)
+	}
+	return groups
+}
+
+// mutantJournalClause is one state's sentence, with the plural wording kept for a
+// group holding more than one path.
+func mutantJournalClause(state tools.MutantJournalState, paths []string) string {
+	joined := strings.Join(paths, ", ")
+	one := len(paths) == 1
+	switch state {
+	case tools.MutantStillApplied:
+		if one {
+			return " This was a mutation_test, and a mutant is still applied at " + joined + " — re-read it before retrying"
+		}
+		return " This was a mutation_test, and mutants are still applied at " + joined + " — re-read them before retrying"
+	case tools.MutantAlreadyBack:
+		if one {
+			return " This was a mutation_test; the file at " + joined + " is already back to its pre-run content"
+		}
+		return " This was a mutation_test; the files at " + joined + " are already back to their pre-run content"
+	case tools.MutantFileChanged:
+		if one {
+			return " This was a mutation_test; the file at " + joined +
+				" matches neither side, so plumb left it exactly as it was — re-read it before retrying"
+		}
+		return " This was a mutation_test; the files at " + joined +
+			" match neither side, so plumb left them exactly as they were — re-read them before retrying"
+	default: // MutantFileGone
+		if one {
+			return " This was a mutation_test; the file at " + joined + " no longer exists"
+		}
+		return " This was a mutation_test; the files at " + joined + " no longer exist"
 	}
 }
 

@@ -125,7 +125,7 @@ func clearMutantJournal(target string) {
 // directory exists, because an existing but unwritable state dir satisfies
 // MkdirAll and still fails at the first entry. The probe's name carries no
 // .json extension, so a probe left behind by an unlink that failed is never
-// read as an entry by the sweep or by MutantJournalPaths.
+// read as an entry by the sweep or by MutantJournalStates.
 func checkMutantJournalUsable() error {
 	stateDir := paths.StateDir()
 	dir, err := mutantJournalDir()
@@ -154,12 +154,31 @@ func mutantJournalUnusable(stateDir string, cause error) error {
 		filepath.Join(stateDir, mutantJournalDirName), stateDir, cause)
 }
 
-// MutantJournalPaths names the files the journal still holds — the entries a sweep
-// could not resolve, because the file matches neither the pre-mutation nor the
-// mutant content (someone edited it since) or because restoring it failed. It is
-// read-only: the reconnect note needs to say what is still out there without
-// sweeping anything itself.
-func MutantJournalPaths() ([]string, error) {
+// MutantJournalState is what a journalled mutant's file holds right now.
+type MutantJournalState int
+
+const (
+	// MutantStillApplied: the file holds the mutant's own digest — this run's mutant,
+	// or another session's, is on disk and has not been put back.
+	MutantStillApplied MutantJournalState = iota
+	// MutantAlreadyBack: the file holds the pre-mutation digest, so there is nothing to undo.
+	MutantAlreadyBack
+	// MutantFileChanged: the file matches neither digest — someone edited it since, and
+	// the sweep deliberately leaves it alone.
+	MutantFileChanged
+	// MutantFileGone: the file the entry names no longer exists.
+	MutantFileGone
+)
+
+// MutantJournalStatus is one journalled entry's state, as the reconnect note needs it.
+type MutantJournalStatus struct {
+	Path  string
+	State MutantJournalState
+}
+
+// MutantJournalStates classifies every journal entry by digest, read-only: the reconnect
+// note must not claim "someone edited it" for a file that simply still holds the mutant.
+func MutantJournalStates() ([]MutantJournalStatus, error) {
 	dir, err := mutantJournalDir()
 	if err != nil {
 		return nil, err
@@ -168,7 +187,7 @@ func MutantJournalPaths() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mutant journal: %w", err)
 	}
-	var paths []string
+	var states []MutantJournalStatus
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
@@ -179,11 +198,29 @@ func MutantJournalPaths() ([]string, error) {
 		}
 		var entry mutantJournalEntry
 		if json.Unmarshal(data, &entry) != nil || entry.Path == "" {
-			continue
+			continue // an entry only the SWEEP can read is not this read-only query's to report
 		}
-		paths = append(paths, entry.Path)
+		states = append(states, MutantJournalStatus{Path: entry.Path, State: mutantJournalState(entry)})
 	}
-	return paths, nil
+	return states, nil
+}
+
+// mutantJournalState hashes one entry's file ONCE and says which side it is on. The
+// four states are exhaustive and agree with what the sweep would decide about the same
+// bytes: applied (restore it), back (forget it), gone (there is no mutant to undo), or
+// a third party's edit (leave it, and say so).
+func mutantJournalState(entry mutantJournalEntry) MutantJournalState {
+	sha, err := fileSHA256(entry.Path)
+	switch {
+	case err == nil && sha == entry.ShaMutant:
+		return MutantStillApplied
+	case err == nil && sha == entry.ShaBefore:
+		return MutantAlreadyBack
+	case os.IsNotExist(err):
+		return MutantFileGone
+	default:
+		return MutantFileChanged
+	}
 }
 
 // sweepAction is what the sweep decided about one entry.
