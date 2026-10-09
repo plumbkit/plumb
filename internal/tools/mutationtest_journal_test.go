@@ -155,6 +155,45 @@ func TestSweepMutantJournal_ForgetsAnEntryWhoseFileIsGone(t *testing.T) {
 	}
 }
 
+// TestMutantJournalPaths_ListsWhatIsStillOutThere is the read-only query the
+// reconnect note uses (PLAN-459): a resolved entry must vanish from it, and an
+// entry the sweep refused to touch must stay.
+func TestMutantJournalPaths_ListsWhatIsStillOutThere(t *testing.T) {
+	path := journalFixture(t, "func f() int { return 1 }\n", "func f() int { return 2 }\n")
+	const theirs = "func f() int { return 3 } // someone else's edit\n"
+	if err := os.WriteFile(path, []byte(theirs), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, err := MutantJournalPaths()
+	if err != nil {
+		t.Fatalf("MutantJournalPaths: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != path {
+		t.Fatalf("paths = %v, want exactly [%s]", paths, path)
+	}
+
+	// The sweep leaves that entry alone (the file matches neither side), so it is
+	// still reported afterwards — the note and the sweep tell the same story.
+	if _, needAttention, err := SweepMutantJournal(); err != nil || len(needAttention) != 1 {
+		t.Fatalf("sweep = (%v, %v), want the one path needing attention", needAttention, err)
+	}
+	if paths, err = MutantJournalPaths(); err != nil || len(paths) != 1 {
+		t.Errorf("after the sweep the entry must survive for the note: %v / %v", paths, err)
+	}
+}
+
+func TestMutantJournalPaths_IsEmptyWhenNothingIsJournalled(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	paths, err := MutantJournalPaths()
+	if err != nil {
+		t.Fatalf("MutantJournalPaths: %v", err)
+	}
+	if len(paths) != 0 {
+		t.Errorf("paths = %v, want none", paths)
+	}
+}
+
 // TestClearMutantJournal_ForgetsOnlyItsOwnTarget keeps two mutants in flight apart:
 // one file per entry means one target's completion cannot erase another's record.
 func TestClearMutantJournal_ForgetsOnlyItsOwnTarget(t *testing.T) {

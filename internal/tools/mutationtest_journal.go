@@ -108,6 +108,38 @@ func clearMutantJournal(target string) {
 	}
 }
 
+// MutantJournalPaths names the files the journal still holds — the entries a sweep
+// could not resolve, because the file matches neither the pre-mutation nor the
+// mutant content (someone edited it since) or because restoring it failed. It is
+// read-only: the reconnect note needs to say what is still out there without
+// sweeping anything itself.
+func MutantJournalPaths() ([]string, error) {
+	dir, err := mutantJournalDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("mutant journal: %w", err)
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if readErr != nil {
+			continue
+		}
+		var entry mutantJournalEntry
+		if json.Unmarshal(data, &entry) != nil || entry.Path == "" {
+			continue
+		}
+		paths = append(paths, entry.Path)
+	}
+	return paths, nil
+}
+
 // sweepAction is what the sweep decided about one entry.
 type sweepAction int
 

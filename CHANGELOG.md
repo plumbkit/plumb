@@ -183,7 +183,9 @@
   process that no longer exists, so a startup sweep puts those files back and says
   so in the daemon log; a file someone else has edited since (matching neither
   digest) is left exactly as it is and reported, because guessing which content the
-  user wants would be worse than saying so.
+  user wants would be worse than saying so. When the daemon restarts mid-request,
+  the reconnect error for an interrupted `mutation_test` now names those files
+  itself, instead of leaving the caller with "re-read the file" and no path.
 - **With history off, a huge before-side is no longer read (PLAN-457).** The
   before-side of a write served two consumers — the history row and the response
   diff — and with history off only the response wanted it, which withholds
