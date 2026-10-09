@@ -173,6 +173,12 @@ func (t *MutationTest) Execute(ctx context.Context, raw json.RawMessage) (string
 	if err := args.validate(); err != nil {
 		return "", err
 	}
+	// Refused before anything costs anything — no slot, no baseline, no mutant —
+	// because a run whose journal cannot be written would report EVERY mutant
+	// invalid for one environment fault. See checkMutantJournalUsable.
+	if err := checkMutantJournalUsable(); err != nil {
+		return "", err
+	}
 	plan, err := t.resolvePlan(ctx, args)
 	if err != nil {
 		return "", err

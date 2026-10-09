@@ -3,7 +3,10 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // mutationtest_journal_test.go covers PLAN-459's acceptance: a mutant that outlives
@@ -228,5 +231,132 @@ func TestClearMutantJournal_ForgetsOnlyItsOwnTarget(t *testing.T) {
 	// verified restore, and this test simulates the two happening independently.
 	if got := readSubject(t, first); got != "A\n" {
 		t.Errorf("first = %q, want its mutant left alone", got)
+	}
+}
+
+// --- the wiring: a real run, driven through the kill window -------------------
+//
+// Everything above builds the journal state BY HAND and so exercises the SWEEP.
+// What none of it can see is whether runOne still journals a mutant before
+// writing it and still clears the entry after a verified restore: delete either
+// call and every test above stays green, because none of them runs runOne at
+// all. These three do — one driven into the window, one as its control, and one
+// refusing a run whose journal cannot be written.
+
+// killInWindow makes the next run stop inside the mutate window: the mutant is
+// journalled and on disk, and the deferred restore is skipped, which is exactly
+// what a killed process leaves behind (mutationKillWindowHook).
+func killInWindow(t *testing.T) {
+	t.Helper()
+	mutationKillWindowHook = func() bool { return true }
+	t.Cleanup(func() { mutationKillWindowHook = nil })
+}
+
+// TestMutantJournal_AKilledRunLeavesAMutantTheSweepCanRestore is PLAN-459's
+// acceptance for the WIRING rather than for the sweep: a REAL run — preflight,
+// baseline, journal, mutate, compile, test — is killed in the window, and what
+// it leaves on disk is put back by the next daemon start's sweep.
+func TestMutantJournal_AKilledRunLeavesAMutantTheSweepCanRestore(t *testing.T) {
+	const original, mutant = "keep\n", "changed\n"
+	env := newMutationEnv(t, original)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	killInWindow(t)
+
+	report, err := env.run(t, "keep", "changed")
+	if err != nil {
+		t.Fatalf("a run killed in the window is not a failure of the call itself: %v\n%s", err, report)
+	}
+	// The two things a kill leaves behind, asserted before the sweep touches
+	// anything: the mutant on disk, and its entry in the journal.
+	if got := env.content(t); got != mutant {
+		t.Fatalf("the file must still hold the mutant a killed run left: %q, want %q", got, mutant)
+	}
+	paths, err := MutantJournalPaths()
+	if err != nil {
+		t.Fatalf("MutantJournalPaths: %v", err)
+	}
+	if len(paths) != 1 || paths[0] != env.file {
+		t.Fatalf("the journal must hold the killed run's entry: %v, want exactly [%s]", paths, env.file)
+	}
+
+	// The next daemon start: the file goes back to its pre-run content and the
+	// entry is spent.
+	restored, needAttention, err := SweepMutantJournal()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(restored) != 1 || restored[0] != env.file {
+		t.Errorf("restored = %v, want exactly [%s]", restored, env.file)
+	}
+	if len(needAttention) != 0 {
+		t.Errorf("nothing needs a person here: %v", needAttention)
+	}
+	if got := env.content(t); got != original {
+		t.Errorf("file = %q, want the pre-run content", got)
+	}
+	if n := journalEntryCount(t); n != 0 {
+		t.Errorf("the sweep resolved the entry, so it must be gone (have %d)", n)
+	}
+}
+
+// TestMutantJournal_AnOrdinaryRunLeavesNoEntry is the control the kill test
+// needs to mean anything: a run that is NOT killed restores its file and clears
+// its entry, so the journal is empty afterwards. Without this, an implementation
+// that journals and never clears would leave the sweep restoring a file that was
+// already correct — and the kill test above would still pass.
+func TestMutantJournal_AnOrdinaryRunLeavesNoEntry(t *testing.T) {
+	const original = "keep\n"
+	env := newMutationEnv(t, original)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	report, err := env.run(t, "keep", "changed")
+	if err != nil {
+		t.Fatalf("an ordinary run: %v\n%s", err, report)
+	}
+	if got := env.content(t); got != original {
+		t.Fatalf("an unkilled run restores its file: got %q, want %q", got, original)
+	}
+	if n := journalEntryCount(t); n != 0 {
+		t.Errorf("a run whose restore was verified must clear its entry (have %d)", n)
+	}
+	if paths, err := MutantJournalPaths(); err != nil || len(paths) != 0 {
+		t.Errorf("the reconnect note must have nothing to report: %v / %v", paths, err)
+	}
+}
+
+// TestMutationTest_RefusesWhenTheJournalCannotBeWritten covers the other half of
+// the wiring: with an unusable state dir every mutant used to come back invalid
+// — the mutant never ran — so a whole-run environment fault was reported once
+// per mutant as though each mutant had a problem of its own. The call is refused
+// instead, before anything runs.
+//
+// The state dir is made unusable with a REGULAR FILE where the directory should
+// be: creating a directory below it fails with ENOTDIR for every user, root
+// included, where a read-only directory would be no obstacle at all to root.
+func TestMutationTest_RefusesWhenTheJournalCannotBeWritten(t *testing.T) {
+	env := newMutationEnv(t, "keep\n")
+	// Proof that nothing ran, rather than only a claim in the message.
+	env.installScript(t, env.compileScript, "touch \"$(dirname \"$0\")/compile-ran\"\nexit 0")
+	blocker := filepath.Join(t.TempDir(), "state-file")
+	if err := os.WriteFile(blocker, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", blocker)
+
+	report, err := env.run(t, "keep", "changed")
+	if err == nil {
+		t.Fatalf("a run that cannot journal must be refused, not reported: %q", report)
+	}
+	if stateDir := paths.StateDir(); !strings.Contains(err.Error(), stateDir) {
+		t.Errorf("the refusal must name the state directory %s:\n%v", stateDir, err)
+	}
+	if !strings.Contains(err.Error(), "NOTHING WAS RUN") {
+		t.Errorf("the refusal must say that nothing was run, so it is not read as a per-mutant verdict:\n%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.root, "compile-ran")); !os.IsNotExist(err) {
+		t.Errorf("the refusal must come before any command runs (compile-ran: %v)", err)
+	}
+	if got := env.content(t); got != "keep\n" {
+		t.Errorf("refused calls mutate nothing: got %q", got)
 	}
 }

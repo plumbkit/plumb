@@ -108,6 +108,52 @@ func clearMutantJournal(target string) {
 	}
 }
 
+// checkMutantJournalUsable refuses a whole run whose journal cannot be written,
+// BEFORE any mutant is applied or any command is run.
+//
+// The journal is not optional bookkeeping: journalMutant runs before the mutant
+// is written, and its failure is reported per mutant as `invalid`. So an
+// unusable state directory — a sandbox that denies $HOME, a state dir on a
+// read-only mount, an XDG_STATE_HOME pointing at a file — turns EVERY mutant
+// into an invalid, with a reason carrying the journal's own I/O error. The
+// caller reads that as "my mutants are wrong" and is sent to correct them, when
+// the truth is one environment fault that has nothing to do with any mutant,
+// reported once per mutant as though each had a problem of its own. It is the
+// tool's own false-attribution defect, arrived at from the filesystem.
+//
+// It probes by CREATING and REMOVING a file rather than by asking whether the
+// directory exists, because an existing but unwritable state dir satisfies
+// MkdirAll and still fails at the first entry. The probe's name carries no
+// .json extension, so a probe left behind by an unlink that failed is never
+// read as an entry by the sweep or by MutantJournalPaths.
+func checkMutantJournalUsable() error {
+	stateDir := paths.StateDir()
+	dir, err := mutantJournalDir()
+	if err != nil {
+		return mutantJournalUnusable(stateDir, err)
+	}
+	probe, err := os.CreateTemp(dir, ".probe-")
+	if err != nil {
+		return mutantJournalUnusable(stateDir, err)
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return nil
+}
+
+// mutantJournalUnusable builds that refusal. It names the directory that cannot
+// hold the journal and says plainly that nothing was run, so a caller is never
+// left reading a whole-run fault as a per-mutant verdict.
+func mutantJournalUnusable(stateDir string, cause error) error {
+	return fmt.Errorf("mutation_test: NOTHING WAS RUN — the mutant journal at %s (under the state directory %s) "+
+		"cannot be written, so this call is refused before any mutant is applied and before any command is run. "+
+		"The journal is what puts a killed run's mutant back at the next daemon start; without it every mutant "+
+		"would come back invalid for a reason that has nothing to do with the mutant. Make that directory "+
+		"writable — or point XDG_STATE_HOME at one that is — and retry. Cause: %w",
+		filepath.Join(stateDir, mutantJournalDirName), stateDir, cause)
+}
+
 // MutantJournalPaths names the files the journal still holds — the entries a sweep
 // could not resolve, because the file matches neither the pre-mutation nor the
 // mutant content (someone edited it since) or because restoring it failed. It is

@@ -148,6 +148,25 @@ func (t *MutationTest) runAll(ctx context.Context, targets []mutationTarget, pla
 	return results, stopNote, nil
 }
 
+// mutationKillWindowHook, when non-nil, models a process KILLED inside runOne's
+// mutate window: the mutant is on disk and journalled, and the deferred restore
+// never runs. It reports whether this is the run to kill, and is nil in
+// production — only a test sets it.
+//
+// The seam sits at the RESTORE rather than at the write, because the observable
+// consequence of a kill is exactly "the restore did not run while the entry and
+// the mutant both remain". Skipping the restore reproduces that consequence
+// whole without changing anything else about the run: the mutant is really
+// journalled, really written, really compiled and really tested, and only the
+// process carrying on afterwards differs from a SIGKILL. A subprocess killed
+// with a real signal would be more faithful in that one respect and worse in
+// three: it needs a helper binary; it must POLL for the mutant to know when to
+// kill, so it hits whatever instant the poll happened to catch; and its kill
+// races the very deferred restore it means to pre-empt, which makes the test
+// that depends on it flaky in the direction of passing. On the production path
+// this is a nil check in front of the restore call, so the hook cannot alter it.
+var mutationKillWindowHook func() bool
+
 // runOne applies one mutant, classifies it, and restores the file.
 //
 // The named restoreErr return is set by the deferred restore, so restoration
@@ -169,11 +188,6 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 	// Journalled BEFORE the write (PLAN-459): a process killed between these two
 	// statements leaves an entry with nothing mutated, which the startup sweep
 	// resolves by finding the original digest already in place.
-	if err := journalMutant(tgt, mutated); err != nil {
-		res.outcome = MutationInvalid
-		res.reason = err.Error()
-		return res, nil
-	}
 	if _, err := safeWrite(tgt.path, []byte(mutated), tgt.mode); err != nil {
 		clearMutantJournal(tgt.path) // nothing was mutated, so there is nothing to sweep
 		res.outcome = MutationInvalid
@@ -181,8 +195,15 @@ func (t *MutationTest) runOne(ctx context.Context, tgt mutationTarget, plan muta
 		return res, nil
 	}
 	// From here the file on disk is mutated: nothing may return without the
-	// deferred restore running.
-	defer func() { restoreErr = t.restore(ctx, tgt) }()
+	// deferred restore running — except a test standing in for the process
+	// being killed in this window (mutationKillWindowHook), which is the one
+	// exit a deferred call cannot cover.
+	defer func() {
+		if mutationKillWindowHook != nil && mutationKillWindowHook() {
+			return
+		}
+		restoreErr = t.restore(ctx, tgt)
+	}()
 	t.announce(ctx, tgt.path)
 
 	// Sequenced, not evaluated as two arguments: a mutant that does not compile
