@@ -88,6 +88,7 @@ var Layers = map[string]Layer{
 	"internal/paths":                LayerFoundation,
 	"internal/ignore":               LayerFoundation, // gitignore matching, shared by every walk
 	"internal/fsync":                LayerFoundation,
+	"internal/fswatch":              LayerFoundation, // recursive OS file watching that never opens watched files
 	"internal/sqlitex":              LayerFoundation, // the one place a SQLite DSN is built
 	"internal/tokenise":             LayerFoundation,
 	"internal/textfmt":              LayerFoundation, // stdlib-only text primitives, no lipgloss

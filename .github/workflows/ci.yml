@@ -68,6 +68,31 @@ jobs:
       - name: make verify
         run: make verify
 
+      # Release builds are CGO_ENABLED=0, while `make verify` on macOS builds with
+      # cgo, so it never runs the file watcher users actually get. PLAN-488: in
+      # CGO_ENABLED=0 builds the old watcher backend (kqueue) opened every file in
+      # the workspace, .plumb's SQLite databases included, and released their
+      # locks whenever a watcher stopped. Run the watcher and lock tests the way
+      # the release is built, and compile the other macOS architecture too
+      # (running it would need Rosetta).
+      - name: watcher tests as released (macOS, CGO_ENABLED=0)
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go test -count=1 ./internal/fswatch/
+          go test -count=1 -run 'FSWatcher|LSPFSWatcher|LSPWatch' ./internal/topology/ ./internal/cli/
+          GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
+
+      # internal/fswatch picks a backend per platform; `make verify` only ever
+      # builds the runner's own. Compile its tests for the platforms no runner
+      # covers: Windows (sgtdi's ReadDirectoryChangesW) and the BSDs (no watcher).
+      - name: watcher compiles for Windows and FreeBSD
+        if: runner.os == 'Linux'
+        run: |
+          GOOS=windows GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
+          GOOS=freebsd GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
+
       # The CHANGELOG placement guard lives here rather than in `make verify` because
       # it is the only guard that needs a base ref, and a working tree does not have
       # one — see the header of scripts/check-changelog-placement.sh. It is a STEP in

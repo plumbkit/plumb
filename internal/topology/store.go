@@ -47,14 +47,23 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	var watcher *fsWatcher
 	if cfg.Watch {
 		w, werr := newFSWatcher(workspace, s, excludes)
-		if werr != nil {
-			slog.Warn("topology: file watcher unavailable; falling back to periodic resync",
+		switch {
+		case werr != nil && cfg.ResyncIntervalMinutes == 0:
+			// Both freshness paths are off: the index refreshes only at startup
+			// and on plumb's own writes. Respected, because 0 is an explicit
+			// setting, but said loudly.
+			slog.Warn("topology: file watcher unavailable and resync_interval_minutes is 0; the index will not see external changes until the next start",
 				"workspace", workspace, "err", werr)
-		} else {
+		case werr != nil:
+			slog.Warn("topology: file watcher unavailable; falling back to periodic resync",
+				"workspace", workspace, "err", werr, "interval_minutes", cfg.ResyncIntervalMinutes)
+		default:
 			// Event-driven freshness replaces time-based polling: suppress the
 			// periodic resync. A full resync still runs once at startup (Indexer.Start)
-			// and whenever the OS reports dropped/overflowed events.
+			// and whenever the OS reports dropped/overflowed events. Should the
+			// watcher fail for good, it falls back to the configured interval.
 			idx.resyncMins = 0
+			w.fallbackEvery = time.Duration(cfg.ResyncIntervalMinutes) * time.Minute
 			s.watcher = w
 			watcher = w
 		}

@@ -3,11 +3,11 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
-	"github.com/sgtdi/fswatcher"
-
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -45,35 +45,80 @@ func TestLSPWatchShouldSkipPath(t *testing.T) {
 
 func TestLSPFileChangeType(t *testing.T) {
 	cases := []struct {
-		name  string
-		types []fswatcher.EventType
-		want  protocol.FileChangeType
+		name string
+		op   fswatch.Op
+		want protocol.FileChangeType
 	}{
-		{"remove wins", []fswatcher.EventType{fswatcher.EventCreate, fswatcher.EventRemove}, protocol.FileDeleted},
-		{"create only", []fswatcher.EventType{fswatcher.EventCreate}, protocol.FileCreated},
-		{"mod only", []fswatcher.EventType{fswatcher.EventMod}, protocol.FileChanged},
-		{"chmod only", []fswatcher.EventType{fswatcher.EventChmod}, protocol.FileChanged},
-		{"unknown only", []fswatcher.EventType{fswatcher.EventUnknown}, protocol.FileChanged},
+		{"remove wins", fswatch.Create | fswatch.Remove, protocol.FileDeleted},
+		{"create only", fswatch.Create, protocol.FileCreated},
+		{"create and write", fswatch.Create | fswatch.Write, protocol.FileCreated},
+		{"write only", fswatch.Write, protocol.FileChanged},
+		{"rename only", fswatch.Rename, protocol.FileChanged},
+		{"chmod only", fswatch.Chmod, protocol.FileChanged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := lspFileChangeType(fswatcher.WatchEvent{Types: tc.types})
-			if got != tc.want {
-				t.Errorf("lspFileChangeType(%v) = %v, want %v", tc.types, got, tc.want)
+			if got := lspFileChangeType(tc.op); got != tc.want {
+				t.Errorf("lspFileChangeType(%v) = %v, want %v", tc.op, got, tc.want)
 			}
 		})
 	}
 }
 
-func TestLSPWatchHasOverflow(t *testing.T) {
-	if !lspWatchHasOverflow(fswatcher.WatchEvent{Types: []fswatcher.EventType{fswatcher.EventOverflow}}) {
-		t.Error("expected overflow detected")
+// TestLSPWatchExcludeRegexFor pins the source exclusion against the way it is
+// applied (full path AND base name) and against a workspace that lives under a
+// dot-prefixed directory. The pattern it replaced was unanchored and matched
+// such an ancestor, so the watcher silently delivered nothing for that
+// workspace.
+func TestLSPWatchExcludeRegexFor(t *testing.T) {
+	ws := filepath.Clean(filepath.FromSlash("/home/u/.config/repo"))
+	re := regexp.MustCompile(lspWatchExcludeRegexFor(ws))
+	excluded := func(rel string) bool {
+		p := filepath.Join(ws, filepath.FromSlash(rel))
+		return re.MatchString(p) || re.MatchString(filepath.Base(p))
 	}
-	if !lspWatchHasOverflow(fswatcher.WatchEvent{Types: []fswatcher.EventType{fswatcher.EventMod, fswatcher.EventOverflow}}) {
-		t.Error("expected overflow detected among mixed types")
+	for _, rel := range []string{"main.go", "src/a/b.go", "src/main.go", ".gitignore", "output.go"} {
+		if excluded(rel) {
+			t.Errorf("%q excluded at the source; the language server would never hear of it", rel)
+		}
 	}
-	if lspWatchHasOverflow(fswatcher.WatchEvent{Types: []fswatcher.EventType{fswatcher.EventMod}}) {
-		t.Error("expected no overflow on a plain mod event")
+	for _, rel := range []string{".plumb/collab.db", ".git/index", "a/.cache/x", "vendor/x.go", "node_modules/p/i.js", "target/debug/x", "out/x", "a/build/o.js", "__pycache__/m.pyc"} {
+		if !excluded(rel) {
+			t.Errorf("%q not excluded at the source", rel)
+		}
+	}
+}
+
+// TestLSPFSWatcher_DeliversUnderHiddenAncestor drives real filesystem events
+// for a workspace below a dot-prefixed directory, the case the unanchored
+// exclusion silenced completely.
+func TestLSPFSWatcher_DeliversUnderHiddenAncestor(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := filepath.Join(base, ".hidden", "ws")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := &watchedFilesRecordingClient{stubClient: &stubClient{}}
+	proxy := &clientProxy{}
+	proxy.set(rec)
+	fw, err := newLSPFSWatcher(ws, proxy)
+	if err != nil {
+		t.Fatalf("newLSPFSWatcher: %v", err)
+	}
+	fw.Start()
+	t.Cleanup(fw.Stop)
+	deadline := time.Now().Add(30 * time.Second)
+	for rec.totalEvents() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("no event for a workspace under a dot-prefixed directory: the exclusion matched an ancestor")
+		}
+		if err := os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2*lspWatchCooldown + 100*time.Millisecond)
 	}
 }
 

@@ -10,15 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sgtdi/fswatcher"
+	"github.com/plumbkit/plumb/internal/fswatch"
 )
 
 // watchEventFor builds a modify event for a workspace-relative path.
-func watchEventFor(ws, rel string) fswatcher.WatchEvent {
-	return fswatcher.WatchEvent{
-		Path:  filepath.Join(ws, filepath.FromSlash(rel)),
-		Types: []fswatcher.EventType{fswatcher.EventMod},
-	}
+func watchEventFor(ws, rel string) fswatch.Event {
+	return fswatch.Event{Path: filepath.Join(ws, filepath.FromSlash(rel)), Op: fswatch.Write}
 }
 
 // watcher_ignore_test.go covers the watcher's gitignore awareness. The

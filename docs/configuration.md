@@ -583,7 +583,7 @@ language and resolved path, or the reason it will not run.
 | `resync_batch` | int | `100` | Files the full resync extracts before pausing, to throttle CPU. `0` disables pacing. |
 | `resync_pause_ms` | int | `25` | Pause (milliseconds) after each `resync_batch` files. `0` disables pacing. |
 | `resync_interval_minutes` | int | `60` | Periodic full-resync **fallback**, used only when `watch = false` or the platform watcher cannot start; suppressed while the watcher is live. `0` disables. |
-| `watch` | bool | `true` | OS-level file watching ([`fswatcher`](https://github.com/sgtdi/fswatcher)): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
+| `watch` | bool | `true` | OS-level file watching (`internal/fswatch`: FSEvents on macOS, inotify on Linux; other platforms fall back to `resync_interval_minutes`): re-index a file the instant it changes on disk, whoever changed it — this agent, another agent, or your editor. Replaces time-based polling; a mass change (e.g. `git checkout`) coalesces to a single paced resync via the bounded queue + overflow path. Set `false` to fall back to `resync_interval_minutes`. |
 
 Note the two different meanings of `0` in this table: `max_file_size_bytes = 0` means *use the default*, and `extract_timeout_seconds = 0` means *use the built-in 2-minute ceiling* -- it no longer disables bounding entirely, since an unbounded parse can wedge the indexer.
 
