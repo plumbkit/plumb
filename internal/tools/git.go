@@ -112,6 +112,11 @@ type gitToolArgs struct {
 	Repo         string   `json:"repo"`
 	Confirm      bool     `json:"confirm"`
 	ExpectedHead string   `json:"expected_head"`
+	// Amend folds the staged changes into HEAD instead of creating a commit
+	// (commit only). Wait asks a mutating call to wait for its child rather than
+	// detaching at [git] detach_after — see Execute.
+	Amend bool `json:"amend"`
+	Wait  bool `json:"wait"`
 	// The read-tier output window (git_window.go): a slice of, or a pattern over,
 	// a read command's output instead of all of it.
 	StartLine     *int   `json:"start_line"`
@@ -124,6 +129,9 @@ type gitToolArgs struct {
 func (a gitToolArgs) validate() error {
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return errors.New("git: subcommand is required")
+	}
+	if a.Amend && a.Subcommand != "commit" {
+		return fmt.Errorf("git: amend folds changes into HEAD, so it applies to commit, not %q", a.Subcommand)
 	}
 	return nil
 }
@@ -169,15 +177,41 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if err := t.checkBoundary(ctx, a); err != nil {
+	if err := t.guardCall(ctx, a); err != nil {
 		return "", err
+	}
+	child := gitChildSpecFor(policy)
+	if a.Wait {
+		// A caller that asked to wait gets the real result: a detach deadline at the
+		// write bound makes gitChildSpec.detachAfter report that no foreground deadline
+		// applies, so awaitOrDetach waits the child out. It stays bounded by
+		// [git] write_timeout, never by nothing — and a client whose own call timeout is
+		// shorter than the hook still learns the outcome on its next git call here
+		// (git_background.go).
+		child.DetachAfter = child.writeTimeout()
+	}
+	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), child, window)
+}
+
+// guardCall runs the refusals that must be decided before the git child starts:
+// the workspace boundary, the worktree-removal confirm guard, and the amend
+// publication guard. They live here rather than inline because each carries its
+// own evidence and remedy, and because Execute is the sequence of steps — not
+// their bodies (see the gocyclo-15 contract in git.go's header).
+func (t *Git) guardCall(ctx context.Context, a gitToolArgs) error {
+	if err := t.checkBoundary(ctx, a); err != nil {
+		return err
 	}
 	// Removing a worktree destroys whatever is in it. git refuses a dirty one, but
 	// --force gets past that, and the write tier alone would let it through.
 	if err := checkGitWorktreeRemove(ctx, a); err != nil {
-		return "", err
+		return err
 	}
-	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), gitChildSpecFor(policy), window)
+	// An amend rewrites HEAD, which is only private while no remote has it.
+	if err := checkCommitAmend(ctx, a); err != nil {
+		return err
+	}
+	return nil
 }
 
 // gate applies the tier policy (gateGit), adding the untrusted-project note

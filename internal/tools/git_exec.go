@@ -24,10 +24,22 @@ const maxGitBytes = 100 * 1024 // 100 KiB
 func buildGitArgv(a gitToolArgs, trailer string) ([]string, error) {
 	switch a.Subcommand {
 	case "commit":
-		if strings.TrimSpace(a.Message) == "" {
+		// An amend without a message keeps HEAD's message (--no-edit), which is what
+		// folding a review fix into the commit under review normally wants; a plain
+		// commit still requires its own message.
+		message := strings.TrimSpace(a.Message)
+		if message == "" && !a.Amend {
 			return nil, errors.New("git commit: message is required")
 		}
-		argv := []string{"commit", "-m", a.Message}
+		argv := []string{"commit"}
+		if a.Amend {
+			argv = append(argv, "--amend")
+		}
+		if message == "" {
+			argv = append(argv, "--no-edit")
+		} else {
+			argv = append(argv, "-m", a.Message)
+		}
 		if trailer != "" {
 			argv = append(argv, "--trailer", trailer)
 		}

@@ -13,6 +13,15 @@
 
 ### Added
 
+- **`git` can amend, and can wait for a slow hook (PLAN-493).** `commit` takes
+  `amend: true` to fold the staged changes into HEAD (`--amend`), keeping HEAD's
+  message when no `message` is given, and is refused when HEAD is already
+  reachable from a remote-tracking ref — rewriting a published commit is a
+  force-push for everyone else, and the refusal names the refs. `wait: true` on
+  a mutating call waits for the git child instead of detaching at
+  `[git] detach_after` with "STILL RUNNING": the call returns the real result,
+  including a refusing hook's own output, still bounded by
+  `[git] write_timeout`.
 - **The git tool's read tier takes an output window (PLAN-454).** `git` accepts
   `start_line`, `end_line`, `pattern`, `use_regex` and `case_sensitive` on any
   read-tier call, with `read_file`'s semantics: 1-based inclusive lines, literal

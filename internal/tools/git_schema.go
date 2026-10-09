@@ -41,6 +41,14 @@ var gitSchema = json.RawMessage(`{
       "type": "string",
       "description": "Revision HEAD must resolve to, or a write, destructive or network op is refused."
     },
+    "amend": {
+      "type": "boolean",
+      "description": "commit only: fold the staged changes into HEAD (--amend) instead of adding a commit. Omit message to keep HEAD's message. Refused when HEAD is already on a remote-tracking ref."
+    },
+    "wait": {
+      "type": "boolean",
+      "description": "Wait for a mutating git child (commit and friends) instead of detaching at [git] detach_after with STILL RUNNING; bounded by [git] write_timeout. Returns the real result, including a hook's output when it refuses."
+    },
     "start_line": {
       "type": "integer",
       "description": "Read tier: first output line to return (1-based, counted in the command's own output — for show <rev>:<path> it windows that file's lines)."
