@@ -225,7 +225,7 @@ var runTaskSchema = json.RawMessage(`{
     },
     "path": {
       "type": "string",
-      "description": "Run in this directory instead of the workspace/working_dir: a git work-tree of the same repository (e.g. plumb-wt-<card>) or a directory inside the workspace. Absolute, or relative to the directory the command would have run in. The command, its language and its trust still come from the pinned workspace's config."
+      "description": "Run in this directory: absolute, or relative to the command's own directory; must be inside the workspace."
     }
   },
   "required": ["slot"],

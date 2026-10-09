@@ -100,6 +100,23 @@ func TestEditFile_NoSensitiveResolverShowsTheNearMatchContent(t *testing.T) {
 	}
 }
 
+// TestEditFile_SensitivePathNamesOneRangeRetry is the nit from PLAN-456's review:
+// a withheld hint already names the exact RANGE call for the window it found, so
+// rangeModeHint must not name a second one for the same window.
+func TestEditFile_SensitivePathNamesOneRangeRetry(t *testing.T) {
+	dir := t.TempDir()
+	env := hintFixture(t, dir, "secrets/app.env")
+	deps := WriteDeps{Reads: NewReadTracker(), SensitivePathFn: realGate(dir, "secrets/*")}
+
+	err := nearMissEdit(t, deps, env)
+	if err == nil {
+		t.Fatal("a near-miss old_string must fail the edit")
+	}
+	if n := strings.Count(err.Error(), "start_line"); n != 1 {
+		t.Errorf("a withheld hint must carry exactly one RANGE retry, found %d:\n%s", n, err)
+	}
+}
+
 // TestClosestMatchDiff_WithholdDropsOnlyTheContent is the unit pair, and the
 // mutation witness: the two results come from the SAME inputs and differ only by
 // the gate, so removing the gate call in notFoundError turns the sensitive case

@@ -47,7 +47,7 @@ var gitSchema = json.RawMessage(`{
     },
     "wait": {
       "type": "boolean",
-      "description": "Wait for a mutating git child (commit and friends) instead of detaching at [git] detach_after with STILL RUNNING; bounded by [git] write_timeout. Returns the real result, including a hook's output when it refuses."
+      "description": "Wait for a mutating git child instead of detaching with STILL RUNNING; bounded by [git] write_timeout. Returns a refusing hook's own output."
     },
     "start_line": {
       "type": "integer",
@@ -59,7 +59,7 @@ var gitSchema = json.RawMessage(`{
     },
     "pattern": {
       "type": "string",
-      "description": "Read tier: matching output lines instead of a contiguous range; literal text unless use_regex. Narrow with start_line/end_line."
+      "description": "Read tier: matching output lines instead of a range; literal unless use_regex."
     },
     "use_regex": {
       "type": "boolean",
@@ -67,7 +67,7 @@ var gitSchema = json.RawMessage(`{
     },
     "case_sensitive": {
       "type": "boolean",
-      "description": "Read tier: default smart-case (insensitive unless the pattern has an uppercase letter); set to force."
+      "description": "Read tier: default smart-case; set to force."
     }
   },
   "required": ["subcommand"],

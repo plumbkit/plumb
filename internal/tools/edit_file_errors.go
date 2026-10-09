@@ -67,11 +67,19 @@ func (t *EditFile) notFoundError(ctx context.Context, i int, path, sent, searche
 	// write response, and this error response was the other way out — so it asks the
 	// same resolver, and keeps only what reveals no content (the line number and the
 	// RANGE-mode retry route).
-	if diff := closestMatchDiff(content, searched, path, t.deps.withholdsResponse(ctx, path)); diff != "" {
+	withheld := t.deps.withholdsResponse(ctx, path)
+	diff := closestMatchDiff(content, searched, path, withheld)
+	if diff != "" {
 		b.WriteString("\n")
 		b.WriteString(diff)
 	}
-	b.WriteString(rangeModeHint(content, searched))
+	// One RANGE call, not two: the withheld block already names the exact call for
+	// the window it found, and rangeModeHint would name it a second time (review nit
+	// on PLAN-456). Its generic pointer still helps when no window was found, so the
+	// hint is only suppressed alongside a rendered withheld block.
+	if !withheld || diff == "" {
+		b.WriteString(rangeModeHint(content, searched))
+	}
 	return errors.New(b.String())
 }
 
