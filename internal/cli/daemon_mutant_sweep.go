@@ -34,7 +34,13 @@ func sweepKilledMutants() {
 		slog.Warn("daemon: restored a mutant a killed mutation_test left behind", "path", path)
 	}
 	for _, path := range needAttention {
-		slog.Error("daemon: a killed mutation_test left a mutant and the file has changed since — leaving it alone",
+		// Name where the pre-mutation bytes are kept: every journal entry carries the original
+		// content, so the reader has a recovery path rather than a warning. It is the entry
+		// under the state dir, not the old .plumb-mutation-backup sidecar (which only exists
+		// when a restore FAILED), and saying which one it is stops a reader hunting for a file
+		// that may not be there (PLAN-459 SHOULD-FIX 2).
+		slog.Error("daemon: a killed mutation_test left a mutant and the file has changed since — leaving it alone; "+
+			"the pre-mutation content is kept in the journal entry under the plumb state dir (mutant-journal)",
 			"path", path)
 	}
 }
