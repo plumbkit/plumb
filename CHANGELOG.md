@@ -203,6 +203,16 @@
 
 ### Fixed
 
+- **`plumb mail` answers in a sandbox that cannot open the session-registry lock
+  (PLAN-495).** Listing live sessions took the registry's exclusive lock, whose
+  open needs write access to the data directory, so a harness that denies those
+  writes got "operation not permitted" and no answer at all, although every
+  session file it needed was readable. A read-only caller now falls back to
+  reading the registry WITHOUT the lock when the lock file cannot be opened (a
+  permission or read-only-filesystem error, never contention), writing nothing;
+  `--json` then carries `"unlocked_read": true` and the sentence says so, since a
+  session starting or ending at that instant may be missed. Session files are
+  written by temp file plus rename, so the unlocked read is never torn.
 - **A killed `mutation_test` no longer leaves a mutant in your source (PLAN-459).**
   The tool restored its mutant on every exit path a running process can take, but
   not when the process was killed: a daemon restart mid-run left a mutant sitting in
