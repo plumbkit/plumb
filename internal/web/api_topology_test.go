@@ -117,6 +117,12 @@ func waitForIndexReadable(t *testing.T, ws string) {
 // unexported helpers in package tools, and the indexer's own failing
 // determination is already covered end to end there. What this layer owns — and
 // what this test pins — is the overlay of that health onto the wire DTO.
+//
+// This is HALF of the indexer-to-JSON chain, and it is not redundant with the
+// other half: internal/cli's TestDaemonWebDeps_TopologyHealthIsTheLivePool pins
+// that the daemon's own deps carry the LIVE accessor (and that it reports a real
+// failing index), but never renders the DTO. Delete either test and the chain is
+// no longer covered end to end.
 func TestHandleTopology_FailingFlag(t *testing.T) {
 	ws := t.TempDir()
 	// resolveWorkspace accepts only a workspace of a currently-attached session,

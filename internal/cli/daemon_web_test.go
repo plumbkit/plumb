@@ -19,8 +19,11 @@ import (
 // It drives a REAL index into its failing state (SQLite triggers that make every
 // write to topology_files raise, the technique internal/tools uses) and asserts
 // the accessor reports it, then reports recovery, and reports ok=false — "not
-// known", never "fine" — for a workspace the pool does not hold. The overlay of
-// that health onto the wire DTO is pinned in internal/web (TestHandleTopology_FailingFlag).
+// known", never "fine" — for a workspace the pool does not hold.
+//
+// This is HALF of the indexer-to-JSON chain: it never renders the DTO. The other
+// half, the overlay of that health onto the wire DTO, is pinned in internal/web's
+// TestHandleTopology_FailingFlag. Delete either and the chain is no longer covered.
 func TestDaemonWebDeps_TopologyHealthIsTheLivePool(t *testing.T) {
 	ws := t.TempDir()
 	writeFixture := func(name, src string) {
@@ -88,8 +91,11 @@ func waitForDepsHealth(t *testing.T, deps web.Deps, ws, what string, cond func(t
 }
 
 // injectTopologyFilesFault makes every write to topology_files raise, so the
-// next indexing cycle that touches a file fails — the same SQLite-trigger fault
-// internal/tools' topology health tests use. It returns the function that heals it.
+// next indexing cycle that touches a file fails. It returns the function that
+// heals it. The same trigger SQL lives in two other places: internal/tools'
+// injectPersistFault (topology_health_test.go) and internal/topology's
+// indexer_health_test.go. A change to one copy should be a decision about all
+// three, not a fix to one.
 func injectTopologyFilesFault(t *testing.T, ws string) (heal func()) {
 	t.Helper()
 	db, err := sqlitex.Open(topology.DBPath(ws), sqlitex.Options{})

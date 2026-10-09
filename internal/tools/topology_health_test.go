@@ -78,7 +78,9 @@ func TestIndexFreshness(t *testing.T) {
 // injectPersistFault makes every write to topology_files raise, so the next
 // indexing cycle that touches a file fails — standing in for the disk I/O error
 // that held the live index in error (PLAN-467). It returns the function that
-// removes the fault.
+// removes the fault. The same trigger SQL lives in internal/topology's
+// indexer_health_test.go and internal/cli's injectTopologyFilesFault
+// (daemon_web_test.go): a change here should be a decision about all three.
 func injectPersistFault(t *testing.T, ws string) (heal func()) {
 	t.Helper()
 	db, err := sqlitex.Open(topology.DBPath(ws), sqlitex.Options{})

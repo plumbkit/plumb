@@ -17,6 +17,12 @@ import (
 // web.Deps would keep passing with the TopologyHealth wiring deleted from here,
 // and without that wiring the dashboard's failing flag is structurally false —
 // the "index is fine" answer the flag exists to stop giving.
+//
+// Only HALF of it is injectable, deliberately: store, collabPool, topoPool and
+// startedAt are parameters, while MetricsPath and LogPath are resolved here from
+// process-wide state (monitor.SnapshotPath, daemonLogPath) that a caller cannot
+// vary. A test that needs a different metrics or log path must add a parameter;
+// it cannot pass one through this signature today.
 func daemonWebDeps(store *config.Store, collabPool *collabPool, topoPool *topologyPool, startedAt time.Time) web.Deps {
 	return web.Deps{
 		Store:       store,
