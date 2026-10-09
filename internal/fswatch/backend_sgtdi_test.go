@@ -92,8 +92,14 @@ const notBeforeReady = 300 * time.Millisecond
 // a supervisor that then fails to return is reported rather than waited on.
 func supervise(t *testing.T, w *Watcher, first *sgtdiRun, start startFunc) <-chan struct{} {
 	t.Helper()
+	return superviseWithin(t, w, first, start, readyWithin)
+}
+
+// superviseWithin is supervise with the bound on a restart's walk.
+func superviseWithin(t *testing.T, w *Watcher, first *sgtdiRun, start startFunc, within time.Duration) <-chan struct{} {
+	t.Helper()
 	finished := make(chan struct{})
-	go func() { w.superviseSgtdi(Options{}, first, start); close(finished) }()
+	go func() { w.superviseSgtdi(Options{}, first, start, within); close(finished) }()
 	t.Cleanup(func() {
 		if !isClosed(w.done) {
 			close(w.done)
@@ -133,7 +139,7 @@ func TestSuperviseSgtdi_FailureIsDegraded(t *testing.T) {
 		return nil, errors.New("no restart")
 	}
 	finished := make(chan struct{})
-	go func() { w.superviseSgtdi(Options{}, run, restarted); close(finished) }()
+	go func() { w.superviseSgtdi(Options{}, run, restarted, readyWithin); close(finished) }()
 	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
@@ -407,10 +413,16 @@ func TestSuperviseSgtdi_RootGoneAgainBeforeReadyIsWaitedFor(t *testing.T) {
 	}
 }
 
-// runPump runs pumpSgtdi on its own goroutine and returns how it ended.
+// runPump runs pumpSgtdi on its own goroutine, never at the watch limit, and
+// returns how it ended.
 func runPump(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent, stopped <-chan struct{}) <-chan runEnd {
+	return runPumpLimited(w, evs, dropped, stopped, func(string) bool { return false })
+}
+
+// runPumpLimited is runPump with the watch-limit check the test gives it.
+func runPumpLimited(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent, stopped <-chan struct{}, limitReached func(string) bool) <-chan runEnd {
 	end := make(chan runEnd, 1)
-	go func() { end <- pumpSgtdi(w, evs, dropped, stopped) }()
+	go func() { end <- pumpSgtdi(w, evs, dropped, stopped, limitReached) }()
 	return end
 }
 

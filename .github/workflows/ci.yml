@@ -88,6 +88,14 @@ jobs:
           GOOS=windows GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
           GOOS=freebsd GOARCH=amd64 go test -c -o /dev/null ./internal/fswatch/
 
+      # sgtdi discards the error when it cannot watch a directory created after
+      # it started, at the inotify watch limit; internal/fswatch probes for it.
+      # Reaching the limit needs it lowered, which needs sudo, so this runs a
+      # real Watcher past it here, on the ephemeral runner, and restores it.
+      - name: watcher reports the inotify watch limit after start (Linux)
+        if: runner.os == 'Linux'
+        run: ./scripts/test-watch-limit.sh
+
       # The CHANGELOG placement guard lives here rather than in `make verify` because
       # it is the only guard that needs a base ref, and a working tree does not have
       # one — see the header of scripts/check-changelog-placement.sh. It is a STEP in

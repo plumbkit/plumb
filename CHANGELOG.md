@@ -210,9 +210,12 @@
   - A watcher that can no longer see every change now says so: on Linux and
     Windows when the backend stops on its own, and on Linux when the inotify
     watch limit leaves part of the tree unwatched (sgtdi skips those
-    directories and carries on). The topology index then falls back to its
-    `resync_interval_minutes`, and the LSP watcher logs a warning. A
-    directory created later, at the limit, is still not detected.
+    directories and carries on), in its initial walk or in a directory
+    created later. sgtdi discards the error for a directory created later,
+    so plumb probes each new directory with a throwaway inotify watch; CI
+    drives a real watcher past a lowered limit to prove it. The topology
+    index then falls back to its `resync_interval_minutes`, and the LSP
+    watcher logs a warning.
   - A watcher also uses far fewer descriptors on macOS release builds: a
     500-file tree went from about 520 descriptors per watcher to about 12.
   - A populated directory moved into a workspace now has its files reported;
@@ -229,7 +232,9 @@
     index's start), and the full resync after the workspace directory returns
     is requested only once the new watches are added. Before, a resync could
     finish while watches were still being added, and a change made in that
-    gap was never seen.
+    gap was never seen. A restart's walk has the same one-minute bound: one
+    that hangs degrades the watcher instead of leaving it silently blind, and
+    closing the watcher no longer waits for it.
   - Accepted behaviour change for macOS release builds: editing the target of
     an indexed in-workspace symlink no longer re-indexes the symlink until the
     next resync. kqueue happened to report the link too, because opening it

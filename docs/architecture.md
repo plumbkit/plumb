@@ -899,9 +899,11 @@ Every backend keeps one contract (`internal/fswatch/fswatch.go`, tested by
 (a symlink is never reported under its target), anything it cannot report one
 by one is signalled on `Lost` (consumers then resync), a root directory that is
 renamed away, recreated or replaced is watched again, and a backend that can no
-longer see every change (it stopped, or on Linux the inotify watch limit left
-part of the tree unwatched) closes `Failed`, on which the topology index falls
-back to `resync_interval_minutes`. `New` returns, and the `Lost` after a root's
+longer see every change closes `Failed`: it stopped, a restart's walk hung for
+a minute, or on Linux the inotify watch limit left part of the tree unwatched,
+in the initial walk or in a directory created later (sgtdi discards that
+error, so each new directory is probed). The topology index then falls back to
+`resync_interval_minutes`. `New` returns, and the `Lost` after a root's
 return is signalled, only once the backend has finished adding its watches, so
 a resync that follows cannot finish inside an unwatched gap. A directory moved
 away is reported under its own name only, so deleting a path in the topology

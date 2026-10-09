@@ -39,12 +39,24 @@ func (w *Watcher) excluded(path string) bool {
 // subdirectory it cannot read) it asks for a reconcile. An entry that vanished
 // mid-walk is not a loss: its removal is an event of its own.
 func (w *Watcher) expandIfDir(path string, op Op, emit func(string)) {
+	if arrivedDir(path, op) {
+		w.expand(path, emit)
+	}
+}
+
+// arrivedDir reports whether an event says path was created or renamed into
+// place, and it is a directory.
+func arrivedDir(path string, op Op) bool {
 	if !op.Has(Create | Rename) {
-		return
+		return false
 	}
-	if fi, err := os.Lstat(path); err != nil || !fi.IsDir() {
-		return
-	}
+	fi, err := os.Lstat(path)
+	return err == nil && fi.IsDir()
+}
+
+// expand reports everything inside the directory path through emit; see
+// expandIfDir.
+func (w *Watcher) expand(path string, emit func(string)) {
 	n := 0
 	incomplete := false
 	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
