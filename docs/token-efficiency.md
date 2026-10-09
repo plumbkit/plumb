@@ -105,6 +105,31 @@ Anthropic's prompt cache has a 5-minute TTL on the conversation prefix. Plumb's 
 
 The practical agent rule: a single long-running session is cheaper than many short sessions for the *same* task because the cached prefix amortises. Switch sessions when the *task* changes, not when the conversation gets long.
 
+## What clients actually send: measured tool presentation
+
+The catalogue size `session_start` reports is what plumb *advertises*. What a
+model pays per step depends on how the client presents MCP tools, and plumb
+cannot observe that from the server side. The `clients_conformance` harness
+measures it on the wire with a scripted model provider, recording only names
+and byte counts (`TestCodexWireCapture`, `TestKimiWireCapture` in
+`cmd/clientsmoke`; set `CLIENTSMOKE_WIRE_REPORT` /
+`CLIENTSMOKE_KIMI_WIRE_REPORT` for JSON). Results as of 2026-10-09, measured
+against the pre-compaction catalogue (~114 KB, 59 tools):
+
+| Client | Configuration | What reaches the model |
+|---|---|---|
+| Codex 0.161 | any (`omit_tools_from` makes no difference) | Step 0: no plumb schema; Codex always defers MCP tools behind `tool_search`. But one `tool_search` returns the **whole plumb namespace**, even for a query of `read_file` (59 schemas, or 21 under the lean profile), and they stay in the input on every later step. |
+| Kimi Code 0.38.0 | default | Every step carries all 59 plumb schemas in `tools[]`. |
+| Kimi Code 0.38.0 | `[experimental] tool-select`, model without `dynamically_loaded_tools` | Same as default (it correctly falls back to eager). |
+| Kimi Code 0.38.0 | `tool-select` with a capable model, headless (`-p`) | **Plumb is unreachable**: every MCP schema is removed, but `select_tools` is never registered. Upstream defect [MoonshotAI/kimi-code#2381](https://github.com/MoonshotAI/kimi-code/issues/2381), still open. `plumb setup kimi-code` does not enable `tool-select`; do not enable it for headless use. |
+
+So on today's clients the catalogue is paid on (nearly) every step, minus
+whatever prompt caching recovers. Shrinking the catalogue itself is the lever
+plumb controls: the lean profile cuts it to the 21 pinned tools, and the
+descriptions are kept terse. `TestKimiWireCapture` is a tripwire: it fails on
+purpose when a Kimi release makes `tool-select` work, so this table gets
+re-measured.
+
 ## Future Roadmap for Plumb Efficiency
 
 Features that would shift token efficiency from "the agent has to remember to be careful" to "plumb does it automatically." Ordered by estimated impact.

@@ -13,6 +13,22 @@
 
 ### Added
 
+- **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
+  plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
+  declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless
+  (`kimi -p`) removes every MCP tool but never offers `select_tools`, so plumb
+  cannot be called at all (MoonshotAI/kimi-code#2381). plumb never turns the
+  flag on; doctor now flags it when a user has, naming the file to change.
+- **Measured tool presentation for Codex and Kimi Code (PLAN-413).** The
+  `clients_conformance` harness gains `TestCodexWireCapture` and
+  `TestKimiWireCapture`: a scripted model provider records, per step, the plumb
+  schema bytes the client actually sends (names and byte counts only). Findings,
+  now in docs/token-efficiency.md: Codex 0.161 always defers MCP tools, but one
+  `tool_search` returns the whole plumb namespace (59 schemas, 21 under lean),
+  which then stays in every later step's input; Kimi Code sends all 59 schemas on
+  every step, and its `tool-select` is broken headless. The Kimi test is a
+  tripwire that fails when an upstream fix lands, so the matrix gets
+  re-measured.
 - **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
   package-level affected test summaries with counts, reasons, and concrete `run_task`
   targets without printing individual test rows. `detail: "detailed"` remains the

@@ -98,6 +98,7 @@ func checkMCPClients() []checkResult {
 		results = append(results, r)
 	}
 	results = append(results, checkLeanAllowlists()...)
+	results = append(results, checkKimiToolSelect()...)
 	results = append(results, checkSkillFreshness()...)
 	return results
 }
