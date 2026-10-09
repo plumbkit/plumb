@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -107,5 +108,44 @@ func TestConfigFileWatch_CheckAttachesAndNoticesSwap(t *testing.T) {
 	}
 	if !c.check() || c.attached {
 		t.Fatal("check did not notice config.toml was deleted")
+	}
+}
+
+// TestConfigFileWatch_ReattachesAcrossManySwaps pins why detach replaces the
+// OS watcher instead of calling fsnotify's Remove: on kqueue, Remove of a file
+// whose name just moved to a new inode can fail half-way and leave the next Add
+// with EBADF. The failure depends on fsnotify's reader goroutine racing the
+// Remove, so no in-process test makes it deterministic: one swap catches it
+// rarely, and a hundred swaps with the old inode kept alive killed a
+// Remove-based detach in 3 of 5 runs when measured (2026-10-09).
+func TestConfigFileWatch_ReattachesAcrossManySwaps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("v0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestFileWatch(t, path)
+	if !c.attach() {
+		t.Fatal("initial attach failed")
+	}
+	tmp := filepath.Join(dir, "config.toml.tmp")
+	for i := range 100 {
+		// Keep the outgoing inode alive under a second name, as the deterministic
+		// swap above does: Remove then meets a watch whose file still exists.
+		if err := os.Link(path, filepath.Join(dir, fmt.Sprintf("keep-%d", i))); err != nil {
+			t.Skipf("hard links unavailable: %v", err)
+		}
+		if err := os.WriteFile(tmp, []byte("v"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			t.Fatal(err)
+		}
+		if !c.check() || c.attached {
+			t.Fatalf("swap %d: the new inode was not noticed", i)
+		}
+		if !c.check() || !c.attached {
+			t.Fatalf("swap %d: re-attach failed; a half-failed watcher Remove leaves the next Add with EBADF", i)
+		}
 	}
 }

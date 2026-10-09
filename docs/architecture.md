@@ -872,7 +872,8 @@ the daemon cannot apply live — LSP server definitions (`[lsp.*]`), `[cache]`, 
 `Store.RestartNeeded()`: a daemon WARN on the offending reload, a line in the
 `daemon_info` tool, and a "Reload behaviour" legend in `plumb config show`.
 
-Neither config watcher ever watches a directory. On kqueue (macOS, the BSDs)
+Neither config watcher ever watches a directory that holds a database (the project
+watcher's root watch is non-recursive and never lists `.plumb`). On kqueue (macOS, the BSDs)
 fsnotify opens every file in a watched directory, and closing any descriptor to
 a file releases every fcntl lock the process holds on it — the locks SQLite's
 WAL mode depends on. `<workspace>/.plumb` holds `collab.db`, `topology.db` and

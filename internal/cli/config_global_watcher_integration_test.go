@@ -35,7 +35,7 @@ func TestGlobalConfigWatcher_ReloadsOnFileChange(t *testing.T) {
 		cancel()
 		<-done
 	}()
-	time.Sleep(150 * time.Millisecond) // let the directory watch attach
+	time.Sleep(150 * time.Millisecond) // let Run start; the stat tick attaches the file once Save creates it
 
 	if err := config.Save(func(c *config.Config) { c.Edits.Strict = true }); err != nil {
 		t.Fatalf("Save: %v", err)
