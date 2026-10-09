@@ -871,7 +871,10 @@ gracefully when it's off. See the [Topology guide](topology.md).
 
 ### `topology_status`
 Index health: file count, entity count, DB size, indexed languages, last sync,
-last error. **Inputs:** none.
+last error, and a `FAILING` flag while the last indexing cycle has errored
+(the indexer retries with backoff; meanwhile `topology_search`, `topology_explore`,
+`topology_impact`, `topology_affected`, `topology_routes` and `structural_query`
+lead every answer with a `⚠ STALE INDEX` notice). **Inputs:** none.
 
 ### `topology_search`
 FTS5 ranked symbol/file search. **Inputs:** `query` (required), `kinds`

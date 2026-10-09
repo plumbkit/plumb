@@ -79,6 +79,9 @@ func TestIndexer_FailedCycleRetriesUntilItRecovers(t *testing.T) {
 	if !h.LastSync.IsZero() {
 		t.Errorf("LastSync = %v after only failed cycles, want zero", h.LastSync)
 	}
+	if s := Report(db, dir, idx); !s.Failing || !strings.Contains(FormatStatus(s, dir), "FAILING:") {
+		t.Errorf("topology_status's snapshot does not flag the failing index: Failing=%v", s.Failing)
+	}
 
 	// Positive control for the retry itself: while the fault holds, retries keep
 	// failing and the index keeps saying so. A Failing that cleared here would
