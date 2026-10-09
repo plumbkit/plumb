@@ -1,0 +1,6 @@
+# BuildKit reads this in place of the root .dockerignore for
+# .oss-scanner/Dockerfile only. The root file trims the context for the slim
+# runtime images and drops .git, docs/assets and site; the scanner audits the
+# whole tree, and the git tests need the history, so this drops only the
+# local test scratch.
+.testcache
