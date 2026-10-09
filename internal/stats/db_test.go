@@ -680,8 +680,10 @@ func TestOpenReadOnlyOldSchemaTellsUserToDeleteDB(t *testing.T) {
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("OpenReadOnly error = %q, want full DB path %q", err, path)
 	}
-	if !strings.Contains(err.Error(), "delete") || !strings.Contains(err.Error(), "fresh global stats database") {
-		t.Fatalf("OpenReadOnly error = %q, want delete instruction", err)
+	// An old schema is migrated by the daemon, not deleted: deleting would
+	// throw the history away over something the next session fixes.
+	if !strings.Contains(err.Error(), "migrates") || strings.Contains(err.Error(), "delete") {
+		t.Fatalf("OpenReadOnly error = %q, want the migrate instruction and no delete advice", err)
 	}
 }
 
