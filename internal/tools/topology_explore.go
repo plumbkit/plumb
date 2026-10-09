@@ -108,14 +108,14 @@ func (t *TopologyExplore) Execute(ctx context.Context, raw json.RawMessage) (str
 	}
 	nb, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
-		return "", runErr
+		return "", withIndexHealthErr(store, runErr)
 	}
 	out := formatTopologyNeighbourhood(nb, a, alts)
 	if t.ws != nil {
 		nodes := append([]topology.Node{nb.Centre}, nb.Nodes...)
 		out += relatedMemoriesSection(t.ws(ctx), nodesToRefs(nodes))
 	}
-	return out, nil
+	return withIndexHealth(store, out), nil
 }
 
 func parseTopologyExploreArgs(raw json.RawMessage) (topologyExploreArgs, error) {

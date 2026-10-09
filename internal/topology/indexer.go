@@ -74,10 +74,18 @@ type Indexer struct {
 	// the OS. A struct field so tests can observe it; production uses drainArenas.
 	reclaimFn func()
 
+	// retryBase and retryMax bound the failure-retry backoff: a cycle that ends
+	// in error schedules a full resync after retryBase, doubling per consecutive
+	// failure up to retryMax, until a cycle succeeds. Struct fields so tests can
+	// shorten them; 0 retryBase disables the retry.
+	retryBase time.Duration
+	retryMax  time.Duration
+
 	mu            sync.RWMutex
 	state         string
 	lastSync      time.Time
 	lastErr       string
+	failing       bool // the most recent completed cycle ended in error
 	resyncPending bool // set when Enqueue overflows; triggers a recovery resync
 }
 
@@ -86,6 +94,15 @@ type Indexer struct {
 // brief pauses do not each pay a stop-the-world GC, short enough that a daemon
 // left idle settles back to its lean resident set promptly.
 const defaultIdleReclaim = 30 * time.Second
+
+// defaultRetryBase and defaultRetryMax bound the failure-retry backoff. The
+// first retry comes quickly enough that a transient error clears itself before
+// an agent notices; the cap keeps a persistent one (a damaged database) from
+// costing more than one full resync per half hour.
+const (
+	defaultRetryBase = 30 * time.Second
+	defaultRetryMax  = 30 * time.Minute
+)
 
 // drainArenas releases gotreesitter's pooled parse arenas to the GC and hands the
 // freed pages back to the OS. The arena pools are package-global strong-reference
@@ -111,6 +128,8 @@ func newIndexer(workspace string, db *sql.DB, exts []Extractor, maxSize int64, r
 		resyncMins:  resyncMins,
 		idleReclaim: defaultIdleReclaim,
 		reclaimFn:   drainArenas,
+		retryBase:   defaultRetryBase,
+		retryMax:    defaultRetryMax,
 		queue:       make(chan indexOp, 256),
 		done:        make(chan struct{}),
 		state:       "idle",
@@ -179,14 +198,28 @@ func (idx *Indexer) LastError() string {
 	return idx.lastErr
 }
 
+// Health returns the indexer's liveness in one consistent read.
+func (idx *Indexer) Health() Health {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return Health{State: idx.state, LastSync: idx.lastSync, LastError: idx.lastErr, Failing: idx.failing}
+}
+
+// setState records a state transition. failing follows only the states that
+// end a cycle: "running" leaves it alone, so a cycle in flight after a failure
+// still reports the index as failing until that cycle actually succeeds.
 func (idx *Indexer) setState(state, errMsg string) {
 	idx.mu.Lock()
 	idx.state = state
 	if errMsg != "" {
 		idx.lastErr = errMsg
 	}
-	if state == "idle" {
+	switch state {
+	case "idle":
 		idx.lastSync = time.Now()
+		idx.failing = false
+	case "error":
+		idx.failing = true
 	}
 	idx.mu.Unlock()
 }
@@ -211,6 +244,17 @@ func (idx *Indexer) backgroundWorker() {
 	defer idleTimer.Stop()
 	reclaimPending := false
 
+	// Failure-retry timer: a cycle that ends in error arms it, and it re-runs a
+	// full resync with exponential backoff until a cycle succeeds. Nothing else
+	// retries a failed cycle: the periodic tick below runs only from idle and is
+	// off entirely under the file watcher, so a failed derived-edge rebuild left
+	// the index in error until the next file event — on a quiet workspace,
+	// indefinitely. Created stopped.
+	retryTimer := time.NewTimer(time.Hour)
+	retryTimer.Stop()
+	defer retryTimer.Stop()
+	var retryDelay time.Duration
+
 	for {
 		select {
 		case <-idx.done:
@@ -230,13 +274,45 @@ func (idx *Indexer) backgroundWorker() {
 				reclaimPending = true
 				idleTimer.Reset(idx.idleReclaim)
 			}
+			retryDelay = idx.scheduleRetry(retryTimer, retryDelay)
 		case <-idleTimer.C:
 			if reclaimPending {
 				idx.reclaimFn()
 				reclaimPending = false
 			}
+		case <-retryTimer.C:
+			if idx.State() == "error" {
+				idx.Enqueue("", opResync)
+			}
 		}
 	}
+}
+
+// scheduleRetry arms or disarms the failure-retry timer after a cycle and
+// returns the delay it armed, which the next call doubles. A successful cycle
+// stops the timer and resets the backoff; a failed one arms it with the next
+// delay, so a persistent error costs one full resync per retryMax at most.
+func (idx *Indexer) scheduleRetry(timer *time.Timer, prev time.Duration) time.Duration {
+	if idx.State() != "error" || idx.retryBase <= 0 {
+		timer.Stop()
+		return 0
+	}
+	next := nextRetryDelay(prev, idx.retryBase, idx.retryMax)
+	timer.Reset(next)
+	return next
+}
+
+// nextRetryDelay doubles prev, starting from base and capped at limit. A zero
+// or negative limit leaves the delay uncapped.
+func nextRetryDelay(prev, base, limit time.Duration) time.Duration {
+	next := base
+	if prev > 0 {
+		next = prev * 2
+	}
+	if limit > 0 && next > limit {
+		next = limit
+	}
+	return next
 }
 
 // runQueueCycle drains and processes all buffered ops, then runs a full resync

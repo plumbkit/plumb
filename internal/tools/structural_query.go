@@ -101,9 +101,9 @@ func (t *StructuralQuery) Execute(ctx context.Context, raw json.RawMessage) (str
 	}
 	findings, runErr := t.run(ctx, store, a)
 	if runErr != nil {
-		return "", runErr
+		return "", withIndexHealthErr(store, runErr)
 	}
-	return formatStructuralFindings(a, findings), nil
+	return withIndexHealth(store, formatStructuralFindings(a, findings)), nil
 }
 
 func parseStructuralQueryArgs(raw json.RawMessage) (structuralQueryArgs, error) {

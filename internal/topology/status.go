@@ -17,15 +17,37 @@ import (
 // `plumb doctor` and the TUI would rather report contention than block.
 const statusReadTimeout = 2 * time.Second
 
+// Health is the indexer's liveness without the census Status computes — cheap
+// enough to read on every topology-backed tool call.
+type Health struct {
+	// State is idle, running or error; "stopped" when no indexer is attached.
+	State string
+	// LastSync is when a cycle last completed cleanly; zero if none has since
+	// the indexer started.
+	LastSync time.Time
+	// LastError is the most recent indexing error, kept after recovery.
+	LastError string
+	// Failing reports that the most recent completed cycle ended in error. It
+	// stays set while a retry cycle runs, and clears only when one succeeds.
+	Failing bool
+}
+
+// healthOf reads idx's liveness, reporting a nil indexer as stopped.
+func healthOf(idx *Indexer) Health {
+	if idx == nil {
+		return Health{State: "stopped"}
+	}
+	return idx.Health()
+}
+
 // Report builds a Status snapshot of the topology index.
 func Report(db *sql.DB, workspace string, idx *Indexer) Status {
-	s := Status{}
-	if idx != nil {
-		s.IndexerState = idx.State()
-		s.LastSync = idx.LastSync()
-		s.LastError = idx.LastError()
-	} else {
-		s.IndexerState = "stopped"
+	h := healthOf(idx)
+	s := Status{
+		IndexerState: h.State,
+		LastSync:     h.LastSync,
+		LastError:    h.LastError,
+		Failing:      h.Failing,
 	}
 	countFiles(db, &s)
 	countEntities(db, &s)
@@ -269,6 +291,12 @@ func indexedLanguages(db *sql.DB) []string {
 func FormatStatus(s Status, workspace string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "topology index: %s\n", s.IndexerState)
+	if s.Failing {
+		sb.WriteString("  FAILING:       the last indexing cycle ended in error (last error below), so\n" +
+			"                 the index may be missing recent changes. It retries with\n" +
+			"                 backoff; topology-backed answers carry a stale-index notice\n" +
+			"                 until a cycle succeeds.\n")
+	}
 	fmt.Fprintf(&sb, "  workspace:     %s\n", workspace)
 	fmt.Fprintf(&sb, "  indexed files: %d\n", s.IndexedFiles)
 	fmt.Fprintf(&sb, "  skipped files: %d\n", s.SkippedFiles)

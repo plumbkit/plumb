@@ -77,14 +77,14 @@ func (t *TopologyRoutes) Execute(ctx context.Context, raw json.RawMessage) (stri
 	rep := &topology.RouteReport{}
 	if siteCovered {
 		if rep, err = store.Routes(ctx, topology.RouteOpts{Frameworks: fws}); err != nil {
-			return "", fmt.Errorf("topology_routes: %w", err)
+			return "", withIndexHealthErr(store, fmt.Errorf("topology_routes: %w", err))
 		}
 	}
 	candidates, err := t.run(ctx, store, a, fallbackPatterns(a.Framework, siteCovered, rep))
 	if err != nil {
-		return "", err
+		return "", withIndexHealthErr(store, err)
 	}
-	return formatRoutesReport(rep, candidates, a), nil
+	return withIndexHealth(store, formatRoutesReport(rep, candidates, a)), nil
 }
 
 func parseTopologyRoutesArgs(raw json.RawMessage) (topologyRoutesArgs, error) {

@@ -137,17 +137,23 @@ func (t *TopologyImpact) Execute(ctx context.Context, raw json.RawMessage) (stri
 		return topologyDisabledMessage(), nil
 	}
 	if a.Mode == modeReachability {
+		var out string
 		if a.Granularity == "function" {
-			return t.executeFunctionReachability(ctx, store, a)
+			out, err = t.executeFunctionReachability(ctx, store, a)
+		} else {
+			out, err = t.executeReachability(ctx, store, a)
 		}
-		return t.executeReachability(ctx, store, a)
+		if err != nil {
+			return "", withIndexHealthErr(store, err)
+		}
+		return withIndexHealth(store, out), nil
 	}
 	result, alts, runErr := t.run(ctx, store, a)
 	if runErr != nil {
-		return "", runErr
+		return "", withIndexHealthErr(store, runErr)
 	}
 	callers := t.crossFileCallers(ctx, result)
-	return formatImpactResult(result, a, alts, callers), nil
+	return withIndexHealth(store, formatImpactResult(result, a, alts, callers)), nil
 }
 
 func parseTopologyImpactArgs(raw json.RawMessage) (topologyImpactArgs, error) {
