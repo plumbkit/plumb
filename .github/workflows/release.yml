@@ -99,13 +99,34 @@ jobs:
               ;;
           esac
 
+  # The macOS binaries goreleaser is about to build are CGO_ENABLED=0, and that
+  # build once shipped a file watcher that dropped the daemon's SQLite locks
+  # (PLAN-488). Branch protection makes CI run these tests on main, but nothing
+  # stops a tag landing on a commit CI never saw. So the release runs them
+  # itself, from the tagged commit, on both shipped architectures. Gated on a
+  # tag ref exactly like goreleaser, so it can never be skipped when goreleaser
+  # runs.
+  watcher-locks:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: watcher tests as released (macOS arm64 + amd64, CGO_ENABLED=0)
+        run: ./scripts/test-watcher-as-released.sh
+
   goreleaser:
     # tap-preflight is a hard dependency, not advisory: building four platforms
     # to fail at the last step is exactly the waste it exists to prevent. A
     # failed preflight skips this job, which also skips publish-mcp below — so a
     # bad token stops the release cleanly BEFORE anything is published, rather
-    # than half-way through.
-    needs: [client-conformance, tap-preflight]
+    # than half-way through. watcher-locks gates it the same way.
+    needs: [client-conformance, tap-preflight, watcher-locks]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
