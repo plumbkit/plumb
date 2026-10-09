@@ -45,6 +45,15 @@
   large blob were the whole file (spilled outside the workspace, unreadable by
   `read_file`) or a native shell fallback. Both truncation notes now name the
   window parameters, so a capped answer says how to ask for the part it cut.
+- **The LSP fallbacks now say when the index behind them is failing (PLAN-490).**
+  `workspace_symbols`, `read_symbol`, `get_definition` and `call_hierarchy` answer
+  from the topology index when the language server cannot, and their banner said only
+  "results are approximate and may be stale" — true, and undifferentiated whether the
+  index was healthy or had been failing for a day. For an ABSENCE answer that is the
+  difference that matters: "no callers" from a failing index is not evidence of no
+  callers. The banner now carries the same stale-index notice the topology_* tools
+  lead with — the same wording, from the same function, so the two can never drift
+  apart — and stays byte-identical when the index is healthy.
 - **`git merge-tree` can preview a merge as a clean clone would (PLAN-454).** The
   opt-in `clean_clone: true` answers the question a fresh clone answers: the merge
   runs in a throwaway bare repository whose object store is an alternate of the
