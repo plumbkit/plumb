@@ -429,12 +429,11 @@ func checkStatsDB(ws string) []checkResult {
 	}
 	db, err := stats.OpenReadOnly()
 	if err != nil {
-		return []checkResult{{
-			name:   "stats db",
-			ok:     false,
-			detail: err.Error(),
-			fix:    unreadableDBFix(err, "the DB", dbPath, "to reset it"),
-		}}
+		fix := unreadableDBFix(err, "the DB", dbPath, "to reset it")
+		if errors.Is(err, stats.ErrReadOnlySchemaUpgradeRequired) {
+			fix = "start a plumb session: the daemon migrates the stats database to the current schema"
+		}
+		return []checkResult{{name: "stats db", ok: false, detail: err.Error(), fix: fix}}
 	}
 	filter := stats.Filter{}
 	if ws != "" {

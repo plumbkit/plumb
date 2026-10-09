@@ -303,7 +303,12 @@ func OpenReadOnly() (*DB, error) {
 	}
 	if err := checkReadOnlySchema(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("%w; delete %s so plumb can create a fresh global stats database", err, path)
+		if errors.Is(err, ErrReadOnlySchemaUpgradeRequired) {
+			// An old schema is not damage: the daemon's read-write Open migrates it
+			// forward, so deleting the file would only throw the history away.
+			return nil, fmt.Errorf("%w; start a plumb session so the daemon migrates %s", err, path)
+		}
+		return nil, fmt.Errorf("stats: read %s: %w", path, err)
 	}
 	return &DB{db: db}, nil
 }

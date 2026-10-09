@@ -209,11 +209,14 @@ absence. `topology_status` shows the last error and the last good sync.
 3. **If it still fails after a clean restart, rebuild the index.** First quit
    every MCP client using this machine's plumb (agent sessions, editors).
    Otherwise their `plumb serve` restarts the daemon before you can delete
-   anything. Then run `plumb stop` until it prints `Daemon is not running.`,
-   delete `.plumb/topology.db` and its `topology.db-wal` and `topology.db-shm`
-   sidecars, and start a client again. The index is derived data, and a full
-   rebuild of a large repository takes a few minutes. `plumb doctor` gives the
-   same steps when it finds the index corrupt.
+   anything. Then run `plumb stop` until it reports that the daemon is not
+   running. If a daemon keeps coming back, a client is still connected: find it
+   with `pgrep -fl 'plumb serve'` and quit it. Just before deleting, check that
+   `lsof .plumb/topology.db` prints nothing. Then delete `.plumb/topology.db`
+   and its `topology.db-wal` and `topology.db-shm` sidecars, and start a client
+   again. The index is derived data, and a full rebuild of a large repository
+   takes a few minutes. `plumb doctor` gives the same order when it finds the
+   index corrupt.
 
 Never delete or replace the database files while a daemon is running, including
 one a connected client has just restarted. The daemon keeps writing to the
