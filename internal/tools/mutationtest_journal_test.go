@@ -273,6 +273,36 @@ func TestMutantJournalStates_SkipsEntriesItCannotRead(t *testing.T) {
 	}
 }
 
+// TestSweepMutantJournal_ReportsAnEntryItCannotParse covers the state the sweep used to
+// swallow: an entry that cannot be read or parsed means a mutant was applied and plumb
+// cannot say where — so it must be REPORTED (by its own file name) and KEPT, because
+// deleting it would destroy the only record that something was mutated.
+func TestSweepMutantJournal_ReportsAnEntryItCannotParse(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir, err := mutantJournalDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir, "garbage.json")
+	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	restored, needAttention, err := SweepMutantJournal()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(restored) != 0 {
+		t.Errorf("nothing can be restored from an unparsable entry: %v", restored)
+	}
+	if len(needAttention) != 1 || needAttention[0] != bad {
+		t.Errorf("needAttention = %v, want the entry file %s", needAttention, bad)
+	}
+	if _, statErr := os.Stat(bad); statErr != nil {
+		t.Errorf("the unparsable entry must be kept so the record survives: %v", statErr)
+	}
+}
+
 // TestClearMutantJournal_ForgetsOnlyItsOwnTarget keeps two mutants in flight apart:
 // one file per entry means one target's completion cannot erase another's record.
 func TestClearMutantJournal_ForgetsOnlyItsOwnTarget(t *testing.T) {

@@ -253,11 +253,18 @@ func SweepMutantJournal() (restored, needAttention []string, err error) {
 		full := filepath.Join(dir, e.Name())
 		data, readErr := os.ReadFile(full)
 		if readErr != nil {
+			// An entry that cannot be read is a mutant whose target plumb cannot even name.
+			// Report the ENTRY FILE rather than skipping it: silence would lose the only
+			// record that a mutant was applied somewhere, which is the state this card
+			// exists to make impossible. Nothing is deleted, for the same reason.
+			needAttention = append(needAttention, full)
 			continue
 		}
 		var entry mutantJournalEntry
-		if json.Unmarshal(data, &entry) != nil {
-			continue // an unreadable entry is not a reason to touch a file
+		if json.Unmarshal(data, &entry) != nil || entry.Path == "" {
+			// Same reasoning as above: unparsable, or parsed with no target to name.
+			needAttention = append(needAttention, full)
+			continue
 		}
 		switch sweepOne(entry) {
 		case sweepNothing:
