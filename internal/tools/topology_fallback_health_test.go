@@ -16,6 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/topology"
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	ts "github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // errNoLanguageServer is the hard error unavailableLSP answers every call with:
@@ -56,6 +57,20 @@ func (c *unavailableLSP) References(context.Context, protocol.ReferenceParams) (
 	return nil, errNoLanguageServer
 }
 
+// emptyLSP answers a workspace query successfully with nothing — the lazy server
+// (zls and the other on-demand indexers) that has not analysed the matching
+// files yet. It is the one shape that puts workspace_symbols on its tree-sitter
+// FILL path rather than its fallback: an error falls back, and an answer
+// carrying hits wins outright, so only empty-and-no-error reaches
+// formatTopologyFill. Same embedding contract as unavailableLSP.
+type emptyLSP struct {
+	lsp.Client
+}
+
+func (c *emptyLSP) WorkspaceSymbols(context.Context, protocol.WorkspaceSymbolParams) ([]protocol.SymbolInformation, error) {
+	return nil, nil
+}
+
 // fallbackBannerLine returns the first line of out carrying marker, the text
 // that announces a topology fallback.
 func fallbackBannerLine(out, marker string) (string, bool) {
@@ -80,14 +95,21 @@ func fallbackBannerLine(out, marker string) (string, bool) {
 // index's health. That is deliberate: it isolates the labelling rule from the
 // server's behaviour, which is the variable the other tests cover.
 //
-// Covered here: workspace_symbols (query mode), get_definition (by name),
+// Covered here: workspace_symbols (query mode, and the uri-scoped IN-FILE
+// banner), workspace_symbols' tree-sitter FILL banner, get_definition (by name),
 // read_symbol, call_hierarchy (by position — the site PLAN-490's reviewer picked
-// first). Not covered, and why: get_definition's by-position path and
+// first), file_outline's index fallback, and minimal_diff_review (whose clause
+// goes in the report header and whose caller-count finding is withheld while the
+// index is failing). Not covered, and why: get_definition's by-position path and
 // call_hierarchy's by-name path surface the language server's error instead of
 // falling back, so neither has a banner to label; each tool is exercised on the
 // path that carries one.
 func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
-	ws := t.TempDir()
+	// minDiffReview needs a git working tree, and a bare t.TempDir() is only
+	// outside one by accident (CI puts TMPDIR inside this checkout), so the
+	// fixture IS the repo helper the review tests already use. One workspace,
+	// one store, one three-phase shape for every surface.
+	ws, _ := setupReviewRepo(t)
 	writeFixture := func(name, src string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(ws, name), []byte(src), 0o644); err != nil {
@@ -97,8 +119,14 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 	writeFixture("go.mod", "module example.com/demo\n\ngo 1.22\n")
 	writeFixture("demo.go", "package demo\n\nfunc Alpha() { Beta() }\n\nfunc Beta() {}\n")
 	writeFixture("demo_test.go", "package demo\n\nimport \"testing\"\n\nfunc TestAlpha(t *testing.T) { Alpha() }\n")
+	// A tree-sitter-backed language for the FILL case (Go via gopls is excluded
+	// from the fill by design), and the caller + single-use helper shape the
+	// review's caller-count finding is built on.
+	writeFixture("demo.py", "def handle_request():\n    pass\n")
+	writeFixture("review.go", "package demo\n\nfunc CallHelper() int {\n\tx := helperOnce()\n\treturn x + 1\n}\n\nfunc helperOnce() int {\n\treturn 42\n}\n")
 
-	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024}, []topology.Extractor{goext.New()})
+	store, err := topology.Open(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New(), ts.NewPython()})
 	if err != nil {
 		t.Fatalf("topology.Open: %v", err)
 	}
@@ -138,6 +166,23 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 			banner: "[topology fallback",
 		},
 		{
+			// The uri-scoped IN-FILE banner: topologyFallbackInFile's own note,
+			// a separate call site from the workspace-wide one above.
+			name:   "workspace_symbols (in-file)",
+			tool:   NewWorkspaceSymbols(client, nil, ttl, timeout, wsFn).WithTopologyFallback(storeFn),
+			args:   fmt.Sprintf(`{"query":"Alpha","uri":%q}`, demoURI),
+			banner: "[topology fallback",
+		},
+		{
+			// The FILL banner: the server answered empty and the index supplies
+			// the answer, so this is not a fallback at all — and a failing index
+			// makes its hits exactly as untrustworthy.
+			name:   "workspace_symbols (tree-sitter fill)",
+			tool:   NewWorkspaceSymbols(&emptyLSP{}, nil, ttl, timeout, wsFn).WithTopologyFallback(storeFn),
+			args:   `{"query":"handle_request"}`,
+			banner: "[topology fill",
+		},
+		{
 			name:   "get_definition",
 			tool:   NewGetDefinition(client, nil, ttl, timeout).WithWorkspace(wsFn).WithTopologyFallback(storeFn),
 			args:   fmt.Sprintf(`{"uri":%q,"symbol_name":"Alpha"}`, demoURI),
@@ -154,6 +199,14 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 			tool:   NewCallHierarchy(client, timeout).WithWorkspace(wsFn).WithTopologyFallback(storeFn),
 			args:   fmt.Sprintf(`{"uri":%q,"line":2,"character":5,"direction":"both"}`, demoPath),
 			banner: "(reconstructed",
+		},
+		{
+			// file_outline's header IS its banner: "source=topology" is how the
+			// answer says which index it came from, and the clause rides on it.
+			name:   "file_outline",
+			tool:   NewFileOutline(client, nil, ttl, timeout).WithWorkspace(wsFn).WithTopologyFallback(storeFn),
+			args:   fmt.Sprintf(`{"uri":%q}`, demoURI),
+			banner: "source=topology",
 		},
 	}
 
@@ -181,11 +234,50 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 		}
 	}
 
+	// minimal_diff_review carries two PLAN-490 behaviours that must flip
+	// TOGETHER, so it is checked on two axes rather than through the banner table:
+	// the clause belongs in the report HEADER (formatReview — there is no fallback
+	// banner line in a review), and callerCountAt withholds its counts while the
+	// index is failing. A clause with the count still present would be a caveat
+	// nobody needs; a withheld count with no clause would be an unexplained
+	// silence. A single-use finding is the only surface the caller count reaches,
+	// so its presence is the count's presence.
+	review := NewMinimalDiffReview(storeFn).WithWorkspace(wsFn)
+	checkReview := func(phase string, wantClause, wantCount bool) {
+		t.Helper()
+		out, err := review.Execute(context.Background(), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("minimal_diff_review (%s): the review must answer, not error: %v", phase, err)
+		}
+		header, _, ok := strings.Cut(out, "\nfindings")
+		if !ok {
+			t.Fatalf("minimal_diff_review (%s): the report carries no findings section:\n%s", phase, out)
+		}
+		if wantClause {
+			if !strings.Contains(header, staleIndexMarker) {
+				t.Errorf("minimal_diff_review (%s): the report header lacks the stale clause:\n%s", phase, out)
+			}
+		} else if strings.Contains(out, staleIndexMarker) {
+			t.Errorf("minimal_diff_review (%s): a healthy index still carries the stale clause:\n%s", phase, out)
+		}
+		// The limits section always names single-use-abstraction, so the count's
+		// presence is the FINDING line ("[INFO] single-use-abstraction …"), not
+		// the bare kind name.
+		counted := strings.Contains(out, "] single-use-abstraction")
+		if wantCount && (!counted || !strings.Contains(out, "helperOnce")) {
+			t.Errorf("minimal_diff_review (%s): the caller-count finding for helperOnce is missing:\n%s", phase, out)
+		}
+		if !wantCount && counted {
+			t.Errorf("minimal_diff_review (%s): a caller count from a failing index must be withheld:\n%s", phase, out)
+		}
+	}
+
 	// Positive control: nothing is wrong with the index, so the fallbacks answer
 	// bare.
 	for _, tc := range cases {
 		check(t, tc, false, "healthy")
 	}
+	checkReview("healthy", false, true)
 
 	heal := injectPersistFault(t, ws)
 	writeFixture("demo.go", "package demo\n\nfunc Alpha() { Beta() }\n\nfunc Beta() {}\n\nfunc Gamma() {}\n")
@@ -195,6 +287,7 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 	for _, tc := range cases {
 		check(t, tc, true, "failing index")
 	}
+	checkReview("failing index", true, false)
 
 	heal()
 	store.Enqueue("demo.go")
@@ -202,4 +295,5 @@ func TestTopologyFallbacks_LabelAFailingIndex(t *testing.T) {
 	for _, tc := range cases {
 		check(t, tc, false, "recovered")
 	}
+	checkReview("recovered", false, true)
 }
