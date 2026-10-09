@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/session"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // How long a watcher watches, and everything that decides it: the watch loop's
@@ -381,6 +382,11 @@ func TestHookWakeProbe_ReportsLivePeers(t *testing.T) {
 	}
 	t.Cleanup(func() { session.Unregister(me.ID) })
 
+	registry := newConnRegistry()
+	registry.add(me.ID, connHandle{mailboxInbox: func(id string) (tools.Inbox, bool) {
+		return tools.Inbox{Self: me.Name, SelfID: me.ID, Root: ws}, id == "conv-1"
+	}})
+	mailboxTestDaemon(t, registry)
 	report, peers, ok := hookWakeProbe("conv-1", ws)
 	if !ok || report.Session != "grey-lynx" {
 		t.Fatalf("probe = (%+v, ok=%v), want the linked session resolved", report, ok)

@@ -10,6 +10,7 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // connHandle is the per-connection state the registry tracks: the cancel func
@@ -23,6 +24,7 @@ type connHandle struct {
 	// can spare rows belonging to a session that is still connected.
 	proxySessionID func() string
 	reloadProject  func()
+	mailboxInbox   func(string) (tools.Inbox, bool)
 	// summarise generates this session's episodic summary; invoked by the idle
 	// reaper once per idle spell. nil when episodic summaries are unavailable.
 	summarise func()
@@ -42,6 +44,11 @@ type connRegistry struct {
 	// (conn_clear_markers.go). Daemon-wide because the announcement cannot know which
 	// connection that will be.
 	clears *clearMarkers
+	// stopMailSeen bounds unchanged Stop notifications without consuming mail.
+	stopMailSeen map[string]string
+	// stopMailGate serialises Stop snapshot/notification decisions; a bounded
+	// context limits contention without holding mu during a database query.
+	stopMailGate chan struct{}
 }
 
 func newConnRegistry() *connRegistry {

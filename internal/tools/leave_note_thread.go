@@ -134,7 +134,7 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 	// participants of a thread between two OTHER projects, which is precisely what
 	// the consent setting exists to prevent.
 	stores := []*collab.Store{t.deps.store(ctx)}
-	if t.deps.Policy().CrossProject {
+	if t.deps.policy(ctx).CrossProject {
 		stores = append(stores, t.globalIfExists())
 	}
 	now := time.Now()

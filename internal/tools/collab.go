@@ -142,6 +142,10 @@ type CollabDeps struct {
 	SessionIDFor func(ctx context.Context) string
 	// Policy returns the resolved [collab] snapshot.
 	Policy func() CollabPolicy
+	// PolicyFor resolves the CALLER's project consent on shared connections.
+	PolicyFor func(context.Context) CollabPolicy
+	// InboxFor freezes recipient identity, root, policy and readers together.
+	InboxFor func(context.Context) Inbox
 	// Store opens (creating on first use) the workspace's collab.db and returns
 	// the handle, or nil when no workspace is attached or the store cannot open.
 	// The collab write tools are the ONLY paths that create collab.db, so a
@@ -155,6 +159,8 @@ type CollabDeps struct {
 	StoreIfExists func() *collab.Store
 	// StoreIfExistsFor returns the calling agent's workspace collab.db if it exists.
 	StoreIfExistsFor func(ctx context.Context) *collab.Store
+	// StoreReader preserves absence versus open failure on explicit reads.
+	StoreReader func(ctx context.Context) (*collab.Store, error)
 	// GlobalStore opens (creating on first use) the daemon-level cross-project
 	// store. Only the send path calls it, and only once a message is known to
 	// cross a project boundary, so a daemon whose sessions never talk across
@@ -163,6 +169,8 @@ type CollabDeps struct {
 	// GlobalStoreIfExists returns the daemon-level store ONLY when it already
 	// exists, so delivery never creates it. May be nil.
 	GlobalStoreIfExists func() *collab.Store
+	// GlobalStoreReader is the error-preserving cross-project read accessor.
+	GlobalStoreReader func() (*collab.Store, error)
 	// Notifier is the daemon-wide wake-up signal: bumped on send, watched by the
 	// piggyback fast path and by check_messages' blocking wait. May be nil.
 	Notifier *collab.Notifier
@@ -186,6 +194,16 @@ type CollabDeps struct {
 	// it expires. May be nil only where the cross-project send path is never
 	// exercised (e.g. a test that stays same-project).
 	TargetAllowsCrossProject func(workspace string) bool
+}
+
+func (d CollabDeps) policy(ctx context.Context) CollabPolicy {
+	if d.PolicyFor != nil {
+		return d.PolicyFor(ctx)
+	}
+	if d.Policy != nil {
+		return d.Policy()
+	}
+	return CollabPolicy{}
 }
 
 func (d CollabDeps) workspace(ctx ...context.Context) string {

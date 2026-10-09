@@ -417,6 +417,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			webStop:       webServer.Stop,
 			// The marker lives on the registry, beside the connections that consume it.
 			conversationCleared: registry.conversationClears().mark,
+			mailbox:             registry.mailboxProbe,
 		})
 	}
 
@@ -536,6 +537,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 		proxySessionID: func() string { return s.view().proxySessionID },
 		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
 		summarise:      s.generateEpisodicSummary,
+		mailboxInbox:   s.hookInbox,
 	})
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.

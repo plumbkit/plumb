@@ -354,7 +354,7 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
 
 - **Claude Code wakes.** The handler installs as a background watcher (`async` +
   `asyncRewake`), which is the pair that lets a hook reach a session with **no
-  turn in flight**. It polls `plumb mail` every `PLUMB_WAKE_INTERVAL` seconds
+  turn in flight**. It probes the daemon every `PLUMB_WAKE_INTERVAL` seconds
   (default 7, never longer than the base window) and exits 2 with one line on
   stderr the moment mail is waiting — that pair is the wake payload.
 
@@ -400,8 +400,11 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   session that owns the key — nothing a sweep could measure is an upper bound on
   a live watcher, and deleting one would give that session two.
 - **Codex checks.** Codex has no background-wake mechanism, so its handler makes
-  one read-only probe as the turn ends and keeps the turn going only when mail
-  is pending. That narrows the end-of-turn race; it is **not** push delivery.
+  one metadata probe of the running daemon as the turn ends. It issues one Stop
+  notice per unchanged eligible mailbox state; a new arrival can notify again.
+  The existing `stop_hook_active` guard always allows completion. An empty or
+  failed explicit check therefore cannot create an unchanged-notification loop.
+  This narrows the end-of-turn race; it is **not** push delivery.
   Codex also requires an interactive trust review for non-managed command hooks
   — run `/hooks` in Codex after installing.
 
@@ -411,7 +414,11 @@ Properties both hooks hold, and that the tests pin:
   workspace, an unreadable mailbox, a daemon that is down — every one of them
   lets the turn end silently. A hook that failed closed would strand turns on an
   unrelated fault.
-- **A count, never a body.** `plumb mail` does not claim and does not disclose
+- **Daemon authority.** Both hooks use the established live recipient's delivery
+  policy, workspace, identity and verified predecessor identities. They never open
+  a separate mailbox database or fall back to offline inspection. Missing linkage,
+  unsupported older daemons and uncertain probes allow completion.
+- **A count, never a body.** The metadata probe does not claim or disclose
   message text. Pasting a peer's words into hook feedback would be a direct
   injection channel into the agent; the body stays unclaimed and arrives through
   `check_messages`, labelled as the unverified claim it is.
@@ -425,7 +432,11 @@ Properties both hooks hold, and that the tests pin:
   recording the conversation that owns it, stops repeated turns from stacking
   watcher processes — and lets a session that reuses a name take the lock over
   from a previous tenant instead of being silently unwakeable.
-- **Bounded continuation.** A woken turn re-arms only when it provably consumed
+- **Bounded observation.** Codex's notification digests live in daemon memory,
+  with a hard cap of 512 recipient/workspace states. Saturation allows completion;
+  reconnecting to a restarted daemon can produce one fresh notice. No notification
+  state changes delivery watermarks or read tracking.
+- **Bounded continuation.** A Claude Code woken turn re-arms only when it provably consumed
   mail (the pending count dropped), capped at `PLUMB_WAKE_CHAIN_MAX` (default
   10) wakes per chain; any ambiguity stands the chain down.
 - **Paid for only where it buys something.** The long window is spent only while
@@ -647,18 +658,17 @@ plumb mail (--session <name> | --external-id <id> | --workspace <dir>) [--json]
 Report how many agent-to-agent messages are waiting for a plumb session,
 without reading or consuming them.
 
-It exists for a client-side hook that keeps a turn going when mail is waiting.
-Plumb's mailbox ([`[collab] mailbox`](configuration.md)) delivers by polling — a
-message is handed over by a `check_messages` call or `session_start`, and
-previewed (without being consumed) on an ordinary tool result — so an agent that
-has finished its turn and is waiting on its human never learns that a peer wrote
-to it. Nothing server-side can reach it; this lets the client ask the question
-from outside any session.
+This is an offline inspection command for humans and external scripts. It opens
+a separate read-only SQLite view and resolves sessions from the session registry;
+it does not establish the running daemon's current delivery policy or mailbox
+health. Its count can disagree with the daemon during storage faults. Plumb's
+installed lifecycle hooks instead ask the daemon directly and never fall back to
+this view.
 
-It narrows that window rather than closing it. An agent that is *already* idle
-cannot be reached at all: its end-of-turn hook has run and allowed, and nothing
-fires again until its human speaks. Mail arriving after the turn ends waits as
-before, so this is not a delivery mechanism.
+Delivery still happens through `check_messages` or `session_start`. Previews and
+hook counts never consume a message. An explicit `check_messages` failure reports
+an unavailable or incomplete mailbox, rather than asserting "No messages"; any
+rows already delivered remain visible in the partial result.
 
 **It never claims.** The handle is `mode=ro`, so the delivery watermark cannot
 be set: the messages stay undelivered and reach the agent through

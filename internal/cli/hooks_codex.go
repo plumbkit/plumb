@@ -62,15 +62,19 @@ type codexHookInput struct {
 }
 
 func runCodexHook(_ *cobra.Command, _ []string) error {
+	return runCodexHookIO(os.Stdin, os.Stdout)
+}
+
+func runCodexHookIO(in io.Reader, out io.Writer) error {
 	var input codexHookInput
-	if err := json.NewDecoder(io.LimitReader(os.Stdin, 64<<10)).Decode(&input); err != nil {
+	if err := json.NewDecoder(io.LimitReader(in, 64<<10)).Decode(&input); err != nil {
 		return nil // Hook failures must never strand a Codex turn.
 	}
-	output := codexHookResult(input, hookMailReport)
+	output := codexHookResult(input, hookStopMailReport)
 	if output == nil {
 		return nil
 	}
-	return json.NewEncoder(os.Stdout).Encode(output)
+	return json.NewEncoder(out).Encode(output)
 }
 
 // codexHookResult is deliberately pure apart from the supplied probe so the

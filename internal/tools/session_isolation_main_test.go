@@ -119,9 +119,9 @@ func TestGitFixtureCommitForksNoMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The control: a trace that never saw the commit would pass the check below
-	// for the wrong reason.
-	if !strings.Contains(string(got), "start git commit") {
+	// The control must recognise the command even when Git traces an absolute
+	// executable path (Apple Git does), rather than assuming argv[0] is "git".
+	if !strings.Contains(string(got), "cmd_name commit (commit)") {
 		t.Fatalf("the trace did not record the commit, so it cannot show what the commit forked:\n%s", got)
 	}
 	if strings.Contains(string(got), "maintenance") {

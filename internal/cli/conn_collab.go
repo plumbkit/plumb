@@ -73,6 +73,11 @@ func (s *connSession) collabStoreIfExistsFor(ctx context.Context) *collab.Store 
 	return s.collabPool.get(ws)
 }
 
+// collabStoreReader distinguishes a missing mailbox from a failed open.
+func (s *connSession) collabStoreReader(ctx context.Context) (*collab.Store, error) {
+	return s.collabPool.getResult(s.workspaceFor(ctx))
+}
+
 // collabStoreIfExistsForWorkspace returns the collab store for a workspace root
 // only when it already exists on disk.
 func (s *connSession) collabStoreIfExistsForWorkspace(workspace string) *collab.Store {
@@ -85,7 +90,36 @@ func (s *connSession) collabStoreIfExistsForWorkspace(workspace string) *collab.
 // collabPolicy resolves the connection's [collab] intents/mailbox snapshot for
 // the write tools, off the lock-free view (no per-call config read).
 func (s *connSession) collabPolicy() tools.CollabPolicy {
-	c := s.collabConfig()
+	return collabPolicyOf(s.collabConfig())
+}
+
+// collabPolicyFor belongs to the caller's pinned project. A separately pinned
+// shard must never inherit the connection project's mailbox or cross-project
+// consent. LoadProjectWithPolicy applies the same trust rules as normal attach.
+func (s *connSession) collabPolicyFor(ctx context.Context) tools.CollabPolicy {
+	return s.collabPolicyAt(s.workspaceFor(ctx))
+}
+
+func (s *connSession) collabPolicyAt(root string) tools.CollabPolicy {
+	view := s.view()
+	if root == "" {
+		return tools.CollabPolicy{}
+	}
+	if root == view.configRoot || (view.configRoot == "" && root == view.acquiredRoot) {
+		return collabPolicyOf(view.collab)
+	}
+	if s.store == nil {
+		return tools.CollabPolicy{}
+	}
+	cfg, _, err := config.LoadProjectWithPolicy(s.store.Current(), root)
+	if err != nil {
+		s.log().Warn("collab: recipient project config unreadable; mailbox disabled", "workspace", root, "err", err)
+		return tools.CollabPolicy{}
+	}
+	return collabPolicyOf(cfg.Collab)
+}
+
+func collabPolicyOf(c config.CollabConfig) tools.CollabPolicy {
 	return tools.CollabPolicy{
 		Intents:            c.Intents,
 		Mailbox:            c.Mailbox,
@@ -210,12 +244,16 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		SessionID:                s.sessionID,
 		SessionIDFor:             s.sessionIDFor,
 		Policy:                   s.collabPolicy,
+		PolicyFor:                s.collabPolicyFor,
+		InboxFor:                 s.inboxFor,
 		Store:                    s.collabStoreCreate,
 		StoreFor:                 s.collabStoreFor,
 		StoreIfExists:            s.collabStoreIfExists,
 		StoreIfExistsFor:         s.collabStoreIfExistsFor,
 		GlobalStore:              s.collabGlobalCreate,
 		GlobalStoreIfExists:      s.collabGlobalIfExists,
+		StoreReader:              s.collabStoreReader,
+		GlobalStoreReader:        s.collabPool.getGlobalResult,
 		Notifier:                 s.collabPool.notifier(),
 		ResolvePeer:              s.resolvePeer,
 		InheritedSessionIDs:      s.inheritedSessionIDsFor,

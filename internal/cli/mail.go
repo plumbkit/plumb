@@ -76,11 +76,10 @@ var mailCmd = &cobra.Command{
 	Long: `Report how many messages are waiting for a plumb session, without reading
 or consuming them.
 
-Intended for a client-side hook that keeps a turn going when mail is waiting:
-plumb's mailbox delivers by polling, so an agent waiting on its human never
-learns that a peer wrote to it. This answers "is there something" from outside
-the session. It narrows that window rather than closing it — an agent already
-idle is not reachable at all.
+Offline inspection for humans and external scripts. This opens a separate
+read-only SQLite view, which can disagree with the running daemon during storage
+faults and does not resolve its current delivery policy. Plumb's installed hooks
+ask the daemon directly instead; they never fall back to this command.
 
 It is strictly read-only — the messages stay undelivered and reach the agent
 through ` + "`check_messages`" + ` as usual — and reports only a count and the ages

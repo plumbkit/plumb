@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -60,7 +61,7 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 			return "", fmt.Errorf("check_messages: %w", err)
 		}
 	}
-	policy := t.deps.Policy()
+	policy := t.deps.policy(ctx)
 	if !policy.Mailbox {
 		return "check_messages is disabled — set [collab] mailbox = true (globally or in " +
 			"this workspace's .plumb/config.toml) to exchange messages with peers.", nil
@@ -94,38 +95,73 @@ func (t *CheckMessages) Execute(ctx context.Context, raw json.RawMessage) (strin
 		Policy:       policy,
 		Workspace:    func() *collab.Store { return t.deps.storeIfExists(ctx) },
 		Global:       t.deps.GlobalStoreIfExists,
+		GlobalReader: t.deps.GlobalStoreReader,
+	}
+	if t.deps.StoreReader != nil {
+		inbox.WorkspaceReader = func() (*collab.Store, error) { return t.deps.StoreReader(ctx) }
+	}
+	if t.deps.InboxFor != nil {
+		inbox = t.deps.InboxFor(ctx)
+		policy = inbox.Policy
+		if !policy.Mailbox {
+			return "check_messages is disabled for this recipient's workspace.", nil
+		}
+		if inbox.Self == "" || inbox.SelfID == "" {
+			return "", errors.New("check_messages: mailbox recipient unavailable")
+		}
 	}
 	// The receipt is appended to whichever branch below answers, and is resolved
 	// after them so its ages are current even at the end of a 55-second wait.
-	return t.read(ctx, args, policy, inbox) + t.outboxReceipt(ctx), nil
+	result, err := t.read(ctx, args, policy, inbox)
+	if err != nil {
+		return result, err
+	}
+	return result + t.outboxReceipt(ctx), nil
+}
+
+// claimResult keeps partial delivery visible: those rows are already consumed.
+// The underlying failure is logged; the client receives a bounded diagnostic.
+func (t *CheckMessages) claimResult(ctx context.Context, rows []collab.Row, err error, policy CollabPolicy, inbox Inbox) (string, error) {
+	if err == nil {
+		return t.render(ctx, rows, policy, inbox), nil
+	}
+	slog.Debug("check_messages: mailbox read failed", "err", err)
+	const notice = "Mailbox unavailable or incomplete: Plumb could not finish reading it. This is not an empty-mailbox result. Check daemon health before retrying."
+	if len(rows) > 0 {
+		return t.render(ctx, rows, policy, inbox) + "\n" + notice + "\n", nil
+	}
+	return "", fmt.Errorf("check_messages: %s", notice)
 }
 
 // read is Execute's body once the gates have passed: claim, or wait and claim.
-// It returns no error — every branch is a message to the agent, including the
-// ones that report nothing.
-func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy CollabPolicy, inbox Inbox) string {
-	// Claim first: something may already be waiting, in which case there is
-	// nothing to wait for.
-	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(ctx, rows, policy, inbox)
+// A failed explicit read must never be rendered as an empty mailbox.
+func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy CollabPolicy, inbox Inbox) (string, error) {
+	// Snapshot before claiming: a send between the claim and park must wake us.
+	keys := inbox.Keys()
+	since := t.deps.Notifier.Gens(keys)
+	if rows, err := inbox.ClaimResult(ctx); len(rows) > 0 || err != nil {
+		return t.claimResult(ctx, rows, err, policy, inbox)
 	}
 	wait, clamped := clampWait(args.WaitSeconds, policy.maxWaitSeconds())
 	if wait <= 0 {
-		return t.empty(policy)
+		return t.empty(policy), nil
 	}
 	notice := waitClampNotice(args.WaitSeconds, policy.maxWaitSeconds(), clamped)
 
-	// Snapshot the generations BEFORE waiting so a message written between the
-	// claim above and the park below still wakes us instead of being missed.
-	keys := inbox.Keys()
-	since := t.deps.Notifier.Gens(keys)
 	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	if woke := t.deps.Notifier.Wait(waitCtx, keys, since); !woke {
-		return fmt.Sprintf("No messages (waited %s).%s", humaniseAge(wait), notice)
+		if err := ctx.Err(); err != nil {
+			return t.claimResult(ctx, nil, err, policy, inbox)
+		}
+		// Re-read at the deadline: notifier loss is not proof of emptiness.
+		if rows, err := inbox.ClaimResult(ctx); len(rows) > 0 || err != nil {
+			return t.claimResult(ctx, rows, err, policy, inbox)
+		}
+		return fmt.Sprintf("No messages (waited %s).%s", humaniseAge(wait), notice), nil
 	}
-	if rows := inbox.Claim(ctx); len(rows) > 0 {
-		return t.render(ctx, rows, policy, inbox)
+	if rows, err := inbox.ClaimResult(ctx); len(rows) > 0 || err != nil {
+		return t.claimResult(ctx, rows, err, policy, inbox)
 	}
 	// Woken but nothing to claim. One legitimate cause is a race: a session_start
 	// in this session, or — for a note left to "next" — a peer, got there first,
@@ -139,7 +175,7 @@ func (t *CheckMessages) read(ctx context.Context, args checkMessagesArgs, policy
 	// is certainly true and offers the race as a possibility.
 	return t.empty(policy) +
 		"  If a peer did write to you during the wait, something claimed it first — a " +
-		"session_start here, or another session if it was addressed to \"next\".\n" + notice
+		"session_start here, or another session if it was addressed to \"next\".\n" + notice, nil
 }
 
 // receiptTimeout bounds the outbox read. It shares the delivery budget's

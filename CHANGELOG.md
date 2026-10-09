@@ -151,6 +151,18 @@
   `structural_query` lead every answer and error with a `⚠ STALE INDEX`
   notice. `workspace_search` reports the code corpus as `stale` rather than
   `building`, and `topology_status` flags the index `FAILING`.
+- **Authoritative mailbox hooks and bounded Codex continuation.** Lifecycle hooks
+  now ask the running daemon for eligible-mail metadata instead of opening a
+  separate SQLite view. Codex issues one Stop notice per unchanged eligible row
+  set; new arrivals can notify again, while unavailable or ambiguous probes allow
+  completion. Explicit `check_messages` reads report failures and keep partial
+  deliveries visible instead of asserting an empty mailbox. Shared connections
+  resolve mailbox consent from the recipient's project and capture recipient
+  identity with its workspace so concurrent re-pins cannot mix their routing.
+- **Git fixture trace portability.** The test that checks fixture commits do not
+  launch background maintenance now identifies Git's command event rather than
+  assuming its traced executable has no absolute path, supporting Apple Git.
+
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered

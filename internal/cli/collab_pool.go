@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"log/slog"
+	"os"
 	"sync"
 
 	"github.com/plumbkit/plumb/internal/collab"
@@ -61,18 +63,34 @@ func (p *collabPool) acquireGlobal() *collab.Store {
 // getGlobal returns the daemon-level store ONLY when it already exists on disk,
 // so delivery and prune paths never create it.
 func (p *collabPool) getGlobal() *collab.Store {
+	store, err := p.getGlobalResult()
+	if err != nil {
+		slog.Warn("collab: open cross-project store", "err", err)
+	}
+	return store
+}
+
+// getGlobalResult distinguishes an unused mailbox from a failed open.
+func (p *collabPool) getGlobalResult() (*collab.Store, error) {
 	if p == nil {
-		return nil
+		return nil, errors.New("collab: mailbox pool unavailable")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.global != nil {
-		return p.global
+		return p.global, nil
 	}
-	if !collab.GlobalExists() {
-		return nil
+	if _, err := os.Stat(collab.GlobalDBPath()); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	return p.openGlobalLocked()
+	store, err := collab.OpenGlobal()
+	if err == nil {
+		p.global = store
+	}
+	return store, err
 }
 
 // openGlobalLocked returns the cached global store or opens a new one. Must hold
@@ -106,18 +124,34 @@ func (p *collabPool) acquire(workspace string) *collab.Store {
 // opening (and caching) it if so; otherwise nil. It never creates the database,
 // so read/hint/prune paths are safe to call it unconditionally.
 func (p *collabPool) get(workspace string) *collab.Store {
-	if workspace == "" {
-		return nil
+	store, err := p.getResult(workspace)
+	if err != nil {
+		slog.Warn("collab: open store", "workspace", workspace, "err", err)
+	}
+	return store
+}
+
+// getResult is get with truthful absence/error reporting for explicit reads.
+func (p *collabPool) getResult(workspace string) (*collab.Store, error) {
+	if p == nil || workspace == "" {
+		return nil, errors.New("collab: mailbox workspace unavailable")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if s, ok := p.stores[workspace]; ok {
-		return s
+	if store, ok := p.stores[workspace]; ok {
+		return store, nil
 	}
-	if !collab.Exists(workspace) {
-		return nil
+	if _, err := os.Stat(collab.DBPath(workspace)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	return p.openLocked(workspace)
+	store, err := collab.Open(workspace)
+	if err == nil {
+		p.stores[workspace] = store
+	}
+	return store, err
 }
 
 // openLocked returns the cached store or opens a new one. Must hold p.mu.

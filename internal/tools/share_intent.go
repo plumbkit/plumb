@@ -76,7 +76,7 @@ func (t *ShareIntent) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	policy := t.deps.Policy()
+	policy := t.deps.policy(ctx)
 	if !policy.Intents {
 		return "share_intent is disabled — set [collab] intents = true (globally or in this " +
 			"workspace's .plumb/config.toml) to broadcast intents.", nil

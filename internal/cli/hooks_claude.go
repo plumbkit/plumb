@@ -30,7 +30,7 @@ import (
 //     cadence of a real back-and-forth (measured: a second note sat unread for
 //     38s with no watcher alive), so a woken turn that CONSUMED mail re-arms
 //     one more watcher and an ignored wake cannot chain.
-//   - `plumb mail` never claims. The count is all this reports; the bodies stay
+//   - The daemon mailbox probe never claims. Only counts are reported; bodies stay
 //     undelivered and arrive through check_messages, labelled as what they are.
 //     Pasting a peer's text into hook feedback would be a direct injection
 //     channel into the agent.
