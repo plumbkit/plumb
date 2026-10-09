@@ -486,7 +486,7 @@ func TestGit_DetachedChildCarriesTheNonInteractiveEnv(t *testing.T) {
 		{"spec with no Env", func(t *testing.T, dir string) string {
 			t.Helper()
 			spec := gitChildSpec{WriteTimeout: 30 * time.Second, DetachAfter: testDetachAfter}
-			out, err := runGit(t.Context(), dir, "rebase", []string{"rebase", "side"}, tierDestructive, nil, nil, spec, nil, "sess-a")
+			out, err := runGit(t.Context(), dir, "rebase", []string{"rebase", "side"}, tierDestructive, nil, nil, spec, nil, "sess-a", gitWindow{})
 			if err != nil {
 				t.Fatalf("runGit rebase: %v", err)
 			}

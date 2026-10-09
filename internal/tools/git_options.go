@@ -266,4 +266,13 @@ var (
 		valueShort:    "msXF",
 		optionalShort: "S",
 	}
+	// worktreeGrammar: the worktree sub-verbs are option-led (`worktree add -b
+	// <branch> <path>`), so this grammar exists to keep -b/-B values out of the
+	// positional list — the classifier reads -B (a branch reset, so destructive)
+	// and the remove guard reads the target path. --reason, --expire and --orphan
+	// take values; --track takes one only joined, so it is not listed.
+	worktreeGrammar = gitOptionGrammar{
+		valueLong:  []string{"reason", "expire", "orphan"},
+		valueShort: "bB",
+	}
 )

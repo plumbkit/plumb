@@ -71,7 +71,7 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath, concurrentNote s
 		end = *a.EndLine
 	}
 
-	re, err := compileReadFilePattern(a.Pattern, a.UseRegex, a.CaseSensitive)
+	re, err := compileToolPattern("read_file", a.Pattern, a.UseRegex, a.CaseSensitive)
 	if err != nil {
 		return "", err
 	}
@@ -86,12 +86,15 @@ func (t *ReadFile) searchWithinFile(ctx context.Context, fpath, concurrentNote s
 	return t.formatSearchOutput(fpath, mtime, sha, snap.size, concurrentNote, a, matches, matchCount, scanned, truncated, start, end), nil
 }
 
-// compileReadFilePattern builds the matcher for search mode: literal text by
-// default (metacharacters quoted), Go RE2 regex when useRegex. Smart-case
+// compileToolPattern builds the matcher for a tool's pattern mode: literal text
+// by default (metacharacters quoted), Go RE2 regex when useRegex. Smart-case
 // applies only when caseSensitive is nil — an explicit value wins, including
 // false, which forces case-insensitivity for an uppercase pattern. Identical
-// semantics to search_in_files, find_replace, and search_memories.
-func compileReadFilePattern(pattern string, useRegex bool, caseSensitive *bool) (*regexp.Regexp, error) {
+// semantics to search_in_files, find_replace, and search_memories. `tool` names
+// the caller in the invalid-regex error, so the refusal points at the tool that
+// received the pattern: read_file and git's read-tier output window share this
+// one matcher rather than growing a second copy of the same rules.
+func compileToolPattern(tool, pattern string, useRegex bool, caseSensitive *bool) (*regexp.Regexp, error) {
 	cs := !allLower(pattern)
 	if caseSensitive != nil {
 		cs = *caseSensitive
@@ -103,7 +106,7 @@ func compileReadFilePattern(pattern string, useRegex bool, caseSensitive *bool) 
 	if useRegex {
 		re, err := regexp.Compile(flags + pattern)
 		if err != nil {
-			return nil, fmt.Errorf("read_file: invalid regex %q: %w", pattern, err)
+			return nil, fmt.Errorf("%s: invalid regex %q: %w", tool, pattern, err)
 		}
 		return re, nil
 	}

@@ -327,7 +327,9 @@ func gitBackgroundOutcome(ctx context.Context, repoRoot, sub, out string) string
 			return "landed as " + res.Hash + " " + res.Subject
 		}
 	}
-	processed, err := postProcessGit(ctx, repoRoot, sub, out)
+	// A detached op is always a write (only writes detach), so it has no output
+	// window: the zero gitWindow returns the output whole, as before.
+	processed, err := postProcessGit(ctx, repoRoot, sub, out, gitWindow{})
 	if err != nil {
 		return "completed"
 	}

@@ -13,6 +13,16 @@
 
 ### Added
 
+- **The git tool's read tier takes an output window (PLAN-454).** `git` accepts
+  `start_line`, `end_line`, `pattern`, `use_regex` and `case_sensitive` on any
+  read-tier call, with `read_file`'s semantics: 1-based inclusive lines, literal
+  text unless `use_regex`, smart-case unless `case_sensitive` says otherwise, and
+  a trailing note naming the lines returned. The window is applied to the
+  child's full output *before* the response caps, so a 60-line question about a
+  large blob at a revision is answered with those lines even though the whole
+  blob is past the 100 KiB cap. Until now the only ways to read a slice of a
+  large blob were the whole file (spilled outside the workspace, unreadable by
+  `read_file`) or a native shell fallback.
 - **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
   plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
   declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless
@@ -50,6 +60,16 @@
 
 ### Changed
 
+- **`git` reads `merge-tree`, `check-attr` and `worktree list`, and worktree
+  sub-verbs are tiered (PLAN-454).** `merge-tree` (both the trivial and the
+  `--write-tree` form) and `check-attr` join the read tier: they move no ref and
+  touch neither the index nor the worktree, so a reviewer can ask "does this
+  conflict with main, and where" and "which merge driver actually applies here"
+  without leaving the tool. `worktree list` is a read; `worktree add`, `remove`,
+  `lock` and `unlock` are writes; `move`, `prune` and `repair` are destructive,
+  as is `worktree add -B`, which resets a branch. `worktree remove` refuses a
+  worktree holding uncommitted work — and any unconfirmed `--force` — unless
+  `confirm: true`, naming what would be discarded.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were

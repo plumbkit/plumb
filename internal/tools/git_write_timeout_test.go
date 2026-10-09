@@ -268,7 +268,7 @@ func TestGit_NetworkTierExpiredContextIsNotAWriteTimeout(t *testing.T) {
 
 	var err error
 	runBounded(t, 25*time.Second, "git fetch past the caller's own deadline", func() {
-		_, err = runGit(ctx, dir, "fetch", []string{"fetch", "ssh://127.0.0.1/nonexistent.git"}, tierNetwork, nil, nil, child, nil, "")
+		_, err = runGit(ctx, dir, "fetch", []string{"fetch", "ssh://127.0.0.1/nonexistent.git"}, tierNetwork, nil, nil, child, nil, "", gitWindow{})
 	})
 
 	if err == nil {
