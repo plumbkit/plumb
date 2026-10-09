@@ -10,29 +10,72 @@ package tools
 // quietly undo the compaction of #612.
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/mcp"
 )
 
-// maxCatalogueBytes is the full 59-tool tools/list payload budget. Measured,
-// not guessed: 73,361 bytes after the PLAN-413 compaction (from 113,668, and
-// against the card's 108,332-byte baseline), plus about 5% headroom for the
-// next tool or two. It is a ratchet. When a change goes over it, trim
-// descriptions or parameter prose first; raise it only with a reviewed reason,
-// and lower it whenever a trim leaves more than the headroom unused.
-const maxCatalogueBytes = 77000
+// maxCatalogueBytes is the full 59-tool catalogue budget, measured as the
+// tools/list result the LARGEST client receives (wireCatalogueBytes): with
+// the identity argument declared on every schema, as a client that strips
+// undeclared arguments gets it, and the alwaysLoad _meta on pinned tools.
+// Measured, not guessed: 77,839 bytes after the PLAN-413 compaction (from
+// about 118 KB, against the card's 108,332-byte core baseline), plus about 5%
+// headroom. It is a ratchet. When a change goes over it, trim descriptions or
+// parameter prose first; raise it only with a reviewed reason, and lower it
+// whenever a trim leaves more than the headroom unused.
+const maxCatalogueBytes = 82000
+
+// wireCatalogueBytes serves tools/list for set on a real mcp.Server
+// configured as the largest client sees it, and returns the byte size of the
+// result: exactly what goes on the wire, envelope and _meta included.
+func wireCatalogueBytes(t *testing.T, set []describable) int {
+	t.Helper()
+	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: "budget"})
+	for _, tl := range set {
+		mt, ok := tl.(mcp.Tool)
+		if !ok {
+			t.Fatalf("%s does not implement mcp.Tool", tl.Name())
+		}
+		srv.Register(mt)
+	}
+	srv.DeclareIdentityArg = func() bool { return true }
+	srv.AlwaysLoad = IsPinned
+	var out bytes.Buffer
+	req := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}` + "\n"
+	if err := srv.Serve(context.Background(), strings.NewReader(req), &out); err != nil {
+		t.Fatalf("serve tools/list: %v", err)
+	}
+	var resp struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &resp); err != nil || len(resp.Result) == 0 {
+		t.Fatalf("decode tools/list response (%v): %s", err, out.String())
+	}
+	var check struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(resp.Result, &check); err != nil || len(check.Tools) != len(set) {
+		t.Fatalf("tools/list returned %d tools, want %d (%v)", len(check.Tools), len(set), err)
+	}
+	return len(resp.Result)
+}
 
 // TestCatalogueBudget guards maxCatalogueBytes.
 func TestCatalogueBudget(t *testing.T) {
 	set := append(leanToolSet(), nonLeanToolSet()...)
-	full := payloadBytes(t, set)
-	t.Logf("full tools/list payload: %d bytes (%d tools)", full, len(set))
-	if full > maxCatalogueBytes {
-		t.Errorf("full tools/list payload is %d bytes, over the %d-byte budget — run `make tool-sizes` and trim the largest descriptions or parameter prose",
-			full, maxCatalogueBytes)
+	wire := wireCatalogueBytes(t, set)
+	t.Logf("full tools/list result, worst-case client: %d bytes (%d tools); core name+description+schema: %d bytes",
+		wire, len(set), payloadBytes(t, set))
+	if wire > maxCatalogueBytes {
+		t.Errorf("full tools/list result is %d bytes, over the %d-byte budget — run `make tool-sizes` and trim the largest descriptions or parameter prose",
+			wire, maxCatalogueBytes)
 	}
 }
 
@@ -74,7 +117,9 @@ func toolSizes(t *testing.T) []toolSize {
 	return out
 }
 
-// renderToolSizes is the report `make tool-sizes` prints.
+// renderToolSizes is the report `make tool-sizes` prints. Its TOTAL row sums
+// the entries; the budgets above measure the served tools/list result, which
+// adds the envelope, commas, the identity argument and _meta.
 func renderToolSizes(sizes []toolSize, pinned func(string) bool) string {
 	var sb strings.Builder
 	var name, desc, schema, total int
@@ -94,6 +139,8 @@ func renderToolSizes(sizes []toolSize, pinned func(string) bool) string {
 // TestToolSizeReport prints the per-tool size report under -v. Its assertions
 // keep the report honest: every tool appears once and the components add up.
 func TestToolSizeReport(t *testing.T) {
+	empty, _ := json.Marshal(toolDef{Name: "", Description: "", InputSchema: json.RawMessage("{}")})
+	entryFrame := len(empty) - len(`""`) - len(`""`) - len(`{}`)
 	sizes := toolSizes(t)
 	seen := map[string]bool{}
 	for _, s := range sizes {
@@ -101,11 +148,12 @@ func TestToolSizeReport(t *testing.T) {
 			t.Errorf("%s appears twice in the report", s.name)
 		}
 		seen[s.name] = true
-		// A tools/list entry is the three components plus a fixed JSON frame;
-		// a component missing from the sum would show up as a negative frame.
-		if frame := s.n - s.nameB - s.descB - s.schemaB; frame < 0 || frame > 64 {
-			t.Errorf("%s: total %d does not decompose into name %d + description %d + schema %d (frame %d bytes)",
-				s.name, s.n, s.nameB, s.descB, s.schemaB, frame)
+		// An entry is exactly its three components plus the fixed JSON frame
+		// of an empty entry, so a component dropped from (or double-counted
+		// in) the report cannot pass.
+		if frame := s.n - s.nameB - s.descB - s.schemaB; frame != entryFrame {
+			t.Errorf("%s: total %d does not decompose into name %d + description %d + schema %d + the %d-byte frame (got %d)",
+				s.name, s.n, s.nameB, s.descB, s.schemaB, entryFrame, frame)
 		}
 	}
 	t.Log("\n" + renderToolSizes(sizes, IsPinned))

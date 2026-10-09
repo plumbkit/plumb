@@ -177,11 +177,12 @@ func TestPinnedSetMatchesPinnedTools(t *testing.T) {
 // description-budget work in this card does not touch. Measured (not guessed,
 // same discipline as maxDescriptionChars above): the full 20-tool
 // PinnedTools payload was ~42,700 bytes then. PLAN-413's compaction (#612)
-// brought it to 28,170, so the cap is ratcheted down to that measurement plus
-// about 6% headroom. It is a ratchet against payload growth: lower it after a
-// trim, raise it only with a reviewed reason. TestCatalogueBudget guards the
-// full catalogue the same way.
-const maxPinnedBytes = 30000
+// brought the served pinned tools/list result, for the largest client
+// (identity argument declared, alwaysLoad _meta), to 30,076 bytes, so the cap
+// is ratcheted to that plus about 5% headroom. It is a ratchet against payload
+// growth: lower it after a trim, raise it only with a reviewed reason.
+// TestCatalogueBudget guards the full catalogue the same way.
+const maxPinnedBytes = 31500
 
 // TestPinnedToolsSupersetsBootstrapAndMailbox is the structural guard for the
 // invariant PinnedTools' doc comment promises (and docs/configuration.md
@@ -208,8 +209,8 @@ func TestPinnedToolsSupersetsBootstrapAndMailbox(t *testing.T) {
 
 // TestPinnedSetBudget guards maxPinnedBytes.
 func TestPinnedSetBudget(t *testing.T) {
-	pinned := payloadBytes(t, pinnedToolSet())
-	t.Logf("pinned tools/list payload: %d bytes (%d tools)", pinned, len(pinnedToolSet()))
+	pinned := wireCatalogueBytes(t, pinnedToolSet())
+	t.Logf("pinned tools/list result, worst-case client: %d bytes (%d tools)", pinned, len(pinnedToolSet()))
 	if pinned > maxPinnedBytes {
 		t.Errorf("pinned payload is %d bytes, over the %d-byte budget — trim a description or evict a tool from PinnedTools",
 			pinned, maxPinnedBytes)
