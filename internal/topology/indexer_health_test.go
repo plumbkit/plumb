@@ -243,12 +243,12 @@ func TestScheduleRetry_OnlyAFailedRetryEscalates(t *testing.T) {
 	if r != (retryBackoff{delay: 2 * time.Hour, armed: true}) {
 		t.Fatalf("failed retry: %+v, want the delay doubled and armed", r)
 	}
+	r.armed = false             // the retry fired, then a clean cycle queued a catch-up
 	idx.setState("running", "") // a catch-up resync is queued; the index is still failing
 	idx.scheduleRetry(timer, &r)
-	if r != (retryBackoff{delay: 2 * time.Hour, armed: true}) {
-		t.Fatalf("a queued catch-up reset or escalated the backoff: %+v", r)
+	if r != (retryBackoff{delay: 2 * time.Hour}) {
+		t.Fatalf("a queued catch-up armed, reset or escalated the backoff: %+v", r)
 	}
-	r.armed = false // the retry fired while the catch-up was queued
 	idx.setState("error", "catch-up failed")
 	idx.scheduleRetry(timer, &r)
 	if r != (retryBackoff{delay: 4 * time.Hour, armed: true}) {
