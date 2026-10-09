@@ -30,12 +30,15 @@
   tripwire that fails when an upstream fix lands, so the matrix gets
   re-measured.
 - **A byte budget for the whole tool catalogue, and `make tool-sizes`
-  (PLAN-413).** `TestCatalogueBudget` caps the full 59-tool `tools/list`
-  payload at 77,000 bytes (73,361 today, after the compaction), and the pinned
-  set's cap is ratcheted from 45,000 to 30,000 bytes (28,170 today), so one
+  (PLAN-413).** Both budgets now measure the `tools/list` result a real
+  `mcp.Server` serves to the largest client (identity argument declared on
+  every schema, `alwaysLoad` `_meta` on pinned tools), not just
+  name + description + schema. `TestCatalogueBudget` caps the full 59-tool
+  result at 82,000 bytes (77,839 today, after the compaction), and the pinned
+  set's cap is ratcheted from 45,000 to 31,500 bytes (30,076 today), so one
   verbose tool cannot quietly undo the compaction. `make tool-sizes` prints the
   per-tool report, largest first, split into name, description and schema
-  bytes, with the pinned tools marked.
+  bytes, with the pinned tools marked, and fails if the report's own checks do.
 - **`topology_affected` compact summary mode.** Added `detail: "compact"` to return
   package-level affected test summaries with counts, reasons, and concrete `run_task`
   targets without printing individual test rows. `detail: "detailed"` remains the

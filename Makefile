@@ -230,11 +230,15 @@ lint-cross:
 # check-size fails if any Go file exceeds its line rule — 600 for source, 900 for
 # tests (with a grandfather baseline for files still awaiting a split). Keeps the
 # standard from regressing — see scripts/check-file-size.sh.
-tool-sizes: ## Per-tool tools/list size report (name, description, schema), largest first
-	@go test ./internal/tools/ -run '^TestToolSizeReport$$' -count=1 -v | sed -n 's/^        //p'
-
 check-size:
 	./scripts/check-file-size.sh
+
+# tool-sizes prints the per-tool tools/list size report (name, description,
+# schema bytes), largest first, pinned tools marked. The test's own exit code
+# is kept, so a broken report fails the target rather than printing nothing.
+tool-sizes:
+	@out=$$(go test ./internal/tools/ -run '^TestToolSizeReport$$' -count=1 -v) || { echo "$$out"; exit 1; }; \
+		echo "$$out" | sed -n 's/^        //p'
 
 # check-brief fails if AGENTS.md grows past its budget (150 lines / 20 KiB) —
 # the brief is rules + pointers; reference detail lives in docs/. See
