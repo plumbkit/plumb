@@ -2,6 +2,8 @@ package topology
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,8 +33,14 @@ func TestStatusForWorkspace_UnreadableDBIsAnError(t *testing.T) {
 	if err := os.WriteFile(DBPath(dir), []byte("this is not a SQLite database, just text long enough to have a header\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := StatusForWorkspace(dir); err == nil || os.IsNotExist(err) {
+	_, err := StatusForWorkspace(dir)
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("StatusForWorkspace on a non-database file: err = %v, want a read error", err)
+	}
+	// The driver error must survive the wrap: doctor gates its destructive
+	// remedy on sqlitex.IsCorrupt.
+	if !sqlitex.IsCorrupt(err) {
+		t.Errorf("err = %v, want sqlitex.IsCorrupt to recognise it", err)
 	}
 }
 

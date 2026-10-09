@@ -115,18 +115,23 @@
 ### Fixed
 
 - **Topology recovery guidance no longer says to delete the index under a
-  running daemon, and `plumb doctor` now reports a corrupt index.** (PLAN-467)
-  The docs said "drop `topology.db` and plumb rebuilds it". Deleted under a
-  live daemon, the daemon keeps writing to the unlinked file, nothing is
-  rebuilt until it restarts, and an unflushed WAL is lost. `docs/topology.md`
-  and a new `docs/troubleshooting.md` section now give the order: wait for the
-  automatic retry, then `plumb stop`, then delete `topology.db` with its
-  `-wal`/`-shm` sidecars. Doctor's fixes for an unreadable topology, stats or
-  history database say the same. Doctor also used to report a corrupt
-  `topology.db` as "index is empty, initial indexing may still be in progress":
-  the read-only open is lazy and the status census ignores query errors. The
-  status read now probes the schema first, so doctor shows the failure and its
-  fix.
+  running daemon, and `plumb doctor` now reports an index with a corrupt
+  header or schema.** (PLAN-467)
+  - The docs said "drop `topology.db` and plumb rebuilds it". Deleted under a
+    live daemon, the daemon keeps writing to the unlinked file, nothing is
+    rebuilt until it restarts, and an unflushed WAL is lost.
+  - `docs/topology.md` and a new `docs/troubleshooting.md` section now give
+    the order: wait for the automatic retry, then `plumb stop`. To rebuild,
+    first quit every MCP client, since a connected `plumb serve` restarts the
+    daemon within seconds. Then run `plumb stop` until the daemon is not
+    running, and delete `topology.db` with its `-wal`/`-shm` sidecars.
+  - Doctor gives that remedy for the topology, stats and history databases
+    only when SQLite itself reports corruption (`sqlitex.IsCorrupt`). A busy
+    or unopenable file gets a retry hint instead of "remove it".
+  - Doctor used to report a corrupt `topology.db` as "index is empty, initial
+    indexing may still be in progress": the read-only open is lazy and the
+    status census ignores query errors. The status read now probes the schema
+    first. Damage confined to a data page still reads as a partial census.
 - **On macOS the daemon no longer loses its SQLite locks to its own config
   watchers (PLAN-485).** The project config watcher watched
   `<workspace>/.plumb`, and the global one watched the global config directory,
