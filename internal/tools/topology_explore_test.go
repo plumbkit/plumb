@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,26 +211,40 @@ func TestTopologyExplore_MembersCutMidListDisclosesOmitted(t *testing.T) {
 }
 
 // TestTopologyExplore_MembersBeyondListCapDisclosed pins the per-type listing
-// cap: a type with more members than topology.MemberListCap must say so rather
-// than present the first page as the whole set.
+// cap at its boundary: a type with exactly topology.MemberListCap members is
+// complete and says nothing more, while one past it must say more exist
+// rather than present the first page as the whole set.
 func TestTopologyExplore_MembersBeyondListCapDisclosed(t *testing.T) {
-	var src strings.Builder
-	src.WriteString("package demo\n\n// Greeter greets people.\ntype Greeter struct{}\n")
-	for i := range topology.MemberListCap + 2 {
-		fmt.Fprintf(&src, "\nfunc (g *Greeter) M%d() {}\n", i)
-	}
-	tool, _ := openExploreFixtureSource(t, src.String())
+	for _, tc := range []struct {
+		methods int
+		want    string
+		capped  bool
+	}{
+		{topology.MemberListCap, fmt.Sprintf("members (%d):", topology.MemberListCap), false},
+		{topology.MemberListCap + 1, fmt.Sprintf("members (%d+):", topology.MemberListCap), true},
+	} {
+		t.Run(strconv.Itoa(tc.methods), func(t *testing.T) {
+			var src strings.Builder
+			src.WriteString("package demo\n\n// Greeter greets people.\ntype Greeter struct{}\n")
+			for i := range tc.methods {
+				fmt.Fprintf(&src, "\nfunc (g *Greeter) M%d() {}\n", i)
+			}
+			tool, _ := openExploreFixtureSource(t, src.String())
 
-	raw, _ := json.Marshal(map[string]any{"name": "Greeter", "kind": "type", "max_bytes": 100000})
-	out, err := tool.Execute(context.Background(), raw)
-	if err != nil {
-		t.Fatalf("Execute(Greeter): %v", err)
-	}
-	want := fmt.Sprintf("members (%d+):", topology.MemberListCap)
-	if !strings.Contains(out, want) || !strings.Contains(out, "more members exist beyond the first") {
-		t.Errorf("expected %q and a beyond-the-cap notice:\n%s", want, out)
-	}
-	if strings.Contains(out, "omitted, max_bytes reached") {
-		t.Errorf("the listing cap is not a byte cut and must not be reported as one:\n%s", out)
+			raw, _ := json.Marshal(map[string]any{"name": "Greeter", "kind": "type", "max_bytes": 100000})
+			out, err := tool.Execute(context.Background(), raw)
+			if err != nil {
+				t.Fatalf("Execute(Greeter): %v", err)
+			}
+			if !strings.Contains(out, tc.want) {
+				t.Errorf("expected %q:\n%s", tc.want, out)
+			}
+			if got := strings.Contains(out, "more members exist beyond the first"); got != tc.capped {
+				t.Errorf("beyond-the-cap notice present = %v, want %v:\n%s", got, tc.capped, out)
+			}
+			if strings.Contains(out, "omitted, max_bytes reached") {
+				t.Errorf("the listing cap is not a byte cut and must not be reported as one:\n%s", out)
+			}
+		})
 	}
 }

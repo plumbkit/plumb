@@ -270,8 +270,8 @@ func writeMembersSection(sb *strings.Builder, nb *topology.Neighbourhood, maxByt
 		fmt.Fprintf(sb, "  … %d more member(s) omitted, max_bytes reached — raise max_bytes to list them\n", omitted)
 	}
 	if nb.MembersCapped {
-		fmt.Fprintf(sb, "  … more members exist beyond the first %d — use file_outline on the type's file for the rest\n",
-			topology.MemberListCap)
+		fmt.Fprintf(sb, "  … more members exist beyond the first %d — query workspace_symbols for the rest, "+
+			"or explore one by its selector\n", topology.MemberListCap)
 	}
 }
 
