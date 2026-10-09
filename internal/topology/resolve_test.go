@@ -201,7 +201,25 @@ func TestTypeMembers_SamePackageScoping(t *testing.T) {
 		Language:  "go",
 	})
 
-	// Members of pkgA's Store must only contain MethodA, never MethodB from pkgB.
+	// A subpackage of A (pkgA/sub) is a different Go package with its own Store.
+	// The SQL prefilter `f.path LIKE 'pkgA/%'` admits it, so only the exact
+	// directory check keeps MethodSub out of pkgA's members.
+	fileSub := insertTestFile(t, db, "pkgA/sub/store.go")
+	insertTestNode(t, db, fileSub, "pkgA/sub/store.go", Node{
+		Kind:      KindType,
+		Name:      "Store",
+		Qualified: "Store",
+		Language:  "go",
+	})
+	insertTestNode(t, db, fileSub, "pkgA/sub/store.go", Node{
+		Kind:      KindMethod,
+		Name:      "MethodSub",
+		Qualified: "(*Store).MethodSub",
+		Language:  "go",
+	})
+
+	// Members of pkgA's Store must only contain MethodA, never MethodB from pkgB
+	// or MethodSub from pkgA/sub.
 	typeNodeA := Node{ID: typeA, Kind: KindType, Name: "Store", Path: "pkgA/store.go", FileID: fileA}
 	membersA, err := TypeMembers(context.Background(), db, typeNodeA, 10)
 	if err != nil {
