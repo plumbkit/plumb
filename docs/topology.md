@@ -19,8 +19,8 @@ waiting for any heavy tooling to start.
 
 The name comes from *topology* in the mathematical sense — the shape of how
 things are connected. Plumb's topology is a **graph** of your code's entities
-(the nodes) and their relationships (the edges), stored in a single file you can
-delete and rebuild at any time.
+(the nodes) and their relationships (the edges), stored in a single file that
+plumb can rebuild from scratch at any time.
 
 > **You don't need to understand any of the internals to use it.** It is **on by
 > default** — the `topology_*` tools (plus faster symbol search) work out of the
@@ -58,8 +58,12 @@ the right few files instead of reading dozens.
   exploration, and blast-radius/impact analysis — things grep cannot do.
 - **Cheap and self-throttling.** A small file under `.plumb/`, maintained by a
   background indexer that paces itself so it never hogs a CPU core.
-- **Safe to delete.** It's derived data: drop `topology.db` and plumb rebuilds
-  it. (plumb also keeps it out of git automatically.)
+- **Rebuildable.** It's derived data: stop the daemon (`plumb stop`), delete
+  `.plumb/topology.db` and its `-wal`/`-shm` sidecars, and plumb rebuilds it on
+  the next start. Don't delete it under a running daemon: the daemon keeps
+  writing to the deleted file and nothing rebuilds until it restarts. See
+  [Troubleshooting](troubleshooting.md). (plumb also keeps it out of git
+  automatically.)
 
 The trade-off — a deliberate one — is that topology is *approximate*: it
 understands syntax, not full type semantics. That's why plumb pairs it with the
