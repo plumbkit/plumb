@@ -47,11 +47,11 @@ var gitSchema = json.RawMessage(`{
     },
     "clean_clone": {
       "type": "boolean",
-      "description": "merge-tree only: preview in a clean clone — no local config or system attributes."
+      "description": "merge-tree only: preview in a clean clone."
     },
     "wait": {
       "type": "boolean",
-      "description": "Wait for a mutating git child instead of detaching with STILL RUNNING; bounded by [git] write_timeout. Returns a refusing hook's own output."
+      "description": "Wait for a mutating git child instead of detaching; bounded by [git] write_timeout."
     },
     "start_line": {
       "type": "integer",

@@ -52,7 +52,7 @@ var sessionStartSchema = json.RawMessage(`{
     "mail": {
       "type": "string",
       "enum": ["claim", "preview"],
-      "description": "What to do with mail waiting for you. 'claim' (default) delivers it in this packet, exactly once — it will NOT arrive again from check_messages. 'preview' shows what is waiting without marking it read, so check_messages still delivers it: pass it from a client that calls session_start automatically, where a packet the model never reads must not consume notes addressed to it."
+      "description": "Use \"preview\" when a client calls session_start automatically: it shows waiting mail without consuming it."
     }
   },
   "additionalProperties": false
