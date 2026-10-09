@@ -648,7 +648,7 @@ func TestOpenReadOnlyCurrentSchemaAllowed(t *testing.T) {
 	}
 }
 
-func TestOpenReadOnlyOldSchemaTellsUserToDeleteDB(t *testing.T) {
+func TestOpenReadOnlyOldSchemaTellsUserToMigrate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_DATA_HOME", dir)
 	path := DBPathFor()

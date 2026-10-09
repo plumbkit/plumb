@@ -14,10 +14,13 @@ import (
 // fault, so callers offering a destructive remedy should gate it on this.
 func IsCorrupt(err error) bool {
 	var se *sqlite.Error
-	if !errors.As(err, &se) {
-		return false
-	}
-	switch se.Code() & 0xff {
+	return errors.As(err, &se) && isCorruptCode(se.Code())
+}
+
+// isCorruptCode classifies a SQLite result code. An extended code carries its
+// primary code in the low byte (SQLITE_CORRUPT_INDEX is 779, 11 | 3<<8).
+func isCorruptCode(code int) bool {
+	switch code & 0xff {
 	case sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB:
 		return true
 	}
