@@ -170,6 +170,16 @@
 
 ### Fixed
 
+- **With history off, a huge before-side is no longer read (PLAN-457).** The
+  before-side of a write served two consumers — the history row and the response
+  diff — and with history off only the response wanted it, which withholds
+  anything past 200 KiB. The side is now answered from its stat when the file is
+  over that cap, so a copy, rename, delete or undo over a 50 MiB file no longer
+  reads it — nor streams a full hash above 8 MiB — only to print "diff withheld:
+  file too large". With history on nothing changes: the store still gets the
+  bytes, or the hash when the file is too large to carry. A stat-only side reports
+  no digest at all, rather than the empty input's hash, which would be a digest
+  nobody computed.
 - **`edit_file`'s near-match hint no longer prints a sensitive path's content
   (PLAN-456).** When `old_string` was not found, the hint rendered the file's
   current lines (the `+` side of a labelled diff) — for a path matching
