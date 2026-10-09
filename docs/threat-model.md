@@ -892,18 +892,22 @@ rather than become a parallel implementation with parallel assumptions.
 ## Severity
 
 How plumb rates a finding, for human reporters and automated scanners alike.
-The attacker is the one [Actors](#actors) names, in this order: a **hostile
-repository** the user clones and opens, a **persuaded agent** whose tool
-arguments are model-controlled, and a page in the user's browser against the
-opt-in `plumb web` UI. Rate by what the attacker reaches **beyond what the
-user's own configuration already grants**.
+The attackers, in the order plumb weighs them: a **hostile repository** the user
+clones and opens (the project's own content in [Actors](#actors)), a
+**persuaded agent** whose tool arguments are model-controlled (the agent/model),
+and a page in the user's browser against the opt-in `plumb web` UI, which
+[`web.md`](web.md#security-model) bounds with a per-start token and an
+`Origin`/`Host` guard. Rate by what the attacker reaches **beyond what the
+user's own configuration already grants**. When one flaw fits two rows, the
+trigger decides: on attach with no tool call, it is Critical; behind an agent's
+call, it is High.
 
 | Rating | What it means here | Examples |
 |---|---|---|
-| Critical | Code execution, or a write or deletion outside every allowed root, that needs nothing beyond opening the workspace: no agent step, no `plumb trust` | an A2b-class attach-triggered replay; a project `.plumb/config.toml` that makes the daemon spawn a process of its choosing; a browser page reaching a `plumb web` write path |
-| High | A tool call crosses a boundary the user did not open | a read or write outside the allowed roots (symlink, hardlink, `..`, alias, case variant); a write landing in another workspace (A1); a destructive or network git operation without its tier and `confirm`, a force-push of a protected branch, an ad-hoc remote; a project-supplied command, task or LSP setting honoured without a matching trust grant; argument injection into git or a configured command |
+| Critical | Code execution, or a write or deletion outside every allowed root, that needs nothing beyond opening the workspace: no agent step, no `plumb trust` | an A2b-class attach-triggered replay; a project `.plumb/config.toml` whose `[lsp.*]` settings make the daemon spawn a process of its choosing on attach; a browser page reaching a `plumb web` write path |
+| High | A tool call crosses a boundary the user did not open | a read or write outside the allowed roots (symlink, hardlink, `..`, alias, case variant); a write landing in another workspace (A1); a destructive or network git operation without its tier and `confirm`, a force-push of a protected branch, an ad-hoc remote; a project-supplied command or task that an agent's call runs without a matching trust grant; argument injection into git or a configured command |
 | Medium | A mitigation this document claims fails between the same user's agents and stores | mail delivered to the wrong session despite its binding; a secret persisted unredacted on a path documented as redacted; the proxy secret or a resume credential leaving the process that holds it; hostile repository content that crashes the shared daemon, taking every workspace down with it |
-| Low | Denial of service confined to the session that opened the content, or hardening of a documented residual | a stalled language server or stranded lock that no deadline bounds; unbounded memory or CPU from one workspace |
+| Low | Denial of service confined to the session that opened the content, or hardening of a documented residual | a stalled language server or stranded lock that no deadline bounds; memory or CPU one workspace consumes without bound, short of taking the shared daemon down (which is Medium) |
 
 **Not vulnerabilities:** anything under [What plumb does not defend
 against](#what-plumb-does-not-defend-against); a [known gap](#known-gaps) or a

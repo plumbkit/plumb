@@ -19,6 +19,11 @@
 # github.com/anthropics/oss-scanner, then run the commands in the brief.
 FROM golang:1.26-bookworm
 
+# The image ships GOTOOLCHAIN=local, which would fail the build the day go.mod's
+# `go` line passes the image's Go. auto fetches that toolchain now, into the
+# module cache the offline audit reads from.
+ENV GOTOOLCHAIN=auto
+
 # Node only installs the npm-published language servers below. bubblewrap is the
 # Linux sandbox run_command wraps commands in; without it they run unwrapped, and
 # the sandbox is part of what is being audited.
@@ -30,16 +35,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # the reason ci.yml gives: TypeScript 7 ships no tsserver, so the TS test skips.
 RUN go install golang.org/x/tools/gopls@latest \
     && npm install -g pyright typescript-language-server typescript@5 vscode-langservers-extracted \
-    && gopls version && pyright --version && typescript-language-server --version
+    && gopls version && pyright --version && typescript-language-server --version \
+    && command -v vscode-html-language-server
 
 # scanner contract: the checkout lives inside the image, at /src
 COPY . /src
 WORKDIR /src
 
-# Everything the offline audit resolves comes from this step's caches: go.mod's
-# toolchain line is fetched here (GOTOOLCHAIN=auto by default), and compiling
-# every test binary, integration tag included, pulls in the test-only module
-# graph and warms the build cache for the 2-CPU agent.
+# Everything the offline audit resolves comes from this step's caches: any
+# toolchain go.mod asks for beyond the image's, and, by compiling every test
+# binary with the integration tag included, the test-only module graph. It also
+# warms the build cache for the 2-CPU agent.
 RUN go version \
     && go mod download \
     && CGO_ENABLED=0 go build -o /usr/local/bin/plumb ./cmd/plumb \
