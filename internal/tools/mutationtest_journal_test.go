@@ -109,7 +109,7 @@ func TestSweepMutantJournal_LeavesAndReportsAForeignEdit(t *testing.T) {
 	if len(restored) != 0 {
 		t.Errorf("a third party's edit must never be overwritten: %v", restored)
 	}
-	if len(needAttention) != 1 || needAttention[0] != path {
+	if len(needAttention) != 1 || needAttention[0].Path != path {
 		t.Errorf("the path must be reported, not silently kept: %v", needAttention)
 	}
 	if got := readSubject(t, path); got != theirs {
@@ -333,7 +333,7 @@ func TestSweepMutantJournal_ReportsAnEntryItCannotParse(t *testing.T) {
 	if len(restored) != 0 {
 		t.Errorf("nothing can be restored from an unparsable entry: %v", restored)
 	}
-	if len(needAttention) != 1 || needAttention[0] != bad {
+	if len(needAttention) != 1 || needAttention[0].Entry != bad {
 		t.Errorf("needAttention = %v, want the entry file %s", needAttention, bad)
 	}
 	if _, statErr := os.Stat(bad); statErr != nil {

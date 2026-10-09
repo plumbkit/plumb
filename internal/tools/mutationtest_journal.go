@@ -195,6 +195,16 @@ type MutantJournalStatus struct {
 	State MutantJournalState
 }
 
+// MutantAttention names a journal entry that needs a human. Path is the file whose content is in
+// question, and it is EMPTY when the entry could not be parsed — there is no target to name then.
+// Entry is always the file holding the pre-mutation bytes. Two fields because "path" used to mean
+// one thing for a changed file and another for an unparsable entry, and a reported API whose field
+// means two things is a defect whether or not anyone has tripped over it yet (PLAN-459 review).
+type MutantAttention struct {
+	Path  string
+	Entry string
+}
+
 // MutantJournalStates classifies every journal entry by digest, read-only: the reconnect
 // note must not claim "someone edited it" for a file that simply still holds the mutant.
 func MutantJournalStates() ([]MutantJournalStatus, error) {
@@ -256,7 +266,7 @@ const (
 //
 // It runs when the daemon starts, which is the only moment that can know a run was
 // killed: everything in the journal belongs to a process that no longer exists.
-func SweepMutantJournal() (restored, needAttention []string, err error) {
+func SweepMutantJournal() (restored []string, needAttention []MutantAttention, err error) {
 	dir, err := mutantJournalDir()
 	if err != nil {
 		return nil, nil, err
@@ -276,13 +286,13 @@ func SweepMutantJournal() (restored, needAttention []string, err error) {
 			// Report the ENTRY FILE rather than skipping it: silence would lose the only
 			// record that a mutant was applied somewhere, which is the state this card
 			// exists to make impossible. Nothing is deleted, for the same reason.
-			needAttention = append(needAttention, full)
+			needAttention = append(needAttention, MutantAttention{Entry: full})
 			continue
 		}
 		var entry mutantJournalEntry
 		if json.Unmarshal(data, &entry) != nil || entry.Path == "" {
 			// Same reasoning as above: unparsable, or parsed with no target to name.
-			needAttention = append(needAttention, full)
+			needAttention = append(needAttention, MutantAttention{Entry: full})
 			continue
 		}
 		switch sweepOne(entry) {
@@ -292,7 +302,7 @@ func SweepMutantJournal() (restored, needAttention []string, err error) {
 			_ = os.Remove(full)
 			restored = append(restored, entry.Path)
 		case sweepAttention:
-			needAttention = append(needAttention, entry.Path)
+			needAttention = append(needAttention, MutantAttention{Path: entry.Path, Entry: full})
 		}
 	}
 	return restored, needAttention, nil
