@@ -362,6 +362,7 @@ func (t *MutationTest) restore(ctx context.Context, tgt mutationTarget) error {
 	if sha != tgt.sha {
 		return t.restoreFailed(tgt, fmt.Sprintf("the restored content does not match the pre-run snapshot (sha256 %s, want %s)", sha, tgt.sha))
 	}
+	clearMutantJournal(tgt.path) // the digest matched: there is nothing left to sweep
 	t.announce(ctx, tgt.path)
 	t.deps.notifyTopology(tgt.path)
 	return nil
