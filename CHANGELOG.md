@@ -59,14 +59,11 @@
 
 ### Fixed
 
-- **Package scoping and budget compliance for type members.** Fixed Go method
-  matching in `TypeMembers` to strictly match same-package methods with exact
-  receiver type equality rather than matching methods across the entire repository.
-  Bounded the members section within `max_bytes` to prevent payload overruns.
 - **Multi-thread reply handle retention in collab chat.** Delivery of multiple
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered
   message row with its conversation thread.
+
 ## 0.23.0 (2026-10-07)
 
 ### Added
