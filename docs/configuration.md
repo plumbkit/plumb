@@ -28,8 +28,10 @@ everything else is inherited from the layer below.
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
    file that sets one field inherits the rest. Hot-reloaded per workspace: the
-   daemon keeps one `fsnotify` watcher per live workspace (create, edit,
-   atomic-save, and deletion of the file are all picked up) and re-applies the
+   daemon keeps one `fsnotify` watch per live workspace on the file itself,
+   never on `.plumb` (create, edit, atomic-save, and deletion of the file are
+   all picked up; a file created inside an existing `.plumb` within about a
+   second) and re-applies the
    merged view to **every** session pinned to that workspace, without a
    reconnect. Deleting the file or breaking its TOML fails closed to the global
    policy. If the OS watcher cannot start or errors, the per-session 30-second

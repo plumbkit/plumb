@@ -13,13 +13,17 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 )
 
-// globalConfigWatcher watches the directory holding the global config file and
-// triggers store.Reload (debounced) when that file changes. It watches the
-// DIRECTORY, not the file, because both plumb's own atomic Save (temp file →
-// rename) and external editors (rename-replace) swap the inode — a file-level
-// watch would miss the replacement. Events are filtered to the config file's
-// basename and coalesced over a short debounce window so the burst a single
-// save emits collapses to one reload.
+// globalConfigWatcher watches the global config file and triggers store.Reload
+// (debounced) when it changes. It watches the FILE, never its directory: on a
+// fresh macOS install that directory is also the data directory holding
+// stats.db, session_state.db, history.db and collab-xproject.db, and on kqueue
+// a directory watch opens every file in it, which strips the daemon's SQLite
+// locks on them (PLAN-485, see configFileWatch). Both plumb's own atomic Save
+// (temp file → rename) and external editors (rename-replace) swap the inode;
+// the Remove or Rename that raises on the old inode detaches the watch and the
+// debounce fire re-attaches it to the new file before reloading. A config file
+// created where there was none is attached by a one-second stat tick. Bursts
+// coalesce over a short debounce window so a single save reloads once.
 //
 // Self-trigger safety: Reload only reads the file and swaps the store's pointer;
 // no subscriber writes the config back, so a reload never produces a new write
@@ -58,31 +62,24 @@ func newGlobalConfigWatcher(store *config.Store) *globalConfigWatcher {
 	}
 }
 
-// shouldReload reports whether an fsnotify event for the watched directory
-// refers to the config file and represents a change worth reloading for.
-func shouldReload(eventName, base string, op fsnotify.Op) bool {
-	if filepath.Base(eventName) != base {
-		return false
-	}
-	return op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0
-}
-
-// Run watches the config directory until ctx is cancelled. A watcher that
-// cannot be created or attached is logged and degraded to a no-op (the daemon
-// still runs; the control-socket reload-config path remains available). A
-// watcher that loses its own descriptor at runtime is recreated in place (see
-// recreateLost). Run returns only after its OS watcher has been closed and
-// its reader has stopped delivering (closeFSWatcher).
+// Run watches the config file until ctx is cancelled. A watcher that cannot be
+// created is logged and degraded to a no-op (the daemon still runs; the
+// control-socket reload-config path remains available). A watcher that loses
+// its own descriptor at runtime is recreated in place (see recreateLost). Run
+// returns only after its OS watcher has been closed and its reader has stopped
+// delivering (closeFSWatcher).
 func (w *globalConfigWatcher) Run(ctx context.Context) error {
 	if err := os.MkdirAll(w.dir, 0o755); err != nil {
 		return fmt.Errorf("creating config dir for watch: %w", err)
 	}
-	watcher, err := w.open()
+	watcher, err := w.newWatcher()
 	if err != nil {
-		return err
+		return fmt.Errorf("creating config watcher: %w", err)
 	}
-	// A closure, not a plain defer: recreateLost swaps the watcher.
-	defer func() { closeFSWatcher(watcher) }()
+	cfg := configFileWatch{path: filepath.Join(w.dir, w.base), newWatcher: w.newWatcher, watcher: watcher}
+	// A closure, not a plain defer: onError swaps the watcher.
+	defer func() { closeFSWatcher(cfg.watcher) }()
+	cfg.attach()
 	slog.Info("daemon: watching global config for changes", "dir", w.dir, "file", w.base)
 
 	timer := time.NewTimer(w.debounce)
@@ -90,74 +87,58 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 		<-timer.C
 	}
 	defer timer.Stop()
+	tick := time.NewTicker(configFileTick)
+	defer tick.Stop()
 
 	var recreatedAt time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event, ok := <-watcher.Events:
+		case event, ok := <-cfg.events():
 			if !ok {
 				return nil
 			}
-			w.onEvent(event, timer)
-		case err, ok := <-watcher.Errors:
+			cfg.handleEvent(event, timer, w.debounce)
+		case err, ok := <-cfg.errs():
 			if !ok {
 				return nil
 			}
-			if watcher, err = w.onError(watcher, err, &recreatedAt, timer); err != nil {
+			if err := w.onError(&cfg, err, &recreatedAt, timer); err != nil {
 				return err
 			}
 		case err := <-w.testErrs:
-			if watcher, err = w.onError(watcher, err, &recreatedAt, timer); err != nil {
+			if err := w.onError(&cfg, err, &recreatedAt, timer); err != nil {
 				return err
 			}
+		case <-tick.C:
+			cfg.handleTick(timer, w.debounce)
 		case <-timer.C:
-			w.reload()
+			w.onSettled(&cfg)
 		}
 	}
 }
 
-// onError handles one watcher error and returns the watcher to carry on
-// with. A lost watcher is recreated (recreateLost) and a reload scheduled,
-// because the file may have changed while it was blind; a non-nil error
-// means recreating failed or was refused, and ends Run. Any other error is
-// only logged, as it always was.
-func (w *globalConfigWatcher) onError(watcher *fsnotify.Watcher, err error, recreatedAt *time.Time, timer *time.Timer) (*fsnotify.Watcher, error) {
+// onError handles one watcher error. A lost watcher is recreated
+// (recreateLost), its file watch re-attached, and a reload scheduled, because
+// the file may have changed while it was blind; a non-nil error means
+// recreating failed or was refused, and ends Run. Any other error is only
+// logged, as it always was.
+func (w *globalConfigWatcher) onError(cfg *configFileWatch, err error, recreatedAt *time.Time, timer *time.Timer) error {
 	if !fsWatcherLost(err) {
 		slog.Warn("daemon: config watcher error", "err", err)
-		return watcher, nil
+		return nil
 	}
-	next, err := w.recreateLost(watcher, err, *recreatedAt)
+	next, err := w.recreateLost(cfg.watcher, err, *recreatedAt)
 	if err != nil {
-		return nil, err
+		cfg.watcher = nil // recreateLost closed it
+		return err
 	}
+	*cfg = configFileWatch{path: cfg.path, newWatcher: w.newWatcher, watcher: next}
+	cfg.attach()
 	*recreatedAt = time.Now()
 	rearmProjectTimer(timer, w.debounce)
-	return next, nil
-}
-
-// open creates the OS watcher on the config directory. An attach that fails
-// because a descriptor was closed underneath it (fsWatcherLost) says nothing
-// about the directory, so it gets one immediate second attempt.
-func (w *globalConfigWatcher) open() (*fsnotify.Watcher, error) {
-	watcher, err := w.openOnce()
-	if fsWatcherLost(err) {
-		watcher, err = w.openOnce()
-	}
-	return watcher, err
-}
-
-func (w *globalConfigWatcher) openOnce() (*fsnotify.Watcher, error) {
-	watcher, err := w.newWatcher()
-	if err != nil {
-		return nil, fmt.Errorf("creating config watcher: %w", err)
-	}
-	if err := watcher.Add(w.dir); err != nil {
-		closeFSWatcher(watcher)
-		return nil, fmt.Errorf("watching config dir %s: %w", w.dir, err)
-	}
-	return watcher, nil
+	return nil
 }
 
 // recreateLost replaces a watcher that lost its own descriptor, which would
@@ -174,7 +155,7 @@ func (w *globalConfigWatcher) recreateLost(old *fsnotify.Watcher, cause error, l
 	if !last.IsZero() && time.Since(last) < w.recreateInterval {
 		return nil, fmt.Errorf("config watcher lost again straight after a recreate: %w", cause)
 	}
-	next, err := w.open()
+	next, err := w.newWatcher()
 	if err != nil {
 		return nil, fmt.Errorf("recreating lost config watcher: %w", err)
 	}
@@ -182,19 +163,16 @@ func (w *globalConfigWatcher) recreateLost(old *fsnotify.Watcher, cause error, l
 	return next, nil
 }
 
-// onEvent re-arms the debounce timer when an event refers to the config file.
-// The stop-drain-reset dance restarts the window without leaking a stale fire.
-func (w *globalConfigWatcher) onEvent(event fsnotify.Event, timer *time.Timer) {
-	if !shouldReload(event.Name, w.base, event.Op) {
-		return
+// onSettled runs when the debounce window elapses. It re-attaches first, so
+// the reload reads the file with the watch already live. A file that is gone
+// is not reloaded: a missing global config resolves to compiled defaults,
+// which a reload cannot improve on, so a delete keeps what was loaded, as it
+// always has.
+func (w *globalConfigWatcher) onSettled(cfg *configFileWatch) {
+	cfg.attach()
+	if cfg.attached {
+		w.reload()
 	}
-	if !timer.Stop() {
-		select {
-		case <-timer.C:
-		default:
-		}
-	}
-	timer.Reset(w.debounce)
 }
 
 // reload re-reads the global config after the debounce window elapses.
