@@ -214,25 +214,41 @@ func TestResync_SkipsASubmoduleWorktree(t *testing.T) {
 	}
 }
 
-// TestResync_WorkspaceUnderAWorktreesDirectory is B3's regression guard, and the reason the
-// shape test reads the components BELOW the root rather than the whole absolute path: a
-// workspace that merely LIVES under a directory called "worktrees" — …/code/worktrees/myproject
-// — would otherwise have every path inside it classified as a linked worktree and be pruned
-// entirely. That is a worse failure than the multiplicity the rule exists to remove, and it is
-// invisible to any test whose workspace sits somewhere innocuous.
-func TestResync_WorkspaceUnderAWorktreesDirectory(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "worktrees", "myproject")
+// TestResync_WorkspaceUnderAWorktreesDirectoryKeepsSubmodules is B3's and SHOULD-FIX 2's
+// regression guard together, and it needs a SUBMODULE to be a guard at all: the rule only ever
+// reads a nested `.git` FILE, so a workspace living under a directory called "worktrees" is
+// unaffected until something inside it has one — which is exactly why my first attempt at this
+// test did not kill the mutant.
+//
+// Two things it pins: (a) the workspace itself living at …/worktrees/proj must not make its
+// submodule look like a worktree, which is what reading the ABSOLUTE path did; (b) a submodule
+// whose path ends in `worktrees` (.git/modules/worktrees) is a submodule, not a worktree — the
+// component search called it one because both components were present.
+func TestResync_WorkspaceUnderAWorktreesDirectoryKeepsSubmodules(t *testing.T) {
+	requireGitForResync(t)
+	root := filepath.Join(t.TempDir(), "worktrees", "proj")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	writeIndexTree(t, root, map[string]string{"main.go": "package main\nfunc Main() {}\n"})
+	initCommittedRepo(t, root)
+
+	sub := t.TempDir()
+	writeIndexTree(t, sub, map[string]string{"sub.go": "package sub\nfunc Sub() {}\n"})
+	initCommittedRepo(t, sub)
+	gitIn(t, root, "-c", "protocol.file.allow=always", "submodule", "add", sub, "plumb")
+	gitIn(t, root, "-c", "protocol.file.allow=always", "submodule", "add", sub, "worktrees")
 
 	idx, db := newTestIndexer(t, root)
 	got := resyncPaths(t, idx, db)
 
 	if !slices.Contains(got, "main.go") {
-		t.Errorf("a workspace under a directory named %q was pruned: %v — the shape test must "+
-			"judge the path below the root, not the names the workspace happens to sit under",
-			"worktrees", got)
+		t.Errorf("the workspace's own file was pruned because the workspace lives under a directory called 'worktrees': %v", got)
+	}
+	if !slices.Contains(got, "plumb/sub.go") {
+		t.Errorf("the submodule was pruned because the WORKSPACE path contains 'worktrees': %v", got)
+	}
+	if !slices.Contains(got, "worktrees/sub.go") {
+		t.Errorf("a submodule NAMED 'worktrees' was pruned — .git/modules/worktrees is a submodule, not a worktree: %v", got)
 	}
 }

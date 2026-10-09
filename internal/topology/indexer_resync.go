@@ -241,18 +241,16 @@ func linkedWorktree(root, dir string) bool {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
-	return hasPathComponent(rel, ".git") && hasPathComponent(rel, "worktrees")
-}
-
-// hasPathComponent reports whether any whole component of path equals name. A substring
-// test would match "notworktrees" and a sibling directory named worktrees-archive.
-func hasPathComponent(path, name string) bool {
-	for _, part := range strings.Split(path, string(filepath.Separator)) {
-		if part == name {
-			return true
-		}
+	// git writes exactly two shapes for a worktree's admin dir, and this tests those shapes
+	// rather than searching for components: `<root>/.git/worktrees/<name>` and
+	// `<root>/.git/modules/<sub>/worktrees/<name>`. A component search was wrong twice over
+	// (review round 1, B3 and SHOULD-FIX 2): it also matched a workspace that merely LIVES under
+	// a directory called "worktrees", and a SUBMODULE whose path ends in `worktrees`
+	// (`.git/modules/worktrees` has both components and is not a worktree at all).
+	if first, _, _ := strings.Cut(rel, string(filepath.Separator)); first != ".git" {
+		return false
 	}
-	return false
+	return filepath.Base(filepath.Dir(target)) == "worktrees"
 }
 
 // gitdirTarget extracts the path from a .git file's contents. A .git file holds
