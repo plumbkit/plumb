@@ -58,12 +58,13 @@ the right few files instead of reading dozens.
   exploration, and blast-radius/impact analysis — things grep cannot do.
 - **Cheap and self-throttling.** A small file under `.plumb/`, maintained by a
   background indexer that paces itself so it never hogs a CPU core.
-- **Rebuildable.** It's derived data: stop the daemon (`plumb stop`), delete
-  `.plumb/topology.db` and its `-wal`/`-shm` sidecars, and plumb rebuilds it on
-  the next start. Don't delete it under a running daemon: the daemon keeps
-  writing to the deleted file and nothing rebuilds until it restarts. See
-  [Troubleshooting](troubleshooting.md). (plumb also keeps it out of git
-  automatically.)
+- **Rebuildable.** It's derived data. Quit your MCP clients (a connected
+  `plumb serve` restarts the daemon), run `plumb stop` until the daemon is not
+  running, then delete `.plumb/topology.db` and its `-wal`/`-shm` sidecars, and
+  plumb rebuilds it on the next start. Don't delete it under a running daemon:
+  the daemon keeps writing to the deleted file and nothing rebuilds until it
+  restarts. See [Troubleshooting](troubleshooting.md). (plumb also keeps it out
+  of git automatically.)
 
 The trade-off — a deliberate one — is that topology is *approximate*: it
 understands syntax, not full type semantics. That's why plumb pairs it with the

@@ -65,7 +65,7 @@ func checkTopologyIndex(ws string) []checkResult {
 			name:   "topology",
 			ok:     false,
 			detail: err.Error(),
-			fix:    resetDBFix("the index", topology.DBPath(ws), "to rebuild it"),
+			fix:    unreadableDBFix(err, "the index", topology.DBPath(ws), "to rebuild it"),
 		}}
 	}
 	return []checkResult{topologyIndexHealth(st)}

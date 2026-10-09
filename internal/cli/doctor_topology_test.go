@@ -61,12 +61,13 @@ func TestCheckTopology_EnabledButNoIndex(t *testing.T) {
 	}
 }
 
-// TestCheckTopology_UnreadableIndexFixStopsTheDaemonFirst: doctor's remedy for
-// an index it cannot open must say to stop the daemon before deleting, and to
-// take the WAL sidecars too. Deleting the database under a running daemon
-// leaves it writing to an unlinked file with nothing rebuilt until it restarts
-// (PLAN-467/PLAN-485).
-func TestCheckTopology_UnreadableIndexFixStopsTheDaemonFirst(t *testing.T) {
+// TestCheckTopology_CorruptIndexFixStopsTheDaemonFirst: doctor's remedy for a
+// corrupt index must put the steps in a safe order: quit the clients (a
+// connected `plumb serve` restarts the daemon), stop the daemon, and only then
+// remove the database with its WAL sidecars. Deleting it under a running daemon
+// leaves the daemon writing to an unlinked file with nothing rebuilt until it
+// restarts (PLAN-467/PLAN-485).
+func TestCheckTopology_CorruptIndexFixStopsTheDaemonFirst(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	ws := t.TempDir()
 	writeProjectTopologyConfig(t, ws, true)
@@ -78,10 +79,35 @@ func TestCheckTopology_UnreadableIndexFixStopsTheDaemonFirst(t *testing.T) {
 	if len(res) != 1 || res[0].ok {
 		t.Fatalf("an unreadable index should fail one check, got %+v", res)
 	}
-	for _, want := range []string{"plumb stop", "-wal/-shm", "topology.db"} {
-		if !strings.Contains(res[0].fix, want) {
-			t.Errorf("fix = %q, want it to mention %q", res[0].fix, want)
-		}
+	fix := res[0].fix
+	if !strings.Contains(fix, "-wal/-shm") || !strings.Contains(fix, "topology.db") {
+		t.Errorf("fix = %q, want it to name topology.db and its -wal/-shm sidecars", fix)
+	}
+	quit, stop, remove := strings.Index(fix, "quit every MCP client"), strings.Index(fix, "plumb stop"), strings.Index(fix, "remove")
+	if quit < 0 || stop < 0 || remove < 0 || quit >= stop || stop >= remove {
+		t.Errorf("fix = %q, want: quit the clients, then plumb stop, then remove", fix)
+	}
+}
+
+// TestCheckTopology_UnopenableIndexIsNotTreatedAsCorrupt: a database SQLite
+// cannot open (here a directory at the index path) is not corrupt, and must not
+// earn the destructive remove-it remedy. That is reserved for SQLite's own
+// corruption verdict, so a busy or unopenable file is never deleted over a
+// transient fault.
+func TestCheckTopology_UnopenableIndexIsNotTreatedAsCorrupt(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	ws := t.TempDir()
+	writeProjectTopologyConfig(t, ws, true)
+	if err := os.MkdirAll(topology.DBPath(ws), 0o755); err != nil {
+		t.Fatalf("make unopenable index: %v", err)
+	}
+
+	res := checkTopology(ws)
+	if len(res) != 1 || res[0].ok {
+		t.Fatalf("an unopenable index should fail one check, got %+v", res)
+	}
+	if strings.Contains(res[0].fix, "remove") || !strings.Contains(res[0].fix, "retry") {
+		t.Errorf("fix = %q, want a retry hint and no remove-it remedy", res[0].fix)
 	}
 }
 

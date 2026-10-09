@@ -204,16 +204,21 @@ absence. `topology_status` shows the last error and the last good sync.
    from 30 seconds to 30 minutes, and a successful resync clears the flag.
 2. **If it persists, restart gracefully.** Run `plumb stop`. It sends SIGTERM
    and waits for the daemon to exit, and unlike `plumb restart` it never
-   escalates to SIGKILL. Check that it reports the daemon stopped, then
-   reconnect a client: the next `serve` starts a fresh daemon.
-3. **If it still fails after a clean restart, rebuild the index.** With the
-   daemon stopped, delete `.plumb/topology.db` and its `topology.db-wal` and
-   `topology.db-shm` sidecars. Then start again. The index is derived data, and
-   a full rebuild of a large repository takes a few minutes.
+   escalates to SIGKILL. Connected clients reconnect on their own: each
+   `plumb serve` starts a fresh daemon within seconds.
+3. **If it still fails after a clean restart, rebuild the index.** First quit
+   every MCP client using this machine's plumb (agent sessions, editors).
+   Otherwise their `plumb serve` restarts the daemon before you can delete
+   anything. Then run `plumb stop` until it prints `Daemon is not running.`,
+   delete `.plumb/topology.db` and its `topology.db-wal` and `topology.db-shm`
+   sidecars, and start a client again. The index is derived data, and a full
+   rebuild of a large repository takes a few minutes. `plumb doctor` gives the
+   same steps when it finds the index corrupt.
 
-Never delete or replace the database files while the daemon is running. The
-daemon keeps writing to the deleted file, nothing rebuilds until it restarts,
-and a SQLite WAL removed under a live writer loses whatever it held. For the
+Never delete or replace the database files while a daemon is running, including
+one a connected client has just restarted. The daemon keeps writing to the
+deleted file, nothing rebuilds until it restarts, and a SQLite WAL removed
+under a live writer loses whatever it held. For the
 same reason, inspect the index with `topology_status` or `plumb doctor`, not by
 opening the live `.plumb/*.db` files with `sqlite3` or other tools.
 

@@ -61,8 +61,10 @@ func Report(db *sql.DB, workspace string, idx *Indexer) Status {
 // StatusForWorkspace opens the topology index for ws strictly read-only and
 // returns a Status snapshot without starting an indexer. It is intended for
 // out-of-daemon inspectors such as `plumb doctor` and the TUI. A missing
-// database is reported as an error satisfying os.IsNotExist; the IndexerState in
-// the returned Status is "stopped" because no live indexer is attached.
+// database is reported as an error satisfying os.IsNotExist, and one whose
+// header or schema SQLite cannot read as a read error (sqlitex.IsCorrupt tells
+// corruption from a busy or unopenable file). The IndexerState in the returned
+// Status is "stopped" because no live indexer is attached.
 //
 // The connection is opened read-only, so the inspection never writes the main
 // database. It may create transient -wal/-shm sidecars: reading a WAL database
@@ -84,7 +86,9 @@ func StatusForWorkspace(ws string) (Status, error) {
 	// Opening is lazy and Report swallows per-query errors on purpose (a partial
 	// census beats none), so a file SQLite cannot read would otherwise come back
 	// as an empty index, which `plumb doctor` reads as "still indexing" rather
-	// than "rebuild it". One schema read separates the two.
+	// than "rebuild it". One schema read catches a bad header or schema. It
+	// reads only those pages, so damage confined to a data page still slips
+	// through as a partial census.
 	var tables int
 	if err := db.QueryRow(`SELECT count(*) FROM sqlite_master`).Scan(&tables); err != nil {
 		return Status{}, fmt.Errorf("topology: read index: %w", err)

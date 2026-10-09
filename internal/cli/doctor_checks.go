@@ -16,6 +16,7 @@ import (
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/render"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
@@ -396,13 +397,23 @@ func projectPolicyTrustResult(ws string, st config.ProjectPolicyStatus) checkRes
 	}
 }
 
-// resetDBFix is the remedy doctor offers for a database it cannot open. The
-// daemon holds these files open, so deleting them under it leaves it writing to
-// unlinked inodes, nothing recreated until it restarts, and any WAL it had not
-// checkpointed lost: stop it first, and take the -wal/-shm sidecars with the
-// main file.
-func resetDBFix(subject, dbPath, outcome string) string {
-	return subject + " may be corrupt — stop the daemon (`plumb stop`), then remove " +
+// unreadableDBFix is the remedy doctor offers for a database it could not
+// read. Only SQLite's own corruption verdict earns the destructive remedy: a
+// busy, locked or unopenable file gets a retry instead, since deleting it would
+// lose data over a transient fault.
+//
+// The destructive remedy must get the order right. The daemon holds these files
+// open, so deleting them under it leaves it writing to unlinked inodes, with
+// nothing recreated until it restarts and any WAL it had not checkpointed lost.
+// And `plumb stop` alone is not enough while a client is connected: every
+// `plumb serve` proxy reconnects by starting a fresh daemon within seconds.
+func unreadableDBFix(err error, subject, dbPath, outcome string) string {
+	if !sqlitex.IsCorrupt(err) {
+		return "retry `plumb doctor`; if " + contractConfigPath(dbPath) +
+			" stays unreadable, check its permissions and the daemon log"
+	}
+	return subject + " is corrupt — quit every MCP client (a connected `plumb serve` restarts the daemon), " +
+		"run `plumb stop` until it says the daemon is not running, then remove " +
 		contractConfigPath(dbPath) + " and its -wal/-shm files " + outcome
 }
 
@@ -422,7 +433,7 @@ func checkStatsDB(ws string) []checkResult {
 			name:   "stats db",
 			ok:     false,
 			detail: err.Error(),
-			fix:    resetDBFix("the DB", dbPath, "to reset it"),
+			fix:    unreadableDBFix(err, "the DB", dbPath, "to reset it"),
 		}}
 	}
 	filter := stats.Filter{}
@@ -451,7 +462,7 @@ func checkHistoryDB() []checkResult {
 	}
 	r, err := history.OpenReadOnlyAt(dbPath)
 	if err != nil {
-		fix := resetDBFix("the database", dbPath, "to reset it (write history is lost)")
+		fix := unreadableDBFix(err, "the database", dbPath, "to reset it (write history is lost)")
 		if errors.Is(err, history.ErrNewerSchema) {
 			fix = "upgrade plumb: history.db was written by a newer version, and this one will not write to it"
 		}
