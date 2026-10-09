@@ -341,8 +341,14 @@ type connSession struct {
 	// a connection-level fact: the retry re-runs restoreIdentity with the same
 	// proxy credential, and the proxy credential belongs to the connection.
 	restoreRetryBackoff func(attempt int) time.Duration
-	cancel              context.CancelFunc
-	resumeSeams         resumeSeams // test seams in an accepted resume (conn_resume_accept.go); zero in production
+	// restoreRetryConverged, when set, is called once the bounded retry has
+	// converged AND finished what convergence does: the late credential minted
+	// and staged, declared linkages restored. A test seam, nil in production.
+	// The recovery outcome alone cannot say that: it turns restored BEFORE the
+	// mint, because only a proven connection may be issued a credential.
+	restoreRetryConverged func()
+	cancel                context.CancelFunc
+	resumeSeams           resumeSeams // test seams in an accepted resume (conn_resume_accept.go); zero in production
 
 	state    atomic.Pointer[sessionView] // lock-free reads of the session snapshot
 	muMutate sync.Mutex                  // the single mutation lane (see mutate)

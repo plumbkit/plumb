@@ -157,6 +157,21 @@
 
 ### Fixed
 
+- **The identity-recovery convergence tests no longer flake (PLAN-504).**
+  `TestResumeCredential_RetryConvergedConnectionIsDisclosedOnce` failed about
+  once in 27 race runs, on main and on pull requests. Five tests had one or
+  both of two races with the bounded restore retry.
+  - With a 1ms backoff, all three attempts could run out before the test
+    detached the blocker, so convergence never came.
+  - The tests took the outcome turning `restored` (or `established`) to mean
+    convergence had finished. But the late resume credential is minted after
+    that, by design, because only a proven connection may be issued one, and
+    the declared linkages are restored after the mint.
+
+  A test seam, nil in production, now reports when the retry has converged
+  and finished, and a gated schedule holds the first attempt until the
+  blocker has gone. The production behaviour is unchanged: a tool call that
+  lands between the two steps simply gets the credential on its next result.
 - **`topology_explore` no longer drops a type's members silently when
   `max_bytes` cuts them (PLAN-461).** The `members (N)` header now counts every
   member found, a byte cut adds `… K more member(s) omitted`, and a type with

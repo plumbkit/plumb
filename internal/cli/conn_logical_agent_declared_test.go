@@ -287,25 +287,16 @@ func TestDeclarationsRestoreWhenADegradedRecoveryConverges(t *testing.T) {
 	const proxyID = "proxy-513-degraded"
 	first := newPersistSession(t, store, ss, proxyID)
 
-	release := make(chan struct{})
-	overlapping := newPersistSessionWithBackoff(t, store, ss, proxyID, func(int) time.Duration {
-		<-release
-		return 0
-	})
+	overlapping, retry := newPersistSessionGated(t, store, ss, proxyID)
 	if overlapping.recovery() != recoveryDegraded {
-		close(release)
 		t.Fatal("precondition: the overlap did not degrade")
 	}
 	first.linkExternalID(context.Background(), "conv-late")
 	first.close()
-	close(release)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for overlapping.recovery() != recoveryRestored {
-		if time.Now().After(deadline) {
-			t.Fatal("the degraded connection never converged")
-		}
-		time.Sleep(10 * time.Millisecond)
+	retry.awaitConverged(t)
+	if got := overlapping.recovery(); got != recoveryRestored {
+		t.Fatalf("the converged connection is %q, want restored", got)
 	}
 	overlapping.recordLogicalAgentCall("conv-late")
 	overlapping.recordLogicalAgentCall("other")

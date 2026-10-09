@@ -145,6 +145,68 @@ func newPersistSessionWithBackoff(t *testing.T, store *config.Store, ss *session
 	return s
 }
 
+// newPersistSessionGated is newPersistSession with the degraded-recovery retry
+// under the test's control (gateRestoreRetry), installed BEFORE onProxySession
+// starts it.
+func newPersistSessionGated(t *testing.T, store *config.Store, ss *sessionstate.Store, proxyID string) (*connSession, *gatedRetry) {
+	t.Helper()
+	s := newConnSession(context.Background(), detectTestPool(), nil, store, nil, ss, newSharedBudgets())
+	t.Cleanup(s.close)
+	retry := gateRestoreRetry(s)
+	s.onProxySession(proxyID)
+	return s, retry
+}
+
+// gatedRetry drives a degraded connection's bounded restore retry (C3) on the
+// test's schedule (PLAN-504). Two races made the convergence tests flake:
+//   - With a bare 1ms backoff, all three attempts could spend themselves before
+//     the test had detached the blocker, so convergence never came. Attempt 1
+//     now waits until awaitConverged releases it.
+//   - The outcome turns restored (or established, on the legacy heal) BEFORE
+//     convergence has finished: the late credential is minted after it, by
+//     design, because only a proven connection may be issued one, and the
+//     declared linkages are restored after that. A poll on recovery() could
+//     therefore assert either a moment too early. awaitConverged waits for the
+//     retry to report that it has finished.
+type gatedRetry struct {
+	gate      chan struct{}
+	converged chan struct{}
+}
+
+// gateRestoreRetry installs the gated schedule on s. Call it BEFORE the
+// initialize (or onProxySession) that degrades, because the retry starts there.
+func gateRestoreRetry(s *connSession) *gatedRetry {
+	g := &gatedRetry{gate: make(chan struct{}), converged: make(chan struct{})}
+	s.restoreRetryBackoff = func(attempt int) time.Duration {
+		switch attempt {
+		case 1:
+			select {
+			case <-g.gate:
+			case <-s.ctx.Done(): // the test ended first: the loop sees ctx and returns
+			}
+			return time.Millisecond
+		case 2:
+			return 100 * time.Millisecond // headroom for a detach still settling
+		default:
+			return 500 * time.Millisecond
+		}
+	}
+	s.restoreRetryConverged = func() { close(g.converged) }
+	return g
+}
+
+// awaitConverged releases the retry, so call it only once the blocker has
+// detached, and waits until the retry has converged and finished.
+func (g *gatedRetry) awaitConverged(t *testing.T) {
+	t.Helper()
+	close(g.gate)
+	select {
+	case <-g.converged:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the degraded connection never converged on the retry")
+	}
+}
+
 // TestPersist_ReadTrackingSurvivesRestart is the headline test: a read recorded
 // under proxy session X for workspace W is rehydrated by a *fresh* connSession
 // (a daemon restart) that reconnects under the same X and re-attaches W, so a
