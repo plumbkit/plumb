@@ -205,8 +205,8 @@ func renderNetEconomics(econ []stats.EconomicsDay) {
 	fmt.Println(tui.HintStyle.Render(
 		"  two of PLAN-367's three economics lines, netted to the current savings-model version only: the\n" +
 			"  estimated read savings and the guard-refusal count (stale/unread-write and dirty-file guards that\n" +
-			"  refused a call; a retried call counts once per refusal). The third line (profile tool-schema\n" +
-			"  surcharge) is a live per-connection figure `plumb stats` itself cannot reconstruct after the fact,\n" +
+			"  refused a call; a retried call counts once per refusal). The third line (the advertised tool\n" +
+			"  catalogue) is a live per-connection figure `plumb stats` itself cannot reconstruct after the fact,\n" +
 			"  so it is not trended here either — see internal/stats/health_economics.go."))
 	if len(econ) == 0 {
 		fmt.Println("  no calls recorded today")

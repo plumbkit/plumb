@@ -66,8 +66,18 @@ func TestWriteSessionStats_ThreeHonestLines(t *testing.T) {
 	ss.writeSessionStats(&sb, "/ws")
 	out := sb.String()
 
-	if !strings.Contains(out, "profile surcharge: 106401 bytes") || !strings.Contains(out, "~23k tokens estimated") {
-		t.Errorf("missing/wrong surcharge line (must show measured bytes AND a labelled token estimate):\n%s", out)
+	if !strings.Contains(out, "advertised tool catalogue: 106401 bytes") || !strings.Contains(out, "~23k tokens estimated") {
+		t.Errorf("missing/wrong catalogue line (must show measured bytes AND a labelled token estimate):\n%s", out)
+	}
+	// PLAN-413: the figure is the ADVERTISED catalogue, not a billed per-request
+	// cost. A client that defers tool loading (Codex, Kimi's tool-select) or
+	// caches the prompt pays far less, and plumb sees neither, so the line must
+	// say it is an upper bound and must not claim a per-request charge.
+	if !strings.Contains(out, "UPPER BOUND") || !strings.Contains(out, "plumb cannot observe") {
+		t.Errorf("catalogue line must disclose it is an upper bound plumb cannot reconcile to billing:\n%s", out)
+	}
+	if strings.Contains(out, "per request") {
+		t.Errorf("catalogue line still claims a per-request charge:\n%s", out)
 	}
 	if !strings.Contains(out, "estimated read savings: ~900 tokens") {
 		t.Errorf("read savings line missing or not scoped to v4 only (must exclude the 5000-token v3 row):\n%s", out)

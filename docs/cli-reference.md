@@ -796,7 +796,7 @@ flagged only when the tool is advertised — pinned into a Claude Code connectio
 context, PLAN-355 — AND both its own sample and the `read_file` baseline sample
 are large enough to trust), and **net economics per client** (the estimated read
 savings and guard-refusal count, trended per day per client; the third PLAN-367
-line, the tool-schema surcharge, is a live per-connection figure this offline
+line, the advertised tool catalogue, is a live per-connection figure this offline
 view has no access to, the same reason the default view above omits it too).
 `--health` always covers today and has no recent-calls list or failure breakdown
 to filter or limit, so it is rejected in combination with `--limit`, `--since`,

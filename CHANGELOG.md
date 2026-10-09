@@ -36,6 +36,14 @@
   59-tool payload went from 113,668 to 73,361 bytes (−35%; −32% against the
   108,332-byte baseline PLAN-413 set), and the pinned set from 43,598 to
   28,170 bytes.
+- **`session_start`'s cost line no longer claims a per-request charge
+  (PLAN-413).** It said "profile surcharge: N bytes of tool schemas served to
+  this client per request". That figure is the size of the catalogue plumb
+  ADVERTISES, not what a model is billed: a client that defers tool loading
+  (Codex, Kimi Code's `tool-select`) or caches the prompt pays far less, and
+  plumb observes neither. It now reads "advertised tool catalogue: N bytes
+  across M tool schemas", labelled as an upper bound plumb cannot reconcile to
+  billing.
 - **`topology_routes` recovers route → handler bindings from registration
   sites instead of guessing from symbol names.** It reads the call sites the
   index records: Go `net/http`, gorilla/mux, chi, gin and echo registrations

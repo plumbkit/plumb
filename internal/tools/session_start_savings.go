@@ -14,7 +14,7 @@ import (
 // writeSessionStats renders the tool-usage summary and, below it, three
 // honest economics lines (PLAN-367) in place of the single "tokens saved"
 // headline the daemon used to lead with: what plumb's own tool surface costs
-// this client per request (surcharge), what the counterfactual read/tool
+// this client at most per step (the advertised catalogue), what the counterfactual read/tool
 // model estimates it saved (netted of the ranged-read arithmetic a native
 // tool reproduces on its own — see clientcaps.ModelVersion v4), and how many
 // times a write guard actually caught something — a real count, not an
@@ -45,7 +45,7 @@ func (t *SessionStart) writeSessionStats(sb *strings.Builder, ws string) {
 		// token count without naming it as an estimate over the measured bytes
 		// (PLAN-367 review round 1).
 		if bytes, tokens, n := t.surchargeFn(); n > 0 {
-			fmt.Fprintf(sb, "profile surcharge: %d bytes of tool schemas served to this client per request (%d tools) — ~%s tokens estimated\n",
+			fmt.Fprintf(sb, "advertised tool catalogue: %d bytes across %d tool schemas — ~%s tokens estimated, an UPPER BOUND on what a client sends per step; deferred tool loading and prompt caching cut the real cost, and plumb cannot observe either\n",
 				bytes, n, stats.FormatSavings(tokens))
 		}
 	}
