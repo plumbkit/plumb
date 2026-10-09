@@ -74,9 +74,13 @@
   Building from source or with `go install` needs Go 1.27; with the default
   `GOTOOLCHAIN=auto`, an older go command downloads it. The Docker images
   (root, `build/docker/`, `.oss-scanner/`) build on `golang:1.27-bookworm`.
-  Go 1.27's gofmt alignment fix reformats no file in the tree. The behaviour
-  the new `go` directive switches on is that tracebacks print goroutine pprof
-  labels, and plumb sets none.
+  Go 1.27's gofmt alignment fix reformats no file in the tree. The new `go`
+  directive switches on two GODEBUG defaults. Tracebacks print goroutine
+  pprof labels, and plumb sets none. And on macOS, `SSL_CERT_FILE` or
+  `SSL_CERT_DIR`, when set, now supply the TLS roots in place of the system
+  verifier; this affects only the opt-in semantic-search embedding clients,
+  plumb's one outbound HTTPS path. `GODEBUG=x509sslcertoverrideplatform=0`
+  restores the old behaviour.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were
