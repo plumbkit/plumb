@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/ignore"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // This file holds the indexer's whole-tree operations: deleting a single file's
@@ -198,13 +199,18 @@ func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ig
 //
 //   - a directory with no .git file is not a worktree (an ordinary directory, or
 //     the main checkout, whose .git is a directory);
-//   - a .git file whose gitdir: line points under <root>/.git/worktrees/ IS a
-//     linked worktree, and is skipped unless [topology] index_worktrees opts in;
-//   - a .git file pointing under <root>/.git/modules/ is a SUBMODULE, whose files
-//     are part of this tree and stay indexed — this rule never prunes one;
-//   - anything else — an unreadable file, a missing gitdir: line, an absolute
-//     path elsewhere on the machine (a worktree of a DIFFERENT repository
-//     vendored in by hand) — is not skipped. The walk does not guess.
+//   - a .git file whose gitdir: line points into a repository's worktrees directory
+//     IS a linked worktree, and is skipped unless [topology] index_worktrees opts in.
+//     The repository may be the workspace root OR one inside it: agent worktrees in a
+//     workspace whose code lives in a submodule are worktrees of THAT repository, so
+//     their gitdir is <root>/.git/modules/<sub>/worktrees/<name> — matching only
+//     <root>/.git/worktrees missed every one of them (review round 1, B1);
+//   - a .git file pointing under <root>/.git/modules/ WITHOUT a worktrees component is
+//     a SUBMODULE, whose files are part of this tree and stay indexed — this rule never
+//     prunes one;
+//   - anything else — an unreadable file, a missing gitdir: line, a path outside this
+//     workspace (a worktree of a DIFFERENT repository vendored in by hand) — is not
+//     skipped. The walk does not guess.
 //
 // The gitdir: target may be relative (git writes a submodule's as
 // ../.git/modules/<name>) and either side may be spelled through a symlink
@@ -222,9 +228,28 @@ func linkedWorktree(root, dir string) bool {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(dir, target)
 	}
-	target = canonicalPath(filepath.Clean(target))
-	worktrees := canonicalPath(filepath.Join(root, ".git", "worktrees"))
-	return target == worktrees || strings.HasPrefix(target, worktrees+string(filepath.Separator))
+	target = paths.Canonical(filepath.Clean(target))
+	// The test is the SHAPE, confined to this workspace: a path under the root carrying both
+	// a .git component and a worktrees component. Confinement matters — a repository outside
+	// the workspace is not ours to classify, so it is never pruned on this rule — and so does
+	// the .git component, which is what distinguishes a worktree's gitdir from any directory
+	// that merely happens to be called "worktrees".
+	rootCanonical := paths.Canonical(root)
+	if target != rootCanonical && !strings.HasPrefix(target, rootCanonical+string(filepath.Separator)) {
+		return false
+	}
+	return hasPathComponent(target, ".git") && hasPathComponent(target, "worktrees")
+}
+
+// hasPathComponent reports whether any whole component of path equals name. A substring
+// test would match "notworktrees" and a sibling directory named worktrees-archive.
+func hasPathComponent(path, name string) bool {
+	for _, part := range strings.Split(path, string(filepath.Separator)) {
+		if part == name {
+			return true
+		}
+	}
+	return false
 }
 
 // gitdirTarget extracts the path from a .git file's contents. A .git file holds
@@ -242,17 +267,6 @@ func gitdirTarget(data []byte) (string, bool) {
 		return "", false
 	}
 	return target, true
-}
-
-// canonicalPath resolves symlinks when it can, so two spellings of one directory
-// compare equal. A path that cannot be resolved is returned unchanged: the
-// caller's comparison then fails closed (not a worktree), which is the same
-// answer the rule gives any path it cannot read.
-func canonicalPath(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return resolved
-	}
-	return path
 }
 
 // resyncSkipsFile reports whether the walk excludes one file. Its directory's
