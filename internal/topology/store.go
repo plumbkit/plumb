@@ -42,6 +42,7 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 	idx.resyncPause = time.Duration(cfg.ResyncPauseMs) * time.Millisecond
 	idx.extractTimeout = time.Duration(cfg.ExtractTimeoutSeconds) * time.Second
 	idx.excludePatterns = excludes
+	idx.indexWorktrees = cfg.IndexWorktrees
 	s := &Store{workspace: workspace, db: db, idx: idx}
 
 	var watcher *fsWatcher

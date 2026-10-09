@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/ignore"
@@ -143,13 +145,20 @@ func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 // (fs.SkipDir) or record the ignore rules in force inside it. Split out of the
 // walk closure so that closure stays readable.
 //
-// The three exclusions are additive and ordered cheapest-first: the hardcoded
-// floor, then the configured patterns, then the tree's own ignore files.
+// The four exclusions are additive and ordered cheapest-first: the hardcoded
+// floor, then the configured patterns, then the tree's own ignore files, then
+// the one rule that reads the filesystem, a linked worktree's .git file. A
+// directory is pruned if ANY of them says so; none can re-include what another
+// pruned, which is why the order among them changes only the cost, never the
+// answer.
 func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ignore.Stack) error {
 	if path == root {
 		// The workspace root is never judged by the skip list. It used to be: a
 		// checkout living at ~/.config/repo or ~/src/build had its own name
-		// matched by shouldSkipDir and indexed nothing.
+		// matched by shouldSkipDir and indexed nothing. It is not judged by the
+		// worktree rule either — a workspace that IS a linked worktree must still
+		// index itself, and its own .git file points at another repository's
+		// .git/worktrees/ anyway.
 		var st ignore.Stack
 		stacks[root] = st.Load(root)
 		return nil
@@ -168,8 +177,82 @@ func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ig
 	if parent.IsIgnored(path, true) {
 		return fs.SkipDir
 	}
+	// Last because it is the only check here that touches the filesystem: one
+	// os.ReadFile per surviving directory. It must still be decided before the
+	// stack for the directory is loaded, since the prune path never loads one.
+	if !idx.indexWorktrees && linkedWorktree(root, path) {
+		return fs.SkipDir
+	}
 	stacks[path] = parent.Load(path)
 	return nil
+}
+
+// linkedWorktree reports whether dir is a LINKED WORKTREE of the repository
+// rooted at root — a second checkout of the same repository, created by
+// `git worktree add` and materialised in this tree as an untracked directory
+// holding a .git FILE. Nothing about the directory's NAME is consulted: the
+// distinction is git's own bookkeeping, because the names are convention
+// (plumb-wt-*, plumb-review-*) and a rename must not change the answer.
+//
+// The rule is exact, and it is deliberately silent when it cannot be exact:
+//
+//   - a directory with no .git file is not a worktree (an ordinary directory, or
+//     the main checkout, whose .git is a directory);
+//   - a .git file whose gitdir: line points under <root>/.git/worktrees/ IS a
+//     linked worktree, and is skipped unless [topology] index_worktrees opts in;
+//   - a .git file pointing under <root>/.git/modules/ is a SUBMODULE, whose files
+//     are part of this tree and stay indexed — this rule never prunes one;
+//   - anything else — an unreadable file, a missing gitdir: line, an absolute
+//     path elsewhere on the machine (a worktree of a DIFFERENT repository
+//     vendored in by hand) — is not skipped. The walk does not guess.
+//
+// The gitdir: target may be relative (git writes a submodule's as
+// ../.git/modules/<name>) and either side may be spelled through a symlink
+// (/var vs /private/var on macOS, where git records the path it was handed), so
+// both are resolved before comparison.
+func linkedWorktree(root, dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false
+	}
+	target, ok := gitdirTarget(data)
+	if !ok {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	target = canonicalPath(filepath.Clean(target))
+	worktrees := canonicalPath(filepath.Join(root, ".git", "worktrees"))
+	return target == worktrees || strings.HasPrefix(target, worktrees+string(filepath.Separator))
+}
+
+// gitdirTarget extracts the path from a .git file's contents. A .git file holds
+// one line, `gitdir: <path>`; git writes nothing else, and a file that does not
+// match that shape is not a gitdir pointer at all (ok is false, and the caller
+// must not skip on a guess).
+func gitdirTarget(data []byte) (string, bool) {
+	line, _, _ := strings.Cut(string(data), "\n")
+	target, found := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
+	if !found {
+		return "", false
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", false
+	}
+	return target, true
+}
+
+// canonicalPath resolves symlinks when it can, so two spellings of one directory
+// compare equal. A path that cannot be resolved is returned unchanged: the
+// caller's comparison then fails closed (not a worktree), which is the same
+// answer the rule gives any path it cannot read.
+func canonicalPath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 // resyncSkipsFile reports whether the walk excludes one file. Its directory's
@@ -268,9 +351,11 @@ func (idx *Indexer) pruneDeletedChanged(present map[string]bool) (bool, error) {
 //
 // This is the FLOOR, not the whole rule. The resync walk additionally honours
 // .gitignore / .ignore and [topology] exclude_patterns, both of which can only
-// exclude more. A repository that tracks its own vendor/ tree still does not
-// get it indexed, and a workspace with no ignore file behaves exactly as it did
-// before the walk learned to read them.
+// exclude more, plus the linked-worktree rule, which is the one exclusion in the
+// chain that is on by default AND has an opt-out ([topology] index_worktrees).
+// A repository that tracks its own vendor/ tree still does not get it indexed,
+// and a workspace with no ignore file behaves exactly as it did before the walk
+// learned to read them.
 func shouldSkipDir(name string) bool {
 	if len(name) > 1 && name[0] == '.' {
 		return true

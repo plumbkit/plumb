@@ -101,6 +101,19 @@
 
 ### Changed
 
+- **The indexer skips linked worktrees, and keeps submodules (PLAN-491).** A
+  workspace holding agent worktrees (`plumb-wt-*`, `plumb-review-*`) indexed each
+  one as another full copy of the repository — 20,291 files and 753 MiB in this
+  workspace, with resync cycles that rarely reached idle, because a worktree is
+  untracked but not gitignored and every worktree created or removed mid-walk meant
+  another full resync. The resync walk now recognises a linked worktree from git's
+  own bookkeeping — a nested `.git` FILE whose `gitdir:` points under
+  `<root>/.git/worktrees/` — and prunes it. A `.git` file pointing under
+  `<root>/.git/modules/` is a SUBMODULE and stays indexed, so `./plumb` in this
+  workspace is unaffected, and anything the walk cannot classify (an unreadable
+  file, no `gitdir:` line, a path outside this repository) is not skipped at all:
+  it does not guess. `[topology] index_worktrees = true` includes worktrees again
+  for a workspace that wants them.
 - **`git` reads `merge-tree`, `check-attr` and `worktree list`, and worktree
   sub-verbs are tiered (PLAN-454).** `merge-tree` (both the trivial and the
   `--write-tree` form) and `check-attr` join the read tier: they move no ref and

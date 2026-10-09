@@ -37,6 +37,16 @@ type Indexer struct {
 	// resync walk; set once before Start and not mutated afterwards.
 	excludePatterns []string
 
+	// indexWorktrees is [topology] index_worktrees. False (the default) makes the
+	// resync walk prune a LINKED WORKTREE of this workspace's own repository: the
+	// directory holds a .git FILE whose gitdir points under <workspace>/.git/
+	// worktrees/, so it is a second full copy of the tree rather than another
+	// tree. Submodules (a .git file pointing under <workspace>/.git/modules/) are
+	// never pruned by this rule, and neither is anything the rule cannot read:
+	// see linkedWorktree. Read by the resync walk; set once before Start and not
+	// mutated afterwards.
+	indexWorktrees bool
+
 	// extractTimeout caps one file's parse. The size gates bound how much source
 	// a grammar sees, not how long it spends on it — a pathological error-recovery
 	// path can burn tens of seconds on a file well inside maxSize — and the worker

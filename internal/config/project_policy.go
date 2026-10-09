@@ -280,13 +280,19 @@ var policyCollabFreeFields = map[string]bool{
 // exclude_patterns can, which is why it is absent from this list. See its entry
 // in projectFieldClasses for the reasoning.
 //
+// index_worktrees is free for the opposite reason to exclude_patterns: it is the
+// only key here that can only ADD to the index. Nothing it does can hide a file,
+// and what it names — .git/worktrees/, this workspace's own local git
+// bookkeeping — is not something a clone can carry, so a hostile repository has
+// nothing to set it against.
+//
 // An ALLOW-list, like its [lsp], [collab] and [commands] siblings and for the
 // same reason: a [topology] key added later is gated until someone decides
 // otherwise, rather than free until someone remembers.
 var policyTopologyFreeFields = map[string]bool{
 	"enabled": true, "resync_on_attach": true, "max_file_size_bytes": true,
 	"extract_timeout_seconds": true, "resync_batch": true, "resync_pause_ms": true,
-	"resync_interval_minutes": true, "watch": true,
+	"resync_interval_minutes": true, "watch": true, "index_worktrees": true,
 }
 
 // isFreeTopologyField reports whether a [topology] key is one a project may set

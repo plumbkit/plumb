@@ -300,6 +300,16 @@ type TopologyConfig struct {
 	ResyncPauseMs int `toml:"resync_pause_ms"`
 	// ResyncIntervalMinutes is the interval between full resyncs. 0 disables periodic resync. Default 60.
 	ResyncIntervalMinutes int `toml:"resync_interval_minutes"`
+	// IndexWorktrees indexes the linked worktrees of this workspace's own
+	// repository (plumb-wt-*, plumb-review-*, or any `git worktree add`). Default
+	// false: a linked worktree is a second full copy of the tree, so indexing
+	// each one multiplies both the index and the resync walk for no new
+	// information — one workspace reached 20,291 files and 753 MiB this way. It
+	// is an OPT-IN rather than an unconditional exclusion because the rule is
+	// exact: only a directory whose .git FILE records a gitdir under
+	// <workspace>/.git/worktrees/ is skipped, so submodules
+	// (<workspace>/.git/modules/) stay indexed either way.
+	IndexWorktrees bool `toml:"index_worktrees"`
 	// Watch enables OS-level file-system watching: any change to a source file —
 	// by this agent, another agent, or an external editor — is re-indexed at the
 	// moment it happens, instead of waiting for a periodic resync. Default true.
