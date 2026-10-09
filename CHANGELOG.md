@@ -159,6 +159,10 @@
   deliveries visible instead of asserting an empty mailbox. Shared connections
   resolve mailbox consent from the recipient's project and capture recipient
   identity with its workspace so concurrent re-pins cannot mix their routing.
+  Stop observations are serialised per recipient and use cached daemon handles
+  without opening SQLite or waiting on a busy pool; a cold or slow mailbox cannot
+  hold up another recipient's probe. Confirmed absent stores still allow a first
+  message in the other consented store to notify.
 - **Git fixture trace portability.** The test that checks fixture commits do not
   launch background maintenance now identifies Git's command event rather than
   assuming its traced executable has no absolute path, supporting Apple Git.

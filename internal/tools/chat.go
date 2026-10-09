@@ -32,9 +32,9 @@ import (
 // now be shown early and still be waiting in check_messages, but it can never be
 // marked read by a result nobody read.
 
-// chatClaimTimeout bounds a delivery read. Delivery runs on the response path of
-// unrelated tool calls, so a slow disk must cost latency on the message, never
-// on the tool the agent actually called.
+// chatClaimTimeout is the delivery query's context budget. Store acquisition and
+// SQLite's existing busy handler can take longer; it is not a hard elapsed-time
+// limit. Hook clients enforce their own deadline and never open SQLite handles.
 const chatClaimTimeout = 250 * time.Millisecond
 
 // maxDeliveredPerCall caps how many messages one delivery hands over, so a burst

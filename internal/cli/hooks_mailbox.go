@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -101,6 +102,8 @@ func (s *connSession) hookInbox(external string) (tools.Inbox, bool) {
 	}
 	ctx := mcp.WithLogicalAgent(s.ctx, external)
 	inbox := s.knownInboxFor(ctx)
+	inbox.WorkspaceReader = func() (*collab.Store, error) { return s.collabPool.probeResult(inbox.Root) }
+	inbox.GlobalReader = s.collabPool.probeGlobalResult
 	return inbox, inbox.Self != "" && inbox.SelfID != "" && inbox.Root != ""
 }
 
@@ -108,13 +111,6 @@ func (s *connSession) hookInbox(external string) (tools.Inbox, bool) {
 // pooled handles with delivery's policy and predicate. CWD/name guesses are not
 // routing evidence. The response is metadata only and never claims a note.
 func (r *connRegistry) mailboxProbe(ctx context.Context, request hookMailboxRequest) (hookMailboxReply, error) {
-	if request.Stop {
-		unlock, err := r.lockStopMailbox(ctx)
-		if err != nil {
-			return hookMailboxReply{}, err
-		}
-		defer unlock()
-	}
 	r.mu.Lock()
 	var resolvers []func(string) (tools.Inbox, bool)
 	for _, h := range r.conns {
@@ -134,7 +130,18 @@ func (r *connRegistry) mailboxProbe(ctx context.Context, request hookMailboxRequ
 	if matches != 1 {
 		return hookMailboxReply{}, errors.New("mailbox recipient unavailable or ambiguous")
 	}
+	key := request.SessionID + "\x00" + inbox.Root + "\x00" + inbox.SelfID
+	if request.Stop {
+		unlock, err := r.lockStopMailbox(ctx, key)
+		if err != nil {
+			return hookMailboxReply{}, err
+		}
+		defer unlock()
+	}
 	snapshot, err := inbox.Snapshot(ctx)
+	if err == nil {
+		err = ctx.Err()
+	}
 	if err != nil {
 		return hookMailboxReply{}, err
 	}
@@ -142,28 +149,48 @@ func (r *connRegistry) mailboxProbe(ctx context.Context, request hookMailboxRequ
 		Session: inbox.Self, Workspace: inbox.Root, Count: snapshot.Count,
 	}}
 	if request.Stop && snapshot.Count > 0 {
-		key := request.SessionID + "\x00" + inbox.Root + "\x00" + inbox.SelfID
 		reply.Notify = r.shouldNotifyMailbox(key, snapshot.Fingerprint)
 	}
 	return reply, nil
 }
 
-// lockStopMailbox serialises the snapshot and its notification decision. Ordering
-// requests before their queries is insufficient: a delayed query may see newer
-// mail than a later request. A waiting hook retains its original deadline.
-func (r *connRegistry) lockStopMailbox(ctx context.Context) (func(), error) {
+// stopMailboxState holds one recipient's gate and notice fingerprint. Map access
+// and fingerprint updates use registry.mu; its gate orders snapshot/decision
+// pairs without coupling healthy recipients to another recipient's slow query.
+type stopMailboxState struct {
+	gate        chan struct{}
+	fingerprint string
+	notified    bool
+}
+
+func (r *connRegistry) stopMailboxStateFor(key string) *stopMailboxState {
 	r.mu.Lock()
-	if r.stopMailGate == nil {
-		r.stopMailGate = make(chan struct{}, 1)
+	defer r.mu.Unlock()
+	if r.stopMailSeen == nil {
+		r.stopMailSeen = make(map[string]*stopMailboxState)
 	}
-	gate := r.stopMailGate
-	r.mu.Unlock()
+	state := r.stopMailSeen[key]
+	if state == nil && len(r.stopMailSeen) < maxStopMailStates {
+		state = &stopMailboxState{gate: make(chan struct{}, 1)}
+		r.stopMailSeen[key] = state
+	}
+	return state
+}
+
+// lockStopMailbox serialises only this recipient's snapshot and notification
+// decision. Policy resolution precedes the gate; a waiting hook keeps its
+// original deadline. Saturation fails open rather than adding unbounded gates.
+func (r *connRegistry) lockStopMailbox(ctx context.Context, key string) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	state := r.stopMailboxStateFor(key)
+	if state == nil {
+		return nil, errors.New("mailbox probe state unavailable")
+	}
 	select {
-	case gate <- struct{}{}:
-		return func() { <-gate }, nil
+	case state.gate <- struct{}{}:
+		return func() { <-state.gate }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -173,15 +200,13 @@ func (r *connRegistry) lockStopMailbox(ctx context.Context) (func(), error) {
 // or is ignored. New arrivals can notify again. This is bounded in-memory hook
 // state, not a delivery watermark; saturation allows completion.
 func (r *connRegistry) shouldNotifyMailbox(key, fingerprint string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.stopMailSeen == nil {
-		r.stopMailSeen = make(map[string]string)
-	}
-	previous, exists := r.stopMailSeen[key]
-	if !exists && len(r.stopMailSeen) >= maxStopMailStates {
+	state := r.stopMailboxStateFor(key)
+	if state == nil {
 		return false
 	}
-	r.stopMailSeen[key] = fingerprint
-	return !exists || previous != fingerprint
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	notify := !state.notified || state.fingerprint != fingerprint
+	state.fingerprint, state.notified = fingerprint, true
+	return notify
 }

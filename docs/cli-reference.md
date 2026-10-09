@@ -417,7 +417,13 @@ Properties both hooks hold, and that the tests pin:
 - **Daemon authority.** Both hooks use the established live recipient's delivery
   policy, workspace, identity and verified predecessor identities. They never open
   a separate mailbox database or fall back to offline inspection. Missing linkage,
-  unsupported older daemons and uncertain probes allow completion.
+  unsupported older daemons and uncertain probes allow completion. Probes use
+  pooled handles only: an existing database not yet opened by the daemon is
+  unavailable until ordinary message delivery opens it. A confirmed absent store
+  is empty and does not hide messages in the other consented store. Stop queries
+  are serialised per recipient, so a slow recipient cannot delay another's probe.
+  The hook client enforces a 300 ms deadline; SQLite's existing busy handler and
+  filesystem reads inside the daemon are not themselves hard elapsed-time bounds.
 - **A count, never a body.** The metadata probe does not claim or disclose
   message text. Pasting a peer's words into hook feedback would be a direct
   injection channel into the agent; the body stays unclaimed and arrives through
