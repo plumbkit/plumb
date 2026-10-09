@@ -12,8 +12,8 @@
 # binary is pure-Go (CGO_ENABLED=0), so arch rarely matters, but pass
 # DOCKER_PLATFORM=linux/amd64 to the make target for amd64 fidelity (emulated).
 #
-# Keep the Go version in step with go.mod (currently `go 1.26`).
-FROM golang:1.26-bookworm
+# Keep the Go version in step with go.mod (currently `go 1.27`).
+FROM golang:1.27-bookworm
 
 # Node is needed only to install pyright (the Python language server).
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \

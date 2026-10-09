@@ -61,14 +61,26 @@
   - Go: bubbletea v2.0.10 → v2.1.0, charmbracelet/x/ansi v0.11.8 →
     v0.11.9, golang.org/x/sys v0.48.0 → v0.49.0, and the indirect
     ultraviolet, regexp2 v2.8.4, go-runewidth v0.0.31 and x/sync v0.24.0
-    modules. gotreesitter and purego are already at their latest; the Go toolchain
-    stays on go1.26.9, the newest 1.26 patch (moving to Go 1.27 would raise
-    the macOS minimum of release binaries, so it is a separate decision).
+    modules. gotreesitter and purego are already at their latest. The Go
+    toolchain moves separately, in the entry below.
   - Web UI: svelte 5.57.1 → 5.57.2 and vite 8.3.2 → 8.3.4, with the
     lockfile refreshed; the embedded bundle is rebuilt with Node 22, as CI
     checks it. `npm audit` reports no vulnerabilities.
   - CI's golangci-lint pin moves v2.13.2 → v2.14.0, matching the release
     developers run locally; the tree already lints clean under it.
+- **Go 1.27: toolchain go1.26.9 → go1.27.2, `go` directive 1.26.0 → 1.27.0.**
+  Release binaries for macOS now need macOS 13 Ventura or later, because
+  Go 1.27 dropped macOS 12 and its linker stamps 13.0 as the minimum.
+  Building from source or with `go install` needs Go 1.27; with the default
+  `GOTOOLCHAIN=auto`, an older go command downloads it. The Docker images
+  (root, `build/docker/`, `.oss-scanner/`) build on `golang:1.27-bookworm`.
+  Go 1.27's gofmt alignment fix reformats no file in the tree. The new `go`
+  directive switches on two GODEBUG defaults. Tracebacks print goroutine
+  pprof labels, and plumb sets none. And on macOS, `SSL_CERT_FILE` or
+  `SSL_CERT_DIR`, when set, now supply the TLS roots in place of the system
+  verifier; this affects only the opt-in semantic-search embedding clients,
+  plumb's one outbound HTTPS path. `GODEBUG=x509sslcertoverrideplatform=0`
+  restores the old behaviour.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were

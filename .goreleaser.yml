@@ -137,6 +137,9 @@ release:
 
     Verify your download against `checksums.txt`.
 
+    > **macOS 13 Ventura or later.** plumb is built with Go 1.27, which does not
+    > support older macOS releases.
+
     > **macOS note:** these binaries are not yet code-signed. On a direct download
     > Gatekeeper may block the first run — clear the quarantine flag once:
     > `xattr -dr com.apple.quarantine ./plumb`. Homebrew installs are unaffected.

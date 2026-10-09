@@ -14,13 +14,13 @@
 # Contract (see github.com/anthropics/oss-scanner, templates/Dockerfile): the
 # checkout lives at /src, the final stage keeps a package manager, and a failing
 # test must not fail the build. Keep the Go version in step with go.mod
-# (currently `go 1.26`, `toolchain go1.26.9`), mirroring build/docker/*.Dockerfile,
+# (currently `go 1.27`, `toolchain go1.27.2`), mirroring build/docker/*.Dockerfile,
 # and the language-server set in step with the `integration` job in
 # .github/workflows/ci.yml.
 #
 # Check it the way the scanner builds it: `tools/check plumb` from a checkout of
 # github.com/anthropics/oss-scanner, then run the commands in the brief.
-FROM golang:1.26-bookworm
+FROM golang:1.27-bookworm
 
 # The image ships GOTOOLCHAIN=local, which would fail the build the day go.mod's
 # `go` line passes the image's Go. auto fetches that toolchain now, into the

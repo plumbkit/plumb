@@ -12,11 +12,11 @@
 #
 # Build context is the repo root (the builder needs the full source). arm64 by
 # default; TARGETARCH follows DOCKER_PLATFORM from the make target. Keep the Go
-# version in step with go.mod (currently `go 1.26`).
+# version in step with go.mod (currently `go 1.27`).
 
 # ── builder: compile a pure-Go (CGO-off) Linux binary, version-stamped exactly
 #    like the Makefile's build target. ─────────────────────────────────────────
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 ARG VERSION=docker
 ARG TARGETARCH
 WORKDIR /src

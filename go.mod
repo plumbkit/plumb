@@ -1,8 +1,8 @@
 module github.com/plumbkit/plumb
 
-go 1.26.0
+go 1.27.0
 
-toolchain go1.26.9
+toolchain go1.27.2
 
 require (
 	charm.land/bubbles/v2 v2.2.1
