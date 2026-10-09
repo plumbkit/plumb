@@ -29,6 +29,11 @@ import (
 // opened — a permission or read-only-filesystem error, never contention, since
 // flock blocks rather than failing — it falls back to listReadOnly, and locked is
 // false so the caller can say its answer was read without the lock.
+//
+// Its one caller today is `plumb mail` (internal/cli/mail.go,
+// resolveMailSessionReading), which reports locked=false as "unlocked_read". A new
+// caller must surface locked=false the same way rather than discard it: an answer
+// read without the lock must not be presented as an authoritative one.
 func ListForReading() (infos []Info, locked bool, err error) {
 	dir, err := Dir()
 	if err != nil {
@@ -64,6 +69,11 @@ func lockUnavailable(err error) bool {
 // temp file plus rename (writeSessionFileAtomic), so it is read whole or not at
 // all. What it can do is race a session that is starting or ending at this
 // instant, and miss it or still list it; that is the cost callers are told about.
+//
+// An unreadable or unparsable file is skipped without a count, exactly as
+// listLocked skips it. With atomic writes such a file is not a torn write in
+// progress but a damaged one, which the locked path drops just as silently, so a
+// count here would describe the fallback as less reliable than it is.
 func listReadOnly(dir string) ([]Info, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
