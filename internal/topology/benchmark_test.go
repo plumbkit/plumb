@@ -21,8 +21,8 @@ import (
 	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
 )
 
-func benchRepoRoot(t testing.TB) string {
-	t.Helper()
+func benchRepoRoot(tb testing.TB) string {
+	tb.Helper()
 	dir, _ := os.Getwd()
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
@@ -30,17 +30,17 @@ func benchRepoRoot(t testing.TB) string {
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			t.Fatal("could not find repo root")
+			tb.Fatal("could not find repo root")
 		}
 		dir = parent
 	}
 }
 
-func requireGoplsBench(t testing.TB) string {
-	t.Helper()
+func requireGoplsBench(tb testing.TB) string {
+	tb.Helper()
 	p, err := exec.LookPath("gopls")
 	if err != nil {
-		t.Skip("gopls not found on PATH")
+		tb.Skip("gopls not found on PATH")
 	}
 	return p
 }
@@ -157,7 +157,7 @@ func warmTopology(t *testing.T, workspace string) (query func(), cold time.Durat
 // medianQueryLatency runs fn iters times and returns the median duration.
 func medianQueryLatency(fn func(), iters int) time.Duration {
 	durs := make([]time.Duration, iters)
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		s := time.Now()
 		fn()
 		durs[i] = time.Since(s)
@@ -189,7 +189,7 @@ func TestDoD7_ConcurrentSearchNoBusy(t *testing.T) {
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	errCh := make(chan error, 100)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -234,7 +234,7 @@ func BenchmarkTopologySearch(b *testing.B) {
 	}
 	ctx := context.Background()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_, _ = store.Search(ctx, "workspacePool", topology.SearchOpts{Limit: 10})
 	}
 }

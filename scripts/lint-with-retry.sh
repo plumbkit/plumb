@@ -3,8 +3,9 @@
 # agent's lint is mid-run, golangci-lint reports "parallel golangci-lint is
 # running" and exits non-zero — a contention signal, not a lint failure. Retry
 # with capped backoff, then fail for real; any other failure is printed unchanged
-# and exits with golangci-lint's own status. See the `lint` Makefile target and
-# docs/contributing.md#build--verify.
+# and exits with golangci-lint's own status. Arguments are passed through to
+# `golangci-lint run` (`make lint-tags` adds --build-tags). See the `lint` and
+# `lint-tags` Makefile targets and docs/contributing.md#build--verify.
 #
 # The budget is sized for a QUEUE, not for one peer. A single lint on this repo
 # takes ~5s warm or cold (measured), so the previous 5 attempts / 45s looked
@@ -19,7 +20,7 @@ attempts=${LINT_RETRY_ATTEMPTS:-12}
 max_sleep=${LINT_RETRY_MAX_SLEEP:-15}
 rc=1
 for ((attempt = 1; attempt <= attempts; attempt++)); do
-	out="$(golangci-lint run 2>&1)"
+	out="$(golangci-lint run "$@" 2>&1)"
 	rc=$?
 	printf '%s\n' "$out"
 	if [ "$rc" -eq 0 ]; then

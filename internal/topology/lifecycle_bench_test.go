@@ -77,34 +77,34 @@ func benchExtractors() []topology.Extractor {
 }
 
 // benchCorpus materialises the pinned benchmark revision into a fresh temp directory.
-func benchCorpus(t testing.TB) string {
-	t.Helper()
-	return unpackCorpus(t, benchRepoRoot(t), t.TempDir())
+func benchCorpus(tb testing.TB) string {
+	tb.Helper()
+	return unpackCorpus(tb, benchRepoRoot(tb), tb.TempDir())
 }
 
-func unpackCorpus(t testing.TB, root, dst string) string {
-	t.Helper()
+func unpackCorpus(tb testing.TB, root, dst string) string {
+	tb.Helper()
 	rev := lifecycleBenchRevision
-	tarball := filepath.Join(t.TempDir(), "corpus.tar")
+	tarball := filepath.Join(tb.TempDir(), "corpus.tar")
 	archive := exec.Command("git", "-C", root, "archive", "--format=tar", "-o", tarball, rev) //nolint:gosec // G204: rev is operator-supplied bench configuration, not request data
 	if out, err := archive.CombinedOutput(); err != nil {
-		t.Fatalf("git archive: %v: %s", err, out)
+		tb.Fatalf("git archive: %v: %s", err, out)
 	}
 	untar := exec.Command("tar", "-x", "-f", tarball, "-C", dst)
 	if out, err := untar.CombinedOutput(); err != nil {
-		t.Fatalf("tar: %v: %s", err, out)
+		tb.Fatalf("tar: %v: %s", err, out)
 	}
 	return dst
 }
 
-func walBytes(t testing.TB, dbPath string) int64 {
-	t.Helper()
+func walBytes(tb testing.TB, dbPath string) int64 {
+	tb.Helper()
 	fi, err := os.Stat(dbPath + "-wal")
 	if os.IsNotExist(err) {
 		return 0
 	}
 	if err != nil {
-		t.Fatalf("stat wal: %v", err)
+		tb.Fatalf("stat wal: %v", err)
 	}
 	return fi.Size()
 }
@@ -192,12 +192,12 @@ func TestLifecycleSaveCost(t *testing.T) {
 
 // timeSave rewrites one file, enqueues it and waits for the indexer to report a
 // completed cycle, returning the wall-clock time that took.
-func timeSave(t testing.TB, store *topology.Store, ws, rel string, original []byte, pass int) time.Duration {
-	t.Helper()
+func timeSave(tb testing.TB, store *topology.Store, ws, rel string, original []byte, pass int) time.Duration {
+	tb.Helper()
 	abs := filepath.Join(ws, rel)
 	body := append(append([]byte{}, original...), []byte(fmt.Sprintf("\n// bench pass %d\n", pass))...)
 	if err := os.WriteFile(abs, body, 0o600); err != nil {
-		t.Fatalf("write %s: %v", rel, err)
+		tb.Fatalf("write %s: %v", rel, err)
 	}
 	last := store.Status().LastSync
 	start := time.Now()
@@ -208,14 +208,14 @@ func timeSave(t testing.TB, store *topology.Store, ws, rel string, original []by
 			return time.Since(start)
 		}
 		if time.Since(start) > 60*time.Second {
-			t.Fatalf("save of %s did not complete", rel)
+			tb.Fatalf("save of %s did not complete", rel)
 		}
 		time.Sleep(50 * time.Microsecond)
 	}
 }
 
-func waitIndexed(t testing.TB, store *topology.Store) {
-	t.Helper()
+func waitIndexed(tb testing.TB, store *topology.Store) {
+	tb.Helper()
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		s := store.Status()
@@ -224,5 +224,5 @@ func waitIndexed(t testing.TB, store *topology.Store) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("initial index did not complete")
+	tb.Fatal("initial index did not complete")
 }

@@ -36,8 +36,8 @@ const tierDTimeout = 60 * time.Second
 func makeBareFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if real, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = real
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
 	}
 	if err := os.Mkdir(filepath.Join(dir, ".plumb"), 0o755); err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func setGitIdentity(t *testing.T, dir string) {
 
 func mkTmpHome(t *testing.T) string {
 	t.Helper()
-	tmpHome, err := os.MkdirTemp("/tmp", "plsmk")
+	tmpHome, err := os.MkdirTemp("/tmp", "plsmk") //nolint:usetesting // the daemon's unix socket lives under this HOME; macOS t.TempDir() would push it past the ~104-byte limit
 	if err != nil {
 		t.Fatal("create tmpHome:", err)
 	}

@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,8 +108,8 @@ func makeFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 
-	if real, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = real
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
 	}
 
 	must := func(e error) {
@@ -361,7 +362,7 @@ func (c *mcpClient) handleServerRequest(ctx context.Context, req mcpMsg) {
 	}
 	resp := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      json.RawMessage(req.ID),
+		"id":      req.ID,
 		"result":  result,
 	}
 	c.encMu.Lock()
@@ -372,11 +373,11 @@ func (c *mcpClient) handleServerRequest(ctx context.Context, req mcpMsg) {
 // send writes a JSON-RPC request. Returns the ID used.
 func (c *mcpClient) send(method string, params any) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
-	rawID := json.RawMessage(fmt.Sprintf("%d", id))
+	rawID := json.RawMessage(strconv.FormatInt(id, 10))
 
 	msg := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      json.RawMessage(rawID),
+		"id":      rawID,
 		"method":  method,
 	}
 	if params != nil {

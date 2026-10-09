@@ -339,6 +339,17 @@
   messages now attaches actionable `reply: leave_note(...)` handles for all distinct
   conversation threads rather than only the final message, and marks each delivered
   message row with its conversation thread.
+- **Files behind custom build tags are now linted and format-checked.**
+  golangci-lint only analyses the files the default build selects, so the
+  integration suite, `cmd/smoke`, the `clientsmoke` tiers and the `parity` and
+  `race` variants were never linted. A misaligned struct sat behind the
+  `clients_conformance` tag for seven weeks. `make lint-tags`, now part of
+  `make verify` and so of CI, lints them all in one run with every tag that
+  `scripts/build-tags.sh` finds in the tree, so a new tag is covered without a
+  config change. The 16 findings it surfaced are fixed: `intrange`,
+  `perfsprint`, `predeclared`, `thelper` and `unconvert`. Three `usetesting`
+  hits are kept with a reason: two short `/tmp` HOMEs for the macOS socket-path
+  limit, and failure evidence that has to outlive the test.
 
 ## 0.23.0 (2026-10-07)
 

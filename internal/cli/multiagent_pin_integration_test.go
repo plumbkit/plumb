@@ -790,7 +790,7 @@ func testDeclaredFirstContactPairsRefusePerAgent(t *testing.T) {
 	if testing.Short() {
 		pairs = 5
 	}
-	for i := 0; i < pairs; i++ {
+	for i := range pairs {
 		m := newMultiAgentConn(t)
 		wsA, wsB := freshTempDir(t), freshTempDir(t)
 		mustGitDir(t, wsA)
