@@ -381,21 +381,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// `plumb web` invocation sends "web-start" over the control socket. It reuses
 	// the daemon's live config store and read-path snapshot files, so it never
 	// reimplements domain logic. Closed on daemon shutdown.
-	webServer := web.New(web.Deps{
-		Store:       store,
-		MetricsPath: monitor.SnapshotPath(),
-		LogPath:     daemonLogPath(),
-		StartedAt:   daemonStartedAt,
-		// getGlobal never creates collab-xproject.db — a daemon whose sessions
-		// have never exchanged a cross-project message never materialises it,
-		// including from the dashboard reading this.
-		CollabGlobalStore: collabPool.getGlobal,
-		// healthFor reads the LIVE indexer's health for a workspace this daemon
-		// holds a store for (never opening one, so a dashboard poll cannot
-		// materialise an index); ok=false leaves the DTO's failing flag false —
-		// "not known", not "fine".
-		TopologyHealth: topoPool.healthFor,
-	})
+	webServer := web.New(daemonWebDeps(store, collabPool, topoPool, daemonStartedAt))
 	defer webServer.Close()
 
 	ctrlPath := daemonCtrlSocketPath()
