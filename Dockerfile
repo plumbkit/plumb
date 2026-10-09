@@ -10,11 +10,11 @@
 # warns and still serves topology, filesystem, git, and memory tools).
 #
 # Build context is the repo root. Keep the Go version in step with go.mod
-# (currently `go 1.26`), mirroring build/docker/cleanroom.Dockerfile.
+# (currently `go 1.27`), mirroring build/docker/cleanroom.Dockerfile.
 
 # ── builder: compile a pure-Go (CGO-off) Linux binary, version-stamped like the
 #    Makefile's build target. ─────────────────────────────────────────────────
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.27-bookworm AS builder
 ARG VERSION=docker
 ARG TARGETARCH
 WORKDIR /src

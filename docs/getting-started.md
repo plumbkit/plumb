@@ -27,8 +27,11 @@ Every supported language is enabled by default and activates the moment its
 server is on your `PATH`. To *exclude* one even when its server is installed,
 set `[lsp.<lang>] enabled = false` (see [below](#enabling-more-languages)).
 
-**The Go toolchain** (1.26+) if you install plumb with `go install` or build
+**The Go toolchain** (1.27+) if you install plumb with `go install` or build
 from source.
+
+**macOS 13 Ventura or later** on a Mac. Plumb is built with Go 1.27, which
+does not support older macOS releases.
 
 ## 2. Install plumb
 

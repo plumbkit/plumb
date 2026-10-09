@@ -40,14 +40,14 @@ type codexConformanceConfig struct {
 }
 
 type scriptedProvider struct {
-	mu                sync.Mutex
-	step              int
-	scenario          *conformanceScenario
-	config            codexConformanceConfig
-	requiredTools     []string
-	toolNames         map[string]toolRef
-	advertisedTools   int
-	err               error
+	mu              sync.Mutex
+	step            int
+	scenario        *conformanceScenario
+	config          codexConformanceConfig
+	requiredTools   []string
+	toolNames       map[string]toolRef
+	advertisedTools int
+	err             error
 }
 
 func newScriptedProvider(tmpHome, fixture string, config codexConformanceConfig) *scriptedProvider {
