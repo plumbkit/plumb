@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -570,5 +571,45 @@ func TestPumpSgtdi_ExpandsNewDirectory(t *testing.T) {
 	}
 	if rels := relPaths(root, got); !slices.Equal(rels, []string{"a", "a/b", "a/b/c", "a/b/c/new.go"}) {
 		t.Errorf("got %v", rels)
+	}
+}
+
+// TestStartSgtdi_ChannelsOutliveTheRun: sgtdi v1.3.0 closes the event channels
+// it owns when Watch returns, while its debounce goroutine may still be
+// flushing into them, a send on a closed channel that panics (the race detector
+// caught it under TestWatcher_CyclesDoNotLeak). A run owns its channels, so
+// they are still open after the run has ended.
+func TestStartSgtdi_ChannelsOutliveTheRun(t *testing.T) {
+	run, err := startSgtdi(t.TempDir(), Options{Cooldown: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := run.awaitReady(nil, 30*time.Second); !ready {
+		t.Fatalf("the run was not ready: %v", err)
+	}
+	run.close()
+	for name, ch := range map[string]<-chan fswatcher.WatchEvent{"events": run.src.Events(), "dropped": run.src.Dropped()} {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				t.Errorf("the %s channel was closed when the run ended; sgtdi's debounce goroutine can still send on it", name)
+			}
+		default:
+		}
+	}
+}
+
+// TestStartSgtdi_ProbesTheWatchLimit: a real run carries the inotify probe.
+// Without it only sgtdi's own count is left, which never covers a new
+// directory itself, and only the end-to-end test under a lowered limit
+// (scripts/test-watch-limit.sh) would notice.
+func TestStartSgtdi_ProbesTheWatchLimit(t *testing.T) {
+	run, err := startSgtdi(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(run.close)
+	if run.probe == nil || reflect.ValueOf(run.probe).Pointer() != reflect.ValueOf(inotifyLimitReached).Pointer() {
+		t.Fatal("startSgtdi does not probe the inotify watch limit; a directory created at the limit would go unreported")
 	}
 }

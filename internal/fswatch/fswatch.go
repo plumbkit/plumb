@@ -44,7 +44,8 @@
 //     backend stopped on its own, a restart's initial walk did not finish
 //     within a minute (a stalled mount, say), or (on Linux) the inotify
 //     watch limit left part of the tree unwatched, in the initial walk or in
-//     a directory that arrived later. A consumer then falls back to periodic
+//     a directory that arrived later (probed, so best effort: see
+//     sgtdiRun.limitReached). A consumer then falls back to periodic
 //     reconciliation; the backend keeps delivering what it still watches.
 //   - A directory that arrives whole (created, or moved in) is reported with
 //     its contents. A directory moved away is reported under its own name
@@ -200,9 +201,10 @@ func (w *Watcher) Lost() <-chan struct{} { return w.lost }
 // for the root to return. Close does not close Failed.
 func (w *Watcher) Failed() <-chan struct{} { return w.failed }
 
-// Close stops watching and waits for the backend to finish. A restart's
-// initial walk in progress is the exception: sgtdi cannot interrupt it, so
-// Close stops it and returns without waiting, and the walk ends on its own.
+// Close stops watching and waits for the backend's own goroutines. It never
+// waits for a walk sgtdi cannot interrupt (a restart's initial walk, or a new
+// directory's, on a stalled mount): it stops that run and returns, and the
+// walk ends on its own.
 func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)

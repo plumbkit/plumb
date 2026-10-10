@@ -53,11 +53,21 @@ type startFunc func(root string, opts Options) (*sgtdiRun, error)
 // ReadDirectoryChangesW on Windows. Neither opens the files it watches. sgtdi
 // debounces and applies the exclusion itself, exactly as plumb configured it
 // before this package existed.
+//
+// The run owns its event channels, so sgtdi never closes them. sgtdi v1.3.0
+// closes channels it owns when Watch returns, but does not wait for its
+// debounce goroutine, so a flush already under way can send on the closed
+// channel and panic (the race detector caught it under
+// TestWatcher_CyclesDoNotLeak). A channel nobody closes takes that late send
+// into a buffer nobody reads; sgtdi's sends never block.
 func startSgtdi(root string, opts Options) (*sgtdiRun, error) {
 	ready := make(chan struct{})
+	events := make(chan fswatcher.WatchEvent, fswatcher.DefaultBufferSize)
+	dropped := make(chan fswatcher.WatchEvent, max(fswatcher.DefaultBufferSize/fswatcher.MaxDroppedBufferRatio, fswatcher.MinDroppedBuffer))
 	cfg := []fswatcher.WatcherOpt{
 		fswatcher.WithSeverity(fswatcher.SeverityNone), // plumb does its own logging
 		fswatcher.WithCooldown(opts.Cooldown),
+		fswatcher.WithCustomChannels(events, dropped),
 		fswatcher.WithReadyChannel(ready),
 		fswatcher.WithPath(root, fswatcher.WithDepth(fswatcher.WatchNested)),
 	}
@@ -133,6 +143,11 @@ func (r *sgtdiRun) partial() bool {
 // certainly failed too. When sgtdi's own watch took the last slot, the probe
 // reports the limit as well; degrading a Watcher that is, for now, complete is
 // the safe side to err on, since the next directory would go unwatched.
+//
+// It is best effort. A watch freed between sgtdi's attempt and the probe (a
+// directory deleted in that moment) hides the limit, and a directory whose
+// event never arrives (sgtdi's buffers full: Lost, not Failed) is never
+// probed.
 func (r *sgtdiRun) limitReached(dir string) bool {
 	return r.partial() || (r.probe != nil && r.probe(dir))
 }
@@ -202,7 +217,11 @@ func (w *Watcher) superviseSgtdi(opts Options, run *sgtdiRun, start startFunc, w
 			w.degrade(limitMsg, nil)
 		}
 		end := pumpSgtdi(w, run.src.Events(), run.src.Dropped(), run.stopped, run.limitReached)
-		run.close()
+		if end == endFailed {
+			run.close() // it has stopped already, so this is immediate, and run.err is safe to read
+		} else {
+			run.abandon() // never wait on a walk sgtdi cannot interrupt (a new directory on a stalled mount)
+		}
 		switch end {
 		case endClosed:
 			return

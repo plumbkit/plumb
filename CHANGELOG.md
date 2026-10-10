@@ -248,6 +248,14 @@
   - When the watcher is unavailable and `resync_interval_minutes` is 0, the
     topology index now warns that it will not see external changes until the
     next start.
+- **Stopping a file watcher on Linux or Windows can no longer panic the
+  daemon.** sgtdi/fswatcher v1.3.0 closes the event channels it owns when
+  its watch ends, but does not wait for its debounce goroutine. A flush
+  already under way could then send on a closed channel and panic. Watchers
+  stop on topology close, LSP hibernation and reconfiguration. The race
+  detector caught it in CI (`TestWatcher_CyclesDoNotLeak`). Plumb now passes
+  its own channels (`WithCustomChannels`), which sgtdi never closes; a late
+  send lands in a buffer nobody reads.
 - **Topology recovery guidance no longer says to delete the index under a
   running daemon, and `plumb doctor` now reports an index with a corrupt
   header or schema.** (PLAN-467)

@@ -13,6 +13,7 @@ if [ "$(uname -s)" != "Linux" ]; then
 	echo "test-watch-limit: Linux only" >&2
 	exit 1
 fi
+cd "$(dirname "$0")/.."
 
 orig="$(cat /proc/sys/fs/inotify/max_user_watches)"
 # Every inotify watch this user's processes hold, which is what the limit

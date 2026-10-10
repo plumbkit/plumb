@@ -100,6 +100,28 @@ func TestSuperviseSgtdi_CloseDuringAHungRestartWalk(t *testing.T) {
 	}
 }
 
+// TestSuperviseSgtdi_CloseDuringAHungWalkOfANewDirectory: sgtdi walks a
+// directory that arrives inside its own event loop, which a stalled mount can
+// hang, and cancelling the run does not interrupt that walk. Close does not
+// wait for it either.
+func TestSuperviseSgtdi_CloseDuringAHungWalkOfANewDirectory(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	run, cancelled := hungRun()
+	close(run.ready) // the run started fine; it is a later walk that hangs
+	start, _ := fakeStarts()
+	finished := supervise(t, w, run, start)
+
+	close(w.done)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the Watcher waited on a run whose walk never ended")
+	}
+	if !cancelled.Load() {
+		t.Error("the run was not told to stop")
+	}
+}
+
 // TestPumpSgtdi_NewDirectoryAtTheWatchLimitIsDegraded: sgtdi discards the
 // error when it cannot watch a directory that arrives later, at the inotify
 // watch limit. The pump checks each new directory, so the Watcher says it can
@@ -120,23 +142,26 @@ func TestPumpSgtdi_NewDirectoryAtTheWatchLimitIsDegraded(t *testing.T) {
 	evs := make(chan fswatcher.WatchEvent)
 	runPumpLimited(w, evs, nil, nil, limitReached)
 	t.Cleanup(func() { close(w.done) })
-	// The pump handles one event at a time, so a send returns only once the
-	// event before it has been handled in full.
 	create := func(rel string) {
 		evs <- fswatcher.WatchEvent{Path: filepath.Join(root, rel), Types: []fswatcher.EventType{fswatcher.EventCreate}}
 	}
+	// handled sends rel and then a file event. The pump handles one event at a
+	// time, so the second send returns only once rel has been handled in full.
+	handled := func(rel string) {
+		create(rel)
+		create("file.go")
+	}
 
-	create("file.go")
-	create("fine")
-	create("full")
+	handled("file.go")
+	handled("fine")
 	if isClosed(w.failed) {
 		t.Fatal("a new directory under the limit degraded the Watcher")
 	}
-	create("later")
+	handled("full")
 	if !isClosed(w.failed) {
 		t.Fatal("a new directory at the watch limit did not close Failed")
 	}
-	create("file.go")
+	handled("later")
 
 	mu.Lock()
 	got := slices.Clone(probed)
