@@ -280,6 +280,12 @@ func (s *Store) ResolveNodes(ctx context.Context, name string, hint NodeHint) ([
 	return ResolveNodes(ctx, s.db, name, hint)
 }
 
+// ResolveSelector is ResolveNodes classified as none, one or ambiguous. See
+// selector_resolution.go.
+func (s *Store) ResolveSelector(ctx context.Context, name string, hint NodeHint) (SelectorResolution, error) {
+	return ResolveSelector(ctx, s.db, name, hint)
+}
+
 // ExploreFrom performs a bounded BFS from an already-resolved centre node.
 func (s *Store) ExploreFrom(ctx context.Context, centre Node, opts ExploreOpts) (*Neighbourhood, error) {
 	return ExploreFrom(ctx, s.db, centre, opts)
@@ -317,13 +323,44 @@ func (s *Store) Health() Health {
 // available for a subject in this workspace, and carries the wording to show
 // when they are not. See callgraph.go for the rule.
 //
-// Nothing in the tool layer calls this yet, deliberately: the lifecycle is now
-// durable across incremental re-indexes, but each consumer still needs a measured
-// before/after before it opts in. That exclusion is enforced, not merely intended —
-// ExploreOpts.IncludeDerivedCalls defaults to false, so a traversal asking for
-// `calls` edges does not receive them until the deliberate step-6 rollout.
+// Derived call edges are opt-in per traversal: ExploreOpts.IncludeDerivedCalls
+// and ImpactOpts.IncludeDerivedCalls default to false, and a consumer sets them
+// only from an admission on the traversal's own subject — DerivedCallsAdmittedFor
+// for a node-centred traversal, AdmitLanguage for a workspace-wide one.
 func (s *Store) AdmitCallGraph(ctx context.Context, subject CallGraphSubject) (CallGraphAdmission, error) {
 	return AdmitCallGraph(ctx, s.db, subject)
+}
+
+// DerivedCallsAdmittedFor reports whether a traversal centred on nodeID may
+// include derived call edges: the admission rule on the node's own subject,
+// failing closed on any error. See DerivedCallsAdmitted.
+func (s *Store) DerivedCallsAdmittedFor(ctx context.Context, nodeID int64) bool {
+	return DerivedCallsAdmitted(ctx, s.db, nodeID)
+}
+
+// AdmitLanguage applies the admission rule to the workspace's indexed package
+// nodes of one language, in index order, and answers with the first admitted
+// package's decision. ok is false when no package of that language is admitted,
+// including when none is indexed. An error from the index or the rule is
+// returned, not swallowed: a workspace-wide answer must not silently degrade.
+func (s *Store) AdmitLanguage(ctx context.Context, language string) (decision CallGraphAdmission, ok bool, err error) {
+	pkgs, err := s.NodesByKind(ctx, KindPackage)
+	if err != nil {
+		return CallGraphAdmission{}, false, err
+	}
+	for _, p := range pkgs {
+		if p.Language != language {
+			continue
+		}
+		d, err := s.AdmitCallGraph(ctx, CallGraphSubject{Language: p.Language, Path: p.Path})
+		if err != nil {
+			return CallGraphAdmission{}, false, err
+		}
+		if d.Admitted {
+			return d, true, nil
+		}
+	}
+	return CallGraphAdmission{}, false, nil
 }
 
 // CallGraphSubjectForPath derives a file subject's language from the index. It
