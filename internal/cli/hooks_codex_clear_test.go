@@ -115,9 +115,10 @@ func TestCodexHookInput_DecodesSourceFromTheWire(t *testing.T) {
 	}
 }
 
-// The announcement reaches the daemon's real control handler and becomes a marker
-// that its conversation's first call consumes exactly once.
-func TestCodexSessionStartHook_ClearReachesTheRealControlHandler(t *testing.T) {
+// clearMarkingDaemon stands up a fake control socket that answers through the
+// daemon's real handler, and returns the marker table it fills.
+func clearMarkingDaemon(t *testing.T) *clearMarkers {
+	t.Helper()
 	probeTestEnv(t)
 	markers := newClearMarkers()
 	fakeCtrlDaemon(t, func(c net.Conn, line string) {
@@ -128,6 +129,30 @@ func TestCodexSessionStartHook_ClearReachesTheRealControlHandler(t *testing.T) {
 		_ = p1.Close()
 		_, _ = c.Write([]byte(r))
 	})
+	return markers
+}
+
+// The production entry point, runCodexHookIO, is wired to the real notifier: a
+// clear payload on stdin leaves a marker in the daemon.
+func TestRunCodexHookIO_ClearReachesTheDaemon(t *testing.T) {
+	markers := clearMarkingDaemon(t)
+	payload := `{"session_id":"thr-NEW","cwd":"/repo","hook_event_name":"SessionStart","source":"clear"}`
+	var out bytes.Buffer
+	if err := runCodexHookIO(bytes.NewReader([]byte(payload)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !markers.take("thr-NEW") {
+		t.Fatal("runCodexHookIO announced nothing to the daemon for source=clear")
+	}
+	if want := codexLinkageJSON(t, "thr-NEW"); out.String() != want {
+		t.Errorf("stdout = %q, want %q", out.String(), want)
+	}
+}
+
+// The announcement reaches the daemon's real control handler and becomes a marker
+// that its conversation's first call consumes exactly once.
+func TestCodexSessionStartHook_ClearReachesTheRealControlHandler(t *testing.T) {
+	markers := clearMarkingDaemon(t)
 
 	got := codexSessionStartJSON(t,
 		codexHookInput{Event: "SessionStart", SessionID: "thr-NEW", Source: "clear"}, notifyConversationCleared)
