@@ -28,11 +28,15 @@ const (
 )
 
 // SelectorResolution is a selector's answer. Node is set only for
-// ResolutionOne, Candidates only for ResolutionAmbiguous.
+// ResolutionOne, Candidates only for ResolutionAmbiguous. Shadowed holds the
+// import, package and file nodes that also matched but were set aside because a
+// declaration did; it is empty when nothing was set aside. A caller discloses
+// it rather than letting the preference pass silently.
 type SelectorResolution struct {
 	Kind       ResolutionKind
 	Node       Node
 	Candidates []Node
+	Shadowed   []Node
 }
 
 // isReference reports a node kind that names something declared elsewhere — an
@@ -60,22 +64,25 @@ func ResolveSelector(ctx context.Context, db *sql.DB, name string, hint NodeHint
 }
 
 func classifyResolution(nodes []Node) SelectorResolution {
-	decls := make([]Node, 0, len(nodes))
+	var decls, refs []Node
 	for _, n := range nodes {
-		if !isReference(n.Kind) {
+		if isReference(n.Kind) {
+			refs = append(refs, n)
+		} else {
 			decls = append(decls, n)
 		}
 	}
+	var shadowed []Node
 	if len(decls) > 0 {
-		nodes = decls
+		nodes, shadowed = decls, refs
 	}
 	switch len(nodes) {
 	case 0:
 		return SelectorResolution{Kind: ResolutionNone}
 	case 1:
-		return SelectorResolution{Kind: ResolutionOne, Node: nodes[0]}
+		return SelectorResolution{Kind: ResolutionOne, Node: nodes[0], Shadowed: shadowed}
 	}
-	return SelectorResolution{Kind: ResolutionAmbiguous, Candidates: nodes}
+	return SelectorResolution{Kind: ResolutionAmbiguous, Candidates: nodes, Shadowed: shadowed}
 }
 
 // DerivedCallsAdmitted reports whether derived (call-resolver) call edges may be
