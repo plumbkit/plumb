@@ -153,14 +153,15 @@ func (*ContextForTask) Name() string                 { return "context_for_task"
 func (*ContextForTask) InputSchema() json.RawMessage { return contextForTaskSchema }
 func (*ContextForTask) Description() string {
 	return "Experimental, read-only context pack that starts from explicit seeds: at least one file or symbol is required, and task prose only re-ranks, never seeds. " +
-		"Returns resolved seeds, complete symbol bodies with an edit guard, gaps and next calls; ambiguous or missing selectors are reported with candidates, never guessed. " +
+		"Returns seeds, complete symbol bodies with an edit guard, related code, affected tests, memory and doc constraints, gaps and next calls; ambiguous or missing selectors are reported with candidates, never guessed. " +
 		"Files must be files (a directory is scope: use within); symbols are path#Selector or a bare selector, code only (documents come through corpora). " +
 		"Relative paths resolve against the pinned workspace; an unpinned call is refused. " +
 		"max_bytes bounds the WHOLE response and includes a 1024-byte reserve for appended connection notes; above the cap it is clamped and disclosed. " +
 		"No LLM, network or mutation. To find where to start, use workspace_search."
 }
 
-// contextHave is one body the caller still holds. A1 validates its shape only.
+// contextHave is one body the caller still holds: the declaration it names and
+// the content_sha256 of the exact body (context_ack.go).
 type contextHave struct {
 	Symbol        string `json:"symbol"`
 	ContentSHA256 string `json:"content_sha256"`
@@ -310,9 +311,9 @@ func (r *contextRequest) normaliseBudget() error {
 	return nil
 }
 
-// checkHave validates the shape of each acknowledgement. Behaviour arrives with
-// the packer; until then a malformed entry is still refused so callers learn
-// the contract early.
+// checkHave validates the shape of each acknowledgement and normalises its hash.
+// A malformed entry is refused so callers learn the contract early; how many are
+// honoured is the collector's business (contextMaxHave).
 func (r *contextRequest) checkHave() error {
 	for i := range r.Have {
 		h := &r.Have[i]

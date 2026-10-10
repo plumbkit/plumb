@@ -121,7 +121,7 @@ func (s contextScope) allows(candidate, corpus string) (bool, string) {
 	if rel == "" {
 		return false, "outside the workspace root"
 	}
-	if len(s.corpora) > 0 && !s.corpora[corpus] {
+	if !s.corpusAllowed(corpus) {
 		return false, fmt.Sprintf("corpus %s is not in corpora", corpus)
 	}
 	if len(s.within) == 0 {
@@ -133,6 +133,14 @@ func (s contextScope) allows(candidate, corpus string) (bool, string) {
 		}
 	}
 	return false, "outside the within filter"
+}
+
+// corpusAllowed reports whether the corpora allowlist admits corpus; an empty
+// allowlist admits every corpus. Memories are judged by this alone: within names
+// code paths, and a memory's own file under .plumb/memories is where it is kept,
+// not what it is about.
+func (s contextScope) corpusAllowed(corpus string) bool {
+	return len(s.corpora) == 0 || s.corpora[corpus]
 }
 
 // relative maps candidate to a clean root-relative slash path, or "" when it

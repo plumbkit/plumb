@@ -81,6 +81,42 @@
   `[history] sensitive_globs` is reduced to its location and a label, under the same
   decision write responses and history use. The tool's description and schema are
   unchanged.
+- **`context_for_task` adds affected tests, constraints and acknowledgements, and
+  answers each agent from its own root (PLAN-462, fourth slice).** The pack now
+  lists the test packages the seeds implicate, one row each with its test count
+  and why ("holds a seed", "imports a seed's package", and, for `intent: change`,
+  "holds a declaration next to a seed"), from the same gather as
+  `topology_affected`. It names no individual test, says in its heading that it is
+  a static estimate and that no test was run, applies `within` and `corpora` to the
+  tests it names (counting what it left out), and gives no estimate at all from a
+  missing or failing index. It also retrieves constraints: memories of the calling
+  agent's own root whose `paths:`, `source_symbols:` or `source_paths:` frontmatter
+  ties them to the seeds (at most three), and document sections, chosen from the
+  index's headings and a seed document's own sections and then scored on their own
+  text, read from one snapshot of the file so a changed document is quoted as it
+  now is (at most four). Each is one line labelled as evidence, not instructions,
+  with its corpus, canonical root and path; the quote is at most 200 bytes,
+  terminal-safe and on one line; a path matching `[history] sensitive_globs` is
+  named and never read; `corpora` decides which kinds arrive; and the packer keeps them
+  behind the bodies and the affected tests but ahead of the follow-up calls, so a
+  tight budget drops the quote first, then the row. `have` is now
+  applied: up to 16 `{symbol, content_sha256}` pairs, each matched against the
+  exact `content_sha256` of the body the pack would deliver and the declaration it
+  names, replace that body with an "unchanged, still held" line carrying its
+  current location. A file's hash, the hash of a line range, or a hash borrowed for
+  another declaration is not that body and leaves it to be delivered; an
+  acknowledgement is not a read, so it records nothing and prints no edit guard.
+  The topology index is now keyed by the agent's canonical root, replacing the
+  interim refusal of another root's index: on a shared connection each agent is
+  answered from the index (and the memories) of the root it is pinned to, a root
+  with no open index degrades with a label instead of refusing the pack, and the
+  accessor never opens an index as a side effect of a read. `ContextCollector`
+  implements `ContextHinter` for the advisory hooks (selectors, locations and
+  evidence classes from the index only; an ambiguous or unresolved selector is a
+  gap, never candidate lines; scope, root and sensitive paths apply at every hop;
+  bounded by `MaxBytes` and `Deadline`), with `NewContextHinter` for a daemon that
+  has a per-root index accessor. The tool's description names the new sections
+  (about 50 bytes longer); the schema is unchanged.
 
 ## 0.24.0 (2026-10-10)
 

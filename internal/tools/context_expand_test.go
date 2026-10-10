@@ -452,7 +452,7 @@ func failIndex(t *testing.T, s shopTool, store *topology.Store) (heal func()) {
 // healthy index has a neighbourhood; and recovery restores it.
 func TestContextForTask_C09b_AFailingIndexSupportsNoRelationshipClaim(t *testing.T) {
 	s := newShop(t)
-	store := s.collector.store()
+	store := s.store
 	c := oracle(t, "C09b")
 
 	healthy, _ := runCase(t, s, c)
@@ -470,7 +470,7 @@ func TestContextForTask_C09b_AFailingIndexSupportsNoRelationshipClaim(t *testing
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	for _, claim := range []string{"[e", "callers of", "gap candidates", labelGoCallGraph, "callee of", "caller of"} {
+	for _, claim := range []string{"[e", "callers of", "gap candidates", labelGoCallGraph, "callee of", "caller of", affectedHeading, "affected tests"} {
 		if strings.Contains(out, claim) {
 			t.Errorf("a failing index still produced the claim %q:\n%s", claim, out)
 		}

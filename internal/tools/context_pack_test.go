@@ -48,7 +48,7 @@ func parseFooter(t *testing.T, out string) (counts omissions, total int, ok bool
 // presentTiers lists every text a record could have been shown as.
 func presentTiers(l packLine) []string {
 	if l.body == nil {
-		return []string{l.text}
+		return append([]string{l.text}, l.alts...)
 	}
 	var out []string
 	for _, s := range append([]string{l.body.full, l.body.noGuard}, l.body.lean...) {

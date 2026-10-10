@@ -61,6 +61,9 @@ type contextBody struct {
 	Start, End int // 1-based inclusive line span in the snapshot
 	Text       string
 	SHA        string
+	// Held marks a body the caller acknowledged holding (have): the pack says so in
+	// place of the body, and the body is not a delivery.
+	Held bool
 	// Signature and Doc describe the declaration as the snapshot has it when the
 	// span was re-validated, and as the index has it otherwise.
 	Signature, Doc string
