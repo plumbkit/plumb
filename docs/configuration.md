@@ -770,15 +770,18 @@ memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
 agent supplies the text; no LLM summary.
 
-## `[context]` — advisory context hints (global only)
+## `[context]` — advisory context hints (experimental, global only)
 
 ```toml
 [context]
-hints = true   # default
+hints = false   # default
 ```
 
-The lifecycle hooks `plumb hooks install` writes can put a short, advisory
-hint in front of an agent: a few code selectors with their locations, never
+Experimental and opt-in. `plumb hooks install <client> --context` adds two
+hint-only hook handlers (UserPromptSubmit and SubagentStart), and `hints = true`
+(or `PLUMB_CONTEXT_HINTS=on`) turns hints on. The explicit `context_for_task`
+tool is the supported path; hints point at it. When on, a hook can put a short,
+advisory hint in front of an agent: a few code selectors with their locations, never
 source, documentation, memory or mail text. A hint is offered when a prompt names
 files or symbols explicitly (backticked selectors and path-shaped tokens; the
 prompt itself never leaves the hook process), after a resume or compaction, and
@@ -787,12 +790,13 @@ logical agent, and neither a compaction nor a daemon restart refills the
 allowance. Asking for a hint never counts as reading a file: the edit guards
 still require an explicit read.
 
-`hints = false` turns every hint off, and so does `PLUMB_CONTEXT_HINTS=off`
-(also `0` or `false`), which the hook reads from its own environment as well
-as the daemon's. Off, the hooks still run, and the daemon records each request
-as a no-op, so an off switch is never mistaken for an outage. To remove the
-hint-only hooks instead, run `plumb hooks uninstall <client> --only context`;
-the SessionStart hook stays, because it also links the session.
+`PLUMB_CONTEXT_HINTS` overrides `hints` in either direction (`on`/`1`/`true`,
+`off`/`0`/`false`), and the hook reads it from its own environment as well as
+the daemon's. Off, any installed hook still runs and the daemon records each
+request as a no-op, so an off switch is never mistaken for an outage. To remove
+the hint-only hooks, run `plumb hooks uninstall <client> --only context`; the
+SessionStart hook stays, because it also links the session. `plumb hooks` says
+whether hints are not installed, installed but off, or on.
 
 The daemon keeps one bounded observation ledger for hints, `context_hints.db`
 in the data directory: metadata only (session, agent, event, capped selectors,

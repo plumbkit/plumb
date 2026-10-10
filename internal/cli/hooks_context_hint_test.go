@@ -38,11 +38,75 @@ func TestPromptSelectors(t *testing.T) {
 	}
 }
 
-func TestContextHintsOffInEnv(t *testing.T) {
-	for v, want := range map[string]bool{"": false, "on": false, "off": true, "Off": true, "0": true, "false": true} {
-		if got := contextHintsOffInEnv(func(string) string { return v }); got != want {
-			t.Errorf("%q: off = %v, want %v", v, got, want)
+func TestHintEnvSwitch(t *testing.T) {
+	for v, want := range map[string][2]bool{
+		"": {false, false}, "maybe": {false, false},
+		"on": {true, true}, "1": {true, true}, "True": {true, true},
+		"off": {true, false}, "Off": {true, false}, "0": {true, false}, "false": {true, false},
+	} {
+		set, on := hintEnvSwitch(func(string) string { return v })
+		if set != want[0] || on != want[1] {
+			t.Errorf("%q: set=%v on=%v, want %v", v, set, on, want)
 		}
+	}
+}
+
+// The hint-only handlers are opt-in: a plain plan neither writes nor lists them,
+// --context adds them, and once present a plain plan keeps them (refreshing a
+// moved binary) rather than reporting them missing or dropping them.
+func TestHookPlan_ContextEntriesAreOptIn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	target := claudeCodeHooksTarget
+	target.pathFn = func() (string, error) { return path, nil }
+	events := func(entries []hookEntry) []string {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, e.event)
+		}
+		return out
+	}
+	_, plain, _, err := hookPlan(target, "/opt/plumb", false)
+	if err != nil || slices.ContainsFunc(plain, func(e hookEntry) bool { return slices.Contains(contextHintEvents, e.event) }) {
+		t.Fatalf("plain plan = %v (%v), want no context-hint entries", events(plain), err)
+	}
+	_, opted, _, _ := hookPlan(target, "/opt/plumb", true)
+	if _, err := installHooksAt(path, opted, target.ours); err != nil {
+		t.Fatal(err)
+	}
+	_, again, states, err := hookPlan(target, "/opt/plumb-moved", false)
+	if err != nil || len(again) != len(opted) {
+		t.Fatalf("plain plan after opting in = %v (%v), want it to keep %v", events(again), err, events(opted))
+	}
+	for _, s := range states {
+		if slices.Contains(contextHintEvents, s.entry.event) && s.state != hookStateStale {
+			t.Errorf("%s state = %q after the binary moved, want stale (to be refreshed)", s.entry.label, s.state)
+		}
+	}
+}
+
+// `plumb hooks` says where context hints stand per client: not installed,
+// installed but off, or on (the environment overriding the config).
+func TestContextHintStatusNote(t *testing.T) {
+	base := make([]hookState, 0, 2)
+	base = append(base, hookState{entry: hookEntry{event: "SessionStart"}, state: hookStateInstalled})
+	with := append(base, hookState{entry: hookEntry{event: "UserPromptSubmit"}, state: hookStateInstalled})
+	t.Setenv(contextHintsEnv, "")
+	if got := contextHintStatusNote(claudeCodeHooksTarget, base, func() bool { return true }); !strings.Contains(got, "not installed") {
+		t.Errorf("no hint handlers: %q", got)
+	}
+	if got := contextHintStatusNote(claudeCodeHooksTarget, with, func() bool { return false }); !strings.Contains(got, "installed, off") {
+		t.Errorf("installed, config off: %q", got)
+	}
+	if got := contextHintStatusNote(claudeCodeHooksTarget, with, func() bool { return true }); !strings.HasSuffix(got, ": on.") {
+		t.Errorf("installed, config on: %q", got)
+	}
+	t.Setenv(contextHintsEnv, "on")
+	if got := contextHintStatusNote(claudeCodeHooksTarget, with, func() bool { return false }); !strings.HasSuffix(got, ": on.") {
+		t.Errorf("installed, env on over config off: %q", got)
+	}
+	if got := contextHintStatusNote(codexHooksTarget, with, nil); got != "" {
+		t.Errorf("a client with no hint handlers got a note: %q", got)
 	}
 }
 
@@ -111,7 +175,8 @@ func TestUninstallOnlyContext(t *testing.T) {
 	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
 		"UserPromptSubmit": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "mine.sh"}}}},
 	}})
-	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+	all := append(claudeHookEntries("/opt/plumb"), claudeContextHookEntries("/opt/plumb")...)
+	if _, err := installHooksAt(path, all, claudeHookOwned); err != nil {
 		t.Fatal(err)
 	}
 	scope, err := hooksUninstallScope("context")
@@ -129,7 +194,7 @@ func TestUninstallOnlyContext(t *testing.T) {
 	if _, ok := hooks["SubagentStart"]; ok {
 		t.Error("plumb's SubagentStart handler survived")
 	}
-	states, err := hookStatesAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned)
+	states, err := hookStatesAt(path, all, claudeHookOwned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,16 +241,18 @@ func TestAskContextHint(t *testing.T) {
 			t.Errorf("askContextHint = %q with no daemon, want nothing", got)
 		}
 	})
-	t.Run("off travels", func(t *testing.T) {
-		probeTestEnv(t)
-		t.Setenv(contextHintsEnv, "off")
-		got := make(chan string, 1)
-		fakeCtrlDaemon(t, func(c net.Conn, line string) { got <- line; _, _ = c.Write([]byte("ok {\"outcome\":\"noop\"}\n")) })
-		askContextHint(contextHintRequest{SessionID: "c"})
-		line := <-got
-		var req contextHintRequest
-		if json.Unmarshal([]byte(strings.TrimPrefix(line, ctrlContextHintCommand)), &req) != nil || !req.Off {
-			t.Errorf("request %q did not carry off", line)
-		}
-	})
+	for env, want := range map[string][2]bool{"off": {true, false}, "on": {false, true}, "": {false, false}} {
+		t.Run("env="+env+" travels", func(t *testing.T) {
+			probeTestEnv(t)
+			t.Setenv(contextHintsEnv, env)
+			got := make(chan string, 1)
+			fakeCtrlDaemon(t, func(c net.Conn, line string) { got <- line; _, _ = c.Write([]byte("ok {\"outcome\":\"noop\"}\n")) })
+			askContextHint(contextHintRequest{SessionID: "c"})
+			line := <-got
+			var req contextHintRequest
+			if json.Unmarshal([]byte(strings.TrimPrefix(line, ctrlContextHintCommand)), &req) != nil || req.Off != want[0] || req.On != want[1] {
+				t.Errorf("request %q: off=%v on=%v, want %v", line, req.Off, req.On, want)
+			}
+		})
+	}
 }

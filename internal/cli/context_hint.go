@@ -63,9 +63,11 @@ type contextHintRequest struct {
 	AgentID     string   `json:"agent_id,omitempty"`
 	TurnID      string   `json:"turn_id,omitempty"`
 	Selectors   []string `json:"selectors,omitempty"`
-	// Off carries the off switch from the hook's environment, which a user's
-	// shell export reaches and the daemon's may not.
+	// Off and On carry PLUMB_CONTEXT_HINTS from the hook's environment, which a
+	// user's shell export reaches and the daemon's may not. Either outranks the
+	// daemon's own setting; Off outranks On.
 	Off bool `json:"off,omitempty"`
+	On  bool `json:"on,omitempty"`
 }
 
 // contextHintReply is the answer: an outcome, and the text to show, which is
@@ -228,7 +230,7 @@ func (c *contextHintService) decide(ctx context.Context, req contextHintRequest,
 // admit resolves the caller's root, or names why there is none to hint for.
 func (c *contextHintService) admit(req contextHintRequest) (root hintRoot, refused string) {
 	switch {
-	case req.Off, c.enabled != nil && !c.enabled():
+	case req.Off, !req.On && (c.enabled == nil || !c.enabled()):
 		return hintRoot{}, "off"
 	case req.SessionID == "":
 		return hintRoot{}, "no-session"

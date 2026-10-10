@@ -75,11 +75,28 @@ func sameDir(t *testing.T, a, b string) bool {
 	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
-func TestContextHintsEnabled_EnvOffSwitch(t *testing.T) {
-	for v, want := range map[string]bool{"": true, "on": true, "off": false, "OFF": false, "0": false, "false": false} {
-		t.Setenv(contextHintsEnv, v)
-		if got := contextHintsEnabled(); got != want {
-			t.Errorf("%s=%q: enabled = %v, want %v", contextHintsEnv, v, got, want)
+// The environment overrides the config in either direction; unset (or any other
+// value) leaves the config in charge, and the config defaults to off.
+func TestContextHintsEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		env    string
+		config bool
+		want   bool
+	}{
+		{"", false, false},
+		{"", true, true},
+		{"on", false, true},
+		{"1", false, true},
+		{"TRUE", false, true},
+		{"off", true, false},
+		{"0", true, false},
+		{"false", true, false},
+		{"maybe", true, true},
+		{"maybe", false, false},
+	} {
+		t.Setenv(contextHintsEnv, tc.env)
+		if got := contextHintsEnabled(func() bool { return tc.config }); got != tc.want {
+			t.Errorf("%s=%q config=%v: enabled = %v, want %v", contextHintsEnv, tc.env, tc.config, got, tc.want)
 		}
 	}
 }
