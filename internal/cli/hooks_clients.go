@@ -113,14 +113,15 @@ var claudeCodeHooksTarget = hooksTarget{
 }
 
 var codexHooksTarget = hooksTarget{
-	use:     "codex",
-	name:    "Codex",
-	setup:   codexTarget,
-	pathFn:  codexHooksPath,
-	entries: codexHookEntries,
-	ours:    codexHookOwned,
+	use:            "codex",
+	name:           "Codex",
+	setup:          codexTarget,
+	pathFn:         codexHooksPath,
+	entries:        codexHookEntries,
+	contextEntries: codexContextHookEntries,
+	ours:           codexHookOwned,
 	notes: []string{
-		"Codex — run /hooks in Codex to review and trust the two plumb command hooks.",
+		"Codex — run /hooks in Codex to review and trust the plumb command hooks (two; four with --context).",
 		"Codex — the Stop hook checks only as a turn ends; Codex cannot wake an already-idle session.",
 	},
 }

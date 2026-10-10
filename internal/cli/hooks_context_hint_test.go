@@ -105,8 +105,13 @@ func TestContextHintStatusNote(t *testing.T) {
 	if got := contextHintStatusNote(claudeCodeHooksTarget, with, func() bool { return false }); !strings.HasSuffix(got, ": on.") {
 		t.Errorf("installed, env on over config off: %q", got)
 	}
-	if got := contextHintStatusNote(codexHooksTarget, with, nil); got != "" {
+	noHints := codexHooksTarget
+	noHints.contextEntries = nil
+	if got := contextHintStatusNote(noHints, with, nil); got != "" {
 		t.Errorf("a client with no hint handlers got a note: %q", got)
+	}
+	if got := contextHintStatusNote(codexHooksTarget, base, func() bool { return true }); !strings.Contains(got, "Codex") || !strings.Contains(got, "not installed") {
+		t.Errorf("Codex, not opted in: %q", got)
 	}
 }
 
