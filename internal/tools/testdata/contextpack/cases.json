@@ -5,156 +5,585 @@
     "Gold is authored from the fixture source alone, before any context_for_task code exists, and must be independently reviewed before it is hashed into the PLAN-462 gate manifest.",
     "Symbol ids are '<path>::<selector>' with Go methods as '(*Recv).Method' or 'Recv.Method'. The harness maps them to index nodes through topology.ResolveNodes with a path hint.",
     "mode 'known-seed' measures packing capacity from explicit seeds. Mode 'discovery' starts from a file seed plus task prose, and the gold includes symbols outside the seed files (residual).",
-    "required_labels are truthful-partial disclosures the pack must carry. forbidden lists content or behaviour the pack must never contain."
+    "required_labels are truthful-partial disclosures the pack must carry. forbidden lists content or behaviour the pack must never contain.",
+    "residual is derived, not hand-picked: gold items (bodies, related, constraints, gap_candidates, members) whose file is not a declared seed file. validate_cases.py recomputes it and fails on disagreement. Only mode 'discovery' cases count toward headline expansion recall; known-seed residual is a capacity diagnostic."
   ],
   "cases": [
     {
-      "id": "C01", "category": "exact", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "(*Cart).Total"}]},
-      "gold": {
-        "bodies": ["cart/cart.go::(*Cart).Total"],
-        "related": ["pricing/discount.go::Apply", "pricing/discount.go::Lookup"],
-        "test_packages": ["./cart/..."],
-        "residual": ["pricing/discount.go::Apply", "pricing/discount.go::Lookup"]
+      "id": "C01",
+      "category": "exact",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
       },
-      "required_labels": ["call graph is Go-only and syntactic; receiver-method callers may be absent"],
-      "forbidden": ["store/ledger.go::(*Ledger).Total as a seed"]
+      "gold": {
+        "bodies": [
+          "cart/cart.go::(*Cart).Total"
+        ],
+        "related": [
+          "pricing/discount.go::Apply",
+          "pricing/discount.go::Lookup"
+        ],
+        "test_packages": [
+          "./cart/..."
+        ],
+        "residual": [
+          "pricing/discount.go::Apply",
+          "pricing/discount.go::Lookup"
+        ]
+      },
+      "required_labels": [
+        "call graph is Go-only and syntactic; receiver-method callers may be absent"
+      ],
+      "forbidden": [
+        "store/ledger.go::(*Ledger).Total as a seed"
+      ],
+      "headline": false
     },
     {
-      "id": "C02", "category": "identifier-poor", "mode": "discovery", "split": "dev", "intent": "change",
-      "seeds": {"files": ["cart/cart.go"]},
+      "id": "C02",
+      "category": "identifier-poor",
+      "mode": "discovery",
+      "split": "dev",
+      "intent": "change",
+      "seeds": {
+        "files": [
+          "cart/cart.go"
+        ]
+      },
       "task": "A five-dollar code on a three-dollar cart charges a negative amount. Fix it.",
       "gold": {
-        "bodies": ["pricing/discount.go::Apply", "cart/cart.go::(*Cart).Total"],
-        "related": ["pricing/discount.go::Lookup", "pricing/discount.go::Discount"],
-        "constraints": ["docs/pricing.md#Totals"],
-        "test_packages": ["./pricing/...", "./cart/..."],
-        "residual": ["pricing/discount.go::Apply", "pricing/discount.go::Discount", "docs/pricing.md#Totals"]
+        "bodies": [
+          "pricing/discount.go::Apply",
+          "cart/cart.go::(*Cart).Total"
+        ],
+        "related": [
+          "pricing/discount.go::Lookup",
+          "pricing/discount.go::Discount",
+          "pricing/discount.go::codes"
+        ],
+        "constraints": [
+          "docs/pricing.md#Totals"
+        ],
+        "test_packages": [
+          "./pricing/...",
+          "./cart/..."
+        ],
+        "residual": [
+          "pricing/discount.go::Apply",
+          "pricing/discount.go::Lookup",
+          "pricing/discount.go::Discount",
+          "pricing/discount.go::codes",
+          "docs/pricing.md#Totals"
+        ]
       },
       "required_labels": [],
-      "forbidden": ["edit-ready guard for any file whose body was not delivered"]
+      "forbidden": [
+        "edit-ready guard for any file whose body was not delivered"
+      ],
+      "gold_rationale": "codes holds FIVER {FixedCents: 500}: the only link from 'five-dollar code' to FixedCents."
     },
     {
-      "id": "C03", "category": "duplicate-name", "mode": "known-seed", "split": "heldout", "intent": "understand",
-      "seeds": {"symbols": [{"name": "Total"}]},
+      "id": "C03",
+      "category": "duplicate-name",
+      "mode": "known-seed",
+      "split": "heldout",
+      "intent": "understand",
+      "seeds": {
+        "symbols": [
+          {
+            "name": "Total"
+          }
+        ]
+      },
       "gold": {
-        "ambiguous_candidates": ["cart/cart.go::(*Cart).Total", "store/ledger.go::(*Ledger).Total"],
+        "ambiguous_candidates": [
+          "cart/cart.go::(*Cart).Total",
+          "store/ledger.go::(*Ledger).Total"
+        ],
         "bodies": []
       },
-      "required_labels": ["ambiguous selector with bounded candidates and a retry hint"],
-      "forbidden": ["silently selecting either candidate as the seed"]
-    },
-    {
-      "id": "C04", "category": "receiver-selector", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "seeds_equivalent": [
-        {"symbols": [{"path": "cart/cart.go", "name": "(*Cart).Add"}]},
-        {"symbols": [{"path": "cart/cart.go", "name": "Cart.Add"}]},
-        {"symbols": [{"path": "cart/cart.go", "name": "*Cart.Add"}]}
+      "required_labels": [
+        "ambiguous selector with bounded candidates and a retry hint"
       ],
-      "gold": {"bodies": ["cart/cart.go::(*Cart).Add"], "same_seed_across_forms": true},
-      "required_labels": [],
-      "forbidden": ["different resolved seed for any equivalent form"]
+      "forbidden": [
+        "silently selecting either candidate as the seed"
+      ]
     },
     {
-      "id": "C05", "category": "type-members", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "Cart"}]},
+      "id": "C04",
+      "category": "receiver-selector",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "seeds_equivalent": [
+        {
+          "symbols": [
+            {
+              "path": "cart/cart.go",
+              "name": "(*Cart).Add"
+            }
+          ]
+        },
+        {
+          "symbols": [
+            {
+              "path": "cart/cart.go",
+              "name": "Cart.Add"
+            }
+          ]
+        },
+        {
+          "symbols": [
+            {
+              "path": "cart/cart.go",
+              "name": "*Cart.Add"
+            }
+          ]
+        }
+      ],
       "gold": {
-        "bodies": ["cart/cart.go::Cart"],
-        "members": ["cart/cart.go::(*Cart).Add", "cart/cart.go::(*Cart).Remove", "cart/cart.go::(*Cart).ApplyCode", "cart/cart.go::(*Cart).Total"]
+        "bodies": [
+          "cart/cart.go::(*Cart).Add"
+        ],
+        "same_seed_across_forms": true
       },
-      "required_labels": ["struct fields are not graph members (disclosed, not claimed absent)"],
-      "forbidden": ["call edges attributed to the type itself"]
+      "required_labels": [],
+      "forbidden": [
+        "different resolved seed for any equivalent form"
+      ]
     },
     {
-      "id": "C06", "category": "multi-hop", "mode": "discovery", "split": "dev", "intent": "change",
-      "seeds": {"symbols": [{"path": "pricing/discount.go", "name": "Apply"}]},
+      "id": "C05",
+      "category": "type-members",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "Cart"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "cart/cart.go::Cart"
+        ],
+        "members": [
+          "cart/cart.go::(*Cart).Add",
+          "cart/cart.go::(*Cart).Remove",
+          "cart/cart.go::(*Cart).ApplyCode",
+          "cart/cart.go::(*Cart).Total"
+        ]
+      },
+      "required_labels": [
+        "struct fields are not graph members (disclosed, not claimed absent)"
+      ],
+      "forbidden": [
+        "call edges attributed to the type itself"
+      ]
+    },
+    {
+      "id": "C06",
+      "category": "multi-hop",
+      "mode": "discovery",
+      "split": "dev",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "pricing/discount.go",
+            "name": "Apply"
+          }
+        ]
+      },
       "task": "Change Apply so percentage discounts round half up. Which callers and tests are affected?",
       "gold": {
-        "bodies": ["pricing/discount.go::Apply"],
-        "related": ["cart/cart.go::(*Cart).Total"],
-        "gap_candidates": ["api/checkout.go::Checkout"],
-        "test_packages": ["./pricing/...", "./cart/..."],
-        "residual": ["cart/cart.go::(*Cart).Total", "api/checkout.go::Checkout"]
+        "bodies": [
+          "pricing/discount.go::Apply"
+        ],
+        "related": [
+          "cart/cart.go::(*Cart).Total"
+        ],
+        "gap_candidates": [
+          "api/checkout.go::Checkout"
+        ],
+        "test_packages": [
+          "./pricing/...",
+          "./cart/..."
+        ],
+        "residual": [
+          "cart/cart.go::(*Cart).Total",
+          "api/checkout.go::Checkout"
+        ]
       },
-      "required_labels": ["receiver-method call sites unresolved: an empty or short caller list is not proof of no callers"],
-      "forbidden": ["claiming api.Checkout is unaffected"]
+      "required_labels": [
+        "receiver-method call sites unresolved: an empty or short caller list is not proof of no callers"
+      ],
+      "forbidden": [
+        "claiming api.Checkout is unaffected"
+      ],
+      "gold_rationale": "Checkout reaches Total only through the receiver call c.Total(), which the syntactic resolver leaves unresolved. The sole route is a reverse import edge (api imports cart), so the pack must surface Checkout as a labelled gap candidate via reverse-import expansion, never as a resolved caller. Slice A must implement reverse-import gap expansion or this case fails by construction."
     },
     {
-      "id": "C07", "category": "broad-test-package", "mode": "known-seed", "split": "dev", "intent": "change",
-      "seeds": {"symbols": [{"path": "reports/reports.go", "name": "Summarise"}]},
-      "gold": {"bodies": ["reports/reports.go::Summarise"], "test_packages": ["./reports/..."], "test_package_counts": {"./reports/...": 60}},
+      "id": "C07",
+      "category": "broad-test-package",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "reports/reports.go",
+            "name": "Summarise"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "reports/reports.go::Summarise"
+        ],
+        "test_packages": [
+          "./reports/..."
+        ],
+        "test_package_counts": {
+          "./reports/...": 60
+        }
+      },
       "required_labels": [],
-      "forbidden": ["listing individual TestSummariseCase* rows inside the compact pack"]
+      "forbidden": [
+        "listing individual TestSummariseCase* rows inside the compact pack"
+      ]
     },
     {
-      "id": "C08", "category": "cold-lsp", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "env": {"lsp": "unavailable"},
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "(*Cart).Total"}]},
-      "gold": {"bodies": ["cart/cart.go::(*Cart).Total"], "related": ["pricing/discount.go::Apply"]},
-      "required_labels": ["structural-only partial result; LSP enrichment unavailable"],
-      "forbidden": ["waiting past the enrichment sub-deadline"]
+      "id": "C08",
+      "category": "cold-lsp",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "env": {
+        "lsp": "unavailable"
+      },
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "cart/cart.go::(*Cart).Total"
+        ],
+        "related": [
+          "pricing/discount.go::Apply"
+        ],
+        "residual": [
+          "pricing/discount.go::Apply"
+        ]
+      },
+      "required_labels": [
+        "structural-only partial result; LSP enrichment unavailable"
+      ],
+      "forbidden": [
+        "waiting past the enrichment sub-deadline"
+      ]
     },
     {
-      "id": "C09", "category": "stale-index", "mode": "known-seed", "split": "heldout", "intent": "change",
-      "env": {"mutate_after_index": "insert a new method (*Cart).Count above Total in cart/cart.go without reindexing"},
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "(*Cart).Total"}]},
-      "gold": {"bodies": ["cart/cart.go::(*Cart).Total (current disk bytes)"]},
-      "required_labels": ["file changed since indexing: relationships may be stale"],
-      "forbidden": ["a body sliced from stale index line spans", "file guards from the index rather than the current snapshot"]
+      "id": "C09",
+      "category": "stale-index",
+      "mode": "known-seed",
+      "split": "heldout",
+      "intent": "change",
+      "env": {
+        "mutate_after_index": "insert a new method (*Cart).Count above Total in cart/cart.go without reindexing"
+      },
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "cart/cart.go::(*Cart).Total (current disk bytes)"
+        ]
+      },
+      "required_labels": [
+        "file changed since indexing: relationships may be stale"
+      ],
+      "forbidden": [
+        "a body sliced from stale index line spans",
+        "file guards from the index rather than the current snapshot"
+      ]
     },
     {
-      "id": "C10", "category": "unsupported-graph-language", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "seeds": {"symbols": [{"path": "scripts/export.py", "name": "export_charges"}]},
-      "gold": {"bodies": ["scripts/export.py::export_charges"], "related_structural": ["scripts/export.py::format_row"]},
-      "required_labels": ["call graph not available for python; relations are structural only"],
-      "forbidden": ["'no callers' stated as fact"]
+      "id": "C09b",
+      "category": "missing-or-failing-index",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "change",
+      "env": {
+        "index": "absent, then failing (Health.Failing true, 467/490 state)"
+      },
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "cart/cart.go::(*Cart).Total (from a current disk snapshot)"
+        ]
+      },
+      "required_labels": [
+        "index unavailable or failing: no relationship or test-impact claims; body from a disk snapshot"
+      ],
+      "forbidden": [
+        "any caller, callee or affected-test claim presented as complete",
+        "silence about the index state"
+      ]
     },
     {
-      "id": "C11", "category": "long-body", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "options": {"max_bytes": 16000},
-      "seeds": {"symbols": [{"path": "reports/reports.go", "name": "StatusLabel"}]},
-      "gold": {"bodies": [], "handoffs": ["read_symbol reports/reports.go StatusLabel"]},
-      "required_labels": ["body omitted: larger than the budget, with a guarded handoff"],
-      "forbidden": ["a partial body presented as complete", "whole response over max_bytes"]
+      "id": "C10",
+      "category": "unsupported-graph-language",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "scripts/export.py",
+            "name": "export_charges"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "scripts/export.py::export_charges"
+        ],
+        "related_intrafile": [
+          "scripts/export.py::format_row"
+        ]
+      },
+      "required_labels": [
+        "cross-file call graph unavailable for python; intra-file heuristic call edges only (confidence 0.8)"
+      ],
+      "forbidden": [
+        "'no callers' stated as fact"
+      ]
     },
     {
-      "id": "C12", "category": "nonexistent-no-change", "mode": "discovery", "split": "dev", "intent": "change",
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "Cart.Coupon"}]},
+      "id": "C11",
+      "category": "long-body",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "options": {
+        "max_bytes": 16000
+      },
+      "seeds": {
+        "symbols": [
+          {
+            "path": "reports/reports.go",
+            "name": "StatusLabel"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [],
+        "handoffs": [
+          "read_symbol reports/reports.go StatusLabel"
+        ]
+      },
+      "required_labels": [
+        "body omitted: larger than the budget, with a guarded handoff"
+      ],
+      "forbidden": [
+        "a partial body presented as complete",
+        "whole response over max_bytes"
+      ]
+    },
+    {
+      "id": "C12",
+      "category": "nonexistent-no-change",
+      "mode": "discovery",
+      "split": "dev",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "Cart.Coupon"
+          }
+        ]
+      },
       "task": "Make Cart.Coupon case-insensitive.",
-      "gold": {"bodies": [], "no_match": true, "acceptable_suggestions": ["cart/cart.go::(*Cart).ApplyCode", "pricing/discount.go::Lookup"]},
-      "required_labels": ["no symbol matches; suggestions are labelled candidates, not resolved seeds"],
-      "forbidden": ["inventing a Coupon symbol or relevance"]
+      "gold": {
+        "bodies": [],
+        "no_match": true,
+        "acceptable_suggestions": [
+          "cart/cart.go::(*Cart).ApplyCode",
+          "pricing/discount.go::Lookup"
+        ]
+      },
+      "required_labels": [
+        "no symbol matches; suggestions are labelled candidates, not resolved seeds"
+      ],
+      "forbidden": [
+        "inventing a Coupon symbol or relevance"
+      ]
     },
     {
-      "id": "C13", "category": "private-corpus-restriction", "mode": "discovery", "split": "heldout", "intent": "understand",
-      "options": {"exclude_roots": ["private/"]},
-      "seeds": {"files": ["docs/pricing.md"]},
+      "id": "C13",
+      "category": "private-corpus-restriction",
+      "mode": "discovery",
+      "split": "heldout",
+      "intent": "understand",
+      "options": {
+        "exclude_roots": [
+          "private/"
+        ]
+      },
+      "seeds": {
+        "files": [
+          "docs/pricing.md"
+        ]
+      },
       "task": "Summarise the pricing notes and rules.",
-      "gold": {"constraints": ["docs/pricing.md#Totals", "docs/pricing.md#Codes"]},
+      "gold": {
+        "constraints": [
+          "docs/pricing.md#Totals",
+          "docs/pricing.md#Codes"
+        ]
+      },
       "required_labels": [],
-      "forbidden": ["PRIVATE-FIXTURE-MARKER-7f3a anywhere in the response", "private/notes.md as a seed, candidate or provenance"]
+      "forbidden": [
+        "PRIVATE-FIXTURE-MARKER-7f3a anywhere in the response",
+        "private/notes.md as a seed, candidate or provenance"
+      ]
     },
     {
-      "id": "C14", "category": "uncovered-language", "mode": "known-seed", "split": "dev", "intent": "understand",
-      "seeds": {"files": ["web/CartBadge.svelte"]},
-      "gold": {"bodies": []},
-      "required_labels": ["svelte is not covered by an extractor: no symbols, which is a coverage gap rather than an absence"],
-      "forbidden": ["claiming the file has no symbols or relations"]
+      "id": "C13b",
+      "category": "private-corpus-restriction-config",
+      "mode": "discovery",
+      "split": "heldout",
+      "intent": "understand",
+      "env": {
+        "workspace_config": "private/ excluded by root/corpus scope configuration (PLAN-468), not by a request argument"
+      },
+      "seeds": {
+        "files": [
+          "docs/pricing.md"
+        ]
+      },
+      "task": "Summarise the pricing notes and rules.",
+      "gold": {
+        "constraints": [
+          "docs/pricing.md#Totals",
+          "docs/pricing.md#Codes"
+        ]
+      },
+      "required_labels": [],
+      "forbidden": [
+        "PRIVATE-FIXTURE-MARKER-7f3a anywhere in the response",
+        "private/notes.md as a seed, candidate or provenance"
+      ]
     },
     {
-      "id": "C15", "category": "have-ack", "mode": "known-seed", "split": "dev", "intent": "change",
-      "seeds": {"symbols": [{"path": "cart/cart.go", "name": "(*Cart).Total"}]},
-      "have": [{"symbol": "cart/cart.go::(*Cart).Total", "content_sha256": "<computed at run time from the delivered body>"}],
-      "phases": ["unchanged: body omitted with an acknowledged reference and its current location", "after editing Total on disk: body re-sent with a new content_sha256"],
-      "gold": {"bodies_phase2": ["cart/cart.go::(*Cart).Total"]},
+      "id": "C14",
+      "category": "uncovered-language",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "understand",
+      "seeds": {
+        "files": [
+          "web/CartBadge.svelte"
+        ]
+      },
+      "gold": {
+        "bodies": []
+      },
+      "required_labels": [
+        "svelte is not covered by an extractor: no symbols, which is a coverage gap rather than an absence"
+      ],
+      "forbidden": [
+        "claiming the file has no symbols or relations"
+      ]
+    },
+    {
+      "id": "C15",
+      "category": "have-ack",
+      "mode": "known-seed",
+      "split": "dev",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
+      },
+      "have": [
+        {
+          "symbol": "cart/cart.go::(*Cart).Total",
+          "content_sha256": "<computed at run time from the delivered body>"
+        }
+      ],
+      "phases": [
+        "unchanged: body omitted with an acknowledged reference and its current location",
+        "after editing Total on disk: body re-sent with a new content_sha256"
+      ],
+      "gold": {
+        "bodies_phase2": [
+          "cart/cart.go::(*Cart).Total"
+        ]
+      },
       "required_labels": [],
-      "forbidden": ["an acknowledgement creating a read record", "content_sha256 accepted as an edit guard"]
+      "forbidden": [
+        "an acknowledgement creating a read record",
+        "content_sha256 accepted as an edit guard"
+      ]
     }
   ],
   "coverage": {
-    "cases": 15,
-    "nonempty_cross_file_residual": ["C01", "C02", "C06"],
-    "languages": {"go": "structure + Go-only syntactic call graph", "python": "structure only", "markdown": "sections only", "svelte": "not covered"},
-    "heldout": ["C03", "C09", "C13"]
+    "cases": 17,
+    "headline_discovery_residual": [
+      "C02",
+      "C06"
+    ],
+    "capacity_diagnostic_residual": [
+      "C01",
+      "C08"
+    ],
+    "languages": {
+      "go": "structure + Go-only syntactic cross-file call graph (receiver calls unresolved)",
+      "python": "structure + intra-file heuristic call edges",
+      "markdown": "sections only",
+      "svelte": "not covered"
+    },
+    "heldout": [
+      "C03",
+      "C09",
+      "C13",
+      "C13b"
+    ],
+    "contract_note": "The contract's '>=3 of six task cases with nonempty cross-file residual' applies to the paired pilot/eval tasks, not this fixture: pilot T1-T4 all have nonempty residual (amendment v1.2)."
   }
 }
