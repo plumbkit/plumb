@@ -28,8 +28,9 @@ import (
 // the start of a conversation.
 const clearNotifyBudget = time.Second
 
-// claudeSourceClear is SessionStart's `source` for a conversation begun by /clear.
-const claudeSourceClear = "clear"
+// sessionSourceClear is SessionStart's `source` for a conversation begun by /clear,
+// in both Claude Code's and Codex's hook input (hooks_codex.go).
+const sessionSourceClear = "clear"
 
 // runClaudeSessionStart is the SessionStart command body: tell the daemon when the
 // conversation began with /clear, then print the linkage sentence. notify is
@@ -40,7 +41,7 @@ func runClaudeSessionStart(input claudeHookInput, notify func(conversationID str
 	if id == "" {
 		return
 	}
-	if input.Source == claudeSourceClear && notify != nil {
+	if input.Source == sessionSourceClear && notify != nil {
 		notify(id)
 	}
 	// Plain stdout reaches the agent for this event, so the linkage sentence needs
