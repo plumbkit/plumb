@@ -329,8 +329,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
 	// context_for_task is experimental and deliberately unpinned and non-lean (see
 	// tools.PinnedTools / tools.LeanTools): it is found by name, not pushed. The
-	// collector carries no read tracker, so a pack never records a read.
-	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested)))
+	// collector carries no read tracker, so gathering a pack never records a read;
+	// the tool records, per agent, only the bodies it actually delivered.
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested)).
+		WithReads(s.readTracker).WithReadsFor(s.readTrackerFor))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.

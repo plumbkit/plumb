@@ -2,29 +2,21 @@ package tools
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
 
 // context_render.go — the compact text a context_for_task call returns.
 //
-// The output is a header line, then seeds, gaps and next-call sections. Every
-// line carries a priority, so a tight budget drops the least important lines
-// first and reports exactly how many it dropped; a line is never cut in half.
-
-// Line priorities: lower survives longer. Candidates and gaps share a tier
-// because both are disclosures a reader needs in order to trust the seed list.
-const (
-	prioHeader = iota
-	prioSeed
-	prioDetail
-	prioNext
-)
+// The output is a header line, then seeds (each symbol seed followed by its body
+// or the reason it has none), gaps and next-call sections. Every record carries a
+// priority, so a tight budget drops the least important first and reports
+// exactly how many it dropped; the packer (context_pack.go) never cuts a record
+// in half.
 
 // Sections group a heading with its body lines, so a heading is never left
 // standing over nothing.
@@ -39,16 +31,21 @@ const (
 // dropped, so a long path cannot crowd out the budget it reports.
 const headerRootBytes = 96
 
-type packLine struct {
-	text    string
-	prio    int
-	section int
-	heading bool
-}
+// Bounds for the signature and doc shown on a status line.
+const (
+	statusSignatureBytes = 120
+	statusDocBytes       = 80
+)
 
 // renderContextPack renders pack within its budget.
 func renderContextPack(p contextPack) string {
-	return packContextLines(p.lines(), p.budget())
+	return renderContext(p).Text
+}
+
+// renderContext renders pack within its budget and reports which files' bodies
+// it delivered, which is what the caller may record as read.
+func renderContext(p contextPack) packResult {
+	return packLines(p.lines(), p.budget())
 }
 
 func (p *contextPack) lines() []packLine {
@@ -78,14 +75,18 @@ func headerSafe(s string) string {
 	return textfmt.ClampBytes(s, headerRootBytes)
 }
 
+func (p *contextPack) seedHeading() string {
+	return fmt.Sprintf("seeds (%d resolved, %d unresolved):", len(p.Seeds), len(p.Misses))
+}
+
 func (p *contextPack) seedLines() []packLine {
-	ls := make([]packLine, 0, 1+len(p.Seeds)+len(p.Misses))
-	ls = append(ls, packLine{
-		text: fmt.Sprintf("seeds (%d resolved, %d unresolved):", len(p.Seeds), len(p.Misses)),
-		prio: prioSeed, section: secSeeds, heading: true,
-	})
-	for _, s := range p.Seeds {
-		ls = append(ls, packLine{text: "  " + seedText(s), prio: prioSeed, section: secSeeds})
+	ls := make([]packLine, 0, 1+2*len(p.Seeds)+len(p.Misses))
+	ls = append(ls, packLine{text: p.seedHeading(), prio: prioSeed, section: secSeeds, heading: true, class: classSeed})
+	for i, s := range p.Seeds {
+		ls = append(ls, packLine{text: "  " + seedText(s), prio: prioSeed, section: secSeeds, class: classSeed})
+		if u, ok := p.bodyLine(i); ok {
+			ls = append(ls, u)
+		}
 	}
 	for _, m := range p.Misses {
 		ls = append(ls, missLines(m)...)
@@ -104,29 +105,124 @@ func seedText(s contextSeed) string {
 	if s.Language != "" {
 		fmt.Fprintf(&sb, " [%s]", s.Language)
 	}
+	if s.Shadowed > 0 {
+		fmt.Fprintf(&sb, " — also matches %s", referenceNodes(s.Shadowed))
+	}
 	if s.Coverage != "" {
 		fmt.Fprintf(&sb, " — coverage gap: %s", s.Coverage)
 	}
 	return sb.String()
 }
 
+// bodyLine is the body unit that follows symbol seed i: its complete body when
+// the budget allows, else a status line saying why it is not here and how to get
+// it. A file seed, or a seed whose body was never attempted, has none.
+func (p *contextPack) bodyLine(i int) (packLine, bool) {
+	if i >= len(p.Bodies) || p.Bodies[i].State == bodyNone {
+		return packLine{}, false
+	}
+	s, b := p.Seeds[i], p.Bodies[i]
+	call := callText("read_symbol", "path", s.Abs, "name", s.Selector)
+	sig := signatureDoc(b.Signature, b.Doc)
+	unit := &bodyUnit{file: b.File}
+	if b.State != bodyReady {
+		bare := fmt.Sprintf("    body unavailable (%s): %s", b.Why, call)
+		unit.lean = degrade(withSignature(bare, sig), bare)
+	} else {
+		unit = p.readyUnit(b, s, call, sig)
+	}
+	return packLine{prio: prioBody, section: secSeeds, class: classBody, body: unit}, true
+}
+
+// readyUnit builds the renderings of a body that exists. It is offered whole only
+// when it could fit alone in the budget; a body larger than anything the budget
+// can hold becomes a handoff that names the size and the snapshot it was taken
+// from, so a later read can be checked against it.
+func (p *contextPack) readyUnit(b contextBody, s contextSeed, call, sig string) *bodyUnit {
+	meta := fmt.Sprintf("%d B, lines %d–%d", len(b.Text), b.Start, b.End)
+	head := fmt.Sprintf("    body lines %d–%d (%d B) content_sha256=%s", b.Start, b.End, len(b.Text), b.SHA)
+	gutter := strings.TrimSuffix(withLineGutter(b.Text, b.Start), "\n")
+	full := head + "\n" + p.guardLine(b.File) + "\n" + gutter
+	if p.fitsAlone(len(full), len(seedText(s))+2) {
+		omitted := fmt.Sprintf("    body omitted for budget (%s): %s", meta, call)
+		bare := "    body omitted for budget: " + call
+		return &bodyUnit{
+			file: b.File, full: full, noGuard: head + "\n" + gutter,
+			lean: degrade(withSignature(omitted, sig), omitted, bare),
+		}
+	}
+	big := fmt.Sprintf("    body larger than the budget (%s; content_sha256=%s; snapshot file sha256=%s): %s",
+		meta, b.SHA, p.Files[b.File].SHA, call)
+	bare := fmt.Sprintf("    body larger than the budget (%s): %s", meta, call)
+	return &bodyUnit{file: b.File, lean: degrade(withSignature(big, sig), big, bare)}
+}
+
+// guardLine is the edit guard for a file's snapshot, in the shape read_symbol's
+// header uses so its values can be copied into edit_file's expected_mtime and
+// expected_sha. It belongs to the file; a body's content_sha256 is not one.
+func (p *contextPack) guardLine(file int) string {
+	f := p.Files[file]
+	return fmt.Sprintf("    guard for edit_file on %s (expected_mtime, expected_sha): mtime=%s sha256=%s",
+		textfmt.TerminalSafeLine(f.Path), f.MTime.Format(time.RFC3339Nano), f.SHA)
+}
+
+// fitsAlone reports whether a block of blockLen bytes could ever be delivered:
+// whether it fits in the budget next to the header, the seeds heading, its own
+// seed line and the omission footer, with every other record dropped.
+func (p *contextPack) fitsAlone(blockLen, seedLineLen int) bool {
+	fixed := len(p.headerLine()) + 1 + len(p.seedHeading()) + 1 + seedLineLen + 1 + footerCeiling()
+	return fixed+blockLen+1 <= p.budget()
+}
+
+// signatureDoc is the one-line description a status line carries: the signature,
+// and the first line of the doc comment if there is one. Both are index text.
+func signatureDoc(sig, doc string) string {
+	var parts []string
+	if sig != "" {
+		parts = append(parts, textfmt.ClampBytes(textfmt.TerminalSafeLine(sig), statusSignatureBytes))
+	}
+	if doc != "" {
+		parts = append(parts, "// "+textfmt.ClampBytes(textfmt.TerminalSafeLine(doc), statusDocBytes))
+	}
+	return strings.Join(parts, " ")
+}
+
+func withSignature(base, sig string) string {
+	if sig == "" {
+		return base
+	}
+	return base + " — " + sig
+}
+
+// degrade drops empty and repeated renderings, keeping the richest first.
+func degrade(tiers ...string) []string {
+	var out []string
+	for _, t := range tiers {
+		if t != "" && (len(out) == 0 || out[len(out)-1] != t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // missLines renders a seed that did not resolve, followed by its labelled
 // candidates, if any. An ambiguous selector is told how to retry; a candidate
 // is shown in the path#selector form that can be pasted back into symbols.
 func missLines(m contextMiss) []packLine {
-	head := fmt.Sprintf("  unresolved %q: %s", textfmt.TerminalSafeLine(m.Input), m.Reason)
+	reason := textfmt.TerminalSafeLine(m.Reason)
+	head := fmt.Sprintf("  unresolved %q: %s", textfmt.TerminalSafeLine(m.Input), reason)
 	if m.Ambiguous {
-		head = fmt.Sprintf("  ambiguous %q: %s; retry with path#Selector using one of", textfmt.TerminalSafeLine(m.Input), m.Reason)
+		head = fmt.Sprintf("  ambiguous %q: %s; retry with path#Selector using one of", textfmt.TerminalSafeLine(m.Input), reason)
 	}
-	ls := []packLine{{text: head, prio: prioSeed, section: secSeeds}}
+	ls := []packLine{{text: head, prio: prioSeed, section: secSeeds, class: classSeed}}
 	for _, c := range m.Candidates {
 		ls = append(ls, packLine{
 			text: fmt.Sprintf("    %s#%s (%s, line %d)", textfmt.TerminalSafeLine(c.Path), textfmt.TerminalSafeLine(c.Selector), c.NodeKind, c.Line),
-			prio: prioDetail, section: secSeeds,
+			prio: prioDetail, section: secSeeds, class: classCandidate,
 		})
 	}
 	if m.More > 0 {
-		ls = append(ls, packLine{text: fmt.Sprintf("    … and %d more", m.More), prio: prioDetail, section: secSeeds})
+		ls = append(ls, packLine{text: fmt.Sprintf("    … and %d more", m.More), prio: prioDetail, section: secSeeds, class: classCandidate})
 	}
 	return ls
 }
@@ -135,22 +231,30 @@ func (p *contextPack) gapLines() []packLine {
 	if len(p.Gaps) == 0 {
 		return nil
 	}
-	ls := []packLine{{text: "gaps:", prio: prioDetail, section: secGaps, heading: true}}
+	ls := []packLine{{text: "gaps:", prio: prioDetail, section: secGaps, heading: true, class: classGap}}
 	for _, g := range p.Gaps {
-		ls = append(ls, packLine{text: "  - " + strings.Join(strings.Fields(g), " "), prio: prioDetail, section: secGaps})
+		ls = append(ls, packLine{text: "  - " + textfmt.TerminalSafeLine(strings.Join(strings.Fields(g), " ")), prio: prioDetail, section: secGaps, class: classGap})
 	}
 	return ls
 }
 
-// nextLines offers one concrete follow-up call per resolved seed, with absolute
-// paths so the call is valid on a connection that refuses relative ones.
+// nextLines offers one concrete follow-up call per resolved seed that has no body
+// record of its own (a symbol seed's status line already carries its call), with
+// absolute paths so the call is valid on a connection that refuses relative ones.
 func (p *contextPack) nextLines() []packLine {
-	if len(p.Seeds) == 0 {
+	var calls []string
+	for i, s := range p.Seeds {
+		if i < len(p.Bodies) && p.Bodies[i].State != bodyNone {
+			continue
+		}
+		calls = append(calls, nextCall(s))
+	}
+	if len(calls) == 0 {
 		return nil
 	}
-	ls := []packLine{{text: "next:", prio: prioNext, section: secNext, heading: true}}
-	for _, s := range p.Seeds {
-		ls = append(ls, packLine{text: "  " + nextCall(s), prio: prioNext, section: secNext})
+	ls := []packLine{{text: "next:", prio: prioNext, section: secNext, heading: true, class: classNext}}
+	for _, c := range calls {
+		ls = append(ls, packLine{text: "  " + c, prio: prioNext, section: secNext, class: classNext})
 	}
 	return ls
 }
@@ -191,89 +295,4 @@ func jsonQuote(s string) string {
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(s) // a string always encodes: invalid UTF-8 is replaced, not refused
 	return strings.TrimRight(b.String(), "\n")
-}
-
-// omittedFooter is the line that discloses dropped lines. It is built from the
-// same constants wherever it is measured, so the reserve and the real footer
-// cannot disagree.
-func omittedFooter(n int) string {
-	return fmt.Sprintf("omitted: %d line(s) did not fit in max_bytes; raise it (cap %d) or narrow the seeds", n, contextMaxBytesCap)
-}
-
-// packContextLines joins lines within budget bytes. When everything fits it
-// returns everything. Otherwise it keeps the longest prefix of the
-// priority-ordered lines that leaves room for the omission footer, shows the
-// survivors in their original order, and states exactly how many lines went.
-// The header is always kept.
-func packContextLines(lines []packLine, budget int) string {
-	keep, omitted := selectLines(lines, budget)
-	var kept []string
-	for i, l := range lines {
-		if keep[i] {
-			kept = append(kept, l.text)
-		}
-	}
-	if omitted > 0 {
-		kept = append(kept, omittedFooter(omitted))
-	}
-	return strings.Join(kept, "\n")
-}
-
-// selectLines decides which lines survive budget, and how many were dropped.
-func selectLines(lines []packLine, budget int) (keep []bool, omitted int) {
-	keep = make([]bool, len(lines))
-	all := 0
-	for i, l := range lines {
-		all += len(l.text)
-		if i > 0 {
-			all++ // the newline before it
-		}
-	}
-	if all <= budget {
-		for i := range keep {
-			keep[i] = true
-		}
-		return keep, 0
-	}
-	reserve := len(omittedFooter(len(lines))) + 1 // worst-case digits, plus its newline
-	keep[0] = true
-	used := len(lines[0].text)
-	order := make([]int, len(lines))
-	for i := range order {
-		order[i] = i
-	}
-	slices.SortStableFunc(order, func(a, b int) int { return cmp.Compare(lines[a].prio, lines[b].prio) })
-	for _, i := range order {
-		if i == 0 {
-			continue
-		}
-		cost := len(lines[i].text) + 1
-		if used+cost+reserve > budget {
-			break // strict priority: nothing below a line that did not fit is shown
-		}
-		keep[i] = true
-		used += cost
-	}
-	dropDanglingHeadings(lines, keep)
-	for _, k := range keep {
-		if !k {
-			omitted++
-		}
-	}
-	return keep, omitted
-}
-
-// dropDanglingHeadings unkeeps a heading none of whose body lines survived.
-func dropDanglingHeadings(lines []packLine, keep []bool) {
-	hasBody := map[int]bool{}
-	for i, l := range lines {
-		if keep[i] && !l.heading {
-			hasBody[l.section] = true
-		}
-	}
-	for i, l := range lines {
-		if keep[i] && l.heading && !hasBody[l.section] {
-			keep[i] = false
-		}
-	}
 }

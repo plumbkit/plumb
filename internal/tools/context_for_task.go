@@ -89,12 +89,19 @@ var contextForTaskSchema = json.RawMessage(`{
 }`)
 
 // ContextForTask is the context_for_task MCP tool: a bounded, seeds-first
-// context pack. It is a thin orchestrator over ContextCollector (gathering) and
-// renderContextPack (presentation).
+// context pack. It is a thin orchestrator over ContextCollector (gathering),
+// renderContext (presentation and packing) and the calling agent's read tracker
+// (recording the bodies that were delivered).
+//
+// The tracker lives here and not on the collector on purpose: gathering a pack
+// never records a read. Only a body that survived packing and was rendered is a
+// read, and only the tool knows which those are.
 //
 // Concurrency: Execute is safe for concurrent use.
 type ContextForTask struct {
 	collector *ContextCollector
+	tracker   *ReadTracker
+	readsFor  func(ctx context.Context) *ReadTracker // PLAN-286: per-agent resolver; overrides tracker
 }
 
 // NewContextForTask returns the tool over collector. A nil collector is valid
@@ -103,11 +110,43 @@ func NewContextForTask(collector *ContextCollector) *ContextForTask {
 	return &ContextForTask{collector: collector}
 }
 
+// WithReads wires the connection-level ReadTracker, the fallback when no
+// per-agent resolver answers.
+func (t *ContextForTask) WithReads(tracker *ReadTracker) *ContextForTask {
+	t.tracker = tracker
+	return t
+}
+
+// WithReadsFor wires a per-call ReadTracker resolver (PLAN-286): on a shared
+// connection each logical agent records its reads against its own tracker, so one
+// agent's delivered body never satisfies another's strict-mode edit.
+func (t *ContextForTask) WithReadsFor(fn func(ctx context.Context) *ReadTracker) *ContextForTask {
+	t.readsFor = fn
+	return t
+}
+
+// readTracker resolves the ReadTracker for this call.
+func (t *ContextForTask) readTracker(ctx context.Context) *ReadTracker {
+	if t.readsFor != nil {
+		if r := t.readsFor(ctx); r != nil {
+			return r
+		}
+	}
+	return t.tracker
+}
+
+// ReadDeps implements readRecordingTool (see read_deps.go). A pack records reads,
+// so strict mode's edit gate depends on this wiring; it has no WriteTracker leg
+// and no edit-lane hint, so those report not-applicable rather than a wiring gap.
+func (t *ContextForTask) ReadDeps() (tracker, readsFor, writes, client bool) {
+	return t.tracker != nil, t.readsFor != nil, writesNotApplicable, clientNotApplicable
+}
+
 func (*ContextForTask) Name() string                 { return "context_for_task" }
 func (*ContextForTask) InputSchema() json.RawMessage { return contextForTaskSchema }
 func (*ContextForTask) Description() string {
 	return "Experimental, read-only context pack that starts from explicit seeds: at least one file or symbol is required, and task prose only re-ranks, never seeds. " +
-		"Returns the resolved seeds, gaps and concrete next calls; ambiguous or missing selectors are reported with candidates, never guessed. " +
+		"Returns resolved seeds, complete symbol bodies with an edit guard, gaps and next calls; ambiguous or missing selectors are reported with candidates, never guessed. " +
 		"Files must be files (a directory is scope: use within); symbols are path#Selector or a bare selector, code only (documents come through corpora). " +
 		"Relative paths resolve against the pinned workspace; an unpinned call is refused. " +
 		"max_bytes bounds the WHOLE response and includes a 1024-byte reserve for appended connection notes; above the cap it is clamped and disclosed. " +
@@ -151,7 +190,21 @@ func (t *ContextForTask) Execute(ctx context.Context, raw json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
-	return renderContextPack(pack), nil
+	rendered := renderContext(pack)
+	t.recordDelivered(ctx, pack, rendered.Delivered)
+	return rendered.Text, nil
+}
+
+// recordDelivered records a read for each file whose body was actually rendered,
+// once per file, with the version of that file the body was sliced from. A body
+// that was omitted, degraded to a status line or handed off records nothing: the
+// agent has not seen it, so an edit must not be allowed to rely on it.
+func (t *ContextForTask) recordDelivered(ctx context.Context, pack contextPack, delivered []int) {
+	reads := t.readTracker(ctx)
+	for _, i := range delivered {
+		f := pack.Files[i]
+		reads.Record(f.Abs, f.MTime, f.SHA)
+	}
 }
 
 func parseContextRequest(raw json.RawMessage) (contextRequest, error) {

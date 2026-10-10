@@ -92,10 +92,14 @@ func normaliseWithin(root, entry string) (string, error) {
 	}
 	if filepath.IsAbs(e) {
 		rel := relWithinRoot(root, e)
-		if rel == "" {
+		switch {
+		case rel != "":
+			e = rel
+		case !hasParentTraversal(e) && canonicalRoot(e) == root:
+			e = "." // the root itself narrows nothing, and is not an error to name
+		default:
 			return "", badArgument(fmt.Errorf("context_for_task: within entry %q is outside the workspace root; within only narrows", entry))
 		}
-		e = rel
 	}
 	e = path.Clean(filepath.ToSlash(e))
 	if e == ".." || strings.HasPrefix(e, "../") {

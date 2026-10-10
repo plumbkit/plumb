@@ -86,11 +86,17 @@ func newShop(t *testing.T) shopTool {
 // run calls the tool with args and returns its text or its error.
 func (s shopTool) run(t *testing.T, args map[string]any) (string, error) {
 	t.Helper()
+	return s.runAs(t, context.Background(), args)
+}
+
+// runAs is run under ctx, which is how a test plays one agent among several.
+func (s shopTool) runAs(t *testing.T, ctx context.Context, args map[string]any) (string, error) {
+	t.Helper()
 	raw, err := json.Marshal(args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return s.tool.Execute(context.Background(), raw)
+	return s.tool.Execute(ctx, raw)
 }
 
 // collect validates args the way Execute does and returns the structured pack.
