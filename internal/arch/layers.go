@@ -124,6 +124,7 @@ var Layers = map[string]Layer{
 
 	// ── Domain ──
 	"internal/config":       LayerDomain,
+	"internal/contexthints": LayerDomain, // bounded hint observation ledger + allowance
 	"internal/history":      LayerDomain, // write-diff history store
 	"internal/session":      LayerDomain,
 	"internal/sessionstate": LayerDomain,
