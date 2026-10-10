@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.24.0 (2026-10-10)
 
 ### Security
 
@@ -20,6 +20,57 @@
   `.oss-scanner/threat_model.md` points the audit at the attack surface, and
   `docs/threat-model.md` gains a Severity section that rates a finding by what
   the attacker reaches beyond the user's own configuration.
+- **`run_task` can run a slot in a work-tree, and an unconfigured slot names the
+  project's own Make target (PLAN-494).** `path` moves the command's working
+  directory into a directory INSIDE THE WORKSPACE — the same boundary every other
+  tool uses, so a work-tree of the same repository that lives outside it is
+  refused — while the language, the `[tasks.<lang>]` command and its trust still
+  resolve against the pinned workspace's config, so a branch cannot supply its own
+  trusted commands; `{workspace}` follows the command, and an argument naming an
+  absolute path in the tree being left is refused rather than left pointing at the
+  wrong checkout. When a slot has no command and the Makefile in the directory the
+  command would have run in defines a target named after it, the refusal now says
+  so (`make vuln`, the project's own gate) instead of stopping at the config
+  recipe.
+- **`git` can amend, and can wait for a slow hook (PLAN-493).** `commit` takes
+  `amend: true` to fold the staged changes into HEAD (`--amend`), keeping HEAD's
+  message when no `message` is given, and is refused when HEAD is already
+  reachable from a remote-tracking ref — rewriting a published commit is a
+  force-push for everyone else, and the refusal names the refs. `wait: true` on
+  a mutating call waits for the git child instead of detaching at
+  `[git] detach_after` with "STILL RUNNING": the call returns the real result,
+  including a refusing hook's own output, still bounded by
+  `[git] write_timeout`.
+- **The git tool's read tier takes an output window (PLAN-454).** `git` accepts
+  `start_line`, `end_line`, `pattern`, `use_regex` and `case_sensitive` on any
+  read-tier call, with `read_file`'s semantics: 1-based inclusive lines, literal
+  text unless `use_regex`, smart-case unless `case_sensitive` says otherwise, and
+  a trailing note naming the lines returned. The window is applied to the
+  child's full output *before* the response caps, so a 60-line question about a
+  large blob at a revision is answered with those lines even though the whole
+  blob is past the 100 KiB cap. Until now the only ways to read a slice of a
+  large blob were the whole file (spilled outside the workspace, unreadable by
+  `read_file`) or a native shell fallback. Both truncation notes now name the
+  window parameters, so a capped answer says how to ask for the part it cut.
+- **The LSP fallbacks now say when the index behind them is failing (PLAN-490).**
+  `workspace_symbols`, `read_symbol`, `get_definition` and `call_hierarchy` answer
+  from the topology index when the language server cannot, and their banner said only
+  "results are approximate and may be stale" — true, and undifferentiated whether the
+  index was healthy or had been failing for a day. For an ABSENCE answer that is the
+  difference that matters: "no callers" from a failing index is not evidence of no
+  callers. The banner now carries the same stale-index notice the topology_* tools
+  lead with — the same wording, from the same function, so the two can never drift
+  apart — and stays byte-identical when the index is healthy.
+- **`git merge-tree` can preview a merge as a clean clone would (PLAN-454).** The
+  opt-in `clean_clone: true` answers the question a fresh clone answers: the merge
+  runs in a throwaway bare repository whose object store is an alternate of the
+  real one, with the machine's global and system config and attributes off — and,
+  since review round 2, with no init template and with every `GIT_*` variable
+  dropped except `GIT_EXEC_PATH`, so `GIT_CONFIG_PARAMETERS` cannot smuggle config
+  in — so a machine-local `merge=union` driver in `.git/info/attributes` can no
+  longer make a real conflict look clean (that trap is what hid a CHANGELOG conflict
+  in #588). An in-tree `.gitattributes` still applies, because it is part of the tree
+  under review rather than machine state. The real repository gains no object.
 - **`plumb doctor` warns when Kimi Code's `tool-select` flag would hide
   plumb (PLAN-413).** With `[experimental] tool-select = true` and a model
   declaring `dynamically_loaded_tools`, Kimi Code 0.38.0 run headless
@@ -81,6 +132,54 @@
   verifier; this affects only the opt-in semantic-search embedding clients,
   plumb's one outbound HTTPS path. `GODEBUG=x509sslcertoverrideplatform=0`
   restores the old behaviour.
+- **`check_messages` says whether each unread note's recipient can still read it
+  (PLAN-496).** The receipt of your own unread notes said only "still unread", so
+  a sender could not tell a busy peer from one whose session had ended — and a
+  note bound to an ended session expires unread however long you wait. Each row now
+  adds the recipient's state: the session it is bound to is live; it has ended and
+  the name now belongs to another session (so re-send); no single live session
+  answers to the name (so it most likely expires unread); or, for a note addressed
+  by name only, whether a live session holds the name or the next one to take it
+  will receive it. A `"next"` note and a receipt built without a resolver are
+  unchanged.
+- **The web API reports a failing topology index (PLAN-489).** `failing` joins the
+  topology JSON the dashboard reads, and unlike every other field there it cannot
+  come from the on-disk snapshot: a failed cycle is a property of the LIVE indexer,
+  and an out-of-process read reports `stopped` by contract. The daemon therefore
+  hands the web server a live health accessor for the workspaces it actually owns
+  (a non-creating pool lookup — a dashboard poll must not open a database), and the
+  handler uses it when present. Where it is absent the field stays false and
+  `indexerState: "stopped"` carries the meaning, so a UI that renders the badge only
+  while the state is live can never show a false "healthy" from a stopped snapshot.
+- **The indexer skips linked worktrees, and keeps submodules (PLAN-491).** A
+  workspace holding agent worktrees (`plumb-wt-*`, `plumb-review-*`) indexed each
+  one as another full copy of the repository — 20,291 files and 753 MiB in this
+  workspace, with resync cycles that rarely reached idle, because a worktree is
+  untracked but not gitignored and every worktree created or removed mid-walk meant
+  another full resync. The resync walk now recognises a linked worktree from git's
+  own bookkeeping — a nested `.git` FILE whose `gitdir:` points under
+  `<root>/.git/worktrees/` — and prunes it. A `.git` file pointing under
+  `<root>/.git/modules/` is a SUBMODULE and stays indexed, so `./plumb` in this
+  workspace is unaffected, and anything the walk cannot classify (an unreadable
+  file, no `gitdir:` line, a path outside this repository) is not skipped at all:
+  it does not guess. `[topology] index_worktrees = true` includes worktrees again
+  for a workspace that wants them.
+- **`git` reads `merge-tree`, `check-attr` and `worktree list`, and worktree
+  sub-verbs are tiered (PLAN-454).** `merge-tree` (both the trivial and the
+  `--write-tree` form) and `check-attr` join the read tier: they move no ref and
+  touch neither the index nor the worktree, so a reviewer can ask "does this
+  conflict with main, and where" and "which merge driver actually applies here"
+  without leaving the tool. `worktree list` is a read; `worktree add`, `remove`,
+  `lock` and `unlock` are writes; `move`, `prune` and `repair` are destructive,
+  as is `worktree add -B`, which resets a branch. `worktree remove` refuses a
+  worktree holding uncommitted work — and any unconfirmed `--force` — unless
+  `confirm: true`, naming what would be discarded; it also refuses a worktree on
+  a detached HEAD whose commits no branch, tag or remote reaches, because the
+  reflog naming them is deleted with the directory (`--force` does not help
+  there). `add`, `move`, `remove` and `repair` are confined to the workspace
+  through the same boundary every other tool uses — an outside path is refused,
+  and `confirm` does not lift that — and `add -f/--force` joins `-B` at the
+  destructive tier, since it lets two worktrees hold one branch.
 - **The tool catalogue is a third smaller (PLAN-413 phase 3).** Every
   client pays for `tools/list` in discovery, prompt cache and, without
   deferred tool loading, on each step. Tool and parameter descriptions were
@@ -280,6 +379,51 @@
     indexing may still be in progress": the read-only open is lazy and the
     status census ignores query errors. The status read now probes the schema
     first. Damage confined to a data page still reads as a partial census.
+- **`plumb mail` answers in a sandbox that cannot open the session-registry lock
+  (PLAN-495).** Listing live sessions took the registry's exclusive lock, whose
+  open needs write access to the data directory, so a harness that denies those
+  writes got "operation not permitted" and no answer at all, although every
+  session file it needed was readable. A read-only caller now falls back to
+  reading the registry WITHOUT the lock when the lock file cannot be opened (a
+  permission or read-only-filesystem error, never contention), writing nothing;
+  `--json` then carries `"unlocked_read": true` and the sentence says so, since a
+  session starting or ending at that instant may be missed. Session files are
+  written by temp file plus rename, so the unlocked read is never torn.
+- **A killed `mutation_test` no longer leaves a mutant in your source (PLAN-459).**
+  The tool restored its mutant on every exit path a running process can take, but
+  not when the process was killed: a daemon restart mid-run left a mutant sitting in
+  a source file, and the client's "re-read the file to check whether it landed"
+  named neither the file nor the mutant. The mutant is now journalled — path, digest
+  before, digest of the mutant, the original bytes, the mode — under the daemon's
+  state dir BEFORE it is written, and the entry is cleared only once the restore has
+  been verified by digest. Whatever survives into the next daemon start belongs to a
+  process that no longer exists, so a startup sweep puts those files back and says
+  so in the daemon log; a file someone else has edited since (matching neither
+  digest) is left exactly as it is and reported, because guessing which content the
+  user wants would be worse than saying so. When the daemon restarts mid-request,
+  the reconnect error for an interrupted `mutation_test` now names those files
+  itself, instead of leaving the caller with "re-read the file" and no path — and
+  it words each case for what is true: the file is classified by digest, so one
+  still holding the mutant says so rather than claiming, as it used to, that
+  someone had edited it.
+- **With history off, a huge before-side is no longer read (PLAN-457).** The
+  before-side of a write served two consumers — the history row and the response
+  diff — and with history off only the response wanted it, which withholds
+  anything past 200 KiB. The side is now answered from its stat when the file is
+  over that cap, so a copy, rename, delete or undo over a 50 MiB file no longer
+  reads it — nor streams a full hash above 8 MiB — only to print "diff withheld:
+  file too large". With history on nothing changes: the store still gets the
+  bytes, or the hash when the file is too large to carry. A stat-only side reports
+  no digest at all, rather than the empty input's hash, which would be a digest
+  nobody computed.
+- **`edit_file`'s near-match hint no longer prints a sensitive path's content
+  (PLAN-456).** When `old_string` was not found, the hint rendered the file's
+  current lines (the `+` side of a labelled diff) — for a path matching
+  `[history] sensitive_globs` too, so an error response was a way around the
+  withholding the write response applies. The hint now asks the same resolver
+  (`SensitivePathFn`) and, for a sensitive path, keeps only what reveals no
+  content: the closest-match line number and the RANGE-mode retry call. A path
+  the gate does not match renders the diff exactly as before.
 - **On macOS the daemon no longer loses its SQLite locks to its own config
   watchers (PLAN-485).** The project config watcher watched
   `<workspace>/.plumb`, and the global one watched the global config directory,

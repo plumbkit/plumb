@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/ignore"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // This file holds the indexer's whole-tree operations: deleting a single file's
@@ -181,13 +184,20 @@ func (idx *Indexer) processResyncChanged(ctx context.Context) (bool, error) {
 // (fs.SkipDir) or record the ignore rules in force inside it. Split out of the
 // walk closure so that closure stays readable.
 //
-// The three exclusions are additive and ordered cheapest-first: the hardcoded
-// floor, then the configured patterns, then the tree's own ignore files.
+// The four exclusions are additive and ordered cheapest-first: the hardcoded
+// floor, then the configured patterns, then the tree's own ignore files, then
+// the one rule that reads the filesystem, a linked worktree's .git file. A
+// directory is pruned if ANY of them says so; none can re-include what another
+// pruned, which is why the order among them changes only the cost, never the
+// answer.
 func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ignore.Stack) error {
 	if path == root {
 		// The workspace root is never judged by the skip list. It used to be: a
 		// checkout living at ~/.config/repo or ~/src/build had its own name
-		// matched by shouldSkipDir and indexed nothing.
+		// matched by shouldSkipDir and indexed nothing. It is not judged by the
+		// worktree rule either — a workspace that IS a linked worktree must still
+		// index itself, and its own .git file points at another repository's
+		// .git/worktrees/ anyway.
 		var st ignore.Stack
 		stacks[root] = st.Load(root)
 		return nil
@@ -206,8 +216,96 @@ func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ig
 	if parent.IsIgnored(path, true) {
 		return fs.SkipDir
 	}
+	// Last because it is the only check here that touches the filesystem: one
+	// os.ReadFile per surviving directory. It must still be decided before the
+	// stack for the directory is loaded, since the prune path never loads one.
+	if !idx.indexWorktrees && linkedWorktree(root, path) {
+		return fs.SkipDir
+	}
 	stacks[path] = parent.Load(path)
 	return nil
+}
+
+// linkedWorktree reports whether dir is a LINKED WORKTREE of the repository
+// rooted at root — a second checkout of the same repository, created by
+// `git worktree add` and materialised in this tree as an untracked directory
+// holding a .git FILE. Nothing about the directory's NAME is consulted: the
+// distinction is git's own bookkeeping, because the names are convention
+// (plumb-wt-*, plumb-review-*) and a rename must not change the answer.
+//
+// The rule is exact, and it is deliberately silent when it cannot be exact:
+//
+//   - a directory with no .git file is not a worktree (an ordinary directory, or
+//     the main checkout, whose .git is a directory);
+//   - a .git file whose gitdir: line points into a repository's worktrees directory
+//     IS a linked worktree, and is skipped unless [topology] index_worktrees opts in.
+//     The repository may be the workspace root OR one inside it: agent worktrees in a
+//     workspace whose code lives in a submodule are worktrees of THAT repository, so
+//     their gitdir is <root>/.git/modules/<sub>/worktrees/<name> — matching only
+//     <root>/.git/worktrees missed every one of them (review round 1, B1);
+//   - a .git file pointing under <root>/.git/modules/ WITHOUT a worktrees component is
+//     a SUBMODULE, whose files are part of this tree and stay indexed — this rule never
+//     prunes one;
+//   - anything else — an unreadable file, a missing gitdir: line, a path outside this
+//     workspace (a worktree of a DIFFERENT repository vendored in by hand) — is not
+//     skipped. The walk does not guess.
+//
+// The gitdir: target may be relative (git writes a submodule's as
+// ../.git/modules/<name>) and either side may be spelled through a symlink
+// (/var vs /private/var on macOS, where git records the path it was handed), so
+// both are resolved before comparison.
+func linkedWorktree(root, dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ".git"))
+	if err != nil {
+		return false
+	}
+	target, ok := gitdirTarget(data)
+	if !ok {
+		return false
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	target = paths.Canonical(filepath.Clean(target))
+	// The test is the SHAPE of the part of target INSIDE this workspace: a relative path whose
+	// components include both .git and worktrees. Two things make the relative form load-bearing
+	// rather than cosmetic. First, confinement: a repository outside the workspace is not ours
+	// to classify, so it is never pruned on this rule. Second — and this is review round 1's B3 —
+	// testing the ABSOLUTE path's components would classify every file in a workspace that merely
+	// LIVES under a directory called "worktrees" (…/code/worktrees/myproject) as a linked
+	// worktree, and prune the whole workspace. Only the path below the root says anything about
+	// what is inside it.
+	rel, err := filepath.Rel(paths.Canonical(root), target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	// git writes exactly two shapes for a worktree's admin dir, and this tests those shapes
+	// rather than searching for components: `<root>/.git/worktrees/<name>` and
+	// `<root>/.git/modules/<sub>/worktrees/<name>`. A component search was wrong twice over
+	// (review round 1, B3 and SHOULD-FIX 2): it also matched a workspace that merely LIVES under
+	// a directory called "worktrees", and a SUBMODULE whose path ends in `worktrees`
+	// (`.git/modules/worktrees` has both components and is not a worktree at all).
+	if first, _, _ := strings.Cut(rel, string(filepath.Separator)); first != ".git" {
+		return false
+	}
+	return filepath.Base(filepath.Dir(target)) == "worktrees"
+}
+
+// gitdirTarget extracts the path from a .git file's contents. A .git file holds
+// one line, `gitdir: <path>`; git writes nothing else, and a file that does not
+// match that shape is not a gitdir pointer at all (ok is false, and the caller
+// must not skip on a guess).
+func gitdirTarget(data []byte) (string, bool) {
+	line, _, _ := strings.Cut(string(data), "\n")
+	target, found := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
+	if !found {
+		return "", false
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", false
+	}
+	return target, true
 }
 
 // resyncSkipsFile reports whether the walk excludes one file. Its directory's
@@ -306,9 +404,11 @@ func (idx *Indexer) pruneDeletedChanged(present map[string]bool) (bool, error) {
 //
 // This is the FLOOR, not the whole rule. The resync walk additionally honours
 // .gitignore / .ignore and [topology] exclude_patterns, both of which can only
-// exclude more. A repository that tracks its own vendor/ tree still does not
-// get it indexed, and a workspace with no ignore file behaves exactly as it did
-// before the walk learned to read them.
+// exclude more, plus the linked-worktree rule, which is the one exclusion in the
+// chain that is on by default AND has an opt-out ([topology] index_worktrees).
+// A repository that tracks its own vendor/ tree still does not get it indexed,
+// and a workspace with no ignore file behaves exactly as it did before the walk
+// learned to read them.
 func shouldSkipDir(name string) bool {
 	if len(name) > 1 && name[0] == '.' {
 		return true

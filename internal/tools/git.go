@@ -13,53 +13,18 @@ import (
 	"github.com/plumbkit/plumb/internal/collab"
 )
 
-var gitSchema = json.RawMessage(`{
-  "type": "object",
-  "properties": {
-    "subcommand": {
-      "type": "string",
-      "description": "Git subcommand. Read: diff, log, show, blame, status, shortlog, check-ignore, branch/tag/stash listing. Write: add, commit, switch, mv, merge, branch/tag create, stash push/pop. Destructive: reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, branch/tag delete, stash drop. Network: push, fetch, pull."
-    },
-    "args": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Arguments passed to git, e.g. [\"--oneline\",\"-10\"] for log or [\"--staged\"] for diff. Not for add or commit."
-    },
-    "files": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "add: paths to stage (-A semantics). commit: commit ONLY these tracked paths, ignoring other staged changes; omit for the whole index. No globs."
-    },
-    "message": {
-      "type": "string",
-      "description": "Commit message (-m); pre-commit hooks always run."
-    },
-    "repo": {
-      "type": "string",
-      "description": "A path inside the target repository (default: the attached workspace; refused if none, never the daemon's directory). For a submodule, pass a path inside it; run from the superproject, git records only its pointer."
-    },
-    "confirm": {
-      "type": "boolean",
-      "description": "Required for destructive and network subcommands, and to override the cross-session HEAD guard."
-    },
-    "expected_head": {
-      "type": "string",
-      "description": "Revision HEAD must resolve to, or a write, destructive or network op is refused."
-    }
-  },
-  "required": ["subcommand"],
-  "additionalProperties": false
-}`)
-
 // Git runs git through a single tiered interface: read subcommands always run;
 // write, destructive, and network subcommands are gated by the resolved
 // GitPolicy. The subcommand always leads the argv, so global flags supplied in
 // args cannot reconfigure git; there is no shell.
 //
-// The tool is split across files by concern: tier classification + the global
-// flag denylist live in git_classify.go; the gating policy and push protection
-// in git_policy.go; argv assembly, execution, and output formatting in
-// git_exec.go. This file holds the MCP Tool surface and request orchestration.
+// The tool is split across files by concern: the wire schema in git_schema.go;
+// tier classification + the global flag denylist in git_classify.go; the option
+// grammars the classifier reads in git_options.go; the gating policy and push
+// protection in git_policy.go; argv assembly, execution, and output formatting
+// in git_exec.go; the read-tier output window in git_window.go; the worktree
+// removal guard in git_worktree.go. This file holds the MCP Tool surface and
+// request orchestration.
 //
 // Concurrency: Execute is safe for concurrent use. sessID/sessNameFn/sessNameForFn
 // are set once at registration (WithSession/WithSessionNameFor); the
@@ -135,11 +100,9 @@ func (t *Git) projectGitStatus() ProjectGitStatus {
 	return t.projectGit()
 }
 
-func (t *Git) Name() string                 { return "git" }
-func (t *Git) InputSchema() json.RawMessage { return gitSchema }
-func (t *Git) Description() string {
-	return "Policy-gated git, no shell. Reads always run. Writes need [git] allow_writes (default on). Destructive subcommands need allow_destructive and confirm:true; push, fetch and pull need allow_push and confirm:true. Force-pushing a protected branch or using an ad-hoc remote is always refused. add (-A) and commit (message, optional files) are typed; others take args. A write is refused if a DIFFERENT session moved HEAD since you looked (confirm:true overrides). Details: the plumb-git skill."
-}
+// Name, InputSchema and Description live in git_schema.go with the schema they
+// serve: the wire surface is one file, so the schema-contract test that counts
+// schemas against additionalProperties markers per file holds.
 
 type gitToolArgs struct {
 	Subcommand   string   `json:"subcommand"`
@@ -149,11 +112,33 @@ type gitToolArgs struct {
 	Repo         string   `json:"repo"`
 	Confirm      bool     `json:"confirm"`
 	ExpectedHead string   `json:"expected_head"`
+	// Amend folds the staged changes into HEAD instead of creating a commit
+	// (commit only). Wait asks a mutating call to wait for its child rather than
+	// detaching at [git] detach_after — see Execute.
+	Amend bool `json:"amend"`
+	Wait  bool `json:"wait"`
+	// CleanClone previews a merge-tree in a throwaway clean clone of the repository
+	// (git_clean_clone.go): the answer a machine with no local git configuration or
+	// system attributes would compute.
+	CleanClone bool `json:"clean_clone"`
+	// The read-tier output window (git_window.go): a slice of, or a pattern over,
+	// a read command's output instead of all of it.
+	StartLine     *int   `json:"start_line"`
+	EndLine       *int   `json:"end_line"`
+	Pattern       string `json:"pattern"`
+	UseRegex      bool   `json:"use_regex"`
+	CaseSensitive *bool  `json:"case_sensitive"`
 }
 
 func (a gitToolArgs) validate() error {
 	if strings.TrimSpace(a.Subcommand) == "" {
 		return errors.New("git: subcommand is required")
+	}
+	if a.Amend && a.Subcommand != "commit" {
+		return fmt.Errorf("git: amend folds changes into HEAD, so it applies to commit, not %q", a.Subcommand)
+	}
+	if a.CleanClone && a.Subcommand != "merge-tree" {
+		return fmt.Errorf("git: clean_clone previews a merge in a clean clone, so it applies to merge-tree, not %q", a.Subcommand)
 	}
 	return nil
 }
@@ -175,6 +160,16 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 		return "", err
 	}
 	tier = t.refineTier(ctx, a, tier) // git_ref_reset.go: creating a NEW ref is a write
+	// The output window (git_window.go) slices what a READ command printed.
+	// Dressing a commit in start_line or pattern is caller error worth naming
+	// rather than silently ignoring.
+	window, err := windowGitArgs(a)
+	if err != nil {
+		return "", err
+	}
+	if window.wanted() && tier != tierRead {
+		return "", fmt.Errorf("git: start_line, end_line and pattern window a read command's output, and %q is not a read", a.Subcommand)
+	}
 	policy := t.resolvePolicy()
 	if err := t.gate(tier, policy, a.Confirm); err != nil {
 		return "", err
@@ -189,10 +184,45 @@ func (t *Git) Execute(ctx context.Context, raw json.RawMessage) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	if err := t.checkBoundary(ctx, a); err != nil {
+	if err := t.guardCall(ctx, a); err != nil {
 		return "", err
 	}
-	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), gitChildSpecFor(policy))
+	if a.CleanClone {
+		return t.runCleanClone(ctx, a, window)
+	}
+	child := gitChildSpecFor(policy)
+	if a.Wait {
+		// A caller that asked to wait gets the real result: a detach deadline at the
+		// write bound makes gitChildSpec.detachAfter report that no foreground deadline
+		// applies, so awaitOrDetach waits the child out. It stays bounded by
+		// [git] write_timeout, never by nothing — and a client whose own call timeout is
+		// shorter than the hook still learns the outcome on its next git call here
+		// (git_background.go).
+		child.DetachAfter = child.writeTimeout()
+	}
+	return t.runGitCommand(ctx, a, tier, switchNote, t.commitTrailerToken(ctx, policy, a.Subcommand), child, window)
+}
+
+// guardCall runs the refusals that must be decided before the git child starts:
+// the workspace boundary, the worktree-removal confirm guard, and the amend
+// publication guard. They live here rather than inline because each carries its
+// own evidence and remedy, and because Execute is the sequence of steps — not
+// their bodies (see the gocyclo-15 contract in git.go's header).
+func (t *Git) guardCall(ctx context.Context, a gitToolArgs) error {
+	if err := t.checkBoundary(ctx, a); err != nil {
+		return err
+	}
+	// A worktree call creates, moves or deletes a directory: its paths are
+	// confined to the workspace, and a removal that would discard work needs
+	// confirm (git_worktree.go).
+	if err := t.checkGitWorktree(ctx, a); err != nil {
+		return err
+	}
+	// An amend rewrites HEAD, which is only private while no remote has it.
+	if err := checkCommitAmend(ctx, a); err != nil {
+		return err
+	}
+	return nil
 }
 
 // gate applies the tier policy (gateGit), adding the untrusted-project note
@@ -263,7 +293,7 @@ func (t *Git) commitTrailerToken(ctx context.Context, p GitPolicy, sub string) s
 //
 // runGit serialises every non-read tier; a read (status/log/diff) must never
 // queue behind a slow commit.
-func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote, trailer string, child gitChildSpec) (string, error) {
+func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, switchNote, trailer string, child gitChildSpec, window gitWindow) (string, error) {
 	argv, err := buildGitArgv(a, trailer)
 	if err != nil {
 		return "", err
@@ -283,7 +313,7 @@ func (t *Git) runGitCommand(ctx context.Context, a gitToolArgs, tier gitTier, sw
 		}
 	}
 	guard := t.armRefGuard(a, tier)
-	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.deps.writes(ctx), t.sessionKey())
+	out, err := runGit(ctx, a.Repo, a.Subcommand, argv, tier, guard, t.peerIntentWarnFn(a.Subcommand, tier), child, t.deps.writes(ctx), t.sessionKey(), window)
 	if err != nil {
 		return "", err
 	}

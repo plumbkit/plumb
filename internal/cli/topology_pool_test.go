@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"os"
 	"reflect"
 	"slices"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/topology"
 	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 	"github.com/plumbkit/plumb/internal/topology/extractors/wasmts"
 )
@@ -209,5 +211,75 @@ func TestExtractorCtors_EngineWiring(t *testing.T) {
 	}
 	if _, ok := extractorCtors["swift"]().(*wasmts.Extractor); !ok {
 		t.Errorf("swift extractor is %T, want *wasmts.Extractor (Swift stays on WASM until its upstream residuals clear)", extractorCtors["swift"]())
+	}
+}
+
+// TestTopologyPool_GetNeverCreates pins get as the read-only counterpart to
+// Acquire: it reports a store only when one is already open, so a reader (the
+// web dashboard's health poll) cannot materialise an index — database file,
+// background indexer and all — for a workspace that has none.
+func TestTopologyPool_GetNeverCreates(t *testing.T) {
+	dir := t.TempDir()
+	p := newTopologyPool(enabledTopologyConfig())
+	t.Cleanup(p.StopAll)
+
+	if s := p.get(dir); s != nil {
+		t.Fatalf("get on an untouched pool = %v, want nil", s)
+	}
+	if s := p.get(""); s != nil {
+		t.Fatalf("get(%q) = %v, want nil", "", s)
+	}
+	if _, err := os.Stat(topology.DBPath(dir)); !os.IsNotExist(err) {
+		t.Fatalf("get touched the filesystem: stat %s = %v, want not-exist", topology.DBPath(dir), err)
+	}
+
+	s := p.Acquire(dir, enabledTopologyConfig())
+	if s == nil {
+		t.Fatal("expected a store from an enabled pool")
+	}
+	if got := p.get(dir); got != s {
+		t.Fatalf("get after Acquire = %v, want the acquired store %v", got, s)
+	}
+
+	p.StopAll()
+	if got := p.get(dir); got != nil {
+		t.Fatalf("get after StopAll = %v, want nil (no store is open)", got)
+	}
+}
+
+// TestTopologyPool_HealthFor pins the two things the web layer's failing flag
+// needs from the pool: ok reports whether there is a LIVE indexer to ask at all
+// (a workspace with no open store must not be read as healthy), and the health
+// comes from that store's own indexer.
+func TestTopologyPool_HealthFor(t *testing.T) {
+	dir := t.TempDir()
+	p := newTopologyPool(enabledTopologyConfig())
+	t.Cleanup(p.StopAll)
+
+	if h, ok := p.healthFor(dir); ok {
+		t.Fatalf("healthFor with no open store = (%+v, true), want ok=false", h)
+	}
+	if _, ok := p.healthFor(""); ok {
+		t.Fatal("healthFor(\"\") = ok true, want false")
+	}
+
+	s := p.Acquire(dir, enabledTopologyConfig())
+	if s == nil {
+		t.Fatal("expected a store from an enabled pool")
+	}
+	h, ok := p.healthFor(dir)
+	if !ok {
+		t.Fatal("healthFor = ok false, want true for an open store")
+	}
+	// The store's own indexer: a live one is never "stopped" (that is the nil
+	// indexer healthOf reports). Compared by state, not DeepEqual, because
+	// LastSync advances underneath the test.
+	if h.State == "stopped" {
+		t.Errorf("healthFor state = %q for an open store: %+v", h.State, h)
+	}
+
+	p.StopAll()
+	if _, ok := p.healthFor(dir); ok {
+		t.Fatal("healthFor after StopAll = ok true, want false")
 	}
 }

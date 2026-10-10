@@ -200,6 +200,14 @@ func (d WriteDeps) withheldForResponse(ctx context.Context, path, from string) s
 	return ""
 }
 
+// withholdsResponse is the decision without the marker, for callers that must
+// withhold something other than a diff: edit_file's near-match hint renders its
+// own wording around it. Same resolver, same answer — a path that withholds a
+// response diff must not leak through an error response instead.
+func (d WriteDeps) withholdsResponse(ctx context.Context, path string) bool {
+	return d.withheldForResponse(ctx, path, "") != ""
+}
+
 // bytesSide maps a byte slice to a side: nil is absent, empty-but-non-nil is
 // present and empty, and content past maxResponseDiffBytes is unknown. The size
 // check is here rather than only in responseDiff so a huge side is never copied

@@ -67,17 +67,17 @@ func TestSmartCase_SearchInFilesMatrix(t *testing.T) {
 }
 
 func TestSmartCase_ExplicitFalseForcesInsensitive_ReadFile(t *testing.T) {
-	re, err := compileReadFilePattern("FSYNC", false, boolPtr(false))
+	re, err := compileToolPattern("read_file", "FSYNC", false, boolPtr(false))
 	if err != nil {
-		t.Fatalf("compileReadFilePattern: %v", err)
+		t.Fatalf("compileToolPattern: %v", err)
 	}
 	if !re.MatchString("fsync enabled") {
 		t.Error("case_sensitive:false must force an insensitive match on an uppercase pattern")
 	}
 	// Unset keeps smart-case: an uppercase pattern stays case-sensitive.
-	re, err = compileReadFilePattern("FSYNC", false, nil)
+	re, err = compileToolPattern("read_file", "FSYNC", false, nil)
 	if err != nil {
-		t.Fatalf("compileReadFilePattern: %v", err)
+		t.Fatalf("compileToolPattern: %v", err)
 	}
 	if re.MatchString("fsync enabled") {
 		t.Error("unset case_sensitive must keep smart-case (uppercase pattern → sensitive)")

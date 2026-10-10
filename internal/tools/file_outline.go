@@ -140,7 +140,7 @@ func (t *FileOutline) Execute(ctx context.Context, raw json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	return formatFileOutline(res), nil
+	return formatFileOutline(res, activeTopology(t.topo)), nil
 }
 
 func parseFileOutlineArgs(raw json.RawMessage) (fileOutlineArgs, error) {
@@ -354,9 +354,17 @@ func readSourceLines(path string) ([]string, error) {
 	return strings.Split(string(b), "\n"), nil
 }
 
-func formatFileOutline(res *outlineResult) string {
+func formatFileOutline(res *outlineResult, store *topology.Store) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Outline of %s — %d symbols (source=%s)\n", res.uri, len(res.entries), res.source)
+	// The outline is only as good as the index it came from: when the source is the
+	// topology index and that index's last cycle failed, say so here, in the same
+	// wording every other topology-backed answer uses (PLAN-490). A file_outline that
+	// silently dropped recent symbols is the absence answer with a straight face.
+	stale := ""
+	if res.source == "topology" {
+		stale = staleIndexSuffixFor(store, time.Now())
+	}
+	fmt.Fprintf(&sb, "Outline of %s — %d symbols (source=%s)%s\n", res.uri, len(res.entries), res.source, stale)
 	sb.WriteString("Signatures shown; bodies collapsed. Line ranges are 1-based.\n\n")
 	if len(res.entries) == 0 {
 		sb.WriteString("(no symbols)\n")

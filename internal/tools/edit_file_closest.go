@@ -2,7 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -28,7 +27,12 @@ const charAnchorFloor = 0.5
 // the file actually contains — so an agent can see the exact whitespace or
 // token drift without a re-read. It is a suggestion, never an applied edit;
 // the exactly-once contract still governs any real edit.
-func closestMatchDiff(content, searched, path string) string {
+//
+// withhold replaces the diff with the sensitive-path marker while keeping the
+// line number and the RANGE-mode retry route: a path whose content the write
+// response withholds must not leak it through this error instead, and the line
+// numbers reveal no content.
+func closestMatchDiff(content, searched, path string, withhold bool) string {
 	oldLines := diffSplitLines(searched)
 	contentLines := diffSplitLines(content)
 	if len(oldLines) == 0 || len(contentLines) == 0 {
@@ -41,15 +45,21 @@ func closestMatchDiff(content, searched, path string) string {
 	}
 
 	end := min(bestStart+len(oldLines), len(contentLines))
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "  closest match in the file is near line %d", bestStart+1)
+	if withhold {
+		fmt.Fprintf(&b, "\n  %s\n  Retry with RANGE mode at lines %d\u2013%d: "+
+			`{"start_line": %d, "end_line": %d, "new_string": ...}`+
+			" \u2014 no file content is shown for a sensitive path.\n",
+			withheldSensitiveNote, bestStart+1, end, bestStart+1, end)
+		return b.String()
+	}
 	script := computeEditScript(oldLines, contentLines[bestStart:end])
 	diff := renderUnifiedDiff(path, script)
 	if diff == "" {
 		return ""
 	}
-
-	var b strings.Builder
-	b.WriteString("  closest match in the file is near line ")
-	b.WriteString(strconv.Itoa(bestStart + 1))
 	b.WriteString(" (\"-\" = your old_string, \"+\" = current file content; suggestion only, not applied):\n")
 	b.WriteString(diff)
 	return b.String()

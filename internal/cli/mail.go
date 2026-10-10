@@ -131,6 +131,12 @@ type mailReport struct {
 	// apply a staleness rule (a note minutes from expiry may not be worth
 	// interrupting for) without being told anything about content.
 	AgesSeconds []int `json:"ages_seconds"`
+	// UnlockedRead is true when the session registry had to be read WITHOUT its
+	// lock, because this process may not open the lock file (a sandbox that denies
+	// writes under the data dir; PLAN-495). It describes the read, not any message:
+	// a session starting or ending at this instant may have been missed or still
+	// listed. Omitted when false, so the ordinary answer is unchanged.
+	UnlockedRead bool `json:"unlocked_read,omitempty"`
 }
 
 func runMail(_ *cobra.Command, _ []string) error {
@@ -153,7 +159,7 @@ func runMail(_ *cobra.Command, _ []string) error {
 // The selector must already have been validated by the caller when it comes from
 // flags; hook callers use fixed selectors and never accept a user-controlled name.
 func mailReportFor(selector, value string) (mailReport, error) {
-	info, err := resolveMailSessionFor(selector, value)
+	info, locked, err := resolveMailSessionReading(selector, value)
 	if err != nil {
 		return mailReport{}, err
 	}
@@ -162,10 +168,11 @@ func mailReportFor(selector, value string) (mailReport, error) {
 		return mailReport{}, err
 	}
 	return mailReport{
-		Session:     info.Name,
-		Workspace:   info.Folder,
-		Count:       len(ages),
-		AgesSeconds: ages,
+		Session:      info.Name,
+		Workspace:    info.Folder,
+		Count:        len(ages),
+		AgesSeconds:  ages,
+		UnlockedRead: !locked,
 	}, nil
 }
 
@@ -181,18 +188,27 @@ func resolveMailSession() (session.Info, error) {
 }
 
 func resolveMailSessionFor(selector, value string) (session.Info, error) {
-	all, err := session.List()
+	info, _, err := resolveMailSessionReading(selector, value)
+	return info, err
+}
+
+// resolveMailSessionReading is resolveMailSessionFor that also reports whether
+// the registry was read under its lock. It lists through session.ListForReading,
+// so a process that may not open the lock file — the sandboxed harness PLAN-495
+// was filed from — still gets an answer instead of "operation not permitted".
+func resolveMailSessionReading(selector, value string) (session.Info, bool, error) {
+	all, locked, err := session.ListForReading()
 	if err != nil {
-		return session.Info{}, fmt.Errorf("listing sessions: %w", err)
+		return session.Info{}, false, fmt.Errorf("listing sessions: %w", err)
 	}
 	matches := matchSessions(all, selector, value)
 	switch len(matches) {
 	case 1:
-		return matches[0], nil
+		return matches[0], locked, nil
 	case 0:
-		return session.Info{}, fmt.Errorf("no live session matches --%s %q (see `plumb sessions`)", selector, value)
+		return session.Info{}, locked, fmt.Errorf("no live session matches --%s %q (see `plumb sessions`)", selector, value)
 	default:
-		return session.Info{}, fmt.Errorf(
+		return session.Info{}, locked, fmt.Errorf(
 			"%d live sessions match --%s %q (%s) — select one with --session or --external-id",
 			len(matches), selector, value, strings.Join(mailNames(matches), ", "))
 	}
@@ -373,12 +389,19 @@ func mailWaiting(who collab.Claimant) ([]int, error) {
 // caller that resolved by --external-id or --workspace can see which session it
 // actually asked about.
 func mailSentence(r mailReport) string {
+	var s string
 	if r.Count == 0 {
-		return fmt.Sprintf("No messages waiting for %s.", r.Session)
+		s = fmt.Sprintf("No messages waiting for %s.", r.Session)
+	} else {
+		s = fmt.Sprintf("%d %s waiting for %s (oldest %s, newest %s). Call check_messages in that session to read them.",
+			r.Count, textfmt.Plural(r.Count, "message", "messages"), r.Session,
+			mailAge(r.AgesSeconds[0]), mailAge(r.AgesSeconds[len(r.AgesSeconds)-1]))
 	}
-	return fmt.Sprintf("%d %s waiting for %s (oldest %s, newest %s). Call check_messages in that session to read them.",
-		r.Count, textfmt.Plural(r.Count, "message", "messages"), r.Session,
-		mailAge(r.AgesSeconds[0]), mailAge(r.AgesSeconds[len(r.AgesSeconds)-1]))
+	if r.UnlockedRead {
+		s += " (The session registry was read without its lock, which this process may not open; " +
+			"a session starting or ending right now may have been missed.)"
+	}
+	return s
 }
 
 func mailAge(seconds int) string {

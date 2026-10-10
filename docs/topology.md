@@ -157,7 +157,15 @@ pipeline has four parts:
    every answer from `topology_search`, `topology_explore`, `topology_impact`,
    `topology_affected`, `topology_routes` and `structural_query` leads with a
    `⚠ STALE INDEX` notice: it is served from the last good snapshot, so an
-   absence in it is not evidence of absence.
+   absence in it is not evidence of absence. The same notice rides on the LSP
+   tools' own fallbacks — `workspace_symbols`, `read_symbol`, `get_definition`,
+   `call_hierarchy`, `file_outline`, and the index-supplemented "fill" results —
+   because those answer from the same snapshot whenever the language server
+   cannot. The web API reports the state as `failing`, but only from a LIVE
+   indexer: `failing` is a property of the indexer, not of the database, so a
+   reader with no indexer attached (the TUI, `plumb doctor`, an out-of-process
+   `plumb web`) sees `indexerState: "stopped"` and must read `failing` as *not
+   known* rather than as healthy.
 4. **Six tools query the graph** (below), reporting their source and freshness so
    an agent never mistakes an approximate answer for compiler-grade truth.
 

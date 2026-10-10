@@ -26,8 +26,12 @@ type gitChildRun struct {
 	tier         gitTier
 	child        gitChildSpec
 	guard        *gitRefGuard
-	warning      string
-	cleanup      func()
+	// window is the read-tier output window this call asked for
+	// (git_window.go); zero for every call that did not, and never consulted for
+	// a detached op, because only reads window their output.
+	window  gitWindow
+	warning string
+	cleanup func()
 	// afterExit is the own-writes refresh (git_own_writes.go), run once the child
 	// has exited and before the per-repo lock is released.
 	afterExit func()
@@ -65,13 +69,13 @@ func (r *gitChildRun) exec(argv []string) (string, *gitBackgroundOp, error) {
 		// git check-ignore exits 1 when NONE of the listed paths are ignored —
 		// a normal "no match" result, not a failure.
 		if r.sub == "check-ignore" && isExitCode(err, 1) && strings.TrimSpace(r.stderr.String()) == "" {
-			out, perr := postProcessGit(r.ctx, r.repoRoot, r.sub, r.stdout.String())
+			out, perr := postProcessGit(r.ctx, r.repoRoot, r.sub, r.stdout.String(), r.window)
 			return out, nil, perr
 		}
 		return "", nil, r.failure(err)
 	}
 	r.guard.postExec(r.execCtx)
-	processed, err := postProcessGit(r.ctx, r.repoRoot, r.sub, r.output())
+	processed, err := postProcessGit(r.ctx, r.repoRoot, r.sub, r.output(), r.window)
 	return r.warning + processed, nil, err
 }
 

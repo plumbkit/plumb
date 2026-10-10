@@ -11,14 +11,14 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 
 | Tier | Subcommands | Gate |
 |---|---|---|
-| read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore` | always allowed |
+| read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore`, `merge-tree`, `check-attr` | always allowed |
 | write | `add`, `commit`, `mv` | `[git] allow_writes` |
 | destructive | `reset`, `clean`, `rebase`, `revert`, `cherry-pick` | `[git] allow_destructive` **and** a confirmation |
 | network | `push`, `fetch`, `pull` | `[git] allow_push` **and** a confirmation |
 
 `rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
 
-**Seven subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls. Options are read as git reads them: an abbreviation (`--disc`), a bundle (`-dr`) or a value (`tag -m -d`) counts exactly as git counts it:
+**Eight subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls. Options are read as git reads them: an abbreviation (`--disc`), a bundle (`-dr`) or a value (`tag -m -d`) counts exactly as git counts it:
 
 - `checkout -b` (branch creation) is **write**; every other `checkout` is **destructive**, since it can discard the working tree or detach HEAD — including `-B` on a branch that already exists (on a new, plain-named branch `-B` given once is a write). Prefer `switch` for a safe branch change.
 - `switch` is **write**, but `switch -f` / `--force` / `--discard-changes` and `-C` / `--force-create` on a branch that already exists are **destructive** (on a new, plain-named branch `-C` given once is a write; a name git expands, such as `@{-1}`, is not plain).
@@ -27,6 +27,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 - `tag`: `-l` / `--list` / `-n` / `--contains` / `--merged`, and a bare `tag`, are **read**; creating is **write**; `-d` / `--delete`, and `-f` / `--force` on an existing tag, are **destructive** (on a new, plain-named tag `-f` given once is a write).
 - `stash`: `list` / `show` are **read**; a bare `stash` plus `push` / `save` / `pop` / `apply` / `create` / `store` are **write**; `drop` / `clear` are **destructive**; any other sub-subcommand is refused with the permitted list.
 - `merge` (`--no-ff`, `--ff-only`, `--no-edit`, `-m <message>`, `<ref>`) is **write**, like `commit`, and runs the merge hooks; `--abort` / `--quit` are **destructive**. `--continue`, `--no-verify`, `-e` / `--edit` and `-F` / `--file` are refused: conclude a merge with `commit` and a message instead. A merge that stops on conflicts names the conflicted files and leaves git's merging state: resolve, `add`, then `commit`.
+- `worktree`: `list` is **read**; `add`, `remove`, `lock` and `unlock` are **write**; `move`, `prune` and `repair` are **destructive**, as are `add -B` (which resets a branch) and `add -f` (which lets two worktrees hold one branch). `add`, `move` and `remove` are confined to the workspace — an outside path is refused outright, and `confirm` does not lift it — and `remove` needs `confirm: true` only when it would discard something: uncommitted work, or a detached HEAD whose commits no branch, tag or remote reaches.
 
 `session_start` prints the live policy — read it there rather than discovering a tier by being refused.
 
@@ -35,7 +36,7 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
     git(subcommand="status")
     git(subcommand="log", args=["-10", "--oneline"])
 
-Output is capped — 200 lines for `log` and `blame`, 100 KiB overall — so ask a narrow question instead of paging a whole history.
+Output is capped — 200 lines for `log` and `blame`, 100 KiB overall — so ask a narrow question instead of paging a whole history: `start_line`, `end_line` and `pattern` window any read-tier output, and `show <rev>:<path>` windows that file's lines.
 
 ## Staging and committing
 

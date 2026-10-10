@@ -24,10 +24,22 @@ const maxGitBytes = 100 * 1024 // 100 KiB
 func buildGitArgv(a gitToolArgs, trailer string) ([]string, error) {
 	switch a.Subcommand {
 	case "commit":
-		if strings.TrimSpace(a.Message) == "" {
+		// An amend without a message keeps HEAD's message (--no-edit), which is what
+		// folding a review fix into the commit under review normally wants; a plain
+		// commit still requires its own message.
+		message := strings.TrimSpace(a.Message)
+		if message == "" && !a.Amend {
 			return nil, errors.New("git commit: message is required")
 		}
-		argv := []string{"commit", "-m", a.Message}
+		argv := []string{"commit"}
+		if a.Amend {
+			argv = append(argv, "--amend")
+		}
+		if message == "" {
+			argv = append(argv, "--no-edit")
+		} else {
+			argv = append(argv, "-m", a.Message)
+		}
 		if trailer != "" {
 			argv = append(argv, "--trailer", trailer)
 		}
@@ -130,7 +142,7 @@ func gitArgvForTier(argv []string, tier gitTier) []string {
 //
 // sessKey names the calling session for the once-per-session report of a
 // background op's outcome (git_background.go).
-func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker, sessKey string) (string, error) {
+func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker, sessKey string, window gitWindow) (string, error) {
 	repoRoot, err := findGitRoot(repo)
 	if err != nil {
 		return "", fmt.Errorf("git: %w", err)
@@ -146,7 +158,7 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 			return "", err
 		}
 	}
-	out, err := runGitIn(ctx, repoRoot, sub, argv, tier, guard, intentWarn, child, writes)
+	out, err := runGitIn(ctx, repoRoot, sub, argv, tier, guard, intentWarn, child, writes, window)
 	if err != nil {
 		return "", err
 	}
@@ -164,8 +176,8 @@ func runGit(ctx context.Context, repo, sub string, argv []string, tier gitTier, 
 // would otherwise outlive its client just as the holder did, and then commit
 // after the client had been told it timed out. A wait cut short runs nothing
 // and says so; a child still running at the bound is detached, never killed.
-func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker) (string, error) {
-	r := &gitChildRun{ctx: ctx, execCtx: ctx, repoRoot: repoRoot, sub: sub, argv: argv, tier: tier, child: child, guard: guard, start: time.Now(), cleanup: func() {}, afterExit: func() {}}
+func runGitIn(ctx context.Context, repoRoot, sub string, argv []string, tier gitTier, guard *gitRefGuard, intentWarn func(context.Context, string) string, child gitChildSpec, writes *WriteTracker, window gitWindow) (string, error) {
+	r := &gitChildRun{ctx: ctx, execCtx: ctx, repoRoot: repoRoot, sub: sub, argv: argv, tier: tier, child: child, guard: guard, window: window, start: time.Now(), cleanup: func() {}, afterExit: func() {}}
 	lockWait := child.writeTimeout()
 	if d, ok := child.detachAfter(); ok && r.mutating() {
 		r.detachAfter = d
@@ -320,8 +332,11 @@ func execGitCmd(cmd *exec.Cmd, mutating bool, repoRoot string) error {
 }
 
 // postProcessGit replaces the raw output of add/commit with the concise
-// feedback the dedicated tools used to provide.
-func postProcessGit(ctx context.Context, repoRoot, sub, out string) (string, error) {
+// feedback the dedicated tools used to provide, and applies a read call's output
+// window (git_window.go) to everything else. The window is applied to the
+// child's FULL output — ahead of formatGitOutput's caps — so a range deep inside
+// a large blob is answered instead of being truncated away first.
+func postProcessGit(ctx context.Context, repoRoot, sub, out string, window gitWindow) (string, error) {
 	switch sub {
 	case "add":
 		return stagedSummary(ctx, repoRoot)
@@ -334,7 +349,14 @@ func postProcessGit(ctx context.Context, repoRoot, sub, out string) (string, err
 			return "none of the listed paths are git-ignored", nil
 		}
 	}
-	return formatGitOutput(sub, out), nil
+	if window.wanted() {
+		windowed, err := applyGitWindow(out, window)
+		if err != nil {
+			return "", err
+		}
+		return formatGitOutput(sub, windowed, true), nil
+	}
+	return formatGitOutput(sub, out, false), nil
 }
 
 // isExitCode reports whether err is an *exec.ExitError with the given exit code.
@@ -442,14 +464,17 @@ func firstQuoted(s string) string {
 	return before0
 }
 
-func formatGitOutput(sub, result string) string {
+func formatGitOutput(sub, result string, windowed bool) string {
 	const maxLogLines = 200
-	if sub == "log" || sub == "blame" {
+	// The log/blame cap bounds an unbounded DEFAULT answer. A window is not that:
+	// the caller named the lines they want, so a pattern matching 300 of them must
+	// not have its tail silently dropped here.
+	if !windowed && (sub == "log" || sub == "blame") {
 		result = truncateLines(result, maxLogLines,
-			fmt.Sprintf("… (showing first %d lines — add --oneline / -n N to narrow, or use args to filter)", maxLogLines))
+			fmt.Sprintf("… (showing first %d lines — add --oneline / -n N to narrow, or pass start_line/end_line/pattern)", maxLogLines))
 	}
 	if len(result) > maxGitBytes {
-		result = result[:maxGitBytes] + "\n… (output truncated at 100 KiB)"
+		result = result[:maxGitBytes] + "\n… (output truncated at 100 KiB — pass pattern, or start_line/end_line, to window a large output)"
 	}
 	if strings.TrimSpace(result) == "" {
 		return "(no output)"

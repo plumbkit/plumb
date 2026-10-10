@@ -47,6 +47,17 @@ func runWithIsolatedData(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "TestMain: setting XDG_DATA_HOME:", err)
 		return 1
 	}
+	// The state dir moves for the same reason, and one more besides: mutation_test
+	// now REFUSES a call whose mutant journal cannot be written
+	// (checkMutantJournalUsable), so a fixture that inherited the developer's real
+	// state dir would have its outcome decided by whether $HOME happens to be
+	// writable — red in a sandbox that denies it, and quietly leaving entries in
+	// the live journal everywhere else. A test that wants its own state dir still
+	// sets XDG_STATE_HOME itself, which outranks this.
+	if err := os.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state")); err != nil {
+		fmt.Fprintln(os.Stderr, "TestMain: setting XDG_STATE_HOME:", err)
+		return 1
+	}
 	if err := disableGitAutoMaintenance(); err != nil {
 		fmt.Fprintln(os.Stderr, "TestMain: disabling git auto-maintenance:", err)
 		return 1

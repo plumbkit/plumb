@@ -48,6 +48,11 @@ var sessionStartSchema = json.RawMessage(`{
       "type": "string",
       "enum": ["brief", "full"],
       "description": "'brief' (≤1.5 KB: counts, memory names, the edit-lane rule) or 'full'. Defaults to full, or to brief when this session_id was seen in the last 24 h."
+    },
+    "mail": {
+      "type": "string",
+      "enum": ["claim", "preview"],
+      "description": "Use \"preview\" when a client calls session_start automatically: it shows waiting mail without consuming it."
     }
   },
   "additionalProperties": false
@@ -392,11 +397,16 @@ func (t *SessionStart) execute(ctx context.Context, raw json.RawMessage) (string
 	if err := t.applyPurpose(raw); err != nil {
 		return "", err
 	}
-	// Validate `detail` BEFORE resolveLinkage: linking is a commitment (it
-	// declares the caller's identity on a shared connection, issue #513), and a
-	// call that is about to fail on a malformed argument must commit nothing.
-	// The real resolution stays below, where the auto-brief signal exists.
+	// Validate `detail` and `mail` BEFORE resolveLinkage: linking is a commitment
+	// (it declares the caller's identity on a shared connection, issue #513), and
+	// a call that is about to fail on a malformed argument must commit nothing.
+	// The real detail resolution stays below, where the auto-brief signal exists;
+	// the mail mode has no such dependency and is final here.
 	if _, err := resolveDetail(raw, false); err != nil {
+		return "", err
+	}
+	mail, err := resolveMailMode(raw)
+	if err != nil {
 		return "", err
 	}
 	link, linked := t.resolveLinkage(perCallCtx, raw)
@@ -417,7 +427,7 @@ func (t *SessionStart) execute(ctx context.Context, raw json.RawMessage) (string
 		return "", err
 	}
 	if detail == "brief" {
-		return t.executeBrief(ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(perCallCtx)), nil
+		return t.executeBrief(ws, lang, inheritedName, repinLine, linked, t.stampChannelNote(perCallCtx), t.mailClaimable(perCallCtx), mail), nil
 	}
 	hasErrors := t.hasActiveDiagnosticErrors()
 	var sb strings.Builder
@@ -444,7 +454,7 @@ func (t *SessionStart) execute(ctx context.Context, raw json.RawMessage) (string
 	// The caller's own claim, so the per-call ctx and not the one that carries the
 	// session_id the call merely typed: an id nothing stamped is not an identity
 	// whose mail this call may take.
-	t.writeSessionMessages(&sb, ws, t.mailClaimable(perCallCtx))
+	t.writeSessionMessages(&sb, ws, t.mailClaimable(perCallCtx), mail)
 	t.writeSessionStats(&sb, ws)
 	t.writeSessionGuidance(&sb)
 	t.writeSessionDiagnostics(&sb)

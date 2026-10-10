@@ -247,6 +247,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		slog.Warn("daemon: invalid log config; keeping defaults", "err", err)
 	}
 	logRecoveredHijacks()
+	sweepKilledMutants()
 
 	// Soft heap ceiling: bound a memory spike so it can't exhaust the machine,
 	// and surface the active limit in daemon.log.
@@ -380,16 +381,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// `plumb web` invocation sends "web-start" over the control socket. It reuses
 	// the daemon's live config store and read-path snapshot files, so it never
 	// reimplements domain logic. Closed on daemon shutdown.
-	webServer := web.New(web.Deps{
-		Store:       store,
-		MetricsPath: monitor.SnapshotPath(),
-		LogPath:     daemonLogPath(),
-		StartedAt:   daemonStartedAt,
-		// getGlobal never creates collab-xproject.db — a daemon whose sessions
-		// have never exchanged a cross-project message never materialises it,
-		// including from the dashboard reading this.
-		CollabGlobalStore: collabPool.getGlobal,
-	})
+	webServer := web.New(daemonWebDeps(store, collabPool, topoPool, daemonStartedAt))
 	defer webServer.Close()
 
 	ctrlPath := daemonCtrlSocketPath()

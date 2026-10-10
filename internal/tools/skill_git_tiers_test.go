@@ -28,13 +28,14 @@ import (
 var (
 	gitArgIndependent = []string{
 		"status", "log", "diff", "show", "blame", "shortlog", "check-ignore",
+		"merge-tree", "check-attr",
 		"add", "commit", "mv",
 		"reset", "clean", "rebase", "revert", "cherry-pick",
 		"push", "fetch", "pull",
 	}
 	// Classified by inspecting their args, so they belong in the skill's
 	// argument-dependent bullets rather than any single tier row.
-	gitArgDependent = []string{"switch", "restore", "branch", "tag", "stash", "checkout", "merge"}
+	gitArgDependent = []string{"switch", "restore", "branch", "tag", "stash", "checkout", "merge", "worktree"}
 	// Refused at every tier.
 	gitRejected = []string{"rm"}
 )
@@ -127,11 +128,11 @@ func TestPlumbGitSkillTierTableMatchesClassifier(t *testing.T) {
 	}
 }
 
-// TestPlumbGitSkillNamesEveryArgDependentSubcommand pins the other half: the six
-// subcommands excluded from the table above must still be explained somewhere,
-// or excluding them would just be a way to omit them. Same for the one plumb
-// refuses outright — an agent that does not know `rm` is refused will keep
-// reaching for it.
+// TestPlumbGitSkillNamesEveryArgDependentSubcommand pins the other half: the
+// argument-dependent subcommands excluded from the table above must still be
+// explained somewhere, or excluding them would just be a way to omit them. Same
+// for the one plumb refuses outright — an agent that does not know `rm` is
+// refused will keep reaching for it.
 func TestPlumbGitSkillNamesEveryArgDependentSubcommand(t *testing.T) {
 	body := readSkill(t, "plumb-git")
 	for _, sub := range append(append([]string{}, gitArgDependent...), gitRejected...) {

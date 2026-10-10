@@ -61,6 +61,20 @@ func TestClassifyGit(t *testing.T) {
 		{"blame", []string{"file.go"}, tierRead},
 		{"shortlog", nil, tierRead},
 		{"check-ignore", []string{"node_modules"}, tierRead},
+		// The read-tier additions from PLAN-454 need an ABSOLUTE row each: the
+		// invariance property below only compares a verb against its own nil baseline,
+		// so a whole-verb demotion would move the baseline with it and stay green
+		// (review round 1, B4).
+		{"merge-tree", []string{"--write-tree", "HEAD", "topic"}, tierRead},
+		{"merge-tree", []string{"base", "branch1", "branch2"}, tierRead},
+		{"check-attr", []string{"-a", "merge", "CHANGELOG.md"}, tierRead},
+		{"worktree", []string{"list"}, tierRead},
+		{"worktree", []string{"add", "wt"}, tierWrite},
+		{"worktree", []string{"add", "-B", "topic", "wt"}, tierDestructive},
+		{"worktree", []string{"remove", "wt"}, tierWrite},
+		{"worktree", []string{"move", "wt", "wt2"}, tierDestructive},
+		{"worktree", []string{"prune"}, tierDestructive},
+		{"worktree", []string{"repair", "wt"}, tierDestructive},
 		{"add", []string{}, tierWrite},
 		{"commit", nil, tierWrite},
 		{"mv", []string{"a", "b"}, tierWrite},

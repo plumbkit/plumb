@@ -117,7 +117,7 @@
     {/if}
   </Card>
 
-  <Card span2 title="Topology" badge="force graph · drag · zoom" desc={topo?.available ? `${num(topo.totalNodes)} nodes · ${num(topo.totalEdges)} edges · ${(topo.languages || []).join(", ")}` : "no index for the active workspace"}>
+  <Card span2 title="Topology" badge={topo?.indexerState && topo.indexerState !== "stopped" ? (topo.failing ? "index FAILING · stale snapshot" : "index ok · force graph") : "force graph · drag · zoom"} desc={topo?.available ? `${num(topo.totalNodes)} nodes · ${num(topo.totalEdges)} edges · ${(topo.languages || []).join(", ")}` : "no index for the active workspace"}>
     {#if topo?.available}
       {@const g = graphData()}
       <Chart option={topologyForce(P, g.langs, g.nodes, g.links)} height="420px" />

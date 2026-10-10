@@ -153,6 +153,9 @@ func TestIndexer_UnrelatedSuccessDoesNotMaskAFailedFile(t *testing.T) {
 		t.Fatalf("startup resync did not complete; health = %+v", idx.Health())
 	}
 
+	// The same fault triggers live in internal/tools' injectPersistFault
+	// (topology_health_test.go) and internal/cli's injectTopologyFilesFault
+	// (daemon_web_test.go): a change here should be a decision about all three.
 	faults := []string{"inject_files_insert", "inject_files_update"}
 	for _, stmt := range []string{
 		`CREATE TRIGGER inject_files_insert BEFORE INSERT ON topology_files BEGIN SELECT RAISE(ABORT, '` + injectedIOErr + `'); END`,

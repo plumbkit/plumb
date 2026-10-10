@@ -24,6 +24,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // Deps are the read handles and paths the web Server needs. They are all
@@ -47,6 +48,16 @@ type Deps struct {
 	// daemon's live handle instead of opening a second connection to the same
 	// file. May be nil (a Server built without it simply shows no panel).
 	CollabGlobalStore func() *collab.Store
+	// TopologyHealth returns the LIVE indexer's health for a workspace this
+	// daemon owns, and false when it holds no indexer for it — the same
+	// never-creates accessor discipline as CollabGlobalStore (internal/cli's
+	// topologyPool.get), wired through so the dashboard's topology panel reports
+	// the in-process indexer's failing flag. StatusForWorkspace cannot know it:
+	// that snapshot attaches no indexer, so a failing flag read from there would
+	// be structurally false and read as "the index is fine". May be nil — a
+	// Server built without it falls back to the out-of-process snapshot, where
+	// failing cannot be known.
+	TopologyHealth func(ws string) (topology.Health, bool)
 }
 
 // Server owns the loopback HTTP listener and its lifecycle. It is constructed

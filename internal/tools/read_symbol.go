@@ -228,7 +228,7 @@ func (t *ReadSymbol) topologyReadFallback(ctx context.Context, reason symbolFall
 	if err != nil {
 		return "", false
 	}
-	return topologyFallbackNoteWhen(reason, t.warmup, uri, waited) + "\n" + out, true
+	return topologyFallbackNoteWhen(reason, activeTopology(t.topo), t.warmup, uri, waited) + "\n" + out, true
 }
 
 func parseReadSymbolArgs(raw json.RawMessage) (readSymbolArgs, error) {

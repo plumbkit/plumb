@@ -141,6 +141,9 @@ func classifyGitCall(a gitToolArgs) (gitTier, error) {
 	if a.Subcommand == "rm" {
 		return tier, errors.New("git: subcommand \"rm\" is not permitted; to remove a tracked file, use delete_file to remove it from disk, then stage the deletion with git add")
 	}
+	if a.Subcommand == "worktree" {
+		return tier, errors.New("git worktree: name a sub-verb — list (read); add, remove, lock, unlock (write); move, prune, repair (destructive)")
+	}
 	return tier, fmt.Errorf("git: subcommand %q is not permitted", a.Subcommand)
 }
 
@@ -149,7 +152,15 @@ func classifyGitCall(a gitToolArgs) (gitTier, error) {
 // classification is safe-biased — when in doubt it returns the higher tier.
 func classifyGit(sub string, args []string) gitTier {
 	switch sub {
-	case "diff", "log", "show", "blame", "status", "shortlog", "check-ignore":
+	case "diff", "log", "show", "blame", "status", "shortlog", "check-ignore",
+		"merge-tree", "check-attr":
+		// merge-tree and check-attr are git's read-only merge and attribute
+		// plumbing. merge-tree computes a tree and may write unreferenced objects
+		// into the object store, but it moves no ref and touches neither the index
+		// nor the worktree; check-attr only reports which attributes apply to a
+		// path. A reviewer needs both to answer "does this conflict with main, and
+		// where" and "which merge driver is actually in force here" without
+		// leaving the tool for a shell.
 		return tierRead
 	case "add", "commit", "mv":
 		return tierWrite
@@ -165,6 +176,8 @@ func classifyGit(sub string, args []string) gitTier {
 		return classifyStash(args)
 	case "checkout":
 		return classifyCheckout(args)
+	case "worktree":
+		return classifyWorktree(args)
 	case "merge":
 		return classifyMerge(args) // git_merge.go
 	// cherry-pick is flat-classified, like rebase — its closest analogue, and the
@@ -298,6 +311,46 @@ func classifyCheckout(args []string) gitTier {
 		return tierWrite
 	}
 	return tierDestructive
+}
+
+// classifyWorktree tiers the `git worktree` sub-verbs by what they do to the
+// repository and to disk. `list` is the read a reviewer uses to find the branch
+// or probe worktree they want. add/remove/lock/unlock write worktree
+// administration; move, prune and repair rewrite it destructively — move
+// relocates a whole directory and leaves the worktree broken if it fails
+// halfway, prune deletes the administration of worktrees whose directories are
+// gone, and repair rewrites theirs in place. The safe-bias rule puts those three
+// at the higher tier. A bare `git worktree` prints usage, so it is refused by
+// name (see classifyGitCall) rather than tiered.
+func classifyWorktree(args []string) gitTier {
+	if len(args) == 0 {
+		return tierReject
+	}
+	switch args[0] {
+	case "list":
+		return tierRead
+	case "add":
+		// -B/--force-create resets an existing branch to the start point, which
+		// discards its commits exactly as `checkout -B` does. -f/--force lets two
+		// worktrees hold the SAME branch (git refuses that without it), so the branch
+		// can then be committed to from either checkout — destructive for the same
+		// reason `checkout -B` is.
+		//
+		// Neither is lowered back to a write for a branch that does not exist yet:
+		// refResetForm (git_ref_reset.go) recognises switch, checkout and tag, and the
+		// `branch -f` precedent is that a forced BRANCH operation is never lowered —
+		// worktree add is a branch operation, so it keeps the higher tier.
+		if worktreeGrammar.has(args, "Bf", "force-create", "force") {
+			return tierDestructive
+		}
+		return tierWrite
+	case "remove", "lock", "unlock":
+		return tierWrite
+	case "move", "prune", "repair":
+		return tierDestructive
+	default:
+		return tierReject
+	}
 }
 
 // hasNonFlagArg reports whether args carry a positional argument: one not

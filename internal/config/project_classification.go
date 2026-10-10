@@ -230,7 +230,13 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"topology.resync_batch":            ClassPreference,
 	"topology.resync_pause_ms":         ClassPreference,
 	"topology.resync_interval_minutes": ClassPreference,
-	"topology.watch":                   ClassPreference,
+	// index_worktrees is the one topology key that WIDENS the index instead of
+	// narrowing it, which is why it is a preference and not gated: it can only
+	// add rows, never hide one. A cloned project cannot turn it into concealment
+	// either, because what it names — <ws>/.git/worktrees/ — is local git
+	// bookkeeping that no clone carries.
+	"topology.index_worktrees": ClassPreference,
+	"topology.watch":           ClassPreference,
 
 	// --- LSP: which process the daemon spawns, and with what.
 	"lsp.<lang>.command":                ClassTrustGated,

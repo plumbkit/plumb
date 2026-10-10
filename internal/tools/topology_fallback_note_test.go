@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // warmupFixed returns an LSPWarmupFn reporting a fixed warm-up state.
@@ -50,7 +52,7 @@ func TestTopologyFallbackNoteFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := topologyFallbackNoteFor(tt.fn, "file:///x.go")
+			got := topologyFallbackNoteFor(nil, tt.fn, "file:///x.go")
 			if tt.wantExact != "" && got != tt.wantExact {
 				t.Fatalf("note = %q, want exactly %q", got, tt.wantExact)
 			}
@@ -68,14 +70,45 @@ func TestTopologyFallbackNoteFor(t *testing.T) {
 	}
 }
 
+// TestStaleIndexSuffix is PLAN-490's core rule: a healthy index adds NOTHING to a
+// fallback banner — the tests around this one pin the legacy text byte-for-byte
+// with a nil store, which is that same case — and a failing index adds the
+// stale-index clause, in indexHealthNote's exact wording so the six topology_*
+// query tools and these fallbacks cannot drift apart about what a failing index
+// means.
+func TestStaleIndexSuffix(t *testing.T) {
+	now := time.Now()
+	healthy := topology.Health{State: "idle", LastSync: now.Add(-time.Minute)}
+	if got := staleIndexSuffix(healthy, now); got != "" {
+		t.Errorf("a healthy index must add nothing, got %q", got)
+	}
+
+	failing := topology.Health{State: "error", LastSync: now.Add(-2 * time.Hour), LastError: "boom", Failing: true}
+	got := staleIndexSuffix(failing, now)
+	if got == "" {
+		t.Fatal("a failing index must add the stale-index clause")
+	}
+	if !strings.HasPrefix(got, " ") {
+		t.Errorf("the clause is appended to a banner, so it needs its separating space: %q", got)
+	}
+	if want := " " + indexHealthNote(failing, now); got != want {
+		t.Errorf("the clause must BE indexHealthNote's wording, not a copy:\n got %q\nwant %q", got, want)
+	}
+	for _, w := range []string{"failing", "boom", "absence"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("the clause must say %q: %q", w, got)
+		}
+	}
+}
+
 func TestTopologyDefinitionNoteFor(t *testing.T) {
-	if got := topologyDefinitionNoteFor(nil, ""); got != topologyDefinitionNote {
+	if got := topologyDefinitionNoteFor(nil, nil, ""); got != topologyDefinitionNote {
 		t.Fatalf("nil fn: note = %q, want the legacy const", got)
 	}
-	if got := topologyDefinitionNoteFor(warmupFixed(false, 0), ""); got != topologyDefinitionNote {
+	if got := topologyDefinitionNoteFor(nil, warmupFixed(false, 0), ""); got != topologyDefinitionNote {
 		t.Fatalf("not warming: note = %q, want the legacy const", got)
 	}
-	got := topologyDefinitionNoteFor(warmupFixed(true, 4*time.Second), "file:///x.go")
+	got := topologyDefinitionNoteFor(nil, warmupFixed(true, 4*time.Second), "file:///x.go")
 	for _, w := range []string{"still warming", "~4s", "declaration line not cursor offset", "retry shortly"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("warming definition note missing %q: %q", w, got)
@@ -84,7 +117,7 @@ func TestTopologyDefinitionNoteFor(t *testing.T) {
 	if strings.Contains(got, "unavailable") {
 		t.Errorf("warming definition note must not claim the server is unavailable: %q", got)
 	}
-	if got := topologyDefinitionNoteFor(warmupFixed(true, 0), ""); strings.Contains(got, "elapsed") {
+	if got := topologyDefinitionNoteFor(nil, warmupFixed(true, 0), ""); strings.Contains(got, "elapsed") {
 		t.Errorf("zero elapsed should omit the duration parenthetical: %q", got)
 	}
 }
@@ -118,7 +151,7 @@ func TestTopologyFallbackNoteWhen_SlowServerIsNotCalledUnavailable(t *testing.T)
 	// merely missed its (shortened) attempt budget must not be reported as
 	// absent, because "unavailable" argues for abandoning semantic tools while
 	// the right move is to retry.
-	got := topologyFallbackNoteWhen(fallbackLSPTimedOut, nil, "file:///x.go", 15*time.Second)
+	got := topologyFallbackNoteWhen(fallbackLSPTimedOut, nil, nil, "file:///x.go", 15*time.Second)
 	if !strings.Contains(got, "did not answer within 15s") {
 		t.Errorf("a timed-out attempt must name the budget it missed: %q", got)
 	}
@@ -131,14 +164,14 @@ func TestTopologyFallbackNoteWhen_SlowServerIsNotCalledUnavailable(t *testing.T)
 
 	// Warming outranks timed-out: the agent's action differs (wait for the
 	// handshake vs. retry a query), and the handshake is the more specific fact.
-	warm := topologyFallbackNoteWhen(fallbackLSPTimedOut, warmupFixed(true, 4*time.Second), "file:///x.go", 15*time.Second)
+	warm := topologyFallbackNoteWhen(fallbackLSPTimedOut, nil, warmupFixed(true, 4*time.Second), "file:///x.go", 15*time.Second)
 	if !strings.Contains(warm, "still warming") {
 		t.Errorf("a warming server must keep the warming banner: %q", warm)
 	}
 
 	// No attempt budget to name (the server answered, just not usefully) keeps
 	// the historical wording byte-for-byte.
-	if got := topologyFallbackNoteWhen(fallbackNotUsed, nil, "file:///x.go", 0); got != topologyFallbackNote {
+	if got := topologyFallbackNoteWhen(fallbackNotUsed, nil, nil, "file:///x.go", 0); got != topologyFallbackNote {
 		t.Errorf("no missed budget must keep the legacy note, got %q", got)
 	}
 }

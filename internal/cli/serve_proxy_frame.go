@@ -59,6 +59,10 @@ func writeFrame(w io.Writer, frame []byte) error {
 type rpcEnvelope struct {
 	Method string          `json:"method"`
 	ID     json.RawMessage `json:"id"`
+	// Params is carried for the ONE thing the proxy needs from a request's body: the
+	// tools/call name, so an interrupted mutation_test can be answered with the path
+	// its journal still holds (PLAN-459). Nothing else reads it.
+	Params json.RawMessage `json:"params"`
 }
 
 func parseEnvelope(frame []byte) rpcEnvelope {

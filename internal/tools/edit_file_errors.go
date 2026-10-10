@@ -63,11 +63,23 @@ func (t *EditFile) notFoundError(ctx context.Context, i int, path, sent, searche
 	if looksGuttered(searched) {
 		b.WriteString("\n  Hint: old_string appears to include the display-only line-number gutter from read_file/read_symbol (\"<n>\\t\" at line start) — strip the gutter and retry.")
 	}
-	if diff := closestMatchDiff(content, searched, path); diff != "" {
+	// #588's D2 residual, closed: a sensitive path's content is withheld from the
+	// write response, and this error response was the other way out — so it asks the
+	// same resolver, and keeps only what reveals no content (the line number and the
+	// RANGE-mode retry route).
+	withheld := t.deps.withholdsResponse(ctx, path)
+	diff := closestMatchDiff(content, searched, path, withheld)
+	if diff != "" {
 		b.WriteString("\n")
 		b.WriteString(diff)
 	}
-	b.WriteString(rangeModeHint(content, searched))
+	// One RANGE call, not two: the withheld block already names the exact call for
+	// the window it found, and rangeModeHint would name it a second time (review nit
+	// on PLAN-456). Its generic pointer still helps when no window was found, so the
+	// hint is only suppressed alongside a rendered withheld block.
+	if !withheld || diff == "" {
+		b.WriteString(rangeModeHint(content, searched))
+	}
 	return errors.New(b.String())
 }
 

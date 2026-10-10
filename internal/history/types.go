@@ -68,11 +68,17 @@ type Side struct {
 	Size    int64
 	sha     []byte // fixed by settled or SideFromFile; computed on demand until then
 	raw     []byte // an uncarried (too large) side's bytes, kept only until settled
+	// unhashed marks a side built from a stat alone (SideStat): it exists and has a
+	// size, and the call that built it deliberately did not read the file. SHA
+	// returns nil for it rather than the empty input's digest, which would be a hash
+	// nobody computed.
+	unhashed bool
 }
 
-// SHA returns the side's sha256, or nil when the side does not exist.
+// SHA returns the side's sha256, or nil when the side does not exist or was never
+// read (SideStat).
 func (s Side) SHA() []byte {
-	if !s.Exists || s.sha != nil {
+	if !s.Exists || s.sha != nil || s.unhashed {
 		return s.sha
 	}
 	src := s.Content
@@ -103,6 +109,18 @@ func SideFromBytes(b []byte) Side {
 		s.raw = b
 	}
 	return s
+}
+
+// SideStat describes a file by its stat alone: it exists and is this large, and
+// the call that asked did not read it. It is the side a RESPONSE needs when it has
+// already decided not to render the bytes — a file over the response diff cap,
+// with history off — and paying an 8 MiB read plus a full hash only to print "diff
+// withheld: file too large" is the waste PLAN-457 removed.
+//
+// SHA returns nil: the side carries no hash, and reporting the empty input's digest
+// would claim a digest nobody computed.
+func SideStat(size int64) Side {
+	return Side{Exists: true, Size: size, unhashed: true}
 }
 
 // SideFromFile describes path's current content: Exists false when it is

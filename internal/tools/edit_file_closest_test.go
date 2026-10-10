@@ -67,7 +67,7 @@ func TestClosestMatchDiff(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := closestMatchDiff(tt.content, tt.searched, "f.go")
+			got := closestMatchDiff(tt.content, tt.searched, "f.go", false)
 			if tt.wantEmpty {
 				if got != "" {
 					t.Fatalf("expected no diff, got:\n%s", got)

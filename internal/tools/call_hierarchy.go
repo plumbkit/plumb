@@ -359,10 +359,13 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx, lspCtx context.Context, q cal
 		}
 	}
 	var sb strings.Builder
+	// The stale-index clause matters MOST here: this answer is a relationship list,
+	// and "no callers" from a failing index is the absence answer that misleads most
+	// (PLAN-490's reviewer picked this site first for exactly that reason).
 	fmt.Fprintf(&sb, "Call hierarchy for %s (%s) at %s:%d "+
 		"(reconstructed — this language server provides no call hierarchy; "+
-		"callers via LSP references, callees via topology; approximate)\n\n",
-		centre.Name, string(centre.Kind), centre.Path, centre.StartLine)
+		"callers via LSP references, callees via topology; approximate)%s\n\n",
+		centre.Name, string(centre.Kind), centre.Path, centre.StartLine, staleIndexSuffixFor(store, time.Now()))
 	if q.direction == "incoming" || q.direction == "both" {
 		// lspCallers takes the ATTEMPT context, not the live one: a server that
 		// never answers has already spent lspCtx, so this returns nil at once

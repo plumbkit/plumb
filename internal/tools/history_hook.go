@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/history"
@@ -73,11 +74,35 @@ func (d WriteDeps) wantContent() bool {
 // history row or the response diff (see wantContent). Use it in place of
 // historySide wherever a response diff is rendered from the same read, or a
 // user running show_write_diff with history off would get no diff at all.
+//
+// With history OFF the bytes serve the response alone, and a response withholds
+// anything past maxResponseDiffBytes (sideOf turns it into unknownSide and the
+// diff says "file too large"). Reading — and, over history.HardMaxContentBytes,
+// hashing — such a file to print that marker is pure waste, so it is stat'ed and
+// answered with existence and size alone (PLAN-457). With history ON the store
+// needs the bytes, so the read is unchanged.
 func (d WriteDeps) contentSide(path string) history.Side {
 	if !d.wantContent() {
 		return history.Side{}
 	}
+	if !d.historyOn() {
+		if s, ok := sideOverResponseCap(path); ok {
+			return s
+		}
+	}
 	return d.readSide(path)
+}
+
+// sideOverResponseCap stats path and, when it is a regular file larger than the
+// response diff cap, returns the stat-only side a response needs. ok is false
+// whenever the caller must read the file: absent, not a regular file (a
+// directory, a device, a pipe), at or under the cap, or a stat that failed.
+func sideOverResponseCap(path string) (history.Side, bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= maxResponseDiffBytes {
+		return history.Side{}, false
+	}
+	return history.SideStat(info.Size()), true
 }
 
 // readSide reads path's current content as a Side. A read error degrades to an
