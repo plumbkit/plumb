@@ -405,18 +405,12 @@ func (t *MinimalDiffReview) callerCountAt(ctx context.Context, name, path, kind 
 		return 0, minchange.SymbolRef{}, false
 	}
 	centre := cands[0]
-	includeDerived := false
-	if subject, subjectErr := store.CallGraphSubjectForNode(ctx, centre.ID); subjectErr == nil {
-		if admission, admissionErr := store.AdmitCallGraph(ctx, subject); admissionErr == nil {
-			includeDerived = admission.Admitted
-		}
-	}
 	res, err := store.ImpactFrom(ctx, centre, topology.ImpactOpts{
 		Depth:               1,
 		MaxNodes:            64,
 		MaxBytes:            100000,
 		EdgeKinds:           []string{"calls"},
-		IncludeDerivedCalls: includeDerived,
+		IncludeDerivedCalls: store.DerivedCallsAdmittedFor(ctx, centre.ID),
 	})
 	if err != nil || res == nil || res.DependedOnBy == nil {
 		return 0, minchange.SymbolRef{}, false
