@@ -151,6 +151,13 @@ func (t *ContextForTask) SensitiveWired() bool {
 	return t.collector != nil && t.collector.sensitive != nil
 }
 
+// LSPWired reports whether the collector holds a language server to refine the top
+// symbol seeds with. Without it every pack with a symbol seed says LSP enrichment is
+// unavailable, so the daemon's registration test pins it.
+func (t *ContextForTask) LSPWired() bool {
+	return t.collector != nil && t.collector.lsp != nil
+}
+
 // contextForTaskName is the tool's registered name.
 const contextForTaskName = "context_for_task"
 

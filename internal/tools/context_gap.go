@@ -285,7 +285,7 @@ func (p *contextPack) relationGaps() []string {
 	if !x.Ran {
 		return nil
 	}
-	gaps := []string{labelStructural}
+	gaps := []string{p.LSP.gap()}
 	for _, l := range x.Languages {
 		if l.Admitted {
 			gaps = append(gaps, labelGoCallGraph+"; "+labelNoProof)
