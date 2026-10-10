@@ -18,14 +18,18 @@ import (
 
 // Line priorities: lower survives longer. Candidates and gaps share a tier
 // because both are disclosures a reader needs in order to trust the seed list.
-// Bodies come after those disclosures and before follow-up calls: a pack that
-// cannot afford a body still tells the truth about what it left out.
+// Bodies come after those disclosures: a pack that cannot afford a body still tells
+// the truth about what it left out. The best-ranked related declarations, each with
+// the body it may carry, follow the seeds' bodies; follow-up calls come next, and
+// the one-line pointers for the rest of the ranked list last.
 const (
 	prioHeader = iota
 	prioSeed
 	prioDetail
 	prioBody
+	prioRelTop
 	prioNext
+	prioRelRest
 )
 
 // packClass is what a record is, for the omission count.
@@ -37,10 +41,11 @@ const (
 	classGap
 	classNext
 	classBody
+	classRelated
 	classCount
 )
 
-var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body"}
+var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body", "related"}
 
 // omissions counts dropped records by class.
 type omissions [classCount]int

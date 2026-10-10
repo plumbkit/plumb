@@ -50,11 +50,11 @@ type bodyFile struct {
 	Changed bool
 }
 
-// contextBody is one symbol seed's body, or the reason it has none. Text is the
+// contextBody is one declaration's body, or the reason it has none. Text is the
 // declaration's source lines as the snapshot holds them (newline-terminated, CR
 // stripped, no line-number gutter), and SHA is the SHA-256 of exactly Text.
 type contextBody struct {
-	Seed       int // index into pack.Seeds
+	Seed       int // index into the call's body targets: the symbol seeds, then the related declarations read
 	File       int // index into pack.Files; -1 when no snapshot was taken
 	State      bodyState
 	Why        string
@@ -101,20 +101,54 @@ func (b *sourceBudget) take(n int64) bool {
 	return true
 }
 
-// collectBodies slices a body for every symbol seed, reading each file once. It
-// returns the gaps the bodies imply (a file that changed since it was indexed).
+// bodyTarget is one declaration a body is wanted for, and where the result goes.
+type bodyTarget struct {
+	seed contextSeed
+	slot *contextBody
+}
+
+// bodyTargets lists the bodies to attempt, in the order they are read: every symbol
+// seed first (S=1 puts an explicit seed above any related node by construction:
+// the lowest a seed can score is 8+2, the highest a related node can is 4+2+3+0.5),
+// then the best-ranked related declarations. A gap candidate is a possibility, not
+// a relationship, and a withheld one is location-only: neither is read. Ranking
+// happened before this, so no body is read to decide an order.
+func (p *contextPack) bodyTargets() []bodyTarget {
+	targets := make([]bodyTarget, 0, len(p.Seeds)+contextRelatedBodies)
+	for i := range p.Seeds {
+		targets = append(targets, bodyTarget{seed: p.Seeds[i], slot: &p.Bodies[i]})
+	}
+	attempts := 0
+	for i := range p.Related {
+		r := &p.Related[i]
+		if r.Gap || r.Withheld || attempts == contextRelatedBodies {
+			continue
+		}
+		attempts++
+		targets = append(targets, bodyTarget{seed: r.seedView(p.Root), slot: &r.Body})
+	}
+	return targets
+}
+
+// collectBodies slices a body for every symbol seed and for the best-ranked
+// related declarations, reading each file once. It returns the gaps the bodies
+// imply (a file that changed since it was indexed).
 func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack, store *topology.Store) []string {
 	pack.Bodies = make([]contextBody, len(pack.Seeds))
+	targets := pack.bodyTargets()
+	seeds := make([]contextSeed, len(targets))
+	for i, t := range targets {
+		seeds[i] = t.seed
+	}
 	budget := &sourceBudget{limit: int64(contextSourceReadFactor) * int64(pack.MaxBytes)}
 	var gaps []string
-	for _, g := range symbolGroups(pack.Seeds) {
+	for _, g := range symbolGroups(seeds) {
 		src, why := openBodySource(ctx, g, store, budget)
 		if src == nil {
 			for _, i := range g.seeds {
-				seed := pack.Seeds[i]
-				pack.Bodies[i] = contextBody{
+				*targets[i].slot = contextBody{
 					Seed: i, File: -1, State: bodyUnavailable, Why: why,
-					Signature: seed.Signature, Doc: seed.Doc,
+					Signature: seeds[i].Signature, Doc: seeds[i].Doc,
 				}
 			}
 			continue
@@ -124,7 +158,7 @@ func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack,
 			Path: g.path, Abs: g.abs, MTime: src.snap.mtime, SHA: src.snap.sha, Size: src.snap.size, Changed: !src.trusted,
 		})
 		for _, i := range g.seeds {
-			pack.Bodies[i] = src.slice(ctx, pack.Seeds[i], i, fileIdx)
+			*targets[i].slot = src.slice(ctx, seeds[i], i, fileIdx)
 		}
 		if !src.trusted {
 			gaps = append(gaps, fmt.Sprintf("%s changed since it was indexed: its bodies come from the current snapshot, "+

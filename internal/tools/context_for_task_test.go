@@ -535,8 +535,27 @@ func TestContextForTask_BudgetIsDisclosed(t *testing.T) {
 	}
 }
 
+// countRecords counts the packer's records in a rendered pack: one per line,
+// except that a delivered body (its head, its guard and its numbered lines) is one
+// record, which is how the omission footer counts it.
+func countRecords(out string) int {
+	n, inBody := 0, false
+	for _, l := range strings.Split(out, "\n") {
+		switch {
+		case bodyHeadRe.MatchString(l):
+			n++
+			inBody = true
+		case inBody && (guardRe.MatchString(l) || gutterRe.MatchString(l)):
+		default:
+			n++
+			inBody = false
+		}
+	}
+	return n
+}
+
 // With a tiny max_bytes the whole output stays inside max_bytes minus the
-// reserve, and the omitted count is exactly the lines that went missing.
+// reserve, and the omitted count is exactly the records that went missing.
 func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 	s := newShop(t)
 	args := func(maxBytes int) map[string]any {
@@ -550,7 +569,7 @@ func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullLines := strings.Count(full, "\n") + 1
+	fullRecords := countRecords(full)
 	sawOmission := false
 	for mb := contextMinMaxBytes; mb <= contextMinMaxBytes+1200; mb += 7 {
 		out, err := s.run(t, args(mb))
@@ -569,8 +588,8 @@ func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 			}
 			lines = lines[:len(lines)-1]
 		}
-		if len(lines)+omitted != fullLines {
-			t.Errorf("max_bytes %d: %d lines shown + %d omitted != %d in the full pack", mb, len(lines), omitted, fullLines)
+		if shown := countRecords(strings.Join(lines, "\n")); shown+omitted != fullRecords {
+			t.Errorf("max_bytes %d: %d records shown + %d omitted != %d in the full pack", mb, shown, omitted, fullRecords)
 		}
 	}
 	if !sawOmission {
