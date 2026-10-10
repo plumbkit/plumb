@@ -534,6 +534,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
 		summarise:      s.generateEpisodicSummary,
 		mailboxInbox:   s.hookInbox,
+		hintRoot:       s.hookHintRoot,
 	})
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.

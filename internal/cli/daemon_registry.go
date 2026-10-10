@@ -25,6 +25,9 @@ type connHandle struct {
 	proxySessionID func() string
 	reloadProject  func()
 	mailboxInbox   func(string) (tools.Inbox, bool)
+	// hintRoot resolves an advisory context hint's caller to its root
+	// (hookHintRoot): ok is false when this connection does not know it.
+	hintRoot func(string) (root string, inherited, ok bool)
 	// summarise generates this session's episodic summary; invoked by the idle
 	// reaper once per idle spell. nil when episodic summaries are unavailable.
 	summarise func()

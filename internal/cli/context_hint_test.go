@@ -59,7 +59,7 @@ func newHintFixture(t *testing.T) *hintFixture {
 	t.Cleanup(ledger.Close)
 	f := &hintFixture{hinter: &fakeHinter{}, ledger: ledger, roots: map[string]string{}, on: true}
 	f.svc = newContextHintService(f.hinter, ledger,
-		func(ext string) (string, bool) { r, ok := f.roots[ext]; return r, ok },
+		func(ext string) (hintRoot, bool) { r, ok := f.roots[ext]; return hintRoot{Path: r}, ok },
 		func() bool { return f.on })
 	return f
 }
@@ -270,6 +270,23 @@ func TestContextHint_SubagentStartRevalidatesAgainstChildRoot(t *testing.T) {
 	}
 }
 
+// A subagent's hint resolved through an inherited root says so, under the header.
+func TestContextHint_InheritedRootIsLabelled(t *testing.T) {
+	f := newHintFixture(t)
+	root := hintRepo(t)
+	f.svc.resolve = func(ext string) (hintRoot, bool) {
+		return hintRoot{Path: root, Inherited: strings.Contains(ext, "/")}, true
+	}
+	f.svc.serve(context.Background(), prompt("conv-1", "Parent.Func"))
+	r := f.svc.serve(context.Background(), contextHintRequest{Host: "claude-code", Event: "SubagentStart", SessionID: "conv-1", AgentID: "a1"})
+	if r.Outcome != contexthints.OutcomeEmitted || !strings.HasPrefix(r.Text, hintHeader+inheritedRootNote) {
+		t.Fatalf("child hint = %q, want the inherited-root label under the header", r.Text)
+	}
+	if p := f.svc.serve(context.Background(), prompt("conv-1", "Parent.Func")); strings.Contains(p.Text, inheritedRootNote) {
+		t.Errorf("a parent's own hint was labelled inherited: %q", p.Text)
+	}
+}
+
 // A collector error is recorded as an error and says nothing.
 func TestContextHint_CollectorErrorIsSilent(t *testing.T) {
 	f := newHintFixture(t)
@@ -288,7 +305,7 @@ func TestContextHint_CollectorErrorIsSilent(t *testing.T) {
 // path fails closed rather than spending an unmetered budget.
 func TestContextHint_NoLedgerFailsClosed(t *testing.T) {
 	root := hintRepo(t)
-	svc := newContextHintService(&fakeHinter{}, nil, func(string) (string, bool) { return root, true }, func() bool { return true })
+	svc := newContextHintService(&fakeHinter{}, nil, func(string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
 	if r := svc.serve(context.Background(), prompt("conv-1", "Seed")); r.Outcome == contexthints.OutcomeEmitted || r.Text != "" {
 		t.Fatalf("reply = %+v, want nothing emitted without a ledger", r)
 	}
@@ -303,7 +320,7 @@ func TestRenderContextHint(t *testing.T) {
 		{Selector: strings.Repeat("c", 150)},
 		{Selector: strings.Repeat("d", 150)},
 	}}
-	got := renderContextHint(res, 300)
+	got := renderContextHint(res, 300, "")
 	if len(got) > 300 {
 		t.Fatalf("rendered %d bytes, over the 300 budget", len(got))
 	}
@@ -318,7 +335,7 @@ func TestRenderContextHint(t *testing.T) {
 	if !strings.Contains(got, "more)") {
 		t.Errorf("no omission count in %q", got)
 	}
-	if renderContextHint(tools.HintResult{Lines: []tools.HintLine{{Selector: strings.Repeat("x", 500)}}}, 300) != "" {
+	if renderContextHint(tools.HintResult{Lines: []tools.HintLine{{Selector: strings.Repeat("x", 500)}}}, 300, "") != "" {
 		t.Error("a hint with no line that fits rendered a bare header")
 	}
 }

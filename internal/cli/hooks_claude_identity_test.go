@@ -515,8 +515,8 @@ func TestInstallHooksAt_AddsIdentityHookToAnExistingInstall(t *testing.T) {
 	}
 
 	removed, err := removeHooksAt(path, claudeHookOwned)
-	if err != nil || removed != 3 {
-		t.Fatalf("uninstall removed %d (%v), want 3", removed, err)
+	if err != nil || removed != 5 {
+		t.Fatalf("uninstall removed %d (%v), want 5", removed, err)
 	}
 	hooks = readHookJSON(t, path)["hooks"].(map[string]any)
 	groups = hooks["PreToolUse"].([]any)

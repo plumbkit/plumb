@@ -146,29 +146,7 @@ func (s *connSession) shardOf(id string) *agentShard {
 		pinOrigin:    v.pinOrigin,
 		prov:         pinProvenanceOf(&v),
 	}
-	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
-	// where the connection happens to sit (issue #513 review). Seeding it from
-	// the connection pin sent a subagent of a parent that had re-pinned itself
-	// to a worktree into whichever checkout the connection held — another
-	// agent's — the exact misroute the declaration gate exists to prevent.
-	s.seedFromParentLocked(sh)
-	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
-	// precedence over the connection's current pin. A pin that no longer verifies
-	// is ignored, so the shard keeps the connection's root rather than resurrecting
-	// a deleted or widened one.
-	if root, language, origin, ok := s.loadPinForAgent(id); ok {
-		if resolved, _, intact := s.restoreRootIntact(root); intact {
-			sh.root = resolved
-			sh.language = language
-			sh.pinOrigin = origin
-			sh.prov = restoredProvenance(origin)
-			// A persisted per-agent row is a root this agent DECLARED (only
-			// repinAgent's move path, confirmShardPin and attributeConnectionPin
-			// write one), so the declaration-refusal marker must not treat it as a
-			// seed, and a connection move must not drag it (followsConnectionLocked).
-			sh.restored = true
-		}
-	}
+	s.seedShardRootLocked(sh)
 	sh.policy = s.buildAgentPolicy(sh.root, sh.language, sh.prov)
 	// The agent that WAS the connection until a peer turned it shared has its
 	// strict-mode reads in the connection tracker, persisted under the empty
@@ -188,6 +166,56 @@ func (s *connSession) shardOf(id string) *agentShard {
 	}
 	s.shards[id] = sh
 	return sh
+}
+
+// seedShardRootLocked decides where a NEW shard sh starts, on top of the
+// connection seed it was built with. It is the one seeding rule, shared by
+// shardOf and by firstCallRoot, so what a hook is told about an agent's root
+// cannot drift from where that agent's first call will actually resolve.
+// It writes only to sh. Caller holds s.shardsMu.
+func (s *connSession) seedShardRootLocked(sh *agentShard) {
+	// A hook-stamped subagent starts where its CONVERSATION chose to work, not
+	// where the connection happens to sit (issue #513 review). Seeding it from
+	// the connection pin sent a subagent of a parent that had re-pinned itself
+	// to a worktree into whichever checkout the connection held — another
+	// agent's — the exact misroute the declaration gate exists to prevent.
+	s.seedFromParentLocked(sh)
+	// Restore a pin this agent persisted before the restart (PLAN-286): it takes
+	// precedence over the connection's current pin. A pin that no longer verifies
+	// is ignored, so the shard keeps the connection's root rather than resurrecting
+	// a deleted or widened one.
+	if root, language, origin, ok := s.loadPinForAgent(sh.id); ok {
+		if resolved, _, intact := s.restoreRootIntact(root); intact {
+			sh.root = resolved
+			sh.language = language
+			sh.pinOrigin = origin
+			sh.prov = restoredProvenance(origin)
+			// A persisted per-agent row is a root this agent DECLARED (only
+			// repinAgent's move path, confirmShardPin and attributeConnectionPin
+			// write one), so the declaration-refusal marker must not treat it as a
+			// seed, and a connection move must not drag it (followsConnectionLocked).
+			sh.restored = true
+		}
+	}
+}
+
+// firstCallRoot is the root agent id resolves against: its shard's, when it has
+// one, or else the root shardOf WOULD seed it with — computed by running the
+// same seeding on a throwaway shard that is never stored, so asking creates no
+// shard, no tracker and no identity. inherited reports the second case: the
+// agent has made no call yet and the root is the one it will start in.
+func (s *connSession) firstCallRoot(id string) (root string, inherited bool) {
+	s.shardsMu.Lock()
+	defer s.shardsMu.Unlock()
+	if sh, ok := s.shards[id]; ok {
+		sh.mu.RLock()
+		defer sh.mu.RUnlock()
+		return sh.root, false
+	}
+	v := s.view()
+	probe := &agentShard{id: id, root: v.acquiredRoot, language: v.acquiredLanguage}
+	s.seedShardRootLocked(probe)
+	return probe.root, true
 }
 
 // repinShard resolves the shard a re-pin may mutate: only an explicit per-call

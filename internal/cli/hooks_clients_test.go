@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -31,8 +32,8 @@ func TestRemoveHooksAt_RemovesOnlyPlumbs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed != 3 {
-		t.Errorf("removed = %d, want 3 (session linkage, mailbox wake, agent identity)", removed)
+	if removed != 5 {
+		t.Errorf("removed = %d, want 5 (session linkage, mailbox wake, agent identity, context hint, subagent context hint)", removed)
 	}
 
 	got := readHookJSON(t, path)
@@ -166,9 +167,9 @@ func TestInstallHooksAt_MigratesLegacyScriptHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range states {
-		if s.entry.event == "PreToolUse" {
-			// The identity hook postdates the shell recipe: nothing legacy
-			// to migrate, so it is simply missing until installed.
+		if !slices.Contains(legacyClaudeHookEvents, s.entry.event) {
+			// The identity and context-hint hooks postdate the shell recipe:
+			// nothing legacy to migrate, so each is simply missing until installed.
 			if s.state != hookStateMissing {
 				t.Errorf("%s state = %q, want missing", s.entry.label, s.state)
 			}

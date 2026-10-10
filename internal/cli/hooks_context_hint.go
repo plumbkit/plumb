@@ -1,0 +1,127 @@
+package cli
+
+// hooks_context_hint.go — the hook-process half of advisory context hints
+// (PLAN-462 Slice B): lifting explicit selectors out of a prompt, and asking the
+// daemon for a hint over the control socket.
+//
+// The prompt itself never leaves this process. Only the tokens a prompt names
+// explicitly — a backticked selector, or a path-shaped token — are sent, at
+// most maxContextHintSelectors of them, and the daemon re-checks every one
+// against the caller's root. Every failure here is silence: no daemon, an older
+// daemon, a slow one, a refusal. A hook never strands a turn and never adds a
+// byte the agent did not need.
+
+import (
+	"encoding/json"
+	"os"
+	"regexp"
+	"strings"
+	"time"
+)
+
+// contextHintHookBudget is the hook's whole wait, the daemon's own budget plus
+// the round trip, well inside the 5 s hook timeout.
+const contextHintHookBudget = contextHintBudget + 200*time.Millisecond
+
+var (
+	// backtickRe: `Cart.Total`, `(*Cart).Total`, `internal/x/y.go`.
+	backtickRe = regexp.MustCompile("`([^`\\s]{1,200})`")
+	// pathTokenRe: a bare token with a slash and a file extension.
+	pathTokenRe = regexp.MustCompile(`(?:^|[\s(\[{"'])((?:\.{0,2}/)?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+\.[A-Za-z0-9]{1,8})(?::\d+(?:-\d+)?)?`)
+	// selectorShapeRe: what a backticked token must look like to be a selector
+	// rather than a command, a flag or a value.
+	selectorShapeRe = regexp.MustCompile(`^(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,8}$|^\(?\*?[A-Za-z_][A-Za-z0-9_]*\)?(?:\.[A-Za-z_][A-Za-z0-9_]*)+$`)
+)
+
+// promptSelectors lifts at most maxContextHintSelectors explicit selectors out
+// of a prompt, in order of appearance, without duplicates. A bare word is never
+// a selector: "fix the cart total" names nothing.
+func promptSelectors(prompt string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(s string) {
+		s = strings.TrimRight(s, ".,;:")
+		if s == "" || seen[s] || len(out) == maxContextHintSelectors {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	for _, m := range backtickRe.FindAllStringSubmatch(prompt, -1) {
+		if tok := strings.TrimSuffix(m[1], "()"); selectorShapeRe.MatchString(tok) {
+			add(tok)
+		}
+	}
+	for _, m := range pathTokenRe.FindAllStringSubmatch(prompt, -1) {
+		add(m[1])
+	}
+	return out
+}
+
+// contextHintsOffInEnv reports whether the user turned hints off in the hook's
+// own environment, which is the one a user's shell export reaches; the daemon's
+// may predate it. The request still goes out, marked off, so the daemon records
+// the noop and the switch stays measurable.
+func contextHintsOffInEnv(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv(contextHintsEnv))) {
+	case "off", "0", "false":
+		return true
+	}
+	return false
+}
+
+// claudeContextHintOutput is what Claude Code's hook prints for a context-hint
+// event: the hint as plain text where Claude Code adds stdout to the context
+// (SessionStart, UserPromptSubmit), as additionalContext where it reads JSON
+// (SubagentStart), and "" for every failure. Outside a plumb workspace it asks
+// nothing: the hooks are user-scoped and fire for every session on the machine.
+func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest) string) string {
+	if _, inside := plumbWorkspaceRoot(input.CWD); !inside || ask == nil {
+		return ""
+	}
+	req := contextHintRequest{
+		Host: "claude-code", Event: input.Event, Source: input.Source,
+		SessionID: input.SessionID, AgentID: input.AgentID,
+	}
+	if input.Event == "UserPromptSubmit" {
+		req.Selectors = promptSelectors(input.Prompt)
+	}
+	text := ask(req)
+	if text == "" || input.Event != "SubagentStart" {
+		return text
+	}
+	out, err := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName":     "SubagentStart",
+		"additionalContext": text,
+	}})
+	if err != nil {
+		return ""
+	}
+	return string(out) + "\n"
+}
+
+// askContextHint asks the daemon for a hint and returns its text, or "" for
+// every outcome but emitted and for every failure.
+func askContextHint(req contextHintRequest) string {
+	req.Off = req.Off || contextHintsOffInEnv(os.Getenv)
+	if strings.TrimSpace(req.SessionID) == "" {
+		return ""
+	}
+	payload, err := json.Marshal(req)
+	if err != nil || len(payload) > maxContextHintRequest {
+		return ""
+	}
+	line, _, err := askDaemonCtrl(ctrlContextHintCommand+string(payload), time.Now().Add(contextHintHookBudget))
+	if err != nil {
+		return ""
+	}
+	body, ok := strings.CutPrefix(strings.TrimSpace(line), "ok ")
+	var reply contextHintReply
+	if !ok || json.Unmarshal([]byte(body), &reply) != nil || reply.Outcome != "emitted" {
+		return ""
+	}
+	if len(reply.Text) > contextHintPerTurn {
+		return "" // a daemon that broke its own cap is not trusted with the turn
+	}
+	return reply.Text
+}

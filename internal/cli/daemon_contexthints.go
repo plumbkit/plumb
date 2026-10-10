@@ -64,23 +64,44 @@ func pruneContextHints(ctx context.Context, ledger *contexthints.Store, every ti
 
 // hintRoot resolves a hook caller to the root it works in, by the same rule the
 // mailbox probe uses to find a recipient: exactly one live connection must know
-// the identity (its owner, or a registered logical-agent shard). Zero or
-// several means no root — a hint is never routed by a guess.
-func (r *connRegistry) hintRoot(external string) (string, bool) {
+// the caller. Zero or several means no root — a hint is never routed by a guess.
+func (r *connRegistry) hintRoot(external string) (hintRoot, bool) {
 	r.mu.Lock()
-	var resolvers []func(string) (tools.Inbox, bool)
+	var resolvers []func(string) (string, bool, bool)
 	for _, h := range r.conns {
-		if h.mailboxInbox != nil {
-			resolvers = append(resolvers, h.mailboxInbox)
+		if h.hintRoot != nil {
+			resolvers = append(resolvers, h.hintRoot)
 		}
 	}
 	r.mu.Unlock()
-	root, matches := "", 0
+	var found hintRoot
+	matches := 0
 	for _, resolve := range resolvers {
-		if inbox, ok := resolve(external); ok && inbox.Root != "" {
-			root = inbox.Root
+		if root, inherited, ok := resolve(external); ok && root != "" {
+			found = hintRoot{Path: root, Inherited: inherited}
 			matches++
 		}
 	}
-	return root, matches == 1
+	return found, matches == 1
+}
+
+// hookHintRoot is one connection's answer to hintRoot. An identity this
+// connection already knows (its owner, or a registered logical-agent shard)
+// resolves to the root its mail and calls already use. A subagent that has made
+// no call yet — the SubagentStart case — resolves only when its conversation is
+// live here, and then to the root its FIRST call will be seeded with
+// (firstCallRoot, the same seeding shardOf runs), reported as inherited.
+func (s *connSession) hookHintRoot(external string) (root string, inherited, ok bool) {
+	if inbox, known := s.hookInbox(external); known {
+		return inbox.Root, false, inbox.Root != ""
+	}
+	linkage := linkageIDOf(external)
+	if linkage == external || linkage == "" {
+		return "", false, false
+	}
+	if _, live := s.hookInbox(linkage); !live {
+		return "", false, false
+	}
+	root, inherited = s.firstCallRoot(external)
+	return root, inherited, root != ""
 }
