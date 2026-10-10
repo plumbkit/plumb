@@ -127,6 +127,9 @@ type ctrlHandlers struct {
 	// /clear: conversation-cleared <new session id> (conn_clear_markers.go).
 	conversationCleared func(string)
 	mailbox             func(context.Context, hookMailboxRequest) (hookMailboxReply, error)
+	// contextHint answers an advisory context hint for a lifecycle hook:
+	// context-hint <json> (context_hint.go).
+	contextHint func(context.Context, contextHintRequest) contextHintReply
 }
 
 // serveControlSocket accepts admin connections on ln and handles each in its
@@ -167,11 +170,7 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 		return
 	}
 
-	if handleMailboxCommand(conn, line, h) {
-		return
-	}
-
-	if handleClearCommand(conn, line, h) {
+	if handleHookCommand(conn, line, h) {
 		return
 	}
 
@@ -223,6 +222,14 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 
 	slog.Info("daemon: log level changed via control socket", "level", level)
 	fmt.Fprintf(conn, "ok\n")
+}
+
+// handleHookCommand dispatches the commands lifecycle hooks send: the mailbox
+// probe, the advisory context hint and the /clear announcement.
+func handleHookCommand(conn net.Conn, line string, h ctrlHandlers) bool {
+	return handleMailboxCommand(conn, line, h) ||
+		handleContextHintCommand(conn, line, h) ||
+		handleClearCommand(conn, line, h)
 }
 
 // handleDebugCommand dispatches the introspection/diagnostics control commands

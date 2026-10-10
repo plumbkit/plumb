@@ -158,6 +158,10 @@ func DBPath() string {
 // Open opens (or creates) the ledger at its conventional path.
 func Open() (*Store, error) { return openAt(DBPath()) }
 
+// OpenAt opens (or creates) the ledger at an explicit path: for tests, and for
+// an isolated daemon whose data directory is elsewhere.
+func OpenAt(path string) (*Store, error) { return openAt(path) }
+
 func openAt(path string) (*Store, error) {
 	// SyncNormal under WAL: a commit survives a process exit, which is the
 	// restart the allowance must outlive; losing the last commit to a power cut
