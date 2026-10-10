@@ -29,6 +29,7 @@ var knownToolGuarding = map[string]string{
 	"NewFileDiff":              "guard",
 	"NewWriteHistory":          "guard",
 	"NewMinimalDiffReview":     "guard", // reviews a git diff; a files entry is boundary-checked before it reaches git
+	"NewContextForTask":        "guard", // files and symbol paths are resolved, boundary-checked and root-contained before any index lookup
 	"NewRenameSymbol":          "guard",
 	"NewListMemories":          "guard",
 	"NewReadMemory":            "guard",

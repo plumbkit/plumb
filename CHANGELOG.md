@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`context_for_task`, an experimental seeds-first context tool (PLAN-462,
+  first slice).** It takes at least one explicit `files` or `symbols` seed and
+  returns a bounded text pack: the resolved seeds, a gaps section and concrete
+  next calls. This first version collects seeds only; bodies, neighbours and
+  affected tests arrive in later slices, and the gaps section says so. Task prose
+  only re-ranks and never seeds, and prose alone is refused with a handoff to
+  `workspace_search`. A directory is refused ("a directory is scope, not a
+  seed"), a `path#Selector` after a document path is refused with a handoff to
+  `corpora`, and an unpinned call is refused with a `session_start` handoff: the
+  tool never attaches or moves a workspace pin, and its argument names (`files`,
+  `symbols`, `within`) are deliberately not pin seeds. A bare selector that
+  matches several declarations is reported as ambiguous with up to five
+  candidates and none chosen; a selector that matches nothing is reported as
+  unresolved with nothing invented; a file in a language the index cannot parse
+  is accepted and labelled as a coverage gap rather than as having no symbols.
+  `within` and `corpora` only narrow the pack. `max_bytes` (default 12000, cap
+  32000, clamped and disclosed above that) bounds the whole served response,
+  including a 1024-byte reserve for the connection layer's appended notes; when
+  the pack does not fit, the least important lines go first and the exact count
+  omitted is stated. The tool is unpinned and outside the lean profile, so a
+  client finds it by name, and it records no read, so it never satisfies the
+  strict-edit guard for a file.
+
 ## 0.24.0 (2026-10-10)
 
 ### Security

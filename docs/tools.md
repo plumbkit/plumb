@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **59** structured tools to AI assistants. Every write tool is
+Plumb exposes **60** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -983,6 +983,43 @@ vetted set. **Inputs:** `query` (required, one of `undocumented-exports` |
   grouped/anonymous params rather than false-flag).
 Results are `source=topology` (approximate). Returns a clear message when the
 index is disabled or empty.
+
+### `context_for_task`
+**Experimental**, read-only context pack that starts from explicit **seeds**.
+It is unpinned and outside the lean profile: discover it by name. At least one
+file or symbol is required; `task` prose only re-ranks and never seeds, and
+prose alone is refused with a handoff to `workspace_search`. It runs no LLM, no
+network call and no mutation, and never attaches or moves the connection's
+workspace pin: relative paths resolve against the calling agent's pinned
+workspace, and an unpinned call is refused with a `session_start` handoff.
+**Inputs:** `files` (files only; a directory is scope, not a seed, and is
+refused), `symbols` (code selectors: `path#Recv.Method` or a bare selector;
+`path#Selector` after a document path such as a `.md` file is refused, because
+documents come through `corpora`), `intent` (`understand` (default) | `change`),
+`task`, `within` (paths or globs that narrow the pack and never widen it: a
+literal selects itself and everything beneath it, a glob with `/` is anchored at
+the root, a glob without `/` matches one path segment anywhere, a leading `**/`
+matches from any depth; an entry outside the workspace is refused), `corpora`
+(subset of `code` | `docs` | `memory`; default all permitted), `max_bytes`
+(default 12000, cap 32000; a larger value is clamped and the header says so; a
+value below 1536 is refused) and `have` (`[{symbol, content_sha256}]`, bodies you
+still hold; the shape is validated and the entries are not applied yet).
+
+`max_bytes` bounds the **whole** served response: the pack is rendered into
+`max_bytes` minus a 1024-byte reserve for the text the connection layer appends
+(mailbox preview, policy notes). When the pack does not fit, the least important
+lines are dropped first, a line is never cut in half, and a final line reports
+the exact count omitted.
+
+The output is a header (tool, root, intent, budget), then **seeds**, **gaps** and
+**next** sections. A selector that matches several declarations is *ambiguous*:
+the candidates are listed (at most five, as `path#Selector` ready to paste back)
+and none is chosen. A selector that matches nothing is reported as unresolved and
+nothing is invented; candidates shown under it are labelled and are never seeds.
+A file in a language the index has no extractor for is accepted as a seed and
+labelled as a coverage gap: its symbols are unknown, not absent. In this first
+version the pack collects seeds only; bodies, neighbours, callers, affected tests
+and constraints arrive in later versions, and the `gaps` section says so.
 
 ---
 

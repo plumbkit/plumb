@@ -86,6 +86,7 @@ func allToolSchemas() map[string]json.RawMessage {
 	return map[string]json.RawMessage{
 		(*AgentConfig)(nil).Name():          (*AgentConfig)(nil).InputSchema(),
 		(*CallHierarchy)(nil).Name():        (*CallHierarchy)(nil).InputSchema(),
+		(*ContextForTask)(nil).Name():       (*ContextForTask)(nil).InputSchema(),
 		(*CopyFile)(nil).Name():             (*CopyFile)(nil).InputSchema(),
 		(*daemonInfo)(nil).Name():           (*daemonInfo)(nil).InputSchema(),
 		(*DeleteFile)(nil).Name():           (*DeleteFile)(nil).InputSchema(),
