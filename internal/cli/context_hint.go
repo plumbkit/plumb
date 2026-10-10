@@ -63,6 +63,9 @@ type contextHintRequest struct {
 	AgentID     string   `json:"agent_id,omitempty"`
 	TurnID      string   `json:"turn_id,omitempty"`
 	Selectors   []string `json:"selectors,omitempty"`
+	// Off carries the off switch from the hook's environment, which a user's
+	// shell export reaches and the daemon's may not.
+	Off bool `json:"off,omitempty"`
 }
 
 // contextHintReply is the answer: an outcome, and the text to show, which is
@@ -78,12 +81,22 @@ const subagentRule = "Plumb: before changing code you start from known files or 
 
 const hintHeader = "Plumb context hint (selectors only; pull bodies with context_for_task or read_symbol):\n"
 
+// hintRoot is where a hint's caller works. Inherited marks a subagent that has
+// made no call yet: the root is the one its first call will be seeded with.
+type hintRoot struct {
+	Path      string
+	Inherited bool
+}
+
+// inheritedRootNote labels a hint whose root a subagent has not used yet.
+const inheritedRootNote = "root: inherited (child has made no call yet)\n"
+
 // contextHintService answers context-hint. Every dependency is injected; there
 // is deliberately no field through which it could reach a read tracker.
 type contextHintService struct {
 	hinter  tools.ContextHinter
 	ledger  *contexthints.Store
-	resolve func(external string) (root string, ok bool)
+	resolve func(external string) (hintRoot, bool)
 	enabled func() bool
 	now     func() time.Time
 	limits  contexthints.Limits
@@ -94,7 +107,7 @@ type contextHintService struct {
 }
 
 func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Store,
-	resolve func(string) (string, bool), enabled func() bool,
+	resolve func(string) (hintRoot, bool), enabled func() bool,
 ) *contextHintService {
 	return &contextHintService{
 		hinter: hinter, ledger: ledger, resolve: resolve, enabled: enabled, now: time.Now,
@@ -171,7 +184,7 @@ func (c *contextHintService) ledgerRoot(req contextHintRequest) string {
 		return ""
 	}
 	root, _ := c.resolve(hintExternal(req.SessionID, req.AgentID))
-	return root
+	return root.Path
 }
 
 // hintDecision is what one request came to. text is set only for a hint that is
@@ -194,7 +207,7 @@ func (c *contextHintService) decide(ctx context.Context, req contextHintRequest,
 	if refused != "" {
 		return noopHint(refused)
 	}
-	seeds, ruleOnly, detail := c.seedsFor(req, root)
+	seeds, ruleOnly, detail := c.seedsFor(req, root.Path)
 	d := c.compose(ctx, req, root, seeds, ruleOnly, detail)
 	if d.text == "" {
 		return d
@@ -203,25 +216,25 @@ func (c *contextHintService) decide(ctx context.Context, req contextHintRequest,
 }
 
 // admit resolves the caller's root, or names why there is none to hint for.
-func (c *contextHintService) admit(req contextHintRequest) (root, refused string) {
+func (c *contextHintService) admit(req contextHintRequest) (root hintRoot, refused string) {
 	switch {
-	case c.enabled != nil && !c.enabled():
-		return "", "off"
+	case req.Off, c.enabled != nil && !c.enabled():
+		return hintRoot{}, "off"
 	case req.SessionID == "":
-		return "", "no-session"
+		return hintRoot{}, "no-session"
 	case c.resolve == nil:
-		return "", "no-root"
+		return hintRoot{}, "no-root"
 	}
 	root, ok := c.resolve(hintExternal(req.SessionID, req.AgentID))
-	if !ok || root == "" {
-		return "", "no-root"
+	if !ok || root.Path == "" {
+		return hintRoot{}, "no-root"
 	}
 	return root, ""
 }
 
 // compose asks the collector and renders what it says. A subagent start that
 // yields no line still gets the tool-choice rule.
-func (c *contextHintService) compose(ctx context.Context, req contextHintRequest, root string,
+func (c *contextHintService) compose(ctx context.Context, req contextHintRequest, root hintRoot,
 	seeds []tools.ContextSeed, ruleOnly bool, detail string,
 ) hintDecision {
 	switch {
@@ -233,13 +246,17 @@ func (c *contextHintService) compose(ctx context.Context, req contextHintRequest
 		return noopHint("no-collector")
 	}
 	res, err := c.hinter.Hint(ctx, tools.HintRequest{
-		Workspace: root, Agent: hintExternal(req.SessionID, req.AgentID), Seeds: seeds,
+		Workspace: root.Path, Agent: hintExternal(req.SessionID, req.AgentID), Seeds: seeds,
 		MaxBytes: c.limits.PerTurn, Deadline: c.now().Add(contextHintBudget),
 	})
 	if err != nil {
 		return hintDecision{outcome: contexthints.OutcomeError, detail: "collector", seeds: seeds}
 	}
-	if text := renderContextHint(res, c.limits.PerTurn); text != "" {
+	note := ""
+	if root.Inherited {
+		note = inheritedRootNote
+	}
+	if text := renderContextHint(res, c.limits.PerTurn, note); text != "" {
 		return hintDecision{text: text, seeds: seeds}
 	}
 	if ruleOnly {
@@ -383,10 +400,12 @@ func hintField(s string) string {
 }
 
 // renderContextHint renders a hint within maxBytes, keeping only whole lines.
-// A hint with no line that fits renders as "": a bare header names nothing.
-func renderContextHint(res tools.HintResult, maxBytes int) string {
+// note, when set, is a fixed label line under the header. A hint with no line
+// that fits renders as "": a bare header names nothing.
+func renderContextHint(res tools.HintResult, maxBytes int, note string) string {
 	var b strings.Builder
 	b.WriteString(hintHeader)
+	b.WriteString(note)
 	shown := 0
 	for _, l := range res.Lines {
 		line := "- " + hintField(l.Selector)
