@@ -102,18 +102,6 @@ func claudeHookEntries(plumbBin string) []hookEntry {
 			"command": command,
 			"timeout": float64(5),
 		}},
-		// Advisory context hints (hooks_context_hint.go): selectors and
-		// locations only, at most 1 KiB a turn, silent on any failure.
-		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
-			"type":    "command",
-			"command": command,
-			"timeout": float64(5),
-		}},
-		{event: "SubagentStart", label: "subagent context hint", handler: map[string]any{
-			"type":    "command",
-			"command": command,
-			"timeout": float64(5),
-		}},
 	}
 }
 

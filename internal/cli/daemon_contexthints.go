@@ -15,17 +15,31 @@ import (
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
-// contextHintsEnvOff is the user-visible off switch. Any of off/0/false
-// silences every hint; the ledger still records the noop, so "off" is
-// measurable and never mistaken for an outage.
+// contextHintsEnv overrides [context] hints in either direction: on|1|true
+// turns hints on, off|0|false turns them off, anything else leaves the config
+// in charge. Off is recorded as a noop, so it is measurable and never mistaken
+// for an outage.
 const contextHintsEnv = "PLUMB_CONTEXT_HINTS"
 
-func contextHintsEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(contextHintsEnv))) {
+// hintEnvSwitch reads the override: set reports whether it says anything, on
+// what it says.
+func hintEnvSwitch(getenv func(string) string) (set, on bool) {
+	switch strings.ToLower(strings.TrimSpace(getenv(contextHintsEnv))) {
+	case "on", "1", "true":
+		return true, true
 	case "off", "0", "false":
-		return false
+		return true, false
 	}
-	return true
+	return false, false
+}
+
+// contextHintsEnabled is the daemon's decision: its own environment's override,
+// else the live config.
+func contextHintsEnabled(configOn func() bool) bool {
+	if set, on := hintEnvSwitch(os.Getenv); set {
+		return on
+	}
+	return configOn != nil && configOn()
 }
 
 // startContextHints opens the ledger and returns the control-socket handler and
@@ -44,7 +58,7 @@ func startContextHints(ctx context.Context, registry *connRegistry, hinter tools
 		slog.Warn("daemon: context-hint ledger unavailable; hooks will receive no hints", "err", err)
 		return nil, func() {}
 	}
-	enabled := func() bool { return contextHintsEnabled() && (configOn == nil || configOn()) }
+	enabled := func() bool { return contextHintsEnabled(configOn) }
 	svc := newContextHintService(hinter, ledger, registry.hintRoot, enabled)
 	go pruneContextHints(ctx, ledger, reaperInterval)
 	return svc.serve, ledger.Close

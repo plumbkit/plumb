@@ -32,8 +32,8 @@ func TestRemoveHooksAt_RemovesOnlyPlumbs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if removed != 5 {
-		t.Errorf("removed = %d, want 5 (session linkage, mailbox wake, agent identity, context hint, subagent context hint)", removed)
+	if removed != 3 {
+		t.Errorf("removed = %d, want 3 (session linkage, mailbox wake, agent identity)", removed)
 	}
 
 	got := readHookJSON(t, path)

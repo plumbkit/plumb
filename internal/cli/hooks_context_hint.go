@@ -60,18 +60,6 @@ func promptSelectors(prompt string) []string {
 	return out
 }
 
-// contextHintsOffInEnv reports whether the user turned hints off in the hook's
-// own environment, which is the one a user's shell export reaches; the daemon's
-// may predate it. The request still goes out, marked off, so the daemon records
-// the noop and the switch stays measurable.
-func contextHintsOffInEnv(getenv func(string) string) bool {
-	switch strings.ToLower(strings.TrimSpace(getenv(contextHintsEnv))) {
-	case "off", "0", "false":
-		return true
-	}
-	return false
-}
-
 // claudeContextHintOutput is what Claude Code's hook prints for a context-hint
 // event: the hint as plain text where Claude Code adds stdout to the context
 // (SessionStart, UserPromptSubmit), as additionalContext where it reads JSON
@@ -148,7 +136,12 @@ func (u uninstallScope) states(all []hookState) []hookState {
 // askContextHint asks the daemon for a hint and returns its text, or "" for
 // every outcome but emitted and for every failure.
 func askContextHint(req contextHintRequest) string {
-	req.Off = req.Off || contextHintsOffInEnv(os.Getenv)
+	// The hook's own environment is the one a user's shell export reaches; the
+	// daemon's may predate it. Either way the request still goes out, so the
+	// daemon records the outcome and the switch stays measurable.
+	if set, on := hintEnvSwitch(os.Getenv); set {
+		req.Off, req.On = !on, on
+	}
 	if strings.TrimSpace(req.SessionID) == "" {
 		return ""
 	}
@@ -169,4 +162,25 @@ func askContextHint(req contextHintRequest) string {
 		return "" // a daemon that broke its own cap is not trusted with the turn
 	}
 	return reply.Text
+}
+
+// claudeContextHookEntries are Claude Code's opt-in advisory context-hint
+// handlers: selectors and locations only, at most 1 KiB a turn,
+// silent on any failure. They are installed only on `plumb hooks install
+// --context`, or refreshed when already present: an unpromoted feature must not
+// spawn a process on every prompt of every user.
+func claudeContextHookEntries(plumbBin string) []hookEntry {
+	command := plumbHookCommand(plumbBin, claudeHookVerb)
+	return []hookEntry{
+		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+		{event: "SubagentStart", label: "subagent context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+	}
 }

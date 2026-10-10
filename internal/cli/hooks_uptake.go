@@ -118,7 +118,7 @@ func uptakeClients() []uptakeClient {
 	out := make([]uptakeClient, 0, len(targets))
 	for _, t := range targets {
 		c := uptakeClient{Client: t.use, Configured: "unknown"}
-		if path, _, states, err := hookPlan(t, plumbBin); err == nil {
+		if path, _, states, err := hookPlan(t, plumbBin, true); err == nil {
 			installed, total := 0, 0
 			for _, s := range states {
 				if slices.Contains(contextHintEvents, s.entry.event) {
