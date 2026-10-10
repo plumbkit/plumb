@@ -157,9 +157,6 @@ func (c *contextHintService) serve(ctx context.Context, req contextHintRequest) 
 	turn := c.window(req)
 	d := c.decide(ctx, req, turn)
 	outcome, detail, text, seeds := d.outcome, d.detail, d.text, d.seeds
-	if outcome != contexthints.OutcomeEmitted {
-		text = ""
-	}
 	_ = c.ledger.Record(contexthints.Observation{
 		At: start, Workspace: c.ledgerRoot(req), SessionID: req.SessionID, AgentID: req.AgentID,
 		Host: req.Host, HostVersion: req.HostVersion, Event: req.Event, Source: req.Source,
@@ -178,7 +175,9 @@ func (c *contextHintService) ledgerRoot(req contextHintRequest) string {
 }
 
 // hintDecision is what one request came to. text is set only for a hint that is
-// still to be charged (outcome unset) or was (outcome emitted).
+// still to be charged (outcome unset) or was (outcome emitted); every other
+// outcome is constructed without it, which is what keeps a refused or failed
+// hint from reaching the agent — there is no later step that strips it.
 type hintDecision struct {
 	outcome contexthints.Outcome
 	detail  string
