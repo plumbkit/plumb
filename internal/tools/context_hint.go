@@ -209,7 +209,7 @@ func (r *hintRun) symbolSeed(ctx context.Context, s ContextSeed, rel string) {
 		return
 	}
 	seeds, misses := len(r.pack.Seeds), len(r.pack.Misses)
-	r.pack.addMatch(input, hint.Path, m)
+	r.pack.addMatch(input, hint.Path, m, "") // a hint reads no file, so it needs no index hash
 	if len(r.pack.Misses) > misses {
 		r.gap(hintMissGap(r.pack.Misses[misses], m, hint.Path))
 		return
@@ -252,7 +252,7 @@ func (r *hintRun) expand(ctx context.Context) {
 		return
 	}
 	tmp := contextPack{Root: r.root, Seeds: walk}
-	r.c.expand(ctx, ctx, &tmp, r.scope, r.index, contextRequest{Intent: contextIntentUnderstand})
+	r.c.walk(ctx, ctx, &tmp, r.scope, r.index, contextRequest{Intent: contextIntentUnderstand}, false)
 	r.pack.Related, r.pack.Expansion = tmp.Related, tmp.Expansion
 }
 

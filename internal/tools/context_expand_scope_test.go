@@ -225,8 +225,8 @@ func TestContextForTask_NodeCapIsSixtyAndTheCutIsDeterministic(t *testing.T) {
 	if !strings.Contains(out, "20 further candidate(s) beyond the 60-node, depth-2 cap were not kept") {
 		t.Errorf("the cut is not disclosed:\n%s", out)
 	}
-	if !strings.Contains(out, "callers of Run: none resolved in the index") {
-		t.Errorf("a capped walk must not speak of callers as if it were whole:\n%s", out)
+	if !strings.Contains(out, "callers of Run: none reached before the walk was cut") || strings.Contains(out, "none resolved in the index") {
+		t.Errorf("a capped walk must say it was cut, not speak of callers as if the index had been asked in full:\n%s", out)
 	}
 }
 

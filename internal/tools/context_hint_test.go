@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -99,36 +100,97 @@ func TestContextHint_ListsSelectorsLocationsAndProvenanceNeverSource(t *testing.
 func shopRoot(s shopTool) string { return canonicalRoot(s.root) }
 
 // Hint reads no file and records no read. The files are deleted after indexing, so a
-// hint that opened one would fail or differ; a tool wired to a read tracker with a
-// counting sink watches that nothing is recorded. Positive control: the same tool,
-// asked for a pack while the files exist, does record, so the sink is live.
+// hint that opened one would fail or differ. The read record is the calling agent's
+// own tracker, the very one a pack for that agent writes to (per-agent resolver, the
+// agent carried by the context the hint is asked under), and it is compared whole
+// before and after. Positive control: the same agent's pack, asked while the files
+// exist, changes that tracker, so the comparison can tell.
 func TestContextHint_ReadsNoFileAndRecordsNoRead(t *testing.T) {
 	s := newShop(t)
-	var recorded atomic.Int32
-	tracker := NewReadTracker()
-	tracker.SetPersistSink(func(string, time.Time, string) { recorded.Add(1) })
-	s.tool.WithReads(tracker)
+	trackers := newAgentTrackers("a")
+	var persisted atomic.Int32
+	trackers["a"].SetPersistSink(func(string, time.Time, string) { persisted.Add(1) })
+	s.tool.WithReadsFor(trackers.resolve)
+	agent := asAgent("a")
+	cart := filepath.Join(s.root, "cart", "cart.go")
+	records := func() []ReadRecord {
+		r := trackers["a"].Records()
+		slices.SortFunc(r, func(a, b ReadRecord) int { return strings.Compare(a.Path, b.Path) })
+		return r
+	}
 
-	if _, err := s.run(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}}); err != nil {
+	if _, err := s.runAs(t, agent, map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}}); err != nil {
 		t.Fatal(err)
 	}
-	if recorded.Load() == 0 {
-		t.Fatal("control: a delivered body recorded no read, so the sink watches nothing")
+	if persisted.Load() == 0 || trackers["a"].Mtime(cart).IsZero() {
+		t.Fatal("control: a delivered body left the agent's tracker unchanged, so comparing it proves nothing")
 	}
-	before, want := recorded.Load(), mustHint(t, shopHinter(s, nil), hintReq(s, ContextSeed{Path: "cart/cart.go", Symbol: "Cart.Total"}))
+	before, persistedBefore := records(), persisted.Load()
+	want := mustHint(t, shopHinter(s, nil), hintReq(s, ContextSeed{Path: "cart/cart.go", Symbol: "Cart.Total"}))
 
 	for _, f := range []string{"cart/cart.go", "pricing/discount.go", "docs/pricing.md"} {
 		if err := os.Remove(filepath.Join(s.root, filepath.FromSlash(f))); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := mustHint(t, s.collector, hintReq(s, ContextSeed{Path: "cart/cart.go", Symbol: "Cart.Total"}))
+	// The collector is the one the tool gathers packs with, asked as the same agent.
+	got, err := s.collector.Hint(agent, hintReq(s, ContextSeed{Path: "cart/cart.go", Symbol: "Cart.Total"}))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !slices.Equal(got.Lines, want.Lines) || len(got.Lines) < 2 {
 		t.Errorf("the hint changed when the files were deleted, so it read them:\n got %+v\nwant %+v", got.Lines, want.Lines)
 	}
-	if recorded.Load() != before {
-		t.Errorf("a hint recorded %d read(s)", recorded.Load()-before)
+	if after := records(); !slices.Equal(after, before) || persisted.Load() != persistedBefore {
+		t.Errorf("a hint changed the agent's read record:\n before %+v\n after  %+v", before, after)
 	}
+}
+
+// The collector cannot record a read, by construction: it holds no read tracker and no
+// way to reach one. This is what makes "a hint records nothing" true rather than
+// merely observed, so a field added later that could record fails here. Positive
+// control: the tool, which does record, is caught by the same check.
+func TestContextCollector_HoldsNothingThatCouldRecordARead(t *testing.T) {
+	recorders := func(typ reflect.Type) (offending []string) {
+		for i := range typ.NumField() {
+			if f := typ.Field(i); canRecordReads(f.Type) {
+				offending = append(offending, f.Name)
+			}
+		}
+		return offending
+	}
+	if got := recorders(reflect.TypeFor[ContextForTask]()); !slices.Equal(got, []string{"tracker", "readsFor"}) {
+		t.Fatalf("control: the checker found %v in the tool, want its tracker and its per-agent resolver", got)
+	}
+	if got := recorders(reflect.TypeFor[ContextCollector]()); len(got) != 0 {
+		t.Errorf("the collector holds something that could record a read: %v", got)
+	}
+}
+
+// canRecordReads reports whether a value of typ is, or can hand back, a ReadTracker.
+func canRecordReads(typ reflect.Type) bool {
+	switch typ.Kind() {
+	case reflect.Func:
+		for i := range typ.NumIn() {
+			if canRecordReads(typ.In(i)) {
+				return true
+			}
+		}
+		for i := range typ.NumOut() {
+			if canRecordReads(typ.Out(i)) {
+				return true
+			}
+		}
+		return false
+	case reflect.Interface:
+		return typ.Implements(reflect.TypeFor[readRecorder]())
+	}
+	return typ == reflect.TypeFor[*ReadTracker]()
+}
+
+// readRecorder is anything with the tracker's recording method.
+type readRecorder interface {
+	Record(path string, mtime time.Time, sha string)
 }
 
 // An ambiguous or unresolved selector is a Gap and never a list of candidates: no
@@ -292,12 +354,16 @@ func TestContextHint_AnExpiredDeadlineIsAPartialWithAGapAndNoLookup(t *testing.T
 
 // A deadline that passes while the index is being reached is also a partial: the
 // answer returns promptly after it, without lines taken after the clock ran out.
+// Positive control: the same slow accessor, given a generous deadline, is waited for
+// and the hint is complete, so the partial above is the deadline's doing and not a
+// hint that never could have answered.
 func TestContextHint_ADeadlinePassingMidwayIsAPartialNotALateAnswer(t *testing.T) {
 	s := newShop(t)
-	h := NewContextHinter(func(r string) *topology.Store { time.Sleep(150 * time.Millisecond); return storeForRoot(s.store)(r) }, nil)
+	const slow = 150 * time.Millisecond
+	h := NewContextHinter(func(r string) *topology.Store { time.Sleep(slow); return storeForRoot(s.store)(r) }, nil)
 	req := hintReq(s, ContextSeed{Path: "cart/cart.go", Symbol: "Cart.Total"})
-	req.Deadline = time.Now().Add(50 * time.Millisecond)
 
+	req.Deadline = time.Now().Add(50 * time.Millisecond)
 	start := time.Now()
 	res := mustHint(t, h, req)
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -305,6 +371,16 @@ func TestContextHint_ADeadlinePassingMidwayIsAPartialNotALateAnswer(t *testing.T
 	}
 	if len(res.Lines) != 0 || !slices.Contains(res.Gaps, hintDeadlineGap) {
 		t.Errorf("want no lines and the deadline gap, got %+v %q", res.Lines, res.Gaps)
+	}
+
+	req.Deadline = time.Now().Add(time.Minute)
+	start = time.Now()
+	full := mustHint(t, h, req)
+	if elapsed := time.Since(start); elapsed < slow {
+		t.Errorf("control: the slow accessor was not waited for (%s), so the partial above proves nothing", elapsed)
+	}
+	if len(full.Lines) < 2 || slices.Contains(full.Gaps, hintDeadlineGap) {
+		t.Errorf("control: with time to spare the hint must be complete, got %+v %q", full.Lines, full.Gaps)
 	}
 }
 

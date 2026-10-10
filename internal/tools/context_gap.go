@@ -52,7 +52,9 @@ type gapSubject struct {
 // gapSubjects are the callable symbol seeds and the resolved callers of those
 // seeds, in a fixed order and capped. Only subjects the call-graph admission rule
 // accepts qualify: for any other language there is no import-resolved graph to
-// reason from, and the language label says so instead.
+// reason from, and the language label says so instead. A withheld (sensitive)
+// caller is never a subject: searching on from it would walk through a sensitive
+// node and name its selector in a candidate's Via.
 func (e *expander) gapSubjects(ctx context.Context) []gapSubject {
 	callerFiles := map[int64]map[string]bool{}
 	var callers []contextRelated
@@ -68,7 +70,7 @@ func (e *expander) gapSubjects(ctx context.Context) []gapSubject {
 			callerFiles[r.CallerOf] = map[string]bool{}
 		}
 		callerFiles[r.CallerOf][r.Node.Path] = true
-		if seedIDs[r.CallerOf] {
+		if seedIDs[r.CallerOf] && !r.Withheld {
 			callers = append(callers, r)
 		}
 	}
@@ -161,6 +163,9 @@ func (e *expander) importerFiles(ctx context.Context, sub gapSubject, pkg topolo
 			e.fail(ctx, err)
 		}
 		return nil
+	}
+	if res.DependedOnBy.Truncated {
+		e.stats.ImportersCapped++
 	}
 	dir := path.Dir(sub.node.Path)
 	var files []string
@@ -310,13 +315,17 @@ func languageGap(l languageNote) string {
 }
 
 // text words one seed's caller list. A list that is empty, short or cut is never
-// "no callers".
+// "no callers", and a walk that was cut says so before it says anything about what
+// the index holds: an empty list from a walk that stopped early reports where the
+// walk got to, not what the index knows.
 func (c callerNote) text(capped bool) string {
 	switch {
-	case c.Resolved == 0:
-		return fmt.Sprintf("callers of %s: none resolved in the index; this is not proof of no callers (gap candidates, if any, are listed separately)", c.Selector)
+	case capped && c.Resolved == 0:
+		return fmt.Sprintf("callers of %s: none reached before the walk was cut (a cap, the deadline or an index error stopped it), so the index was not fully asked; this is not proof of no callers", c.Selector)
 	case capped:
 		return fmt.Sprintf("callers of %s: %d resolved and listed; the list may be incomplete (a cap or the deadline cut the walk)", c.Selector, c.Resolved)
+	case c.Resolved == 0:
+		return fmt.Sprintf("callers of %s: none resolved in the index; this is not proof of no callers (gap candidates, if any, are listed separately)", c.Selector)
 	}
 	return fmt.Sprintf("callers of %s: %d resolved and listed; the call graph is syntactic, so more may exist", c.Selector, c.Resolved)
 }
@@ -347,6 +356,9 @@ func (s expansionStats) gaps() []string {
 	}
 	if s.GapMore > 0 {
 		add("%d further gap candidate(s) beyond their quota are not listed", s.GapMore)
+	}
+	if s.ImportersCapped > 0 {
+		add("%d importer list(s) exceeded %d and were cut; gap candidates may be missing", s.ImportersCapped, contextHopNodes)
 	}
 	if s.Excluded > 0 {
 		add("%d file(s) reached from the seeds are outside within/corpora and were left out; nothing was expanded through them", s.Excluded)

@@ -203,7 +203,23 @@ func (w *chatWatch) reset() {
 // It just is not evidence of anything, so it is rendered as a preview and
 // suppressed per note so it cannot become a banner on every result.
 func (s *connSession) messageHint(ctx context.Context) string {
-	if s.chatWatch == nil {
+	return s.messageHintWithin(ctx, unboundedRoom)
+}
+
+// unboundedRoom is the room of a tool whose result carries no size limit.
+const unboundedRoom = -1
+
+// previewMinBody is the smallest per-message budget previewWithin tries before it
+// gives up on showing any body.
+const previewMinBody = 64
+
+// messageHintWithin is messageHint for a result that may grow by at most room bytes
+// (unboundedRoom for no limit). A preview that does not fit is shown with shorter
+// bodies, and failing that as a one-line pointer at check_messages; when not even
+// the pointer fits, nothing is shown and nothing is marked previewed, so the next
+// call offers it again.
+func (s *connSession) messageHintWithin(ctx context.Context, room int) string {
+	if s.chatWatch == nil || room == 0 {
 		return ""
 	}
 	// knownInboxFor, not inboxFor: this preview rides every tool result, and an
@@ -248,19 +264,29 @@ func (s *connSession) messageHint(ctx context.Context) string {
 		return "" // everything waiting has already been shown once
 	}
 
-	block := tools.RenderMessagePreview(tools.PreviewRows(named), inbox.Policy.ChatBudget(), time.Now())
-	// block == "" means no named note framed this with the "[Messages" header, so the
-	// "next" line has to carry its own or it lands glued to the end of the tool's own
-	// output. That is the common shape, not a corner: "next" is leave_note's default.
-	block += tools.RenderNextWaiting(len(next), block == "")
+	rows, now := tools.PreviewRows(named), time.Now()
+	render := func(budget int) string {
+		block := tools.RenderMessagePreview(rows, budget, now)
+		// block == "" means no named note framed this with the "[Messages" header, so the
+		// "next" line has to carry its own or it lands glued to the end of the tool's own
+		// output. That is the common shape, not a corner: "next" is leave_note's default.
+		block += tools.RenderNextWaiting(len(next), block == "")
+		if more > 0 {
+			// And the recipient must KNOW the remainder exists — "3 waiting" alone
+			// cannot say three-of-three rather than three-of-more, and an agent that
+			// goes idle here believes it has seen everything. Peek already returned
+			// the claimable set, so this is arithmetic on what we hold; the separate
+			// counting query this used to run is gone.
+			block += tools.RenderBacklog(more)
+		}
+		return strings.TrimRight(block, "\n")
+	}
 	if more > 0 {
 		s.chatWatch.invalidate() // the remainder must arrive on the next call, not in 30s
-		// And the recipient must KNOW the remainder exists — "3 waiting" alone
-		// cannot say three-of-three rather than three-of-more, and an agent that
-		// goes idle here believes it has seen everything. Peek already returned
-		// the claimable set, so this is arithmetic on what we hold; the separate
-		// counting query this used to run is gone.
-		block += tools.RenderBacklog(more)
+	}
+	block := previewWithin(render, inbox.Policy.ChatBudget(), room, len(named)+len(next)+more)
+	if block == "" {
+		return "" // no room for even the pointer: mark nothing, the next call offers it again
 	}
 	// A fresh slice rather than append(named, next...): the cap above re-sliced
 	// named, so appending in place would write over the deferred notes still sitting
@@ -269,7 +295,26 @@ func (s *connSession) messageHint(ctx context.Context) string {
 	shown := make([]tools.Preview, 0, len(named)+len(next))
 	shown = append(append(shown, named...), next...)
 	s.chatWatch.markPreviewed(shown)
-	return strings.TrimRight(block, "\n")
+	return block
+}
+
+// previewWithin renders the preview at the chat budget and, when room bounds it and
+// that is too large, at successively smaller per-message budgets, then as a one-line
+// pointer for waiting messages. "" means not even the pointer fits.
+func previewWithin(render func(budget int) string, budget, room, waiting int) string {
+	block := render(budget)
+	if room < 0 || len(block) <= room {
+		return block
+	}
+	for b := min(budget, room) / 2; b >= previewMinBody; b /= 2 {
+		if block = render(b); len(block) <= room {
+			return block
+		}
+	}
+	if pointer := tools.RenderWaitingPointer(waiting); len(pointer) <= room {
+		return pointer
+	}
+	return ""
 }
 
 // splitNextNotes separates notes addressed to this session by NAME from those

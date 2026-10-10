@@ -2,7 +2,9 @@ package cli
 
 import (
 	"log/slog"
+	"maps"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
@@ -98,19 +100,23 @@ func (p *topologyPool) get(root string) *topology.Store {
 // else, and, like get, it never opens a store, so a read cannot materialise an
 // index, with its database file and background indexer, for a workspace that has
 // none. Keys are the spellings sessions attached with, so a canonical root also
-// matches a key that canonicalises to it.
+// matches a key that canonicalises to it. Canonicalising touches the file system, so
+// it runs on a copy of the keys taken under the lock and never while holding it, and
+// goes in key order so two keys that canonicalise alike always answer the same.
 func (p *topologyPool) forRoot(root string) *topology.Store {
 	if root == "" {
 		return nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if s, ok := p.stores[root]; ok {
+		p.mu.Unlock()
 		return s
 	}
-	for key, s := range p.stores {
+	open := maps.Clone(p.stores)
+	p.mu.Unlock()
+	for _, key := range slices.Sorted(maps.Keys(open)) {
 		if paths.Canonical(key) == root {
-			return s
+			return open[key]
 		}
 	}
 	return nil

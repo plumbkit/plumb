@@ -73,21 +73,38 @@ func (p *contextPack) relatedHeading() string {
 
 const gapCandidateHeading = "gap candidates (e0, unconfirmed; the call graph cannot say whether they call the seeds):"
 
-// relatedLines renders the ranked list. The first contextRelatedBodies carry
-// priority prioRelTop with the body they may have; the rest are one-line pointers
-// that go first when the budget is short.
-func (p *contextPack) relatedLines() []packLine {
-	var ls []packLine
+// topRelated marks the window of related entries that carry priority prioRelTop
+// and may carry a body: the first contextRelatedBodies ranked relationships, gap
+// candidates excluded. Every consumer of the window reads this one answer (the
+// lines, the bodies read, the memory refs), and a withheld node holds its place in
+// it, so the three cannot count it differently.
+func (p *contextPack) topRelated() []bool {
+	top := make([]bool, len(p.Related))
 	shown := 0
 	for i, r := range p.Related {
 		if r.Gap {
 			continue
 		}
+		top[i] = shown < contextRelatedBodies
+		shown++
+	}
+	return top
+}
+
+// relatedLines renders the ranked list. The first contextRelatedBodies carry
+// priority prioRelTop with the body they may have; the rest are one-line pointers
+// that go first when the budget is short.
+func (p *contextPack) relatedLines() []packLine {
+	var ls []packLine
+	top := p.topRelated()
+	for i, r := range p.Related {
+		if r.Gap {
+			continue
+		}
 		prio := prioRelRest
-		if shown < contextRelatedBodies {
+		if top[i] {
 			prio = prioRelTop
 		}
-		shown++
 		ls = append(ls, packLine{text: relatedText(r), prio: prio, section: secRelated, class: classRelated})
 		if u, ok := p.relatedBodyLine(i); ok {
 			ls = append(ls, u)

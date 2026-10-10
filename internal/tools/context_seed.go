@@ -137,7 +137,12 @@ func (c *ContextCollector) seedSymbol(ctx context.Context, pack *contextPack, sc
 	if err != nil {
 		return withIndexHealthErr(index.store, fmt.Errorf("context_for_task: resolving %q: %w", input, err))
 	}
-	pack.addMatch(input, hint.Path, match)
+	// The hash is read straight after the spans it vouches for (see indexedHash).
+	hash := ""
+	if match.kind == matchOne {
+		hash = indexedHash(ctx, index.store, match.nodes[0].Path)
+	}
+	pack.addMatch(input, hint.Path, match, hash)
 	return nil
 }
 
@@ -242,15 +247,16 @@ func candidateOf(n topology.Node) contextCandidate {
 	return contextCandidate{Path: n.Path, Selector: nodeSelector(n), NodeKind: string(n.Kind), Line: n.StartLine}
 }
 
-// addMatch records a classified outcome on the pack.
-func (p *contextPack) addMatch(input, pathHint string, m symbolMatch) {
+// addMatch records a classified outcome on the pack. indexHash is the content hash
+// the index held with the matched node's span ("" for any other outcome).
+func (p *contextPack) addMatch(input, pathHint string, m symbolMatch, indexHash string) {
 	switch m.kind {
 	case matchOne:
 		n := m.nodes[0]
 		p.Seeds = append(p.Seeds, contextSeed{
 			Kind: seedSymbol, ID: n.ID, Path: n.Path, Abs: absUnder(p.Root, n.Path), Selector: nodeSelector(n), Name: n.Name,
 			NodeKind: string(n.Kind), Line: n.StartLine, EndLine: n.EndLine, Language: n.Language,
-			Signature: n.Signature, Doc: firstLine(n.Docstring), Shadowed: m.shadowed,
+			Signature: n.Signature, Doc: firstLine(n.Docstring), Shadowed: m.shadowed, IndexHash: indexHash,
 		})
 	case matchAmbiguous:
 		reason := fmt.Sprintf("%d declarations match; none was chosen", len(m.nodes))
