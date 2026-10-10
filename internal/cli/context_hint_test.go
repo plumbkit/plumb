@@ -136,6 +136,35 @@ func TestContextHint_OffIsSilentAndRecorded(t *testing.T) {
 	}
 }
 
+// The hook's own environment outranks the daemon's switch in both directions:
+// On enables hints the daemon has off, Off silences hints the daemon has on.
+func TestContextHint_RequestSwitchOutranksDaemon(t *testing.T) {
+	f := newHintFixture(t)
+	f.roots["conv-1"] = hintRepo(t)
+
+	f.on = false
+	if r := f.svc.serve(context.Background(), prompt("conv-1", "Seed")); r.Outcome != contexthints.OutcomeNoop {
+		t.Fatalf("daemon off, no override = %+v, want noop (the control)", r)
+	}
+	on := prompt("conv-1", "Seed")
+	on.On = true
+	if r := f.svc.serve(context.Background(), on); r.Outcome != contexthints.OutcomeEmitted {
+		t.Fatalf("daemon off, request on = %+v, want emitted", r)
+	}
+
+	f.on = true
+	off := prompt("conv-1", "Seed")
+	off.Off = true
+	if r := f.svc.serve(context.Background(), off); r.Outcome != contexthints.OutcomeNoop || r.Text != "" {
+		t.Fatalf("daemon on, request off = %+v, want a silent noop", r)
+	}
+	both := prompt("conv-1", "Seed")
+	both.On, both.Off = true, true
+	if r := f.svc.serve(context.Background(), both); r.Outcome != contexthints.OutcomeNoop {
+		t.Fatalf("request on and off = %+v, want off to win", r)
+	}
+}
+
 // No live identity means no root, and no guess from anywhere else.
 func TestContextHint_UnknownIdentityIsNoop(t *testing.T) {
 	f := newHintFixture(t)

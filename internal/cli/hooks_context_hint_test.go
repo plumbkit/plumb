@@ -132,7 +132,10 @@ func TestClaudeContextHintOutput(t *testing.T) {
 	var asked []contextHintRequest
 	ask := func(r contextHintRequest) string { asked = append(asked, r); return "HINT\n" }
 
-	if got := claudeContextHintOutput(claudeHookInput{Event: "UserPromptSubmit", CWD: t.TempDir(), SessionID: "c"}, ask); got != "" || len(asked) != 0 {
+	// An empty cwd is outside every workspace on every machine. A t.TempDir() is
+	// not: with GOTMPDIR inside the checkout (CI, make verify-full) it sits under
+	// the repository's own .plumb, and the case silently tests nothing.
+	if got := claudeContextHintOutput(claudeHookInput{Event: "UserPromptSubmit", CWD: "", SessionID: "c"}, ask); got != "" || len(asked) != 0 {
 		t.Fatalf("outside a workspace: printed %q after %d asks, want nothing and no ask", got, len(asked))
 	}
 
