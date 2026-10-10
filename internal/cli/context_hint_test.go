@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/contexthints"
 	"github.com/plumbkit/plumb/internal/tools"
@@ -108,6 +109,13 @@ func TestContextHint_PromptPathEmitsSelectorsAndRecords(t *testing.T) {
 	}
 	if s := summary(t, f, root); s.ByOutcome[contexthints.OutcomeEmitted] != 1 {
 		t.Errorf("ledger = %+v, want one emitted row", s)
+	}
+	rows, err := f.ledger.Since(time.Time{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("ledger rows = %v, %v", rows, err)
+	}
+	if want := []string{"internal/cart/cart.go", "Cart.Total"}; !reflect.DeepEqual(rows[0].Emitted, want) {
+		t.Errorf("recorded emitted = %q, want %q (what the hint named)", rows[0].Emitted, want)
 	}
 }
 
@@ -320,7 +328,10 @@ func TestRenderContextHint(t *testing.T) {
 		{Selector: strings.Repeat("c", 150)},
 		{Selector: strings.Repeat("d", 150)},
 	}}
-	got := renderContextHint(res, 300, "")
+	got, shown := renderContextHint(res, 300, "")
+	if shown != 2 {
+		t.Errorf("shown = %d, want the 2 lines that fit", shown)
+	}
 	if len(got) > 300 {
 		t.Fatalf("rendered %d bytes, over the 300 budget", len(got))
 	}
@@ -335,7 +346,7 @@ func TestRenderContextHint(t *testing.T) {
 	if !strings.Contains(got, "more)") {
 		t.Errorf("no omission count in %q", got)
 	}
-	if renderContextHint(tools.HintResult{Lines: []tools.HintLine{{Selector: strings.Repeat("x", 500)}}}, 300, "") != "" {
+	if text, n := renderContextHint(tools.HintResult{Lines: []tools.HintLine{{Selector: strings.Repeat("x", 500)}}}, 300, ""); text != "" || n != 0 {
 		t.Error("a hint with no line that fits rendered a bare header")
 	}
 }

@@ -469,6 +469,36 @@ func (d *DB) CallDetail(workspace, sessionID string, calledAt time.Time) (inputJ
 	return
 }
 
+// InputsForAgent returns the input_json of the first limit calls the logical
+// agent made in (from, to], oldest first. It is the context-hint consumption
+// proxy's read: did a call soon after a hint mention what the hint named. An
+// agent of "" matches nothing — an unattributed row is no evidence about any
+// one agent. nil-safe.
+func (d *DB) InputsForAgent(agent string, from, to time.Time, limit int) ([]string, error) {
+	if d == nil || agent == "" || limit <= 0 {
+		return nil, nil
+	}
+	rows, err := d.db.Query(
+		`SELECT input_json FROM tool_calls
+		 WHERE called_at > ? AND called_at <= ? AND logical_agent = ?
+		 ORDER BY called_at LIMIT ?`,
+		from.UnixMilli(), to.UnixMilli(), agent, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("stats: inputs for agent: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var in string
+		if err := rows.Scan(&in); err != nil {
+			return nil, fmt.Errorf("stats: inputs for agent: %w", err)
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
 // TotalCalls returns the total number of recorded calls matching filter.
 func (d *DB) TotalCalls(filter Filter) int64 {
 	if d == nil {

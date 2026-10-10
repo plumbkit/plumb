@@ -27,6 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -80,6 +81,7 @@ type Observation struct {
 	Event        string // the host's hook event name
 	Source       string // SessionStart's source, when the host sent one
 	Seeds        []string
+	Emitted      []string // selectors the hint named (capped like Seeds): what consumption matches
 	EmittedBytes int
 	Duration     time.Duration
 	Outcome      Outcome
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS obs (
     event         TEXT    NOT NULL,
     source        TEXT    NOT NULL,
     seeds         TEXT    NOT NULL,
+    emitted       TEXT    NOT NULL DEFAULT '',
     emitted_bytes INTEGER NOT NULL,
     duration_ms   INTEGER NOT NULL,
     outcome       TEXT    NOT NULL,
@@ -161,6 +164,24 @@ func Open() (*Store, error) { return openAt(DBPath()) }
 // OpenAt opens (or creates) the ledger at an explicit path: for tests, and for
 // an isolated daemon whose data directory is elsewhere.
 func OpenAt(path string) (*Store, error) { return openAt(path) }
+
+// OpenReadOnly opens an existing ledger for reading only, as a report outside
+// the daemon does: it can never create the file, write a row or take the
+// writer's lock. A ledger that does not exist yet is (nil, nil), which every
+// read method treats as empty.
+func OpenReadOnly(path string) (*Store, error) {
+	if path == "" {
+		path = DBPath()
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	db, err := sqlitex.OpenReadOnly(path, sqlitex.ReadOnlyOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("contexthints: open read-only %s: %w", path, err)
+	}
+	return &Store{db: db}, nil
+}
 
 func openAt(path string) (*Store, error) {
 	// SyncNormal under WAL: a commit survives a process exit, which is the
@@ -222,7 +243,7 @@ func seedBytes(seeds []string) int {
 // rowSize is what one row counts against MaxBytesPerWorkspace.
 func rowSize(o Observation) int {
 	return rowOverhead + len(o.Workspace) + len(o.SessionID) + len(o.AgentID) + len(o.Host) +
-		len(o.HostVersion) + len(o.Event) + len(o.Source) + seedBytes(o.Seeds) + len(o.Detail)
+		len(o.HostVersion) + len(o.Event) + len(o.Source) + seedBytes(o.Seeds) + seedBytes(o.Emitted) + len(o.Detail)
 }
 
 func (o Observation) validate() error {
@@ -249,6 +270,7 @@ func (s *Store) Record(o Observation) error {
 		return nil
 	}
 	o.Seeds = capSeeds(o.Seeds)
+	o.Emitted = capSeeds(o.Emitted)
 	if err := o.validate(); err != nil {
 		return err
 	}
@@ -263,11 +285,11 @@ func (s *Store) Record(o Observation) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.Exec(`INSERT INTO obs (workspace, at_ms, session_id, agent_id, host, host_version, event, source,
-	                                       seeds, emitted_bytes, duration_ms, outcome, detail, size)
-	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	                                       seeds, emitted, emitted_bytes, duration_ms, outcome, detail, size)
+	                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		o.Workspace, o.At.UnixMilli(), o.SessionID, o.AgentID, o.Host, o.HostVersion, o.Event, o.Source,
-		strings.Join(o.Seeds, "\n"), o.EmittedBytes, o.Duration.Milliseconds(), string(o.Outcome), o.Detail,
-		rowSize(o)); err != nil {
+		strings.Join(o.Seeds, "\n"), strings.Join(o.Emitted, "\n"), o.EmittedBytes, o.Duration.Milliseconds(),
+		string(o.Outcome), o.Detail, rowSize(o)); err != nil {
 		return fmt.Errorf("contexthints: record: %w", err)
 	}
 	if err := enforceCaps(tx, o.Workspace, o.At); err != nil {
@@ -464,29 +486,48 @@ func (s *Store) Summary(workspace string) (Summary, error) {
 
 // recent returns a workspace's newest n observations, newest first.
 func (s *Store) recent(workspace string, n int) ([]Observation, error) {
+	return s.query(`WHERE workspace=? ORDER BY at_ms DESC, id DESC LIMIT ?`, workspace, n)
+}
+
+// Since returns every observation at or after since, oldest first, across all
+// workspaces: the input to an uptake report. nil-safe.
+func (s *Store) Since(since time.Time) ([]Observation, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return s.query(`WHERE at_ms >= ? ORDER BY at_ms, id`, since.UnixMilli())
+}
+
+func (s *Store) query(where string, args ...any) ([]Observation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	q, err := s.db.Query(`SELECT at_ms, session_id, agent_id, host, host_version, event, source, seeds,
-	                             emitted_bytes, duration_ms, outcome, detail
-	                      FROM obs WHERE workspace=? ORDER BY at_ms DESC, id DESC LIMIT ?`, workspace, n)
+	//nolint:gosec // G202: where is a fixed fragment from this file; values are bound
+	q, err := s.db.Query(`SELECT workspace, at_ms, session_id, agent_id, host, host_version, event, source, seeds,
+	                             emitted, emitted_bytes, duration_ms, outcome, detail
+	                      FROM obs `+where, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("contexthints: read: %w", err)
 	}
 	defer q.Close()
 	var out []Observation
 	for q.Next() {
 		var o Observation
 		var at, dur int64
-		var seeds, outcome string
-		if err := q.Scan(&at, &o.SessionID, &o.AgentID, &o.Host, &o.HostVersion, &o.Event, &o.Source, &seeds,
-			&o.EmittedBytes, &dur, &outcome, &o.Detail); err != nil {
-			return nil, err
+		var seeds, emitted, outcome string
+		if err := q.Scan(&o.Workspace, &at, &o.SessionID, &o.AgentID, &o.Host, &o.HostVersion, &o.Event, &o.Source,
+			&seeds, &emitted, &o.EmittedBytes, &dur, &outcome, &o.Detail); err != nil {
+			return nil, fmt.Errorf("contexthints: read: %w", err)
 		}
-		o.Workspace, o.At, o.Duration, o.Outcome = workspace, time.UnixMilli(at), time.Duration(dur)*time.Millisecond, Outcome(outcome)
-		if seeds != "" {
-			o.Seeds = strings.Split(seeds, "\n")
-		}
+		o.At, o.Duration, o.Outcome = time.UnixMilli(at), time.Duration(dur)*time.Millisecond, Outcome(outcome)
+		o.Seeds, o.Emitted = splitLines(seeds), splitLines(emitted)
 		out = append(out, o)
 	}
 	return out, q.Err()
+}
+
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
 }

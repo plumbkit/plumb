@@ -173,7 +173,7 @@ func (c *contextHintService) serve(ctx context.Context, req contextHintRequest) 
 	_ = c.ledger.Record(contexthints.Observation{
 		At: start, Workspace: c.ledgerRoot(req), SessionID: req.SessionID, AgentID: req.AgentID,
 		Host: req.Host, HostVersion: req.HostVersion, Event: req.Event, Source: req.Source,
-		Seeds: seedStrings(seeds), EmittedBytes: len(text), Duration: c.now().Sub(start),
+		Seeds: seedStrings(seeds), Emitted: emittedIf(outcome, d.emitted), EmittedBytes: len(text), Duration: c.now().Sub(start),
 		Outcome: outcome, Detail: detail,
 	})
 	return contextHintReply{Outcome: outcome, Text: text}
@@ -196,6 +196,16 @@ type hintDecision struct {
 	detail  string
 	text    string
 	seeds   []tools.ContextSeed
+	emitted []string // the selectors the rendered text names
+}
+
+// emittedIf returns the named selectors only for a hint that was emitted: a
+// refused or failed one named nothing to the agent.
+func emittedIf(o contexthints.Outcome, sels []string) []string {
+	if o != contexthints.OutcomeEmitted {
+		return nil
+	}
+	return sels
 }
 
 func noopHint(detail string) hintDecision {
@@ -256,8 +266,8 @@ func (c *contextHintService) compose(ctx context.Context, req contextHintRequest
 	if root.Inherited {
 		note = inheritedRootNote
 	}
-	if text := renderContextHint(res, c.limits.PerTurn, note); text != "" {
-		return hintDecision{text: text, seeds: seeds}
+	if text, shown := renderContextHint(res, c.limits.PerTurn, note); text != "" {
+		return hintDecision{text: text, seeds: seeds, emitted: lineSelectors(res.Lines[:shown])}
 	}
 	if ruleOnly {
 		return hintDecision{text: subagentRule, seeds: seeds}
@@ -399,10 +409,25 @@ func hintField(s string) string {
 	return s
 }
 
-// renderContextHint renders a hint within maxBytes, keeping only whole lines.
-// note, when set, is a fixed label line under the header. A hint with no line
-// that fits renders as "": a bare header names nothing.
-func renderContextHint(res tools.HintResult, maxBytes int, note string) string {
+// lineSelectors is what each hint line names: its selector, or its path when it
+// has none.
+func lineSelectors(lines []tools.HintLine) []string {
+	out := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if s := hintField(l.Selector); s != "" {
+			out = append(out, s)
+		} else if p := hintField(l.Path); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// renderContextHint renders a hint within maxBytes, keeping only whole lines,
+// and reports how many of res.Lines it showed (always a prefix). note, when
+// set, is a fixed label line under the header. A hint with no line that fits
+// renders as "": a bare header names nothing.
+func renderContextHint(res tools.HintResult, maxBytes int, note string) (string, int) {
 	var b strings.Builder
 	b.WriteString(hintHeader)
 	b.WriteString(note)
@@ -433,12 +458,12 @@ func renderContextHint(res tools.HintResult, maxBytes int, note string) string {
 		shown++
 	}
 	if shown == 0 {
-		return ""
+		return "", 0
 	}
 	if more := len(res.Lines) - shown + res.Omitted; more > 0 {
 		fmt.Fprintf(&b, "(+%d more)\n", more)
 	}
-	return b.String()
+	return b.String(), shown
 }
 
 // handleContextHintCommand answers `context-hint <json>` on the control
