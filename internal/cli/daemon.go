@@ -398,7 +398,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		}()
 		diagsFn := func(workspace string) string { return workspaceDiagnostics(pool, workspace) }
 		// Advisory context hints (PLAN-462): the collector arrives with Slice A.
-		contextHint, closeHints := startContextHints(ctx, registry, nil)
+		contextHint, closeHints := startContextHints(ctx, registry, nil, func() bool { return store.Current().Context.Hints })
 		defer closeHints()
 		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, ctrlHandlers{
 			diags:         diagsFn,

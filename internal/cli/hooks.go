@@ -79,12 +79,23 @@ named one. Only plumb's own handlers go — hooks the user wrote on the same
 events survive, the file is backed up first, and a client plumb has no hooks in
 is a no-op. Hooks installed by an earlier plumb, including the hand-installed
 shell scripts plumb's own recipe documented, are recognised and removed too;
-script files on disk are left alone.`,
+script files on disk are left alone.
+
+--only context removes just the advisory context-hint handlers
+(UserPromptSubmit, SubagentStart) and leaves session linkage, mailbox and
+identity hooks in place. The SessionStart handler also carries the session
+linkage, so it stays; [context] hints = false or PLUMB_CONTEXT_HINTS=off
+silences the hint it adds.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error { return runHooksUninstall(args) },
 }
 
+// hooksUninstallOnly narrows `plumb hooks uninstall` to one group of handlers.
+var hooksUninstallOnly string
+
 func init() {
+	hooksUninstallCmd.Flags().StringVar(&hooksUninstallOnly, "only", "",
+		"remove only this group of plumb's handlers: context")
 	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd)
 }
 
@@ -160,6 +171,10 @@ func runHooksInstall(args []string) error {
 // registration: removing a registration and then being unable to remove its
 // hooks would be the wrong way round.
 func runHooksUninstall(args []string) error {
+	only, err := hooksUninstallScope(hooksUninstallOnly)
+	if err != nil {
+		return err
+	}
 	PrintLogo()
 	targets, _, err := resolveHooksTargets(args, false)
 	if err != nil {
@@ -177,12 +192,17 @@ func runHooksUninstall(args []string) error {
 			report.clientError(t, err)
 			continue
 		}
-		removed, err := removeHooksAt(path, t.ours)
+		before = only.states(before)
+		removed, err := removeHooksAt(path, only.ownership(t.ours))
 		if err != nil {
 			report.clientError(t, err)
 			continue
 		}
 		report.group(t, path, before, uninstallAction)
+		if only.events != nil {
+			report.note(fmt.Sprintf("%s: the SessionStart hook stays (it also links the session); "+
+				"set [context] hints = false or PLUMB_CONTEXT_HINTS=off to silence its hint.", t.name))
+		}
 		// Every handler plumb owns goes, including one an older plumb installed
 		// on an event this version no longer writes. Saying so keeps the count
 		// in the output honest when it exceeds the rows above.

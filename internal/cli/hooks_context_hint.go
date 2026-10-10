@@ -13,8 +13,10 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -98,6 +100,49 @@ func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest)
 		return ""
 	}
 	return string(out) + "\n"
+}
+
+// contextHintEvents are the hook events that exist only for context hints, and
+// so are what `plumb hooks uninstall --only context` removes. SessionStart is
+// not among them: its handler also links the session.
+var contextHintEvents = []string{"UserPromptSubmit", "SubagentStart"}
+
+// uninstallScope narrows an uninstall to some events; nil events is everything.
+type uninstallScope struct{ events []string }
+
+func hooksUninstallScope(only string) (uninstallScope, error) {
+	switch only {
+	case "":
+		return uninstallScope{}, nil
+	case "context":
+		return uninstallScope{events: contextHintEvents}, nil
+	}
+	return uninstallScope{}, fmt.Errorf("unknown --only %q: supported: context", only)
+}
+
+// ownership narrows an ownership test to the scope's events.
+func (u uninstallScope) ownership(ours ownershipTest) ownershipTest {
+	if u.events == nil {
+		return ours
+	}
+	return func(event string, h map[string]any) bool {
+		return slices.Contains(u.events, event) && ours(event, h)
+	}
+}
+
+// states keeps the status rows the scope covers, so the report lists only what
+// this uninstall touched.
+func (u uninstallScope) states(all []hookState) []hookState {
+	if u.events == nil {
+		return all
+	}
+	var out []hookState
+	for _, s := range all {
+		if slices.Contains(u.events, s.entry.event) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // askContextHint asks the daemon for a hint and returns its text, or "" for

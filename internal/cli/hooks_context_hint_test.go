@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -99,6 +100,50 @@ func TestClaudeContextHintOutput(t *testing.T) {
 
 	if got := claudeContextHintOutput(in, func(contextHintRequest) string { return "" }); got != "" {
 		t.Errorf("a failed ask printed %q", got)
+	}
+}
+
+// `plumb hooks uninstall --only context` removes exactly the context-hint
+// handlers: the user's hooks on the same events, and plumb's linkage, mailbox
+// and identity hooks, all stay; a second run is a no-op.
+func TestUninstallOnlyContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	writeJSONFixture(t, path, map[string]any{"hooks": map[string]any{
+		"UserPromptSubmit": []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "mine.sh"}}}},
+	}})
+	if _, err := installHooksAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := hooksUninstallScope("context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := removeHooksAt(path, scope.ownership(claudeHookOwned))
+	if err != nil || removed != 2 {
+		t.Fatalf("removed %d (%v), want the 2 context-hint handlers", removed, err)
+	}
+	hooks := readHookJSON(t, path)["hooks"].(map[string]any)
+	if !hasCommand(hooks, "UserPromptSubmit", "mine.sh") {
+		t.Error("the user's UserPromptSubmit hook was removed")
+	}
+	if _, ok := hooks["SubagentStart"]; ok {
+		t.Error("plumb's SubagentStart handler survived")
+	}
+	states, err := hookStatesAt(path, claudeHookEntries("/opt/plumb"), claudeHookOwned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range states {
+		kept := !slices.Contains(contextHintEvents, s.entry.event)
+		if kept != (s.state == hookStateInstalled) {
+			t.Errorf("%s (%s) state = %q after --only context", s.entry.label, s.entry.event, s.state)
+		}
+	}
+	if again, err := removeHooksAt(path, scope.ownership(claudeHookOwned)); err != nil || again != 0 {
+		t.Errorf("second run removed %d (%v), want a no-op", again, err)
+	}
+	if _, err := hooksUninstallScope("everything"); err == nil {
+		t.Error("an unknown --only scope was accepted")
 	}
 }
 

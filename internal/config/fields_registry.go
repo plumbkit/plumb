@@ -254,6 +254,12 @@ var registryData = []Field{
 		Description: "Newest episodic-* markdown memories retained per workspace. 0 disables pruning.",
 	},
 
+	// --- Context ---
+	{
+		Key: "context.hints", Type: FieldBool, ReloadTier: ReloadLive,
+		Description: "Advisory context hints from lifecycle hooks: a few selectors and locations (never source) when a prompt names code, after a resume or compaction, and when a subagent starts. At most 1 KiB a turn and 8 KiB per agent. Default on; PLUMB_CONTEXT_HINTS=off also turns it off.",
+	},
+
 	// --- Collab ---
 	// All [collab] fields are ReloadLive: applyProjectConfig swaps the whole
 	// block into the session view on every attach / re-pin / reload, and every
