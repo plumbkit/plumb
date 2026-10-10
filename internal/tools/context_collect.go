@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // Seed kinds.
@@ -81,6 +79,12 @@ type contextPack struct {
 	// gap candidates; Expansion records what produced it and what it could not do.
 	Related   []contextRelated
 	Expansion contextExpansion
+	// Affected is the static test-impact estimate; Constraints are the memories and
+	// document sections retrieved as evidence; Have records what the caller's
+	// acknowledgements matched.
+	Affected    contextAffected
+	Constraints []contextConstraint
+	Have        haveStats
 }
 
 // budget is the byte limit for the rendered pack: max_bytes less the reserve the
@@ -94,12 +98,13 @@ func (p *contextPack) budget() int { return p.MaxBytes - contextReserveBytes }
 //
 // Concurrency: all methods are safe for concurrent use.
 type ContextCollector struct {
-	storeFn   func() *topology.Store
+	storeFor  TopologyForRootFn
 	ws        WorkspaceFn
 	guard     BoundaryGuard
 	contested ContestedFn
 	sensitive SensitivePathFn
-	deadline  time.Duration // zero means contextExpansionDeadline
+	testScope func(context.Context) TestScope // optional; without it test packages are named by directory
+	deadline  time.Duration                   // zero means contextExpansionDeadline
 }
 
 // SensitivePathFn reports whether a path's content must be withheld from a
@@ -108,11 +113,20 @@ type ContextCollector struct {
 // withholds nothing.
 type SensitivePathFn = func(ctx context.Context, path, from string) bool
 
-// NewContextCollector returns a collector over the topology store storeFn
-// supplies (it may return nil when indexing is disabled; symbol seeds are then
-// reported unresolved with that reason).
-func NewContextCollector(storeFn func() *topology.Store) *ContextCollector {
-	return &ContextCollector{storeFn: storeFn}
+// NewContextCollector returns a collector over the topology indexes storeFor
+// supplies, one per canonical root (it may return nil for a root with none, or
+// when indexing is disabled; symbol seeds are then reported unresolved with that
+// reason and the pack degrades rather than refusing).
+func NewContextCollector(storeFor TopologyForRootFn) *ContextCollector {
+	return &ContextCollector{storeFor: storeFor}
+}
+
+// WithTestScope wires the accessor for the calling agent's test-command shape, so
+// an affected package is named by the target run_task accepts. Without it the
+// directory is named and no command is guessed, as topology_affected does.
+func (c *ContextCollector) WithTestScope(fn func(context.Context) TestScope) *ContextCollector {
+	c.testScope = fn
+	return c
 }
 
 // WithWorkspace wires the per-agent workspace accessor. Without a workspace the
@@ -150,49 +164,6 @@ func (c *ContextCollector) expansionDeadline() time.Duration {
 		return c.deadline
 	}
 	return contextExpansionDeadline
-}
-
-func (c *ContextCollector) store() *topology.Store {
-	if c.storeFn == nil {
-		return nil
-	}
-	return c.storeFn()
-}
-
-// contextIndex is the topology index as this call may use it. store is nil when
-// there is none, or when the one supplied belongs to a different root than the
-// calling agent's: foreign is then that other root, kept for the caller's own
-// bookkeeping and never shown, since naming another agent's root would disclose
-// it. Until the index is keyed by the agent's root, an index of another root is
-// refused rather than consulted, because every answer it gave would be about
-// someone else's tree.
-type contextIndex struct {
-	store   *topology.Store
-	foreign string
-}
-
-// indexFor applies that rule to the connection's store.
-func (c *ContextCollector) indexFor(root string) contextIndex {
-	store := c.store()
-	if store == nil {
-		return contextIndex{}
-	}
-	if sr := canonicalRoot(store.Root()); sr != root {
-		return contextIndex{foreign: sr}
-	}
-	return contextIndex{store: store}
-}
-
-// unavailable words why symbols cannot be resolved, or "" when they can.
-func (i contextIndex) unavailable(root string) string {
-	switch {
-	case i.foreign != "":
-		return fmt.Sprintf("the topology index belongs to another root, not this agent's (%s), so symbols cannot be "+
-			"resolved against it; call session_start with this workspace, or seed by file", root)
-	case i.store == nil:
-		return "no topology index is available, so symbols cannot be resolved"
-	}
-	return ""
 }
 
 // agentRoot resolves the calling agent's canonical root. An unpinned caller is
@@ -234,10 +205,13 @@ func (r *contextRequest) seedInputs() []seedInput {
 }
 
 // Collect resolves req's seeds under the calling agent's root, walks their
-// bounded neighbourhood and ranks it, then reads one snapshot of each file a body
-// is wanted from and slices the bodies from it. A refusal (no workspace, a
-// boundary violation, a directory seed, a document selector) is an error; a seed
-// that simply does not resolve is reported in the pack.
+// bounded neighbourhood and ranks it, estimates the affected tests, then reads one
+// snapshot of each file a body is wanted from and slices the bodies from it, and
+// finally retrieves the memories and document sections that bear on the seeds. A
+// refusal (no workspace, a boundary violation, a directory seed, a document
+// selector) is an error; a seed that simply does not resolve is reported in the
+// pack. Everything it reads is keyed by the agent's canonical root, never the
+// connection's.
 func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (contextPack, error) {
 	root, err := c.agentRoot(ctx)
 	if err != nil {
@@ -258,33 +232,50 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 			return contextPack{}, err
 		}
 	}
-	c.expand(ctx, &pack, scope, index, req)
+	// The graph work (the walk and the test-impact estimate) shares one wall-clock
+	// budget, so a slow index costs the call that much once, not twice.
+	graphCtx, cancel := context.WithTimeout(ctx, c.expansionDeadline())
+	defer cancel()
+	c.expand(ctx, graphCtx, &pack, scope, index, req)
+	c.affectedTests(graphCtx, &pack, scope, index)
 	bodyGaps := c.collectBodies(ctx, &pack, index.store)
 	pack.markStale()
-	pack.Gaps = append(collectGaps(req, index), bodyGaps...)
-	pack.Gaps = append(pack.Gaps, pack.relationGaps()...)
-	pack.Gaps = append(pack.Gaps, pack.unreadBodyGap()...)
-	pack.Gaps = append(pack.Gaps, coverageGap(index.store, pack.Seeds)...)
+	pack.applyHave(req.Have)
+	constraintGaps := c.constraints(ctx, &pack, scope, index, req)
+	pack.Gaps = pack.allGaps(index, bodyGaps, constraintGaps)
 	return pack, nil
+}
+
+// allGaps assembles the pack's disclosures in the order a reader needs them: what
+// the index can and cannot support first, then the bodies, the relationships, the
+// test estimate, the constraints and the acknowledgements.
+func (p *contextPack) allGaps(index contextIndex, bodyGaps, constraintGaps []string) []string {
+	gaps := append(collectGaps(index), bodyGaps...)
+	gaps = append(gaps, p.relationGaps()...)
+	gaps = append(gaps, p.affectedGaps()...)
+	gaps = append(gaps, constraintGaps...)
+	gaps = append(gaps, p.haveGaps()...)
+	gaps = append(gaps, p.unreadBodyGap()...)
+	return append(gaps, coverageGap(index.store, p.Seeds)...)
 }
 
 // expand walks the neighbourhood of the resolved seeds, but only when the index
 // can be trusted to describe it. A failing, missing or foreign index gets no walk
 // at all: a caller or callee read from a snapshot known to be behind is the
-// absence claim this tool exists not to make (C09b).
-func (c *ContextCollector) expand(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) {
-	if len(pack.Seeds) == 0 || index.store == nil || index.store.Health().Failing {
+// absence claim this tool exists not to make (C09b). graphCtx carries the call's
+// graph deadline; the summary that follows the walk is asked of ctx, so a walk
+// that ran out of time is still described truthfully.
+func (c *ContextCollector) expand(ctx, graphCtx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) {
+	if len(pack.Seeds) == 0 || !index.usable() {
 		return
 	}
-	walkCtx, cancel := context.WithTimeout(ctx, c.expansionDeadline())
-	defer cancel()
 	seedDirs := map[string]bool{}
 	for _, s := range pack.Seeds {
 		seedDirs[path.Dir(s.Path)] = true
 	}
 	ex := newExpander(index.store, scope, newRanker(req.Task, req.Intent, seedDirs), c.sensitiveFor(ctx, pack.Root))
-	ex.run(walkCtx, ex.addSeeds(walkCtx, pack.Seeds))
-	pack.Related = ex.finish(walkCtx)
+	ex.run(graphCtx, ex.addSeeds(graphCtx, pack.Seeds))
+	pack.Related = ex.finish(graphCtx)
 	pack.Expansion = ex.summarise(ctx, pack.Related)
 }
 
@@ -358,24 +349,18 @@ func absUnder(root, rel string) string {
 }
 
 // collectGaps lists what this pack cannot claim about the index it was built
-// from, and what a later slice adds. An index that is missing, another root's or
-// failing supports no relationship or test-impact claim at all, and the pack
-// says so in the words the cases require.
-func collectGaps(req contextRequest, index contextIndex) []string {
-	var gaps []string
+// from. An index that is missing, another root's or failing supports no
+// relationship or test-impact claim at all, and the pack says so in the words the
+// cases require.
+func collectGaps(index contextIndex) []string {
 	switch {
-	case index.foreign != "":
-		gaps = append(gaps, "topology index belongs to another root: symbol seeds and graph answers are refused, and its health is not reported", labelIndexFailing)
+	case index.mismatch:
+		return []string{"the topology index supplied for this root describes another root and was not consulted: symbol seeds and graph answers are unavailable", labelIndexFailing}
 	case index.store == nil:
-		gaps = append(gaps, "topology index unavailable: symbol seeds cannot be resolved and no relationship is known", labelIndexFailing)
-	default:
-		if note := indexHealthNote(index.store.Health(), time.Now()); note != "" {
-			gaps = append(gaps, note, labelIndexFailing)
-		}
+		return []string{"topology index unavailable: symbol seeds cannot be resolved and no relationship is known", labelIndexFailing}
 	}
-	gaps = append(gaps, "affected tests and constraints are not collected yet")
-	if len(req.Have) > 0 {
-		gaps = append(gaps, "have was accepted but is not applied yet")
+	if note := indexHealthNote(index.store.Health(), time.Now()); note != "" {
+		return []string{note, labelIndexFailing}
 	}
-	return gaps
+	return nil
 }

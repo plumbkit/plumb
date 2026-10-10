@@ -129,7 +129,7 @@ func (c *ContextCollector) seedSymbol(ctx context.Context, pack *contextPack, sc
 		}
 	}
 	if index.store == nil {
-		pack.miss(input, index.unavailable(pack.Root))
+		pack.miss(input, index.unavailable())
 		return nil
 	}
 	nodes, rerr := index.store.ResolveNodes(ctx, selector, hint)

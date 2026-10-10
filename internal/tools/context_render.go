@@ -25,6 +25,8 @@ const (
 	secSeeds
 	secRelated
 	secGapCandidates
+	secAffected
+	secConstraints
 	secGaps
 	secNext
 )
@@ -55,6 +57,8 @@ func (p *contextPack) lines() []packLine {
 	ls = append(ls, p.seedLines()...)
 	ls = append(ls, p.relatedLines()...)
 	ls = append(ls, p.gapCandidateLines()...)
+	ls = append(ls, p.affectedLines()...)
+	ls = append(ls, p.constraintLines()...)
 	ls = append(ls, p.gapLines()...)
 	return append(ls, p.nextLines()...)
 }
@@ -142,8 +146,12 @@ func (p *contextPack) bodyLine(i int) (packLine, bool) {
 // when it could fit alone in the budget under heading and its own line of lineLen
 // bytes; a body larger than anything the budget can hold becomes a handoff that
 // names the size and the snapshot it was taken from, so a later read can be
-// checked against it.
+// checked against it. A body the caller acknowledged holding is not offered at
+// all: its unit has no complete tier, so it is never a delivery.
 func (p *contextPack) readyUnit(b contextBody, heading string, lineLen int, call, sig string) *bodyUnit {
+	if b.Held {
+		return heldUnit(b, call)
+	}
 	meta := fmt.Sprintf("%d B, lines %d–%d", len(b.Text), b.Start, b.End)
 	head := fmt.Sprintf("    body lines %d–%d (%d B) content_sha256=%s", b.Start, b.End, len(b.Text), b.SHA)
 	gutter := strings.TrimSuffix(withLineGutter(b.Text, b.Start), "\n")

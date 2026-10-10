@@ -165,7 +165,7 @@ func TestContextForTask_DepthIsCappedAtTwoHops(t *testing.T) {
 			t.Errorf("%s is %d hops out, past the cap of %d", r.Node.Path, r.Dist, contextExpansionDepth)
 		}
 	}
-	if nodes, _ := s.collector.store().ResolveNodes(t.Context(), "D", topology.NodeHint{}); len(nodes) == 0 {
+	if nodes, _ := s.store.ResolveNodes(t.Context(), "D", topology.NodeHint{}); len(nodes) == 0 {
 		t.Fatal("control: D is not in the index, so its absence proves nothing")
 	}
 }
@@ -303,7 +303,7 @@ func resolveOne(t *testing.T, store *topology.Store, name string) topology.Node 
 // proves the other half can fail.
 func TestContextForTask_DerivedEdgesAreFollowedOnlyWhereTheCallGraphIsAdmitted(t *testing.T) {
 	s := newShop(t)
-	store := s.collector.store()
+	store := s.store
 	formatRow, exportCharges := resolveOne(t, store, "format_row"), resolveOne(t, store, "export_charges")
 	apply, lookup := resolveOne(t, store, "Apply"), resolveOne(t, store, "Lookup")
 	insertEdge(t, s.root, formatRow, exportCharges, sourceCallResolver, 0.9) // python: not admitted

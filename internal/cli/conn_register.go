@@ -332,8 +332,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	// collector carries no read tracker, so gathering a pack never records a read;
 	// the tool records, per agent, only the bodies it actually delivered. A body it
 	// reaches by expansion, rather than being named, is withheld under the same
-	// decision write responses and history take (changeSensitive).
-	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive)).
+	// decision write responses and history take (changeSensitive). Its index is
+	// keyed by the calling agent's root (topologyStoreForRoot), not by the
+	// connection's: a pack for an agent pinned elsewhere never reads this
+	// connection's index.
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(s.topologyStoreForRoot).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive).WithTestScope(s.testScope)).
 		WithReads(s.readTracker).WithReadsFor(s.readTrackerFor))
 }
 

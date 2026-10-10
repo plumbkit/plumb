@@ -43,7 +43,14 @@ func openShopStore(t *testing.T, root string) *topology.Store {
 // the extractors emit, which a hand-built index would only restate.
 func openContextStore(t *testing.T, root string, wantFiles int) *topology.Store {
 	t.Helper()
-	s, err := topology.Open(root, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+	return openContextStoreWith(t, root, wantFiles, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024})
+}
+
+// openContextStoreWith is openContextStore under a topology config, so a test can
+// exercise the scope the project's own configuration sets (exclude_patterns).
+func openContextStoreWith(t *testing.T, root string, wantFiles int, cfg config.TopologyConfig) *topology.Store {
+	t.Helper()
+	s, err := topology.Open(root, cfg,
 		[]topology.Extractor{goext.New(), treesitter.NewPython(), treesitter.NewMarkdown()})
 	if err != nil {
 		t.Fatalf("topology.Open: %v", err)
@@ -64,16 +71,29 @@ func openContextStore(t *testing.T, root string, wantFiles int) *topology.Store 
 // real store, pinned to root with a real boundary guard.
 type shopTool struct {
 	root      string // the workspace as the agent sees it
+	store     *topology.Store
 	collector *ContextCollector
 	tool      *ContextForTask
 }
 
+// storeForRoot is the root-keyed accessor the daemon provides, over one store: it
+// answers for that store's own root and for no other, as a pool keyed by root does.
+func storeForRoot(store *topology.Store) TopologyForRootFn {
+	return func(root string) *topology.Store {
+		if store != nil && canonicalRoot(store.Root()) == canonicalRoot(root) {
+			return store
+		}
+		return nil
+	}
+}
+
 func newShopTool(t *testing.T, store *topology.Store, root string) shopTool {
 	t.Helper()
-	collector := NewContextCollector(func() *topology.Store { return store }).
+	collector := NewContextCollector(storeForRoot(store)).
 		WithWorkspace(func(context.Context) string { return root }).
-		WithBoundary(testBoundaryGuard(root))
-	return shopTool{root: root, collector: collector, tool: NewContextForTask(collector)}
+		WithBoundary(testBoundaryGuard(root)).
+		WithTestScope(func(context.Context) TestScope { return TestScope{Language: "go", Style: TargetGoPackage} })
+	return shopTool{root: root, store: store, collector: collector, tool: NewContextForTask(collector)}
 }
 
 // newShop copies, indexes and wires the fixture in one step.

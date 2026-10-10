@@ -20,7 +20,9 @@ import (
 // because both are disclosures a reader needs in order to trust the seed list.
 // Bodies come after those disclosures: a pack that cannot afford a body still tells
 // the truth about what it left out. The best-ranked related declarations, each with
-// the body it may carry, follow the seeds' bodies; follow-up calls come next, and
+// the body it may carry, follow the seeds' bodies. The affected test packages come
+// next (they say what to run), then the constraints retrieved from memories and
+// documents (evidence a reader should have, not code), then follow-up calls, and
 // the one-line pointers for the rest of the ranked list last.
 const (
 	prioHeader = iota
@@ -28,6 +30,8 @@ const (
 	prioDetail
 	prioBody
 	prioRelTop
+	prioAffected
+	prioConstraint
 	prioNext
 	prioRelRest
 )
@@ -42,10 +46,12 @@ const (
 	classNext
 	classBody
 	classRelated
+	classAffected
+	classConstraint
 	classCount
 )
 
-var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body", "related"}
+var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body", "related", "affected", "constraint"}
 
 // omissions counts dropped records by class.
 type omissions [classCount]int
@@ -58,10 +64,13 @@ func (o omissions) total() int {
 	return n
 }
 
-// packLine is one record. A plain line has only text. A body unit (body != nil)
-// is shown at the richest fidelity that fits.
+// packLine is one record. A plain line has only text, and may list alts: leaner
+// renderings of the same record, tried in order when text does not fit. A body
+// unit (body != nil) is shown at the richest fidelity that fits, and is the only
+// kind of record whose delivery counts as a read.
 type packLine struct {
 	text    string
+	alts    []string
 	prio    int
 	section int
 	heading bool
@@ -121,7 +130,7 @@ func packContextLines(lines []packLine, budget int) string {
 // complete body. guardDone says which files' guard lines are already printed.
 func (l packLine) tiers(guardDone map[int]bool) (texts []string, complete bool) {
 	if l.body == nil {
-		return []string{l.text}, false
+		return append([]string{l.text}, l.alts...), false
 	}
 	if l.body.full != "" {
 		first := l.body.full

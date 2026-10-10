@@ -136,7 +136,7 @@ func TestContextForTask_OnlyReferencesIsNotASeed(t *testing.T) {
 // selector is, for every case that has a declaration to choose.
 func TestContextForTask_ClassifiesAsTheTopologyResolverDoes(t *testing.T) {
 	s := newShop(t)
-	store := s.collector.store()
+	store := s.store
 	for _, sel := range []string{"Total", "Cart.Add", "Apply", "Nonesuch"} {
 		res, err := store.ResolveSelector(t.Context(), sel, topology.NodeHint{})
 		if err != nil {
@@ -160,13 +160,15 @@ func TestContextForTask_ClassifiesAsTheTopologyResolverDoes(t *testing.T) {
 	}
 }
 
-// M1: an index opened for one root says nothing true about another. Symbol seeds
-// are refused with a session_start handoff, naming nothing of the other root;
-// file seeds still work from the disk snapshot.
-func TestContextForTask_IndexOfAnotherRootIsRefusedForSymbols(t *testing.T) {
+// M1, replaced by root-keyed access (Invariant 3): an index opened for one root says
+// nothing true about another, so a root with no index of its own degrades instead
+// of borrowing one. Symbol seeds are unresolved with a label, naming nothing of
+// the other root; file seeds still work from the disk snapshot; the call is not
+// refused.
+func TestContextForTask_ARootWithNoIndexDegradesAndNeverBorrowsAnother(t *testing.T) {
 	rootX, rootY := copyShopFixture(t), copyShopFixture(t)
 	storeX := openShopStore(t, rootX)
-	agentY := newShopTool(t, storeX, rootY)
+	agentY := newShopTool(t, storeX, rootY) // the accessor answers for rootX only
 	args := map[string]any{"files": []string{"cart/cart.go"}, "symbols": []string{"cart/cart.go#Cart.Add", "Total"}}
 
 	pack := agentY.collect(t, args)
@@ -174,12 +176,46 @@ func TestContextForTask_IndexOfAnotherRootIsRefusedForSymbols(t *testing.T) {
 		t.Fatalf("seeds = %v, want only the file seed", got)
 	}
 	if len(pack.Misses) != 2 {
-		t.Fatalf("want both symbol seeds refused, got %+v", pack.Misses)
+		t.Fatalf("want both symbol seeds unresolved, got %+v", pack.Misses)
 	}
 	for _, m := range pack.Misses {
-		if !strings.Contains(m.Reason, "belongs to another root") || !strings.Contains(m.Reason, "session_start") || len(m.Candidates) != 0 {
-			t.Errorf("refusal %+v lacks the other-root reason, the session_start handoff, or leaks candidates", m)
+		if !strings.Contains(m.Reason, "no topology index is available for this root") || len(m.Candidates) != 0 {
+			t.Errorf("miss %+v lacks the no-index label, or leaks candidates from another root's index", m)
 		}
+	}
+	out, err := agentY.run(t, args)
+	if err != nil {
+		t.Fatalf("a root with no index must degrade, not be refused: %v", err)
+	}
+	if strings.Contains(out, canonicalRoot(rootX)) || strings.Contains(out, rootX) {
+		t.Errorf("the other root's path is disclosed:\n%s", out)
+	}
+	if !strings.Contains(out, "topology index unavailable") || strings.Contains(out, "index health") {
+		t.Errorf("the gap must say there is no index for this root, and report none of another's health:\n%s", out)
+	}
+	if !strings.Contains(out, "file cart/cart.go") {
+		t.Errorf("the file seed must still be served from the disk:\n%s", out)
+	}
+	// Control: the same store served to the agent whose root it is resolves.
+	agentX := newShopTool(t, storeX, rootX)
+	if own := agentX.collect(t, args); len(own.Seeds) != 2 {
+		t.Errorf("control: the index's own agent got seeds=%v misses=%+v", seedPaths(own), own.Misses)
+	}
+}
+
+// Defence in depth: an accessor that hands back a store of some other root (the
+// wiring mistake this invariant exists against) is not consulted, and the pack
+// labels it without naming that root.
+func TestContextForTask_AnAccessorThatReturnsAnotherRootsStoreIsNotConsulted(t *testing.T) {
+	rootX, rootY := copyShopFixture(t), copyShopFixture(t)
+	storeX := openShopStore(t, rootX)
+	agentY := newShopTool(t, storeX, rootY)
+	agentY.collector.storeFor = func(string) *topology.Store { return storeX } // ignores the root it was asked for
+	args := map[string]any{"symbols": []string{"cart/cart.go#Cart.Add"}}
+
+	pack := agentY.collect(t, args)
+	if len(pack.Seeds) != 0 || len(pack.Misses) != 1 || !strings.Contains(pack.Misses[0].Reason, "describes another root") {
+		t.Fatalf("want one unresolved symbol labelled as another root's index, got seeds=%v misses=%+v", seedPaths(pack), pack.Misses)
 	}
 	out, err := agentY.run(t, args)
 	if err != nil {
@@ -187,14 +223,6 @@ func TestContextForTask_IndexOfAnotherRootIsRefusedForSymbols(t *testing.T) {
 	}
 	if strings.Contains(out, canonicalRoot(rootX)) || strings.Contains(out, rootX) {
 		t.Errorf("the other root's path is disclosed:\n%s", out)
-	}
-	if !strings.Contains(out, "topology index belongs to another root") || strings.Contains(out, "index health") {
-		t.Errorf("the gap must say the index is another root's, and report none of its health:\n%s", out)
-	}
-	// Control: the same store served to the agent whose root it is resolves.
-	agentX := newShopTool(t, storeX, rootX)
-	if own := agentX.collect(t, args); len(own.Seeds) != 2 {
-		t.Errorf("control: the index's own agent got seeds=%v misses=%+v", seedPaths(own), own.Misses)
 	}
 }
 
