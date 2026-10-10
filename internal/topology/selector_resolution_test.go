@@ -66,7 +66,8 @@ func TestResolveSelector_ReceiverFormsAreOne(t *testing.T) {
 }
 
 // A declaration outranks the imports and package clauses that merely share its
-// name; with no declaration, the references are what there is.
+// name, and the references it set aside are disclosed in Shadowed; with no
+// declaration, the references are what there is and nothing is shadowed.
 func TestResolveSelector_DeclarationsOutrankReferences(t *testing.T) {
 	db, err := openDB(filepath.Join(t.TempDir(), "refs.db"))
 	if err != nil {
@@ -78,13 +79,33 @@ func TestResolveSelector_DeclarationsOutrankReferences(t *testing.T) {
 	insertTestNode(t, db, a, "a/a.go", Node{Kind: KindImport, Name: "stats", Language: "go"})
 	insertTestNode(t, db, b, "b/b.go", Node{Kind: KindImport, Name: "stats", Language: "go"})
 	refs, err := ResolveSelector(context.Background(), db, "stats", NodeHint{})
-	if err != nil || refs.Kind != ResolutionAmbiguous || len(refs.Candidates) != 2 {
-		t.Fatalf("references only = %+v, %v; want ambiguous between the two imports", refs, err)
+	if err != nil || refs.Kind != ResolutionAmbiguous || len(refs.Candidates) != 2 || len(refs.Shadowed) != 0 {
+		t.Fatalf("references only = %+v, %v; want ambiguous between the two imports, nothing shadowed", refs, err)
 	}
 	insertTestNode(t, db, b, "b/b.go", Node{Kind: KindFunction, Name: "stats", Language: "go"})
 	decl, err := ResolveSelector(context.Background(), db, "stats", NodeHint{})
 	if err != nil || decl.Kind != ResolutionOne || decl.Node.Kind != KindFunction {
 		t.Fatalf("with a declaration = %+v, %v; want the one function", decl, err)
+	}
+	if len(decl.Shadowed) != 2 || decl.Shadowed[0].Kind != KindImport || decl.Shadowed[1].Kind != KindImport {
+		t.Fatalf("shadowed = %+v; want the two imports the function outranked", decl.Shadowed)
+	}
+	insertTestNode(t, db, a, "a/a.go", Node{Kind: KindFunction, Name: "stats", Language: "go"})
+	amb, err := ResolveSelector(context.Background(), db, "stats", NodeHint{})
+	if err != nil || amb.Kind != ResolutionAmbiguous || len(amb.Candidates) != 2 || len(amb.Shadowed) != 2 {
+		t.Fatalf("two declarations = %+v, %v; want ambiguous between them, both imports shadowed", amb, err)
+	}
+}
+
+// A selector with no reference among its matches shadows nothing.
+func TestResolveSelector_NothingShadowedWithoutReferences(t *testing.T) {
+	db := seedTwoSameName(t)
+	defer db.Close()
+	for _, sel := range []string{"AChild", "Target"} {
+		r, err := ResolveSelector(context.Background(), db, sel, NodeHint{})
+		if err != nil || r.Shadowed != nil {
+			t.Errorf("%q shadowed = %+v, %v; want none", sel, r.Shadowed, err)
+		}
 	}
 }
 
