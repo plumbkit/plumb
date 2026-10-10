@@ -18,6 +18,8 @@ import (
 // evidenceName is the word that goes beside an evidence ordinal.
 func evidenceName(e int) string {
 	switch e {
+	case evidenceLSP:
+		return "lsp"
 	case evidenceExtractor:
 		return "extractor"
 	case evidenceDerived:
@@ -62,13 +64,18 @@ func gapText(r contextRelated) string {
 }
 
 func (p *contextPack) relatedHeading() string {
-	n := 0
+	n, lsp := 0, false
 	for _, r := range p.Related {
 		if !r.Gap {
 			n++
 		}
+		lsp = lsp || r.Evidence == evidenceLSP
 	}
-	return fmt.Sprintf("related (%d, ranked; e3 extractor edge, e2 derived edge, e1 heuristic edge):", n)
+	legend := "e3 extractor edge, e2 derived edge, e1 heuristic edge"
+	if lsp {
+		legend = "e4 language-server edge, " + legend
+	}
+	return fmt.Sprintf("related (%d, ranked; %s):", n, legend)
 }
 
 const gapCandidateHeading = "gap candidates (e0, unconfirmed; the call graph cannot say whether they call the seeds):"

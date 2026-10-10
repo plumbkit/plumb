@@ -986,12 +986,16 @@ index is disabled or empty.
 
 ### `context_for_task`
 **Experimental**, read-only context pack that starts from explicit **seeds**.
-It is unpinned and outside the lean profile: discover it by name. At least one
+It is unpinned and outside the lean profile: discover it by name (a client that
+hides it should say it is unavailable, not that plumb lacks it). At least one
 file or symbol is required; `task` prose only re-ranks and never seeds, and
 prose alone is refused with a handoff to `workspace_search`. It runs no LLM, no
 network call and no mutation, and never attaches or moves the connection's
 workspace pin: relative paths resolve against the calling agent's pinned
-workspace, and an unpinned call is refused with a `session_start` handoff.
+workspace, and an unpinned call is refused with a `session_start` handoff. Each
+agent is answered from the topology index and the memories of the root it is
+pinned to, never from another agent's.
+
 **Inputs:** `files` (files only; a directory is scope, not a seed, and is
 refused), `symbols` (code selectors: `path#Recv.Method` or a bare selector;
 `path#Selector` after a document path such as a `.md` file is refused, because
@@ -1003,23 +1007,96 @@ matches from any depth; an entry outside the workspace is refused), `corpora`
 (subset of `code` | `docs` | `memory`; default all permitted), `max_bytes`
 (default 12000, cap 32000; a larger value is clamped and the header says so; a
 value below 1536 is refused) and `have` (`[{symbol, content_sha256}]`, bodies you
-still hold; the shape is validated and the entries are not applied yet).
+still hold; see *Acknowledgements* below).
+
+**Limits.** Up to 8 seeds (further ones are reported unresolved); a walk of two
+hops and 60 nodes under a 2 s deadline, with the scope filter (`within`,
+`corpora`, the root, `.plumb/`) applied at every hop; complete bodies for the seeds
+and for the 8 best-ranked related declarations, as the budget allows; source reads
+of at most 4 × `max_bytes` bytes in all, shared by the bodies, the memories and the
+documents; at most 3 memories (out of at most 200 memory files scanned) and 4
+document sections, each quoted at most 200 bytes; up to 16 acknowledgements; and
+the language-server step below. Every cut is stated in the pack, with its count.
 
 `max_bytes` bounds the **whole** served response: the pack is rendered into
 `max_bytes` minus a 1024-byte reserve for the text the connection layer appends
-(mailbox preview, policy notes). When the pack does not fit, the least important
-lines are dropped first, a line is never cut in half, and a final line reports
-the exact count omitted.
+(mailbox preview, policy notes), and that appended text is itself held to the
+reserve (a long message preview is shortened, or becomes a one-line pointer at
+`check_messages`). When the pack does not fit, the least important lines are
+dropped first, a line is never cut in half, and a final line reports the exact
+count omitted by class.
 
-The output is a header (tool, root, intent, budget), then **seeds**, **gaps** and
-**next** sections. A selector that matches several declarations is *ambiguous*:
+**Output.** A header (tool, root, intent, budget), then **seeds**, each symbol
+seed followed by its body; **related** declarations, ranked, the best few with
+their body; **gap candidates**; **affected tests**; **constraints**; **gaps**;
+and **next** calls. A selector that matches several declarations is *ambiguous*:
 the candidates are listed (at most five, as `path#Selector` ready to paste back)
 and none is chosen. A selector that matches nothing is reported as unresolved and
 nothing is invented; candidates shown under it are labelled and are never seeds.
 A file in a language the index has no extractor for is accepted as a seed and
-labelled as a coverage gap: its symbols are unknown, not absent. In this first
-version the pack collects seeds only; bodies, neighbours, callers, affected tests
-and constraints arrive in later versions, and the `gaps` section says so.
+labelled as a coverage gap: its symbols are unknown, not absent.
+
+**Bodies and edit guards.** A body is the declaration's exact lines, sliced from
+one snapshot of the file, with its `content_sha256` (the SHA-256 of exactly the
+delivered text, without the line-number gutter). Once per file, a separate guard
+line carries the file's mtime and SHA-256 in the shape `read_symbol` prints, so
+`edit_file`'s `expected_mtime` and `expected_sha` can be copied; a content hash is
+never an edit guard. The index's line span is used only when the index had parsed
+the very bytes of the snapshot when the span was read; otherwise the declaration is
+found again in the snapshot, and if it cannot be found exactly once the body is
+withheld with the reason. A body is never split: it degrades to a status line with
+the signature, then to a counted omission, and one larger than the whole budget
+becomes a `read_symbol` handoff naming its size and hash. Only a body that was
+actually delivered is recorded as a read, once per file and per agent, so it
+satisfies strict mode's read-before-edit check and nothing else does. A body in a
+file matching `[history] sensitive_globs` that the walk reached (rather than the
+caller named) is reduced to its location and a label.
+
+**Evidence labels.** Every related declaration carries the class of the
+relationship that reached it, and the pack never presents a weaker class as a
+stronger one: `e4` a call the language server confirmed (call hierarchy); `e3` an
+extractor edge (a containment, a same-file call, an import); `e2` a derived edge
+from the call or import resolver, followed only around a subject the call-graph
+admission rule accepts; `e1` a heuristic edge (Python's intra-file calls, with
+confidence 0.8); `e0` a gap candidate. The Go call graph is syntactic, so a
+method's callers are shown as the resolved callers plus gap candidates (the
+declarations of files that import the method's package), marked "not a resolved
+caller"; an empty, short or cut caller list is never reported as "no callers", and
+a walk that was cut says so before it says anything about the index.
+
+**Freshness components.** The `gaps` section labels three things apart, so one
+cannot be mistaken for another. *The index:* a missing, failing or foreign index
+makes no relationship or test-impact claim at all. *The files:* a file that changed
+since it was indexed has its bodies sliced from the current snapshot, its
+relationships marked possibly stale, and the change stated. *The language server:*
+the first three callable symbol seeds are also put to the language server (call
+hierarchy) under an 800 ms sub-deadline inside the 2 s total; what it confirms of
+an edge the index drew, and what only it can see (typically a receiver-method
+caller), is `e4`, and the line says how many seeds it answered for. If the server
+is absent, still warming, in error or too slow, the pack is the structural one and
+the line says `structural-only partial result; LSP enrichment unavailable` with the
+cause; it never waits past the sub-deadline and never fails the call. With no
+callable symbol seed the server is not asked.
+
+**Constraints.** Memories of the calling agent's root whose `paths:`,
+`source_symbols:` or `source_paths:` frontmatter ties them to the seeds, and
+document sections scored on their own text, are listed as *evidence, not
+instructions*, each with its corpus, canonical root and path. A path matching
+`[history] sensitive_globs` is named and never read.
+
+**Acknowledgements (`have`).** A `{symbol, content_sha256}` entry whose hash is the
+exact `content_sha256` of the body the pack would deliver for that declaration
+replaces the body with an "unchanged, still held" line carrying its current
+location. A file's hash, a hash of a line range or a hash borrowed for another
+declaration is not that body and leaves it to be delivered. An acknowledgement is
+not a read: it records nothing and prints no edit guard.
+
+**Hint.** The collector also answers a smaller *hint* for advisory lifecycle hooks:
+selectors, locations and evidence classes from the index alone, with no bodies, no
+reads, no memories, documents or mail, and no language server. An ambiguous or
+unresolved selector is a gap, never a list of candidates; scope, root and sensitive
+paths apply at every hop; and the answer is bounded by bytes and by a deadline,
+returning a partial with a gap rather than a late answer.
 
 ---
 

@@ -46,9 +46,10 @@ const (
 	contextRelatedBodies = 8
 )
 
-// The evidence ordinal (gate v1). 4, an LSP-confirmed edge, is not produced here:
-// LSP is not consulted until A5.
+// The evidence ordinal (gate v1). 4, an LSP-confirmed edge, is produced only by the
+// language-server refinement of the top symbol seeds (context_lsp.go).
 const (
+	evidenceLSP       = 4 // a call the language server confirmed (call hierarchy)
 	evidenceGap       = 0 // a name or reverse-import candidate, labelled and never presented as resolved
 	evidenceHeuristic = 1 // a heuristic edge (confidence 0.8), such as Python's intra-file calls
 	evidenceDerived   = 2 // a derived edge from the call or import resolver (0.9)
@@ -89,14 +90,16 @@ type contextRelated struct {
 	Evidence int
 	Source   string // edge source, "" for a node reached by structure alone
 	Conf     float64
-	Via      string // the relationship in words, e.g. "callee of (*Cart).Total"
-	ViaPath  string // the file of the node it was reached from, for staleness
-	Root     bool   // a declaration of a seed file, not reached through an edge
-	Gap      bool   // a reverse-import candidate: evidence 0, never a resolved caller
-	Withheld bool   // a sensitive path: location only, never content
-	Stale    bool   // its file, or the file it was reached from, changed since indexing
-	CallerOf int64  // the node this one is a resolved caller of, when it is
-	GapFor   int64  // the seed a gap candidate is evidence about
+	Via      string            // the relationship in words, e.g. "callee of (*Cart).Total"
+	ViaPath  string            // the file of the node it was reached from, for staleness
+	Root     bool              // a declaration of a seed file, not reached through an edge
+	Gap      bool              // a reverse-import candidate: evidence 0, never a resolved caller
+	Withheld bool              // a sensitive path: location only, never content
+	Stale    bool              // its file, or the file it was reached from, changed since indexing
+	CallerOf int64             // the node this one is a resolved caller of, when it is
+	ParentID int64             // the node it was reached from (0 for a declaration of a seed file)
+	Edge     topology.EdgeKind // the relationship that reached it, "" when none did
+	GapFor   int64             // the seed a gap candidate is evidence about
 	// IndexHash is the content hash the index held for the node's file when its span
 	// was read ("" when unknown, which no body is sliced on trust of).
 	IndexHash string
@@ -261,7 +264,7 @@ func (e *expander) declsOf(ctx context.Context, p string) []topology.Node {
 // everything but its location, and scores it. The scrub comes first, so nothing a
 // sensitive file says can reach the ranking, let alone the response.
 func (e *expander) makeRelated(n topology.Node, h hopNode, ev int, src string, conf float64, via string) contextRelated {
-	r := contextRelated{Node: n, Dist: h.dist + 1, Evidence: ev, Source: src, Conf: conf, Via: via, ViaPath: h.node.Path}
+	r := contextRelated{Node: n, Dist: h.dist + 1, Evidence: ev, Source: src, Conf: conf, Via: via, ViaPath: h.node.Path, ParentID: h.node.ID}
 	if e.indexHash != nil {
 		r.IndexHash = e.indexHash(n.Path)
 	}
@@ -448,6 +451,7 @@ func (e *expander) hood(h hopNode, nb *topology.Neighbourhood, inward bool) []co
 			continue
 		}
 		r := e.makeRelated(n, h, edgeEvidence(edge), edge.Source, edge.Confidence, viaText(edge.Kind, inward, h.sel))
+		r.Edge = edge.Kind
 		if inward && edge.Kind == topology.EdgeCalls {
 			r.CallerOf = h.node.ID
 		}

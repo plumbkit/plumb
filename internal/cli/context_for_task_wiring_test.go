@@ -125,6 +125,20 @@ func TestContextForTask_ExpansionIsWiredToTheSensitivePathDecision(t *testing.T)
 	}
 }
 
+// The top symbol seeds are put to the language server through the connection's routing
+// proxy, so the real registration must hand the tool one: without it every pack with a
+// symbol seed would report LSP enrichment unavailable, however healthy the server.
+func TestContextForTask_RefinementIsWiredToTheLanguageServer(t *testing.T) {
+	_, tool := contextForTaskTool(t)
+	wired, ok := tool.(interface{ LSPWired() bool })
+	if !ok {
+		t.Fatalf("%T has no LSPWired", tool)
+	}
+	if !wired.LSPWired() {
+		t.Error("context_for_task is registered without a language server (the session's routing proxy)")
+	}
+}
+
 // An unpinned connection that calls the tool with an absolute file is refused
 // with a session_start handoff, and its pin is exactly as it was: the tool
 // resolves against an existing pin and never creates or moves one.

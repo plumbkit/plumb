@@ -4,119 +4,86 @@
 
 ### Added
 
-- **`context_for_task`, an experimental seeds-first context tool (PLAN-462,
-  first slice).** It takes at least one explicit `files` or `symbols` seed and
-  returns a bounded text pack: the resolved seeds, a gaps section and concrete
-  next calls. This first version collects seeds only; bodies, neighbours and
-  affected tests arrive in later slices, and the gaps section says so. Task prose
-  only re-ranks and never seeds, and prose alone is refused with a handoff to
-  `workspace_search`. A directory is refused ("a directory is scope, not a
-  seed"), a `path#Selector` after a document path is refused with a handoff to
-  `corpora`, and an unpinned call is refused with a `session_start` handoff: the
-  tool never attaches or moves a workspace pin, and its argument names (`files`,
-  `symbols`, `within`) are deliberately not pin seeds. A bare selector that
-  matches several declarations is reported as ambiguous with up to five
-  candidates and none chosen; a selector that matches nothing is reported as
-  unresolved with nothing invented; a file in a language the index cannot parse
-  is accepted and labelled as a coverage gap rather than as having no symbols.
-  `within` and `corpora` only narrow the pack. `max_bytes` (default 12000, cap
-  32000, clamped and disclosed above that) bounds the whole served response,
-  including a 1024-byte reserve for the connection layer's appended notes; when
-  the pack does not fit, the least important lines go first and the exact count
-  omitted is stated. The tool is unpinned and outside the lean profile, so a
-  client finds it by name.
-- **`context_for_task` delivers complete symbol bodies, with edit guards, inside a
-  strict budget (PLAN-462, second slice).** A resolved symbol seed now carries
-  its declaration's exact lines, sliced from one snapshot of the file. The index's
-  line span is trusted only when the index parsed those same bytes; when the file
-  has changed since it was indexed, the declaration is found again in the
-  snapshot's own bytes (and the pack says the file changed), and if it cannot be
-  found exactly once the body is withheld with a precise reason, never sliced from
-  a stale span. Each body prints its `content_sha256` (the SHA-256 of exactly the
-  delivered text, without the line-number gutter) and, once per file, a separate
-  guard line with the file's mtime and SHA-256 in the shape `read_symbol` uses, so
-  `edit_file`'s `expected_mtime` and `expected_sha` can be copied; a content hash is
-  never offered as an edit guard. The packer degrades per item (complete body, then
-  a status line with the signature and doc, then a bare status line, then a counted
-  omission), never splits a body, and states the exact number omitted by class; a
-  body larger than the whole budget becomes a handoff to `read_symbol` that names
-  its size, content hash and snapshot. Only a body that survived packing and was
-  rendered is recorded as a read, once per file and per agent, so a delivered body
-  satisfies strict mode's read-before-edit check and an omitted, degraded or handed
-  off one does not. The source read is capped at four times `max_bytes`, and the
-  served text, with a connection message preview of about 1 KiB appended, stays
-  within `max_bytes`. Also: an exact path half in `path#Selector` (a file, or a
-  directory's contents, case-sensitive; `x.go#F` no longer reaches `pkg/x.go`,
-  `a.go` no longer reaches `data.go`), imports and package clauses a declaration
-  outranks are disclosed ("also matches N import/package/file nodes"), a symbol
-  seed is refused with a `session_start` handoff when the topology index belongs
-  to another root than the calling agent's (file seeds still work), `within` may
-  name the workspace root, and files under `.plumb/` are never seeds.
-- **`context_for_task` walks the neighbourhood of its seeds, ranks it and labels
-  what the call graph cannot see (PLAN-462, third slice).** From a symbol seed, or
-  from the top declarations of a file seed, the pack now follows call, containment
-  and type edges two hops out, up to 60 nodes and within a 2 s deadline, one hop at
-  a time so that the scope filter (`within`, `corpora`, the root and `.plumb/`)
-  runs on every node before it is kept or expanded through: a neighbour outside the
-  scope is dropped and nothing past it is reached. Every relationship carries its
-  evidence class (`e3` extractor edge, `e2` derived call- or import-resolver edge,
-  `e1` heuristic edge, `e0` gap candidate) and its source and confidence, and
-  derived call edges are followed only around a subject whose language the
-  call-graph admission rule accepts. The result is ranked, before any body is read,
-  by the frozen score 8·seed + 4·task coverage + 2/(1+hops) + evidence + 0.5·role,
-  with ties broken by path and selector so the same index and request give the
-  same pack; task prose only re-ranks and never adds a node. The best-ranked few
-  related declarations carry their complete body, packed after the seeds' own. The
-  call graph is Go-only and syntactic, so a method's callers are shown as resolved
-  callers plus labelled gap candidates: declarations of the files that import the
-  method's package, marked "unresolved receiver calls possible — not a resolved
-  caller", and an empty or capped caller list is never reported as "no callers".
-  A type seed lists its members and says a struct's fields are not graph members;
-  Python relationships are labelled heuristic (confidence 0.8) with "cross-file
-  call graph unavailable for python"; a file seed in a language with no extractor
-  adds the index's count of unparsed files. While the index is failing, absent or
-  another root's, no relationship is claimed at all and the pack says so;
-  relationships from a file that changed since it was indexed are marked possibly
-  stale. A body reached by the walk, rather than named, in a file matching
-  `[history] sensitive_globs` is reduced to its location and a label, under the same
-  decision write responses and history use. The tool's description and schema are
-  unchanged.
-- **`context_for_task` adds affected tests, constraints and acknowledgements, and
-  answers each agent from its own root (PLAN-462, fourth slice).** The pack now
-  lists the test packages the seeds implicate, one row each with its test count
-  and why ("holds a seed", "imports a seed's package", and, for `intent: change`,
-  "holds a declaration next to a seed"), from the same gather as
-  `topology_affected`. It names no individual test, says in its heading that it is
-  a static estimate and that no test was run, applies `within` and `corpora` to the
-  tests it names (counting what it left out), and gives no estimate at all from a
-  missing or failing index. It also retrieves constraints: memories of the calling
-  agent's own root whose `paths:`, `source_symbols:` or `source_paths:` frontmatter
-  ties them to the seeds (at most three), and document sections, chosen from the
-  index's headings and a seed document's own sections and then scored on their own
-  text, read from one snapshot of the file so a changed document is quoted as it
-  now is (at most four). Each is one line labelled as evidence, not instructions,
-  with its corpus, canonical root and path; the quote is at most 200 bytes,
-  terminal-safe and on one line; a path matching `[history] sensitive_globs` is
-  named and never read; `corpora` decides which kinds arrive; and the packer keeps them
-  behind the bodies and the affected tests but ahead of the follow-up calls, so a
-  tight budget drops the quote first, then the row. `have` is now
-  applied: up to 16 `{symbol, content_sha256}` pairs, each matched against the
-  exact `content_sha256` of the body the pack would deliver and the declaration it
-  names, replace that body with an "unchanged, still held" line carrying its
-  current location. A file's hash, the hash of a line range, or a hash borrowed for
-  another declaration is not that body and leaves it to be delivered; an
-  acknowledgement is not a read, so it records nothing and prints no edit guard.
-  The topology index is now keyed by the agent's canonical root, replacing the
-  interim refusal of another root's index: on a shared connection each agent is
-  answered from the index (and the memories) of the root it is pinned to, a root
-  with no open index degrades with a label instead of refusing the pack, and the
-  accessor never opens an index as a side effect of a read. `ContextCollector`
-  implements `ContextHinter` for the advisory hooks (selectors, locations and
-  evidence classes from the index only; an ambiguous or unresolved selector is a
-  gap, never candidate lines; scope, root and sensitive paths apply at every hop;
-  bounded by `MaxBytes` and `Deadline`), with `NewContextHinter` for a daemon that
-  has a per-root index accessor. The tool's description names the new sections
-  (about 50 bytes longer); the schema is unchanged.
+- **`context_for_task`, an experimental seeds-first context tool (PLAN-462).** It
+  takes at least one explicit `files` or `symbols` seed and returns one bounded text
+  pack: the seeds with their complete bodies and edit guards, the ranked
+  neighbourhood, the test packages the seeds implicate, the memories and document
+  sections that bear on them, what it could not say, and concrete next calls. It is
+  unpinned and outside the lean profile, so a client finds it by name; its catalogue
+  entry is about 1.9 KB. Task prose only re-ranks and never seeds, and prose alone is
+  refused with a handoff to `workspace_search`; a directory is refused ("a directory
+  is scope, not a seed"); a `path#Selector` after a document path is refused with a
+  handoff to `corpora`; and an unpinned call is refused with a `session_start`
+  handoff, because the tool never attaches or moves a workspace pin (its argument
+  names are deliberately not pin seeds). A selector that matches several
+  declarations is reported as ambiguous with up to five candidates and none chosen,
+  one that matches nothing as unresolved with nothing invented, and a file in a
+  language the index cannot parse is accepted and labelled as a coverage gap rather
+  than as having no symbols. `within` and `corpora` only narrow the pack.
+  - **Bodies.** A resolved symbol seed carries its declaration's exact lines, sliced
+    from one snapshot of the file, with the body's `content_sha256` and, once per
+    file, a separate guard line (mtime and SHA-256 in the shape `read_symbol` prints)
+    whose values can be copied into `edit_file`'s `expected_mtime` and
+    `expected_sha`; a content hash is never offered as a guard. The index's line span
+    is trusted only when the content hash the index held *when it gave the span*
+    equals the snapshot's, so a file that changed (or was reindexed) in between has
+    its declaration found again in the snapshot, and one that cannot be found exactly
+    once gets no body, with the reason. Only a body that was actually delivered is
+    recorded as a read, once per file and per agent, so it satisfies strict mode's
+    read-before-edit check and an omitted, degraded or handed-off one does not.
+  - **Budget.** `max_bytes` (default 12000, cap 32000, clamped and disclosed above
+    that) bounds the whole served response: the pack renders into `max_bytes` minus a
+    1024-byte reserve, and the text the connection layer appends to this tool's
+    result (a mailbox preview, a policy notice) is held to that reserve, shortened or
+    replaced by a one-line pointer at `check_messages`; other tools are unchanged. The
+    pack degrades per item (complete body, signature line, counted omission), never
+    splits a body, states the exact number omitted by class, and turns a body larger
+    than the whole budget into a `read_symbol` handoff. Source reads are capped at four
+    times `max_bytes` in all, shared by the bodies, the memories and the documents.
+  - **Neighbourhood.** From a symbol seed, or the top declarations of a file seed, the
+    pack follows call, containment and type edges two hops out, up to 60 nodes under a
+    2 s deadline, one hop at a time so that the scope filter (`within`, `corpora`, the
+    root, `.plumb/`) runs on every node before it is kept or expanded through. Each
+    relationship carries its evidence class: `e4` confirmed by the language server,
+    `e3` extractor edge, `e2` derived call- or import-resolver edge (followed only
+    around a subject the call-graph admission rule accepts), `e1` heuristic edge
+    (Python, confidence 0.8), and `e0` gap candidate. The result is ranked, before any
+    body is read, by the frozen score 8·seed + 4·task coverage + 2/(1+hops) +
+    evidence + 0.5·role, with ties broken by path and selector. The Go call graph is
+    syntactic, so a method's callers are the resolved callers plus labelled gap
+    candidates (declarations of files that import its package, marked "not a resolved
+    caller"); an empty, capped or cut caller list is never reported as "no callers".
+    A type lists its members and says a struct's fields are not graph members; a file
+    seed in a language with no extractor adds the index's count of unparsed files.
+  - **Freshness, labelled apart.** A missing, failing or foreign index makes no
+    relationship or test-impact claim at all and the pack says so; a file that changed
+    since it was indexed has its relationships marked possibly stale; and the language
+    server's state has a line of its own. The first three callable symbol seeds are
+    also put to the language server (call hierarchy) under an 800 ms sub-deadline
+    inside the 2 s total: what it confirms of an edge the index drew, and the callers
+    only it can see (receiver-method calls), are `e4`. If the server is absent, still
+    warming, failing or too slow, the pack is the structural one and says
+    `structural-only partial result; LSP enrichment unavailable` with the cause; it
+    never waits past the sub-deadline and never fails the call.
+  - **Tests, constraints, acknowledgements.** The pack lists the affected test
+    packages, one row each with its count and why, from the same gather as
+    `topology_affected`; it names no test, says it is a static estimate, and runs
+    nothing. Memories whose `paths:`, `source_symbols:` or `source_paths:`
+    frontmatter ties them to the seeds (at most three, out of at most 200 files
+    scanned) and document sections scored on their own text (at most four) are listed
+    as evidence, not instructions, each with its corpus, canonical root and path and a
+    quote of at most 200 bytes; a path matching `[history] sensitive_globs` is named
+    and never read, and a body the walk reaches in such a file is reduced to its
+    location. `have` takes up to 16 `{symbol, content_sha256}` pairs; one that equals
+    the exact `content_sha256` of the body the pack would deliver replaces it with an
+    "unchanged, still held" line, and a file hash, a range hash or a hash borrowed for
+    another declaration does not. An acknowledgement is not a read and prints no guard.
+  - **Per-agent root and the hint.** On a shared connection each agent is answered
+    from the topology index and the memories of the root it is pinned to, never the
+    connection's. `ContextCollector` also implements `ContextHinter`, a smaller answer
+    for advisory hooks: selectors, locations and evidence classes from the index only,
+    with no bodies, reads, memories, documents or language server, an ambiguous
+    selector as a gap and never as candidate lines, bounded by bytes and a deadline.
 
 ## 0.24.0 (2026-10-10)
 

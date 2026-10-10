@@ -335,8 +335,11 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	// decision write responses and history take (changeSensitive). Its index is
 	// keyed by the calling agent's root (topologyStoreForRoot), not by the
 	// connection's: a pack for an agent pinned elsewhere never reads this
-	// connection's index.
-	srv.Register(tools.NewContextForTask(tools.NewContextCollector(s.topologyStoreForRoot).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive).WithTestScope(s.testScope)).
+	// connection's index. The top symbol seeds are also put to the language server
+	// (call hierarchy, under its own sub-deadline), through the same routing proxy and
+	// warm-up probe call_hierarchy uses; a server that is absent or slow only costs the
+	// pack that line of enrichment.
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(s.topologyStoreForRoot).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive).WithTestScope(s.testScope).WithLSP(s.sessionProxy, warmupFn)).
 		WithReads(s.readTracker).WithReadsFor(s.readTrackerFor))
 }
 

@@ -84,6 +84,9 @@ type contextPack struct {
 	// gap candidates; Expansion records what produced it and what it could not do.
 	Related   []contextRelated
 	Expansion contextExpansion
+	// LSP is what the language-server refinement of the top symbol seeds did, which
+	// is its own freshness component: the zero value says it was not consulted.
+	LSP contextLSP
 	// Affected is the static test-impact estimate; Constraints are the memories and
 	// document sections retrieved as evidence; Have records what the caller's
 	// acknowledgements matched.
@@ -113,6 +116,13 @@ type ContextCollector struct {
 	sensitive SensitivePathFn
 	testScope func(context.Context) TestScope // optional; without it test packages are named by directory
 	deadline  time.Duration                   // zero means contextExpansionDeadline
+
+	// lsp, with lspWarm, refines the top symbol seeds (context_lsp.go); lspDeadline is
+	// its sub-deadline, zero meaning contextLSPSubDeadline. Optional: without lsp the
+	// pack is structural and says so.
+	lsp         ContextLSP
+	lspWarm     LSPWarmupFn
+	lspDeadline time.Duration
 
 	// beforeBodies is a test seam: it runs after the index has been read and before
 	// the first file is snapshotted, which is where a reindex or an edit can land
@@ -305,6 +315,10 @@ func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack
 		ex.indexHash = hashCache(graphCtx, index.store)
 	}
 	ex.run(graphCtx, ex.addSeeds(graphCtx, pack.Seeds))
+	if forPack {
+		// Before the pool is ranked, so what the server confirms is ranked as such.
+		pack.LSP = c.refineLSP(graphCtx, ex, pack.Root)
+	}
 	pack.Related = ex.finish(graphCtx)
 	pack.Expansion = ex.summarise(ctx, pack.Related)
 }
