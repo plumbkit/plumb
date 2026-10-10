@@ -10,7 +10,7 @@ func Summarise(charges []int) (n, sum int) {
 }
 
 // StatusLabel maps a numeric status to its label. It is deliberately long:
-// its body is larger than any context budget, so a pack must hand it off
+// its body (about 32 KB) is larger than case C11's 16 KB budget, so a pack must hand it off
 // to read_symbol rather than split it.
 func StatusLabel(code int) string {
 	switch code {
