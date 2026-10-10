@@ -233,8 +233,11 @@
     is requested only once the new watches are added. Before, a resync could
     finish while watches were still being added, and a change made in that
     gap was never seen. A restart's walk has the same one-minute bound: one
-    that hangs degrades the watcher instead of leaving it silently blind, and
-    closing the watcher no longer waits for it.
+    that hangs degrades the watcher instead of leaving it silently blind.
+    Closing a watcher waits at most two seconds for a walk sgtdi cannot
+    interrupt (a restart's, or a new directory's, on a stalled mount), and
+    waits in full for a normal stop, so a watcher started right after on the
+    same tree never overlaps the old one's inotify watches.
   - Accepted behaviour change for macOS release builds: editing the target of
     an indexed in-workspace symlink no longer re-indexes the symlink until the
     next resync. kqueue happened to report the link too, because opening it

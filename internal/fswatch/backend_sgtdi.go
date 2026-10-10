@@ -102,12 +102,32 @@ func (r *sgtdiRun) abandon() {
 	r.src.Close()
 }
 
+// stopGrace bounds how long stop waits for a run to finish. A normal stop
+// takes milliseconds, and waiting for it means a watcher started right after
+// on the same tree does not overlap the old one's inotify watches; near the
+// watch limit the overlap could leave the new walk partial, and the new
+// Watcher degraded for good. A walk sgtdi cannot interrupt is left to end on
+// its own once the grace runs out.
+const stopGrace = 2 * time.Second
+
+// stop stops the run and waits for it to finish, but for at most stopGrace.
+func (r *sgtdiRun) stop() {
+	r.abandon()
+	grace := time.NewTimer(stopGrace)
+	defer grace.Stop()
+	select {
+	case <-r.stopped:
+	case <-grace.C:
+	}
+}
+
 // awaitReady waits, for at most within, until sgtdi's initial walk has added
 // its watches: the walk runs after Watch starts, and a change made before a
 // directory's watch exists is never reported. It reports true once they are
 // in place. Otherwise the run is stopped: closed when it stopped on its own,
-// and abandoned when done closed or within passed, with errNotReady for the
-// latter. It never waits for readiness after done, nor for a hung walk.
+// stopped (with a bounded wait) when done closed, and abandoned when within
+// passed, with errNotReady: that walk is hung. It never waits for readiness
+// after done.
 func (r *sgtdiRun) awaitReady(done <-chan struct{}, within time.Duration) (bool, error) {
 	timeout := time.NewTimer(within)
 	defer timeout.Stop()
@@ -118,7 +138,7 @@ func (r *sgtdiRun) awaitReady(done <-chan struct{}, within time.Duration) (bool,
 		r.close()
 		return false, nil
 	case <-done:
-		r.abandon()
+		r.stop()
 		return false, nil
 	case <-timeout.C:
 		r.abandon()
@@ -220,7 +240,7 @@ func (w *Watcher) superviseSgtdi(opts Options, run *sgtdiRun, start startFunc, w
 		if end == endFailed {
 			run.close() // it has stopped already, so this is immediate, and run.err is safe to read
 		} else {
-			run.abandon() // never wait on a walk sgtdi cannot interrupt (a new directory on a stalled mount)
+			run.stop() // waits a bounded time: never on a walk sgtdi cannot interrupt (a new directory on a stalled mount)
 		}
 		switch end {
 		case endClosed:

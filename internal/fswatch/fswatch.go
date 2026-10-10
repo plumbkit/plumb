@@ -201,10 +201,10 @@ func (w *Watcher) Lost() <-chan struct{} { return w.lost }
 // for the root to return. Close does not close Failed.
 func (w *Watcher) Failed() <-chan struct{} { return w.failed }
 
-// Close stops watching and waits for the backend's own goroutines. It never
-// waits for a walk sgtdi cannot interrupt (a restart's initial walk, or a new
-// directory's, on a stalled mount): it stops that run and returns, and the
-// walk ends on its own.
+// Close stops watching and waits for the backend to finish, but on Linux and
+// Windows for at most two seconds for a running sgtdi watcher: a walk sgtdi
+// cannot interrupt (a restart's initial walk, or a new directory's, on a
+// stalled mount) is stopped and left to end on its own.
 func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)

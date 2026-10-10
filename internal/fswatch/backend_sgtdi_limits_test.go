@@ -122,6 +122,35 @@ func TestSuperviseSgtdi_CloseDuringAHungWalkOfANewDirectory(t *testing.T) {
 	}
 }
 
+// TestSuperviseSgtdi_CloseWaitsForANormalStop: a run that stops promptly, as
+// sgtdi does when it is not mid-walk, is waited for. Otherwise a watcher
+// started right after on the same tree (LSP hibernation, reconfiguration)
+// overlaps the old one's inotify watches, which near the limit can leave the
+// new walk partial and the new Watcher degraded for good.
+func TestSuperviseSgtdi_CloseWaitsForANormalStop(t *testing.T) {
+	w := testWatcher(t.TempDir(), 8)
+	run := fakeRun()
+	stopNow := run.cancel
+	run.cancel = func() {
+		go func() {
+			time.Sleep(50 * time.Millisecond)
+			stopNow()
+		}()
+	}
+	start, _ := fakeStarts()
+	finished := supervise(t, w, run, start)
+
+	close(w.done)
+	select {
+	case <-finished:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the supervisor did not return after the Watcher closed")
+	}
+	if !isClosed(run.stopped) {
+		t.Error("Close returned before a run that stops promptly had stopped")
+	}
+}
+
 // TestPumpSgtdi_NewDirectoryAtTheWatchLimitIsDegraded: sgtdi discards the
 // error when it cannot watch a directory that arrives later, at the inotify
 // watch limit. The pump checks each new directory, so the Watcher says it can
