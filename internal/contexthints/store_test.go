@@ -51,25 +51,36 @@ func TestRecord_RoundTripsAndCountsByOutcome(t *testing.T) {
 	}
 }
 
-// Seeds are capped in count and bytes before they are stored, so a hostile or
-// runaway caller cannot grow the ledger through one row.
+// Seeds are capped in count and in bytes before they are stored, so a hostile
+// or runaway caller cannot grow the ledger through one row. Each cap is tested
+// where it is the one that binds.
 func TestRecord_CapsSeeds(t *testing.T) {
-	s, _ := openTest(t)
-	o := obs("/ws", "s1", "", time.Now())
-	o.Seeds = nil
-	for range 50 {
-		o.Seeds = append(o.Seeds, strings.Repeat("x", 100))
-	}
-	if err := s.Record(o); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.recent("/ws", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || len(got[0].Seeds) > MaxSeeds || seedBytes(got[0].Seeds) > MaxSeedBytes {
-		t.Fatalf("stored seeds = %d (%d bytes), want <= %d and <= %d bytes",
-			len(got[0].Seeds), seedBytes(got[0].Seeds), MaxSeeds, MaxSeedBytes)
+	for name, tc := range map[string]struct {
+		seed string
+		want int
+	}{
+		"count binds": {seed: "short.go", want: MaxSeeds},
+		"bytes bind":  {seed: strings.Repeat("x", 100), want: MaxSeedBytes / 100},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _ := openTest(t)
+			o := obs("/ws", "s1", "", time.Now())
+			o.Seeds = nil
+			for range 50 {
+				o.Seeds = append(o.Seeds, tc.seed)
+			}
+			if err := s.Record(o); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.recent("/ws", 1)
+			if err != nil || len(got) != 1 {
+				t.Fatalf("recent = %v, %v", got, err)
+			}
+			if len(got[0].Seeds) != tc.want || seedBytes(got[0].Seeds) > MaxSeedBytes {
+				t.Fatalf("stored %d seeds (%d bytes), want %d and <= %d bytes",
+					len(got[0].Seeds), seedBytes(got[0].Seeds), tc.want, MaxSeedBytes)
+			}
+		})
 	}
 }
 
@@ -116,21 +127,27 @@ func TestRecord_RowCapEvictsOldestAndCounts(t *testing.T) {
 	}
 }
 
-// The byte cap applies even under the row cap.
+// The byte cap binds on its own: rows big enough that the workspace reaches
+// MaxBytesPerWorkspace well before MaxRowsPerWorkspace.
 func TestRecord_ByteCapEvicts(t *testing.T) {
 	s, _ := openTest(t)
-	o := obs("/ws", "s1", "", time.Now())
+	ws := "/" + strings.Repeat("w", 900)
+	o := obs(ws, "s1", "", time.Now())
 	o.Seeds = []string{strings.Repeat("a", MaxSeedBytes)}
-	n := MaxBytesPerWorkspace/rowSize(o) + 10
-	for range n {
+	perCap := MaxBytesPerWorkspace / rowSize(o)
+	if perCap >= MaxRowsPerWorkspace {
+		t.Fatalf("rows of %d bytes reach the row cap first; the test proves nothing", rowSize(o))
+	}
+	for range perCap + 10 {
 		o.At = o.At.Add(time.Millisecond)
 		if err := s.Record(o); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sum, _ := s.Summary("/ws")
-	if sum.Bytes > MaxBytesPerWorkspace || sum.Evicted == 0 {
-		t.Fatalf("summary = %+v, want <= %d bytes and some evicted", sum, MaxBytesPerWorkspace)
+	sum, _ := s.Summary(ws)
+	if sum.Bytes > MaxBytesPerWorkspace || sum.Rows != perCap || sum.Evicted != 10 {
+		t.Fatalf("summary = rows %d bytes %d evicted %d, want rows %d, <= %d bytes, 10 evicted",
+			sum.Rows, sum.Bytes, sum.Evicted, perCap, MaxBytesPerWorkspace)
 	}
 }
 
@@ -170,13 +187,22 @@ func TestSpend_TurnAndAgentCaps(t *testing.T) {
 	}
 }
 
-// A refused spend leaves the allowance unchanged.
+// A refused spend leaves both allowances exactly as they were: the rest of the
+// turn window, and the rest of the agent's allowance, are still spendable.
 func TestSpend_RefusalChargesNothing(t *testing.T) {
 	s, _ := openTest(t)
-	lim := Limits{PerTurn: 1024, PerAgent: 8192}
-	_, _ = s.Spend("s1", "", "t1", 2000, lim, time.Now())
-	if ok, _ := s.Spend("s1", "", "t1", 1024, lim, time.Now()); !ok {
-		t.Fatal("a refused oversized spend consumed the turn allowance")
+	lim := Limits{PerTurn: 1024, PerAgent: 1524}
+	if ok, _ := s.Spend("s1", "", "t1", 24, lim, time.Now()); !ok {
+		t.Fatal("the opening spend was refused")
+	}
+	if ok, _ := s.Spend("s1", "", "t1", 2000, lim, time.Now()); ok {
+		t.Fatal("an oversized spend was granted")
+	}
+	if ok, _ := s.Spend("s1", "", "t1", 1000, lim, time.Now()); !ok {
+		t.Fatal("a refused spend consumed the turn allowance")
+	}
+	if ok, _ := s.Spend("s1", "", "t2", 500, lim, time.Now()); !ok {
+		t.Fatal("a refused spend consumed the agent allowance")
 	}
 }
 
