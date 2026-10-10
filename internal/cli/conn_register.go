@@ -327,6 +327,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
 	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))
 	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
+	// context_for_task is experimental and deliberately unpinned and non-lean (see
+	// tools.PinnedTools / tools.LeanTools): it is found by name, not pushed. The
+	// collector carries no read tracker, so a pack never records a read.
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested)))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.

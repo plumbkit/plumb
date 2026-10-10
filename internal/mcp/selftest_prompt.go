@@ -38,6 +38,7 @@ var (
 		"topology_status", "topology_search", "topology_explore",
 		"topology_impact", "topology_affected", "topology_routes",
 		"structural_query", "workspace_search", "minimal_diff_review",
+		"context_for_task",
 	}
 
 	selftestMemoryRead = []string{
