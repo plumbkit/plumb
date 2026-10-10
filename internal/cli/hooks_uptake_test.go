@@ -33,12 +33,17 @@ trusted_hash = "sha256:bb"
 
 [hooks.state."/elsewhere/hooks.json:subagent_start:0:0"]
 trusted_hash = "sha256:cc"
+
+[hooks.state."/elsewhere/hooks.json:user_prompt_submit:0:0"]
+trusted_hash = "sha256:dd"
 `
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Another hooks file approves both hint events; only this file's own
+	// UserPromptSubmit approval may count.
 	if got := codexContextTrust(hooks); !strings.HasPrefix(got, "1/2") {
-		t.Errorf("trust = %q, want 1/2 (UserPromptSubmit only)", got)
+		t.Errorf("trust = %q, want 1/2 (UserPromptSubmit, this file only)", got)
 	}
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("not = [valid"), 0o600); err != nil {
 		t.Fatal(err)
