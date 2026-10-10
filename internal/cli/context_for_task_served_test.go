@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // servedText runs context_for_task through a real mcp.Server tools/call, with the
@@ -53,10 +55,10 @@ func servedText(t *testing.T, s *connSession, srv *mcp.Server, args map[string]a
 	return resp.Result.Content[0].Text
 }
 
-// servedFixture pins a session to a fresh workspace and makes it receive a waiting
-// message of about the size a connection appends to a result, returning how many
-// bytes that enrichment adds.
-func servedFixture(t *testing.T, chatBudget int) (s *connSession, srv *mcp.Server, enrichment int) {
+// servedFixture pins a session to a fresh workspace and makes it receive waiting
+// messages of about the size a connection appends to a result, returning how many
+// bytes that enrichment adds on a tool whose result is not budgeted.
+func servedFixture(t *testing.T, chatBudget, messages int) (s *connSession, srv *mcp.Server, enrichment int) {
 	t.Helper()
 	s, srv = buildTestConnSession(t)
 	root := freshTempDir(t)
@@ -68,10 +70,12 @@ func servedFixture(t *testing.T, chatBudget int) (s *connSession, srv *mcp.Serve
 		v.policy = s.buildPathPolicy(v)
 		v.collab = config.CollabConfig{Mailbox: true, ChatBudgetBytes: chatBudget}
 	})
-	seedMessage(t, s, root, "bob", s.view().sessName, strings.Repeat("deploy is blocked, stop what you are doing. ", 60))
-	// Measure the enrichment the hook adds, then rewind so the real call sees the
-	// message as unseen (a preview is offered once).
-	extra := len(s.enrichToolOutput(context.Background(), "context_for_task", json.RawMessage(`{}`), ""))
+	for range messages {
+		seedMessage(t, s, root, "bob", s.view().sessName, strings.Repeat("deploy is blocked, stop what you are doing. ", 60))
+	}
+	// Measure the enrichment the hook adds to a tool nothing bounds, then rewind so
+	// the real call sees the messages as unseen (a preview is offered once).
+	extra := len(s.enrichToolOutput(context.Background(), "run_task", json.RawMessage(`{}`), ""))
 	s.chatWatch.reset()
 	return s, srv, extra
 }
@@ -93,7 +97,7 @@ func longSeeds() map[string]any {
 // still fits.
 func TestContextForTask_ServedBytesStayWithinMaxBytesWithAnEnrichment(t *testing.T) {
 	for _, maxBytes := range []int{1536, 2048, 4000, 12000} {
-		s, srv, extra := servedFixture(t, 600)
+		s, srv, extra := servedFixture(t, 600, 1)
 		if extra < 900 || extra > 1024 {
 			t.Fatalf("control: the enrichment is %d B; this test needs about 1 KiB (900..1024)", extra)
 		}
@@ -119,17 +123,91 @@ func TestContextForTask_ServedBytesStayWithinMaxBytesWithAnEnrichment(t *testing
 // the tool could change under the test.
 const contextReserveForTest = 1024
 
-// The reserve is a contract on the enrichment, not something the tool can enforce:
-// an enrichment larger than the reserve does push a full pack past max_bytes. The
-// control proves the test above would notice, and states the limit.
-func TestContextForTask_AnEnrichmentLargerThanTheReserveExceedsMaxBytes(t *testing.T) {
-	s, srv, extra := servedFixture(t, 1500)
-	if extra <= contextReserveForTest {
-		t.Fatalf("control: the enrichment is %d B, not larger than the %d B reserve", extra, contextReserveForTest)
+// S3: the reserve is held to, not merely hoped for. A message preview larger than the
+// reserve (the default chat budget is 2 KiB, so one ordinary waiting message is) is
+// shortened to fit, and when even short bodies cannot fit it becomes a one-line pointer
+// at check_messages; either way the served text stays within max_bytes and the agent
+// still learns a message is waiting. Positive control: the same enrichment appended to a
+// tool nothing bounds is not shortened, so only context_for_task is affected.
+func TestContextForTask_AnEnrichmentLargerThanTheReserveIsHeldToIt(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		messages int
+		want     []string // what the client must still be told
+		not      []string
+	}{
+		{"one long message: a shortened preview", 1, []string{"[Messages", "from bob", "check_messages"}, []string{"the preview is left out"}},
+		{"several long messages: still told, still within max_bytes", 5, []string{"[Messages", "check_messages"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, maxBytes := range []int{1536, 4000, 12000} {
+				s, srv, extra := servedFixture(t, 1500, tc.messages)
+				if extra <= contextReserveForTest {
+					t.Fatalf("control: the unbounded enrichment is %d B, not larger than the %d B reserve", extra, contextReserveForTest)
+				}
+				args := longSeeds()
+				args["max_bytes"] = maxBytes
+				served := servedText(t, s, srv, args)
+				if len(served) > maxBytes {
+					t.Errorf("max_bytes %d: the client received %d bytes with a %d B enrichment waiting", maxBytes, len(served), extra)
+				}
+				tail := served[max(0, len(served)-1100):]
+				for _, w := range tc.want {
+					if !strings.Contains(served, w) {
+						t.Errorf("max_bytes %d: the client is not told %q:\n%s", maxBytes, w, tail)
+					}
+				}
+				for _, n := range tc.not {
+					if strings.Contains(served, n) {
+						t.Errorf("max_bytes %d: the result holds %q:\n%s", maxBytes, n, tail)
+					}
+				}
+			}
+		})
 	}
-	args := longSeeds()
-	args["max_bytes"] = 1536
-	if served := servedText(t, s, srv, args); len(served) <= 1536 {
-		t.Errorf("a %d B enrichment on a full pack stayed within max_bytes (%d B), so the test above cannot tell a missing reserve from a present one", extra, len(served))
+
+	// Control: the unbounded enrichment on this fixture is what the bounded one is cut
+	// from, so the tool is the only thing that changed it.
+	s, _, extra := servedFixture(t, 1500, 1)
+	if bounded := len(s.enrichToolOutput(context.Background(), "context_for_task", json.RawMessage(`{}`), "")); bounded == 0 || bounded > contextReserveForTest || bounded >= extra {
+		t.Errorf("the enrichment on context_for_task is %d B, want it shortened from %d B to within %d B", bounded, extra, contextReserveForTest)
+	}
+}
+
+// previewWithin shortens before it gives up, points before it says nothing, and never
+// touches an unbounded room.
+func TestPreviewWithin(t *testing.T) {
+	grows := func(budget int) string { return strings.Repeat("x", budget+300) } // a preview that scales with its bodies
+	fixed := func(int) string { return strings.Repeat("x", 5000) }              // one that no body budget can shrink
+	if got := previewWithin(grows, 2048, unboundedRoom, 3); len(got) != 2048+300 {
+		t.Errorf("an unbounded room cut the preview to %d B", len(got))
+	}
+	if got := previewWithin(grows, 2048, 1024, 3); len(got) != 512+300 {
+		t.Errorf("a 1024 B room gave %d B, want the first halving that fits (512 B bodies = 812 B)", len(got))
+	}
+	got := previewWithin(fixed, 2048, 1024, 3)
+	if want := tools.RenderWaitingPointer(3); got != want || len(got) > 1024 {
+		t.Errorf("a preview nothing can shrink gave %q, want the pointer %q", got, want)
+	}
+	if got := previewWithin(fixed, 2048, 50, 3); got != "" {
+		t.Errorf("a room too small even for the pointer gave %q, want nothing", got)
+	}
+}
+
+// The room is spent in order and a spent room says nothing: fitRoom passes an
+// unbounded block through, clamps one to what is left on a UTF-8 boundary, and gives
+// nothing once nothing is left.
+func TestFitRoom(t *testing.T) {
+	block := strings.Repeat("é", 100) // 200 bytes
+	unbounded, spent, small := unboundedRoom, 0, 60
+	if got := fitRoom(block, &unbounded); got != block || unbounded != unboundedRoom {
+		t.Errorf("an unbounded room changed the block or itself: %d B, room %d", len(got), unbounded)
+	}
+	if got := fitRoom(block, &spent); got != "" || spent != 0 {
+		t.Errorf("a spent room gave %d B, room %d", len(got), spent)
+	}
+	got := fitRoom(block, &small)
+	if len(got) == 0 || len(got) > 60 || !utf8.ValidString(got) || small != 60-len(got) {
+		t.Errorf("a 60 B room gave %d B (valid UTF-8 %v) and left %d", len(got), utf8.ValidString(got), small)
 	}
 }

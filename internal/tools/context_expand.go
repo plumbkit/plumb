@@ -97,9 +97,12 @@ type contextRelated struct {
 	Stale    bool   // its file, or the file it was reached from, changed since indexing
 	CallerOf int64  // the node this one is a resolved caller of, when it is
 	GapFor   int64  // the seed a gap candidate is evidence about
-	Q        float64
-	Score    float64
-	Body     contextBody // bodyNone until a body is attempted
+	// IndexHash is the content hash the index held for the node's file when its span
+	// was read ("" when unknown, which no body is sliced on trust of).
+	IndexHash string
+	Q         float64
+	Score     float64
+	Body      contextBody // bodyNone until a body is attempted
 }
 
 // seedView is the related node as a symbol the body machinery can slice.
@@ -108,7 +111,7 @@ func (r contextRelated) seedView(root string) contextSeed {
 		Kind: seedSymbol, ID: r.Node.ID, Path: r.Node.Path, Abs: absUnder(root, r.Node.Path),
 		Selector: nodeSelector(r.Node), Name: r.Node.Name, NodeKind: string(r.Node.Kind),
 		Line: r.Node.StartLine, EndLine: r.Node.EndLine, Language: r.Node.Language,
-		Signature: r.Node.Signature, Doc: firstLine(r.Node.Docstring),
+		Signature: r.Node.Signature, Doc: firstLine(r.Node.Docstring), IndexHash: r.IndexHash,
 	}
 }
 
@@ -124,15 +127,16 @@ func (s contextSeed) node() topology.Node {
 
 // expansionStats is what the expansion could not do, for the gaps section.
 type expansionStats struct {
-	Expanded      int  // nodes whose neighbours were fetched
-	Excluded      int  // distinct files the scope filter left out
-	Truncated     int  // candidates beyond the node cap
-	HopCapped     int  // centres whose neighbour list hit the per-hop ceiling
-	MembersCapped bool // a type has more members than are listed
-	MembersListed bool // a Go type's members were listed, which leave out its fields
-	GapMore       int  // gap candidates beyond their quota
-	Deadline      bool
-	Failed        string // the first store error, if any
+	Expanded        int  // nodes whose neighbours were fetched
+	Excluded        int  // distinct files the scope filter left out
+	Truncated       int  // candidates beyond the node cap
+	HopCapped       int  // centres whose neighbour list hit the per-hop ceiling
+	MembersCapped   bool // a type has more members than are listed
+	MembersListed   bool // a Go type's members were listed, which leave out its fields
+	GapMore         int  // gap candidates beyond their quota
+	ImportersCapped int  // importer lists that hit the per-hop ceiling, so gap candidates may be missing
+	Deadline        bool
+	Failed          string // the first store error, if any
 }
 
 // hopNode is a node being expanded, and what children should call it.
@@ -149,6 +153,9 @@ type expander struct {
 	rk        ranker
 	sensitive func(path string) bool
 	seedFiles map[string]bool
+	// indexHash reports the content hash the index holds for a file (see hashCache);
+	// nil where nothing will be sliced from the spans, as for a hint.
+	indexHash func(path string) string
 
 	visited  map[int64]bool
 	idents   map[string]bool
@@ -255,6 +262,9 @@ func (e *expander) declsOf(ctx context.Context, p string) []topology.Node {
 // sensitive file says can reach the ranking, let alone the response.
 func (e *expander) makeRelated(n topology.Node, h hopNode, ev int, src string, conf float64, via string) contextRelated {
 	r := contextRelated{Node: n, Dist: h.dist + 1, Evidence: ev, Source: src, Conf: conf, Via: via, ViaPath: h.node.Path}
+	if e.indexHash != nil {
+		r.IndexHash = e.indexHash(n.Path)
+	}
 	if e.sensitive != nil && e.sensitive(n.Path) {
 		r.Withheld = true
 		r.Node.Signature, r.Node.Docstring = "", ""

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -18,12 +19,15 @@ import (
 //
 // The index records a line span for every declaration, but the file may have
 // changed since it was indexed, and a span applied to newer bytes slices the
-// wrong lines while looking authoritative. So the span is only trusted when the
-// index parsed exactly the bytes of the snapshot (the index's content hash equals
-// the snapshot's); otherwise the declaration is found again by re-extracting from
-// the snapshot's own bytes, which needs no second read of the file. If neither
-// yields exactly one declaration, the body is withheld with a precise reason and
-// a body is never sliced from a stale span.
+// wrong lines while looking authoritative. So a span is only trusted when the
+// content hash the index held WHEN THE SPAN WAS READ (contextSeed.IndexHash)
+// equals the snapshot's. The index's hash at the time the body is sliced is
+// deliberately not consulted: a reindex between resolving the seed and taking the
+// snapshot makes that hash match the snapshot while the span is still the old
+// one. Otherwise the declaration is found again by re-extracting from the
+// snapshot's own bytes, which needs no second read of the file. If neither yields
+// exactly one declaration, the body is withheld with a precise reason and a body
+// is never sliced from a stale span.
 
 // contextSourceReadFactor bounds the source read for one call at this multiple
 // of max_bytes, so a tiny budget never reads a huge file only to discard it.
@@ -112,41 +116,42 @@ type bodyTarget struct {
 
 // bodyTargets lists the bodies to attempt, in the order they are read: every symbol
 // seed first (S=1 puts an explicit seed above any related node by construction:
-// the lowest a seed can score is 8+2, the highest a related node can is 4+2+3+0.5),
-// then the best-ranked related declarations. A gap candidate is a possibility, not
-// a relationship, and a withheld one is location-only: neither is read. Ranking
+// the lowest a seed can score is 8+2, the highest a related node can is 4+2+3+0.5,
+// and an LSP-confirmed one is never at distance 0, so it tops out at 4+1+4+0.5),
+// then the related declarations of the top window (topRelated). A gap candidate is
+// a possibility, not a relationship, and a withheld one is location-only: neither
+// is read, though a withheld one still holds its place in the window. That is what
+// keeps a body with the line that names it: the line takes its priority from the
+// same window, so a body can never outlive the line that says whose it is. Ranking
 // happened before this, so no body is read to decide an order.
 func (p *contextPack) bodyTargets() []bodyTarget {
 	targets := make([]bodyTarget, 0, len(p.Seeds)+contextRelatedBodies)
 	for i := range p.Seeds {
 		targets = append(targets, bodyTarget{seed: p.Seeds[i], slot: &p.Bodies[i]})
 	}
-	attempts := 0
+	top := p.topRelated()
 	for i := range p.Related {
-		r := &p.Related[i]
-		if r.Gap || r.Withheld || attempts == contextRelatedBodies {
-			continue
+		if r := &p.Related[i]; top[i] && !r.Withheld {
+			targets = append(targets, bodyTarget{seed: r.seedView(p.Root), slot: &r.Body})
 		}
-		attempts++
-		targets = append(targets, bodyTarget{seed: r.seedView(p.Root), slot: &r.Body})
 	}
 	return targets
 }
 
 // collectBodies slices a body for every symbol seed and for the best-ranked
-// related declarations, reading each file once. It returns the gaps the bodies
-// imply (a file that changed since it was indexed).
-func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack, store *topology.Store) []string {
+// related declarations, reading each file once, out of the call's one source-read
+// budget (shared with the documents and memories read after it). It returns the
+// gaps the bodies imply (a file that changed since it was indexed).
+func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack, store *topology.Store, budget *sourceBudget) []string {
 	pack.Bodies = make([]contextBody, len(pack.Seeds))
 	targets := pack.bodyTargets()
 	seeds := make([]contextSeed, len(targets))
 	for i, t := range targets {
 		seeds[i] = t.seed
 	}
-	budget := &sourceBudget{limit: int64(contextSourceReadFactor) * int64(pack.MaxBytes)}
 	var gaps []string
 	for _, g := range symbolGroups(seeds) {
-		src, why := openBodySource(ctx, g, store, budget)
+		src, why := openBodySource(g, store, budget)
 		if src == nil {
 			for _, i := range g.seeds {
 				*targets[i].slot = contextBody{
@@ -157,13 +162,14 @@ func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack,
 			continue
 		}
 		fileIdx := len(pack.Files)
+		changed := slices.ContainsFunc(g.seeds, func(i int) bool { return !src.trusts(seeds[i]) })
 		pack.Files = append(pack.Files, bodyFile{
-			Path: g.path, Abs: g.abs, MTime: src.snap.mtime, SHA: src.snap.sha, Size: src.snap.size, Changed: !src.trusted,
+			Path: g.path, Abs: g.abs, MTime: src.snap.mtime, SHA: src.snap.sha, Size: src.snap.size, Changed: changed,
 		})
 		for _, i := range g.seeds {
 			*targets[i].slot = src.slice(ctx, seeds[i], i, fileIdx)
 		}
-		if !src.trusted {
+		if changed {
 			gaps = append(gaps, fmt.Sprintf("%s changed since it was indexed: its bodies come from the current snapshot, "+
 				"but relationships and line numbers the index holds may be stale", g.path))
 		}
@@ -173,20 +179,19 @@ func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack,
 
 // bodySource is one file's snapshot while its bodies are sliced.
 type bodySource struct {
-	path    string
-	store   *topology.Store
-	lines   []string
-	snap    fileSnapshot
-	trusted bool // the index parsed exactly these bytes, so its spans describe them
+	path  string
+	store *topology.Store
+	lines []string
+	snap  fileSnapshot
 
 	fresh     []topology.Node // declarations re-extracted from the snapshot, once
 	freshDone bool
 	freshErr  bool
 }
 
-// openBodySource takes the file's one snapshot and decides whether the index's
-// spans are true of it. A nil result carries the reason no body can be sliced.
-func openBodySource(ctx context.Context, g fileGroup, store *topology.Store, budget *sourceBudget) (*bodySource, string) {
+// openBodySource takes the file's one snapshot. A nil result carries the reason no
+// body can be sliced.
+func openBodySource(g fileGroup, store *topology.Store, budget *sourceBudget) (*bodySource, string) {
 	info, err := os.Stat(g.abs)
 	if err != nil {
 		return nil, "the file cannot be read"
@@ -198,22 +203,24 @@ func openBodySource(ctx context.Context, g fileGroup, store *topology.Store, bud
 	if err != nil {
 		return nil, "the file cannot be read"
 	}
-	src := &bodySource{path: g.path, store: store, lines: lines, snap: snap}
-	if store != nil {
-		hash, ok, herr := store.IndexedContentHash(ctx, g.path)
-		src.trusted = herr == nil && ok && hash == snap.sha
-	}
-	return src, ""
+	return &bodySource{path: g.path, store: store, lines: lines, snap: snap}, ""
+}
+
+// trusts reports whether seed's span describes the snapshot: the index parsed
+// exactly these bytes when it gave the span. A seed whose hash is unknown is not
+// trusted.
+func (s *bodySource) trusts(seed contextSeed) bool {
+	return seed.IndexHash != "" && seed.IndexHash == s.snap.sha
 }
 
 // slice returns the body for one symbol seed. A trusted span is used after a
-// cheap sanity check (the narrow window between resolving the seed and
-// snapshotting the file could still have moved it); anything else is found again
-// from the snapshot's own bytes.
+// cheap sanity check (the hash is read just after the span, so a reindex landing
+// between the two could still have moved it); anything else is found again from
+// the snapshot's own bytes.
 func (s *bodySource) slice(ctx context.Context, seed contextSeed, seedIdx, fileIdx int) contextBody {
 	b := contextBody{Seed: seedIdx, File: fileIdx, Start: seed.Line, End: seed.EndLine, Signature: seed.Signature, Doc: seed.Doc}
 	text, ok := sliceLines(s.lines, b.Start, b.End)
-	if !s.trusted || !ok || !strings.Contains(text, seed.Name) {
+	if !s.trusts(seed) || !ok || !strings.Contains(text, seed.Name) {
 		node, why := s.revalidate(ctx, seed)
 		if why != "" {
 			b.State, b.Why = bodyUnavailable, why

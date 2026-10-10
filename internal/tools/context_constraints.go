@@ -20,10 +20,15 @@ import (
 // against code, and they are the first thing the packer drops after the affected
 // tests, because a pack that cannot afford them should still say what it left out.
 //
-// Memories are read through the agent's canonical root (memory.List(root)); nothing
-// here consults the connection's workspace.
+// Memories are read through the agent's canonical root (memory.ListBounded(root));
+// nothing here consults the connection's workspace. The memory scan and the document
+// reads draw on the same source-read budget as the bodies (4 x max_bytes in all), and
+// every cut is disclosed: a memory or section that was not read could have been the
+// one that bore on the seeds.
 
 const (
+	// contextMemoryScan is the most memory files whose frontmatter one call reads.
+	contextMemoryScan  = 200
 	contextMaxMemories = 3
 	// contextExcerptBytes bounds the text quoted from one memory or section.
 	contextExcerptBytes = 200
@@ -42,12 +47,12 @@ type contextConstraint struct {
 // constraints retrieves the memories and document sections that bear on the
 // resolved seeds, honouring corpora. It returns the disclosures for what it could
 // not do.
-func (c *ContextCollector) constraints(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) []string {
+func (c *ContextCollector) constraints(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest, reads *sourceBudget) []string {
 	if len(pack.Seeds) == 0 {
 		return nil
 	}
-	mems, memGaps := c.memoryConstraints(ctx, pack, scope)
-	docs, docGaps := c.docConstraints(ctx, pack, scope, index, req)
+	mems, memGaps := c.memoryConstraints(ctx, pack, scope, reads)
+	docs, docGaps := c.docConstraints(ctx, pack, scope, index, req, reads)
 	pack.Constraints = append(mems, docs...)
 	return append(memGaps, docGaps...)
 }
@@ -59,13 +64,11 @@ func (p *contextPack) memoryRefs() []memory.CodeRef {
 	for _, s := range p.Seeds {
 		refs = append(refs, memory.CodeRef{Kind: s.NodeKind, File: s.Path, SymbolName: s.Name})
 	}
-	shown := 0
-	for _, r := range p.Related {
-		if r.Gap || shown == contextRelatedBodies {
-			continue
+	top := p.topRelated()
+	for i, r := range p.Related {
+		if top[i] {
+			refs = append(refs, memory.CodeRef{Kind: string(r.Node.Kind), File: r.Node.Path, SymbolName: r.Node.Name})
 		}
-		shown++
-		refs = append(refs, memory.CodeRef{Kind: string(r.Node.Kind), File: r.Node.Path, SymbolName: r.Node.Name})
 	}
 	return refs
 }
@@ -75,35 +78,63 @@ func (p *contextPack) memoryRefs() []memory.CodeRef {
 // (memory.MemoriesForRefs). A memory is judged by corpora alone: within names code
 // paths, and a memory's file under .plumb/memories is where it is kept, not what
 // it is about.
-func (c *ContextCollector) memoryConstraints(ctx context.Context, pack *contextPack, scope contextScope) ([]contextConstraint, []string) {
+func (c *ContextCollector) memoryConstraints(ctx context.Context, pack *contextPack, scope contextScope, reads *sourceBudget) ([]contextConstraint, []string) {
 	if !scope.corpusAllowed(corpusMemory) {
 		return nil, nil
 	}
-	mems, err := memory.List(pack.Root)
+	mems, skipped, err := memory.ListBounded(pack.Root, contextMemoryScan, reads.take)
 	if err != nil {
 		return nil, []string{"memories were not collected: the memory directory could not be read"}
 	}
-	hits := memory.MemoriesForRefs(mems, pack.memoryRefs(), contextMaxMemories+1)
 	var gaps []string
+	if skipped > 0 {
+		gaps = append(gaps, fmt.Sprintf("memories: %d memory file(s) were not read (at most %d are scanned, and the scan shares the %dx max_bytes source-read budget with the bodies and documents), "+
+			"so a memory about these seeds may be missing", skipped, contextMemoryScan, contextSourceReadFactor))
+	}
+	hits := memory.MemoriesForRefs(mems, pack.memoryRefs(), contextMaxMemories+1)
 	if len(hits) > contextMaxMemories {
 		hits = hits[:contextMaxMemories]
 		gaps = append(gaps, fmt.Sprintf("memories: more than %d match the seeds; only the first %d are listed", contextMaxMemories, contextMaxMemories))
 	}
+	sizes := map[string]int64{}
+	for _, m := range mems {
+		sizes[m.Name] = m.SizeBytes
+	}
 	out := make([]contextConstraint, 0, len(hits))
+	unread := 0
 	for _, h := range hits {
-		rel := memoryDirPrefix + h.Name + ".md"
-		k := contextConstraint{Corpus: corpusMemory, Path: rel, Label: h.Name, Why: h.Why}
-		if h.Confidence != "" && h.Confidence != memory.ConfidenceUser {
-			k.Label += " [" + string(h.Confidence) + "]"
-		}
-		if c.sensitive != nil && c.sensitive(ctx, absUnder(pack.Root, rel), "") {
-			k.Withheld = true
-		} else if body, rerr := memory.ReadBody(pack.Root, h.Name); rerr == nil {
-			k.Excerpt = excerptOf(strings.TrimSpace(h.Description + " " + body))
+		k, read := c.memoryConstraint(ctx, pack.Root, h, sizes[h.Name], reads)
+		if !read {
+			unread++
 		}
 		out = append(out, k)
 	}
+	if unread > 0 {
+		gaps = append(gaps, fmt.Sprintf("memories: %d matching memor%s shown without an excerpt: the source-read budget was spent", unread, textfmt.Plural(unread, "y", "ies")))
+	}
 	return out, gaps
+}
+
+// memoryConstraint is one matching memory as the pack presents it. read is false
+// when its excerpt was wanted and the source-read budget could not pay for it (a
+// withheld memory is never read, and that is not a shortfall).
+func (c *ContextCollector) memoryConstraint(ctx context.Context, root string, h memory.RefHit, size int64, reads *sourceBudget) (k contextConstraint, read bool) {
+	rel := memoryDirPrefix + h.Name + ".md"
+	k = contextConstraint{Corpus: corpusMemory, Path: rel, Label: h.Name, Why: h.Why}
+	if h.Confidence != "" && h.Confidence != memory.ConfidenceUser {
+		k.Label += " [" + string(h.Confidence) + "]"
+	}
+	if c.sensitive != nil && c.sensitive(ctx, absUnder(root, rel), "") {
+		k.Withheld = true
+		return k, true
+	}
+	if !reads.take(size) {
+		return k, false
+	}
+	if body, err := memory.ReadBody(root, h.Name); err == nil {
+		k.Excerpt = excerptOf(strings.TrimSpace(h.Description + " " + body))
+	}
+	return k, true
 }
 
 // excerptOf quotes the start of text on one line, bounded. Whatever the file

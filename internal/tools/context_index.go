@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -64,4 +66,41 @@ func (i contextIndex) unavailable() string {
 // claims: it exists, describes this root, and is not failing.
 func (i contextIndex) usable() bool {
 	return i.store != nil && !i.store.Health().Failing
+}
+
+// indexedHash is the content hash the index holds for rel at this moment, or "" when
+// it holds none (the file is not indexed, was recorded without a parse, or the
+// lookup failed). It is read straight after the node spans it vouches for, so that
+// hash and span describe one version of the file: a reindex that lands later cannot
+// make an older span look current, because the hash a span is judged by is the one
+// captured with it, not the one the index holds when the body is sliced.
+func indexedHash(ctx context.Context, store *topology.Store, rel string) string {
+	if store == nil {
+		return ""
+	}
+	hash, ok, err := store.IndexedContentHash(ctx, rel)
+	if err != nil || !ok {
+		return ""
+	}
+	return hash
+}
+
+// hashCache is indexedHash memoised for one walk, so a file costs one query however
+// many of its declarations the walk reaches. The first answer for a file stays the
+// answer: a node reached later was read no earlier than that, so a hash older than
+// its span makes the span fail the comparison and be re-extracted, which is the safe
+// direction. A lookup the deadline cut short is not remembered. It is for one
+// goroutine.
+func hashCache(ctx context.Context, store *topology.Store) func(rel string) string {
+	seen := map[string]string{}
+	return func(rel string) string {
+		if h, ok := seen[rel]; ok {
+			return h
+		}
+		h := indexedHash(ctx, store, rel)
+		if ctx.Err() == nil {
+			seen[rel] = h
+		}
+		return h
+	}
 }

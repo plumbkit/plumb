@@ -28,8 +28,6 @@ const (
 	contextMaxDocSections = 4
 	// contextSectionText bounds the text of one section that is scored.
 	contextSectionText = 4096
-	// contextDocReadBytes bounds the document bytes read for one call.
-	contextDocReadBytes = 64 << 10
 	// contextSectionScan bounds the index headings examined for one call.
 	contextSectionScan = 20000
 	// contextDocMinScore is the least a section from a file that was not itself a
@@ -144,7 +142,7 @@ func openDoc(ctx context.Context, store *topology.Store, f *docFile, abs string,
 		return nil, "cannot be read"
 	}
 	if !budget.take(info.Size()) {
-		return nil, "the document read cap was reached"
+		return nil, fmt.Sprintf("the source-read budget (%dx max_bytes, shared with the bodies and memories) was spent", contextSourceReadFactor)
 	}
 	lines, snap, err := snapshotLines(abs)
 	if err != nil {
@@ -189,7 +187,7 @@ func (s *docSource) sections(q docQuery, f *docFile) []docSection {
 
 // docConstraints retrieves the document sections that bear on the seeds. A missing
 // or failing index gives none, and says so.
-func (c *ContextCollector) docConstraints(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) ([]contextConstraint, []string) {
+func (c *ContextCollector) docConstraints(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest, reads *sourceBudget) ([]contextConstraint, []string) {
 	if !scope.corpusAllowed(corpusDocs) {
 		return nil, nil
 	}
@@ -213,7 +211,7 @@ func (c *ContextCollector) docConstraints(ctx context.Context, pack *contextPack
 	if len(files) > contextMaxDocFiles {
 		files = files[:contextMaxDocFiles]
 	}
-	found, readGaps := c.readDocSections(ctx, index.store, pack.Root, q, files)
+	found, readGaps := c.readDocSections(ctx, index.store, pack.Root, q, files, reads)
 	return found, append(gaps, readGaps...)
 }
 
@@ -228,13 +226,13 @@ func docSeeds(seeds []contextSeed) map[string]bool {
 	return out
 }
 
-// readDocSections reads the candidates (a sensitive one is named, not read) and
-// keeps the best-scoring sections under the section cap.
-func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.Store, root string, q docQuery, files []*docFile) ([]contextConstraint, []string) {
+// readDocSections reads the candidates (a sensitive one is named, not read) out of
+// the call's shared source-read budget, and keeps the best-scoring sections under
+// the section cap.
+func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.Store, root string, q docQuery, files []*docFile, budget *sourceBudget) ([]contextConstraint, []string) {
 	var out []contextConstraint
 	var gaps []string
 	var pool []docSection
-	budget := &sourceBudget{limit: contextDocReadBytes}
 	for _, f := range files {
 		abs := absUnder(root, f.path)
 		if c.sensitive != nil && c.sensitive(ctx, abs, "") {

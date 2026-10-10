@@ -15,10 +15,12 @@ import (
 const (
 	contextDefaultMaxBytes = 12000
 	contextMaxBytesCap     = 32000
-	// contextReserveBytes is held back from max_bytes for the text the connection
+	// ContextReserveBytes is held back from max_bytes for the text the connection
 	// layer appends to a served result (mailbox preview, policy notes). The pack
-	// renders into max_bytes minus this, so the served total stays within max_bytes.
-	contextReserveBytes = 1024
+	// renders into max_bytes minus this, so the served total stays within max_bytes;
+	// the connection layer holds what it appends to this much (AppendRoom).
+	ContextReserveBytes = 1024
+	contextReserveBytes = ContextReserveBytes
 	// contextMinMaxBytes leaves room for the header and an omission footer after
 	// the reserve; a smaller budget could not carry even the truncation notice.
 	contextMinMaxBytes = contextReserveBytes + 512
@@ -149,7 +151,21 @@ func (t *ContextForTask) SensitiveWired() bool {
 	return t.collector != nil && t.collector.sensitive != nil
 }
 
-func (*ContextForTask) Name() string                 { return "context_for_task" }
+// contextForTaskName is the tool's registered name.
+const contextForTaskName = "context_for_task"
+
+// AppendRoom is the most bytes the connection layer may append to tool's result, and
+// false for a tool whose result carries no such limit. context_for_task tells its
+// caller that max_bytes bounds the WHOLE response, so what is appended to it (a
+// mailbox preview, a policy notice) must fit the reserve the pack left.
+func AppendRoom(tool string) (room int, bounded bool) {
+	if tool == contextForTaskName {
+		return ContextReserveBytes, true
+	}
+	return 0, false
+}
+
+func (*ContextForTask) Name() string                 { return contextForTaskName }
 func (*ContextForTask) InputSchema() json.RawMessage { return contextForTaskSchema }
 func (*ContextForTask) Description() string {
 	return "Experimental, read-only context pack that starts from explicit seeds: at least one file or symbol is required, and task prose only re-ranks, never seeds. " +

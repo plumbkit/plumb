@@ -40,6 +40,11 @@ type contextSeed struct {
 	// Shadowed counts the import, package and file nodes that share the selector
 	// and were set aside because a declaration does.
 	Shadowed int
+	// IndexHash is the content hash the index held for Path when Line and EndLine
+	// were read (see indexedHash); "" when it held none. A body is sliced from the
+	// index's span only if the snapshot is exactly the bytes this hash describes,
+	// never because the index has since caught up with the file.
+	IndexHash string
 }
 
 // contextCandidate is a labelled possibility. A candidate is never a seed.
@@ -85,6 +90,9 @@ type contextPack struct {
 	Affected    contextAffected
 	Constraints []contextConstraint
 	Have        haveStats
+	// SourceRead is the bytes of source the call read in all (the bodies, then the
+	// memories and documents), which never exceeds 4 x max_bytes.
+	SourceRead int64
 }
 
 // budget is the byte limit for the rendered pack: max_bytes less the reserve the
@@ -105,6 +113,11 @@ type ContextCollector struct {
 	sensitive SensitivePathFn
 	testScope func(context.Context) TestScope // optional; without it test packages are named by directory
 	deadline  time.Duration                   // zero means contextExpansionDeadline
+
+	// beforeBodies is a test seam: it runs after the index has been read and before
+	// the first file is snapshotted, which is where a reindex or an edit can land
+	// between the two. Nil in production.
+	beforeBodies func()
 }
 
 // SensitivePathFn reports whether a path's content must be withheld from a
@@ -238,10 +251,17 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 	defer cancel()
 	c.expand(ctx, graphCtx, &pack, scope, index, req)
 	c.affectedTests(graphCtx, &pack, scope, index)
-	bodyGaps := c.collectBodies(ctx, &pack, index.store)
+	if c.beforeBodies != nil {
+		c.beforeBodies()
+	}
+	// One source-read budget for the whole call: the bodies, the memories and the
+	// documents are each read out of it, so what a call reads is bounded once.
+	reads := &sourceBudget{limit: int64(contextSourceReadFactor) * int64(req.MaxBytes)}
+	bodyGaps := c.collectBodies(ctx, &pack, index.store, reads)
 	pack.markStale()
 	pack.applyHave(req.Have)
-	constraintGaps := c.constraints(ctx, &pack, scope, index, req)
+	constraintGaps := c.constraints(ctx, &pack, scope, index, req, reads)
+	pack.SourceRead = reads.spent
 	pack.Gaps = pack.allGaps(index, bodyGaps, constraintGaps)
 	return pack, nil
 }
@@ -266,6 +286,13 @@ func (p *contextPack) allGaps(index contextIndex, bodyGaps, constraintGaps []str
 // graph deadline; the summary that follows the walk is asked of ctx, so a walk
 // that ran out of time is still described truthfully.
 func (c *ContextCollector) expand(ctx, graphCtx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) {
+	c.walk(ctx, graphCtx, pack, scope, index, req, true)
+}
+
+// walk is the expansion a pack and a hint share. forPack adds what only a pack
+// needs, because only a pack slices bodies from the spans the walk reads: the
+// content hash the index held with each span.
+func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest, forPack bool) {
 	if len(pack.Seeds) == 0 || !index.usable() {
 		return
 	}
@@ -274,6 +301,9 @@ func (c *ContextCollector) expand(ctx, graphCtx context.Context, pack *contextPa
 		seedDirs[path.Dir(s.Path)] = true
 	}
 	ex := newExpander(index.store, scope, newRanker(req.Task, req.Intent, seedDirs), c.sensitiveFor(ctx, pack.Root))
+	if forPack {
+		ex.indexHash = hashCache(graphCtx, index.store)
+	}
 	ex.run(graphCtx, ex.addSeeds(graphCtx, pack.Seeds))
 	pack.Related = ex.finish(graphCtx)
 	pack.Expansion = ex.summarise(ctx, pack.Related)
