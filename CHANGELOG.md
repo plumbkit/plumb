@@ -24,8 +24,34 @@
   including a 1024-byte reserve for the connection layer's appended notes; when
   the pack does not fit, the least important lines go first and the exact count
   omitted is stated. The tool is unpinned and outside the lean profile, so a
-  client finds it by name, and it records no read, so it never satisfies the
-  strict-edit guard for a file.
+  client finds it by name.
+- **`context_for_task` delivers complete symbol bodies, with edit guards, inside a
+  strict budget (PLAN-462, second slice).** A resolved symbol seed now carries
+  its declaration's exact lines, sliced from one snapshot of the file. The index's
+  line span is trusted only when the index parsed those same bytes; when the file
+  has changed since it was indexed, the declaration is found again in the
+  snapshot's own bytes (and the pack says the file changed), and if it cannot be
+  found exactly once the body is withheld with a precise reason, never sliced from
+  a stale span. Each body prints its `content_sha256` (the SHA-256 of exactly the
+  delivered text, without the line-number gutter) and, once per file, a separate
+  guard line with the file's mtime and SHA-256 in the shape `read_symbol` uses, so
+  `edit_file`'s `expected_mtime` and `expected_sha` can be copied; a content hash is
+  never offered as an edit guard. The packer degrades per item (complete body, then
+  a status line with the signature and doc, then a bare status line, then a counted
+  omission), never splits a body, and states the exact number omitted by class; a
+  body larger than the whole budget becomes a handoff to `read_symbol` that names
+  its size, content hash and snapshot. Only a body that survived packing and was
+  rendered is recorded as a read, once per file and per agent, so a delivered body
+  satisfies strict mode's read-before-edit check and an omitted, degraded or handed
+  off one does not. The source read is capped at four times `max_bytes`, and the
+  served text, with a connection message preview of about 1 KiB appended, stays
+  within `max_bytes`. Also: an exact path half in `path#Selector` (a file, or a
+  directory's contents, case-sensitive; `x.go#F` no longer reaches `pkg/x.go`,
+  `a.go` no longer reaches `data.go`), imports and package clauses a declaration
+  outranks are disclosed ("also matches N import/package/file nodes"), a symbol
+  seed is refused with a `session_start` handoff when the topology index belongs
+  to another root than the calling agent's (file seeds still work), `within` may
+  name the workspace root, and files under `.plumb/` are never seeds.
 
 ## 0.24.0 (2026-10-10)
 

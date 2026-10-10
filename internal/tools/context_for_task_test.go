@@ -112,23 +112,24 @@ func TestContextForTask_WireBytesWithinTarget(t *testing.T) {
 	}
 }
 
-func TestContextForTask_UnpinnedUnleanAndTracksNoReads(t *testing.T) {
+func TestContextForTask_UnpinnedUnleanAndCollectorTracksNoReads(t *testing.T) {
 	if IsPinned("context_for_task") {
 		t.Error("context_for_task must not be in PinnedTools: it ships unpinned")
 	}
 	if slices.Contains(LeanToolNames(), "context_for_task") {
 		t.Error("context_for_task must not be in LeanTools: a lean client reports it unavailable")
 	}
-	// A pack never records a read, so neither type may be able to: no field of
-	// either mentions the read tracker. The positive control proves the detector
-	// would see one.
-	if len(readTrackerFields(reflect.TypeFor[ReadFile]())) == 0 {
-		t.Fatal("control: ReadFile holds a read tracker, but the detector found none")
-	}
-	for _, typ := range []reflect.Type{reflect.TypeFor[ContextCollector](), reflect.TypeFor[ContextForTask]()} {
-		if fields := readTrackerFields(typ); len(fields) > 0 {
-			t.Errorf("%s has read-tracker field(s) %v; a context pack must never record a read", typ.Name(), fields)
+	// Gathering a pack never records a read, so the collector may not be able to:
+	// no field of it mentions the read tracker. Recording belongs to the tool, and
+	// only for bodies it delivered. The positive controls prove the detector sees
+	// a tracker where there is one.
+	for _, typ := range []reflect.Type{reflect.TypeFor[ReadFile](), reflect.TypeFor[ContextForTask]()} {
+		if len(readTrackerFields(typ)) == 0 {
+			t.Fatalf("control: %s holds a read tracker, but the detector found none", typ.Name())
 		}
+	}
+	if fields := readTrackerFields(reflect.TypeFor[ContextCollector]()); len(fields) > 0 {
+		t.Errorf("ContextCollector has read-tracker field(s) %v; collecting a pack must never record a read", fields)
 	}
 }
 
@@ -304,14 +305,19 @@ func TestContextForTask_UncoveredFilesAreLabelledNotEmpty(t *testing.T) {
 
 func TestContextForTask_NextCallsAreExactAndAbsolute(t *testing.T) {
 	s := newShop(t)
-	out, err := s.run(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Add"}})
+	out, err := s.run(t, map[string]any{"files": []string{"cart/cart.go"}, "symbols": []string{"cart/cart.go#Cart.Add"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	abs := filepath.Join(canonicalRoot(s.root), "cart", "cart.go")
-	want := `read_symbol {"path":` + string(quotedJSON(t, abs)) + `,"name":"(*Cart).Add"}`
-	if !strings.Contains(out, want) {
+	want := `file_outline {"uri":` + string(quotedJSON(t, abs)) + `}`
+	if !strings.Contains(out, "\n  "+want) {
 		t.Errorf("output lacks the exact next call %s:\n%s", want, out)
+	}
+	// A delivered body is its own answer: it offers no read_symbol call for the
+	// same declaration.
+	if strings.Contains(out, "read_symbol") {
+		t.Errorf("a delivered body must not also offer a read_symbol next call:\n%s", out)
 	}
 }
 

@@ -193,11 +193,11 @@ func TestPackContextLines_KeepsTheHeaderEvenWhenNothingElseFits(t *testing.T) {
 		{text: "HEADER", prio: prioHeader},
 		{text: strings.Repeat("x", 300), prio: prioSeed},
 	}
-	out := packContextLines(lines, len("HEADER")+len(omittedFooter(2))+1)
+	out := packContextLines(lines, len("HEADER")+footerCeiling())
 	if !strings.HasPrefix(out, "HEADER\n") || strings.Contains(out, "xxx") {
 		t.Errorf("got %q, want the header plus the omission footer only", out)
 	}
-	if !strings.HasSuffix(out, omittedFooter(1)) {
-		t.Errorf("the footer must state exactly one omitted line: %q", out)
+	if want := omittedFooter(omissions{classSeed: 1}); !strings.HasSuffix(out, want) {
+		t.Errorf("the footer must state exactly one omitted seed record, want suffix %q: %q", want, out)
 	}
 }

@@ -263,6 +263,45 @@ func (s *Store) ExtractFileGraph(ctx context.Context, path string) ([]Node, []Ed
 	return out.nodes, out.edges, err
 }
 
+// ExtractSource parses src as the content of relPath with the matching
+// structural extractor and returns its nodes, WITHOUT reading the file or
+// touching the persisted index. It is ExtractFile for a caller that already holds
+// the bytes it must stay consistent with (a snapshot it is about to slice), so the
+// spans it returns describe exactly those bytes and not a later version of the
+// file. Returns (nil, nil) when no extractor handles relPath.
+func (s *Store) ExtractSource(ctx context.Context, relPath string, src []byte) ([]Node, error) {
+	rel := s.toRelative(paths.URIToPath(relPath))
+	ex := findExtractor(rel, s.idx.extractors)
+	if ex == nil {
+		return nil, nil
+	}
+	out, err := s.idx.extractFile(ctx, ex, rel, src)
+	return out.nodes, err
+}
+
+// IndexedContentHash returns the SHA-256 (hex) of the content the index last
+// parsed for relPath: the hash its recorded nodes and line spans describe. ok is
+// false when the file is not indexed or was recorded without a parse (an
+// extraction error, or no extractor), in which case its spans describe nothing.
+// A caller compares it with the hash of bytes it holds to learn whether the
+// index's spans are still true of them.
+func (s *Store) IndexedContentHash(ctx context.Context, relPath string) (hash string, ok bool, err error) {
+	rel := s.toRelative(paths.URIToPath(relPath))
+	err = s.db.QueryRowContext(ctx, `SELECT content_hash FROM topology_files WHERE path = ?`, rel).Scan(&hash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("topology: indexed content hash: %w", err)
+	}
+	return hash, hash != "", nil
+}
+
+// Root returns the canonical workspace root this store indexes. A caller that
+// answers for one agent compares it with that agent's own root before trusting
+// the index: a store opened for one root says nothing true about another.
+func (s *Store) Root() string { return s.workspace }
+
 // Explore performs a bounded BFS neighbourhood from the named symbol.
 func (s *Store) Explore(ctx context.Context, name string, opts ExploreOpts) (*Neighbourhood, error) {
 	return Explore(ctx, s.db, name, opts)

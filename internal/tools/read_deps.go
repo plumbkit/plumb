@@ -35,6 +35,12 @@ type readRecordingTool interface {
 // the literal from reading as a claim about wiring.
 const writesNotApplicable = true
 
+// clientNotApplicable is the client leg ReadDeps returns for a read-recording
+// tool that has no edit-lane hint to gate by client (context_for_task's guard
+// line is plain text for every client). Like writesNotApplicable it claims
+// nothing about wiring.
+const clientNotApplicable = true
+
 // Compile-time membership: every read-recording tool must implement
 // readRecordingTool, so a future one added here without a ReadDeps method
 // fails the build rather than silently escaping TestToolWiringParity's
@@ -43,4 +49,5 @@ var (
 	_ readRecordingTool = (*ReadFile)(nil)
 	_ readRecordingTool = (*ReadSymbol)(nil)
 	_ readRecordingTool = (*ReadMultipleFiles)(nil)
+	_ readRecordingTool = (*ContextForTask)(nil)
 )
