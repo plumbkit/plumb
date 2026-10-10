@@ -352,12 +352,7 @@ func (t *CallHierarchy) topologyCallHierarchy(ctx, lspCtx context.Context, q cal
 	if !ok {
 		return "", false
 	}
-	includeDerived := false
-	if subject, subjectErr := store.CallGraphSubjectForNode(ctx, centre.ID); subjectErr == nil {
-		if admission, admissionErr := store.AdmitCallGraph(ctx, subject); admissionErr == nil {
-			includeDerived = admission.Admitted
-		}
-	}
+	includeDerived := store.DerivedCallsAdmittedFor(ctx, centre.ID)
 	var sb strings.Builder
 	// The stale-index clause matters MOST here: this answer is a relationship list,
 	// and "no callers" from a failing index is the absence answer that misleads most

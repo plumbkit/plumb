@@ -182,6 +182,7 @@ treat it as an optional, rebuildable index.
 | Understand a symbol's neighbourhood | `topology_explore` |
 | Assess the blast radius of a change | `topology_impact` |
 | Know which tests a change might affect | `topology_affected` |
+| Gather a task's seeds, bodies, neighbourhood, affected tests and constraints in one bounded call (experimental, unpinned) | `context_for_task` |
 | Find entry points: route → handler registrations and the Cobra command tree | `topology_routes` |
 | Jump to a definition with certainty | `get_definition` (LSP) |
 | Find every real call site | `find_references` (LSP) |
@@ -220,6 +221,17 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   the index: route string → handler for Go `net/http`, gorilla/mux, chi, gin and echo,
   Python Flask/FastAPI decorators, and the Cobra command tree (`Use` → `Run`/`RunE`,
   linked through `AddCommand`). See [Route recovery](#route-recovery) below.
+
+`context_for_task` ([Tools](tools.md#context_for_task); experimental and unpinned) is a
+consumer of the index rather than a seventh topology tool. It reads the index of the
+*calling agent's* canonical root, not the connection's, and it uses the same facts the
+tools above do: nodes and edges for the walk, the evidence class of each edge (extractor,
+derived, heuristic) as a rank and a label, `topology_affected`'s test gather, and the
+heading nodes of Markdown for document sections. Two rules are specific to it. A body is
+sliced from the index's line span only if the content hash the index held *when it gave
+the span* equals the hash of the file snapshot the body is cut from; otherwise the
+declaration is found again in the snapshot. And while the index is `FAILING`, absent or
+another root's, it claims no relationship and no test impact, and says so.
 
 ## Package-level reachability
 
@@ -391,8 +403,9 @@ incremental re-indexes: callee re-indexes repoint incoming rows by stable identi
 caller re-indexes replace only outgoing rows. Function reachability is the function-level
 consumer: it opts into admitted Go resolver edges, filters `_test.go` callers, and computes
 full outward closure. The neighbourhood traversal still excludes derived calls by **source**:
-`ExploreOpts.IncludeDerivedCalls` defaults to false, and the remaining consumers
-(`call_hierarchy`'s topology fallback, `topology_impact` package mode,
+`ExploreOpts.IncludeDerivedCalls` defaults to false. `context_for_task` opts in node by
+node, asking the admission rule on the node it is about to walk around; the remaining
+consumers (`call_hierarchy`'s topology fallback, `topology_impact` package mode,
 `topology_affected`, `minimal_diff_review`) receive extractor intra-file edges only.
 Excluding by edge *kind* would not work: derived edges are `calls` edges, identical in kind
 to the extractor's own.

@@ -19,6 +19,7 @@ import (
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/quality"
 	"github.com/plumbkit/plumb/internal/quality/golangcilint"
 	"github.com/plumbkit/plumb/internal/quality/ruff"
@@ -74,6 +75,29 @@ func (s *connSession) topologyEnabledFor(workspace string) bool {
 // handshake attaches the workspace.
 func (s *connSession) topologyStoreLive() *topology.Store {
 	return s.view().topologyStore
+}
+
+// topologyStoreForRoot is the root-keyed topology accessor (Invariant 3, B6). On a
+// shared connection each logical agent may be pinned to a root of its own, so the
+// connection's store (topologyStoreLive) describes the CONNECTION's root and is
+// the wrong answer for an agent pinned elsewhere. This answers for the canonical
+// root it is given: the daemon pool's open store for that root, else the
+// connection's own store when that is the root it holds, else nil. It never opens
+// a store; a root with no open index is reported as having none and the reader
+// degrades.
+func (s *connSession) topologyStoreForRoot(root string) *topology.Store {
+	if root == "" {
+		return nil
+	}
+	if s.topologyPool != nil {
+		if st := s.topologyPool.forRoot(root); st != nil {
+			return st
+		}
+	}
+	if st := s.view().topologyStore; st != nil && paths.Canonical(st.Root()) == root {
+		return st
+	}
+	return nil
 }
 
 // reconcileTopologyStore refreshes the session's topology store after a global

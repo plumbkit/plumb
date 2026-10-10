@@ -2,12 +2,15 @@ package cli
 
 import (
 	"log/slog"
+	"maps"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/topology"
 	"github.com/plumbkit/plumb/internal/topology/extractors/golang"
 	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
@@ -88,6 +91,35 @@ func (p *topologyPool) get(root string) *topology.Store {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.stores[root]
+}
+
+// forRoot returns the pool's already-open store for a canonical root, or nil when
+// none is open. It is the root-keyed accessor the daemon hands to readers that
+// answer FOR a root other than the one a connection holds (context_for_task's
+// agents, the lifecycle hook hinter): the answer depends on root and on nothing
+// else, and, like get, it never opens a store, so a read cannot materialise an
+// index, with its database file and background indexer, for a workspace that has
+// none. Keys are the spellings sessions attached with, so a canonical root also
+// matches a key that canonicalises to it. Canonicalising touches the file system, so
+// it runs on a copy of the keys taken under the lock and never while holding it, and
+// goes in key order so two keys that canonicalise alike always answer the same.
+func (p *topologyPool) forRoot(root string) *topology.Store {
+	if root == "" {
+		return nil
+	}
+	p.mu.Lock()
+	if s, ok := p.stores[root]; ok {
+		p.mu.Unlock()
+		return s
+	}
+	open := maps.Clone(p.stores)
+	p.mu.Unlock()
+	for _, key := range slices.Sorted(maps.Keys(open)) {
+		if paths.Canonical(key) == root {
+			return open[key]
+		}
+	}
+	return nil
 }
 
 // healthFor reports the LIVE indexer's health for root, and false when the pool
