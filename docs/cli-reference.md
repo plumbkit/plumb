@@ -266,7 +266,21 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 plumb hooks                      # read-only status, per client, per hook
 plumb hooks install [client]     # install or refresh
 plumb hooks uninstall [client]   # remove plumb's handlers, and only those
+plumb hooks uninstall [client] --only context   # remove just the context-hint handlers
+plumb hooks uptake [--since 168h] [--json]       # are context hints configured, trusted, invoked, consumed
 ```
+
+Claude Code also gets two **advisory context-hint** handlers, UserPromptSubmit
+and SubagentStart, and its SessionStart handler appends a hint after the linkage
+sentence. A hint names code (selectors and locations, never source) when a
+prompt names files or symbols explicitly, after a resume or compaction, and when
+a subagent starts; it is capped at 1 KiB a turn and 8 KiB per agent, and never
+counts as reading a file. `[context] hints = false` or `PLUMB_CONTEXT_HINTS=off`
+silences hints; `--only context` removes the two hint-only handlers. `plumb hooks
+uptake` reports configured (handlers on disk), trusted (Codex's own approval
+record), invoked (the daemon's bounded hint ledger, by outcome and reason) and
+consumed (a later plumb call by the same agent named what the hint named: a
+proxy, and hints with no attributable later call are reported as unattributed).
 
 Lifecycle hooks are the one place plumb can reach an agent between tool calls:
 at the start of a session, and at the end of a turn. Bare `plumb hooks` is
