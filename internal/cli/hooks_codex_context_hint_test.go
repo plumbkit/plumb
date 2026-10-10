@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -120,10 +121,44 @@ func TestRunCodexHookIO_UserPromptSubmitPayload(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.HookSpecificOutput.AdditionalContext != "HINT" {
 		t.Fatalf("stdout = %q (%v)", out.String(), err)
 	}
-	// runCodexHookIO is wired to the real asker, not to nil.
+	// The test-only runner asks for no hints at all.
 	out.Reset()
 	if err := runCodexHookIOWith(bytes.NewReader(payload), &out, nil, nil); err != nil || out.Len() != 0 {
 		t.Fatalf("hint-less runner printed %q (%v)", out.String(), err)
+	}
+}
+
+// The production entry point, runCodexHookIO, is wired to the real asker: the
+// request reaches the daemon's control socket and the daemon's hint comes back
+// as the event's additionalContext.
+func TestRunCodexHookIO_HintReachesTheDaemon(t *testing.T) {
+	probeTestEnv(t)
+	_, sub := hintWorkspace(t)
+	got := make(chan string, 1)
+	fakeCtrlDaemon(t, func(c net.Conn, line string) {
+		got <- line
+		_, _ = c.Write([]byte(`ok {"outcome":"emitted","text":"DAEMON HINT\n"}` + "\n"))
+	})
+	payload, _ := json.Marshal(map[string]any{
+		"session_id": "thr-1", "turn_id": "turn-3", "cwd": sub, "hook_event_name": "UserPromptSubmit",
+		"prompt": "fix `Cart.Total`",
+	})
+	var out bytes.Buffer
+	if err := runCodexHookIO(bytes.NewReader(payload), &out); err != nil {
+		t.Fatal(err)
+	}
+	var req contextHintRequest
+	select {
+	case line := <-got:
+		if json.Unmarshal([]byte(strings.TrimPrefix(line, ctrlContextHintCommand)), &req) != nil || req.Host != "codex" || req.TurnID != "turn-3" {
+			t.Fatalf("daemon received %q", line)
+		}
+	default:
+		t.Fatal("runCodexHookIO asked the daemon nothing")
+	}
+	var doc codexSpecific
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil || doc.HookSpecificOutput.AdditionalContext != "DAEMON HINT" {
+		t.Fatalf("stdout = %q (%v)", out.String(), err)
 	}
 }
 
