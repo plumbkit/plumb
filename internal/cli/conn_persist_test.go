@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -170,6 +171,7 @@ func newPersistSessionGated(t *testing.T, store *config.Store, ss *sessionstate.
 //     retry to report that it has finished.
 type gatedRetry struct {
 	gate      chan struct{}
+	release   sync.Once // opens gate; a second awaitConverged must not panic
 	converged chan struct{}
 }
 
@@ -199,7 +201,7 @@ func gateRestoreRetry(s *connSession) *gatedRetry {
 // detached, and waits until the retry has converged and finished.
 func (g *gatedRetry) awaitConverged(t *testing.T) {
 	t.Helper()
-	close(g.gate)
+	g.release.Do(func() { close(g.gate) })
 	select {
 	case <-g.converged:
 	case <-time.After(30 * time.Second):
