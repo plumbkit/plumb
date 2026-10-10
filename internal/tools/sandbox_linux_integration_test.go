@@ -23,7 +23,7 @@ func TestSandbox_WriteJailEnforced_Bwrap(t *testing.T) {
 	if err != nil {
 		t.Skipf("no home dir: %v", err)
 	}
-	outside, err := os.MkdirTemp(home, ".plumb-sbtest-")
+	outside, err := os.MkdirTemp(home, ".plumb-sbtest-") //nolint:usetesting // the escape target must not be under /tmp, which the jail mounts as a writable tmpfs (a write there would succeed and pass for a leak); t.TempDir() is under /tmp unless GOTMPDIR moves it
 	if err != nil {
 		t.Fatalf("mkdir outside: %v", err)
 	}

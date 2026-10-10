@@ -44,9 +44,10 @@ both behaviours against a stub linter.
 | `make test` | `go test ./...` |
 | `make test-race` | `go test -race ./...` |
 | `make lint` | `golangci-lint run` via `scripts/lint-with-retry.sh` — retries with bounded backoff on the shared-cache lock ("parallel golangci-lint is running"), so a peer agent's lint does not read as a failure of this one. |
-| `make verify` | Build, test, lint, compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the fast gate CI runs on every pull request. It does not RUN the integration suite, and prints that on success. |
+| `make lint-tags` | Lint and format-check the files behind custom build tags (`integration`, `clients*`, `parity`, `race`), which `make lint` never analyses. `scripts/build-tags.sh` reads the tags from the `//go:build` lines of every Go file that is not ignored, so a new tag is covered without a config change. Part of `make verify`. It lints this OS's files only; `make lint-cross` covers the other's. |
+| `make verify` | Build, test, lint (including `make lint-tags`), compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the fast gate CI runs on every pull request. It does not RUN the integration suite, and prints that on success. |
 | `make verify-full` | The same checks as `make verify` plus `make integration-test` — the full **"ready to commit"** gate, with the unit tests run once. `integration-test` SKIPS tests whose language server is absent, so install gopls and pyright to run all of it. |
-| `make lint-cross` | Statically lint and vet the other supported OS; required after platform-constrained or linter-config changes. |
+| `make lint-cross` | Statically lint and vet the other supported OS, its tagged files included; required after platform-constrained or linter-config changes. |
 | `make cover` | Enforce the whole-tree statement floor from `scripts/check-coverage.sh`. |
 | `make vuln` | Run `govulncheck`; requires network access. |
 | `make tidy` | `go mod tidy` |

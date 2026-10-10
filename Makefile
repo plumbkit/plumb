@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -210,11 +210,25 @@ docker-cleanroom:
 lint:
 	./scripts/lint-with-retry.sh
 
+# lint-tags lints and format-checks the files behind custom build tags, which a
+# plain `make lint` never analyses: the integration suite, cmd/smoke, the
+# clientsmoke tiers, and the parity and race variants (scripts/build-tags.sh
+# finds the tags). They are linted together in one run, because the clientsmoke
+# tiers share one harness and linting each tier alone reports the helpers the
+# other tiers use as unused. A struct misaligned behind the clients_conformance
+# tag sat on main for seven weeks before this existed.
+lint-tags:
+	@tags=$$(./scripts/build-tags.sh) || exit 1; \
+		echo "lint-tags: linting files behind --build-tags=$$tags"; \
+		./scripts/lint-with-retry.sh --build-tags="$$tags"
+
 # lint-cross lints the OTHER supported OS's tree. golangci-lint only analyses
 # files that match the current GOOS, so a Linux `make lint` never sees
 # sandbox_darwin*.go or process_darwin*.go (and vice versa) — a real blind spot:
 # a linter change validated on one platform can pass locally and fail CI's other
 # matrix leg. Static analysis only; it never runs the other platform's tests.
+# It lints the other OS's tagged files too (lint-tags' list): a file behind
+# `linux && integration` is otherwise seen by no macOS lint at all.
 #
 # Run it after changing .golangci.yml or touching platform-constrained code.
 # Not in `verify` — it roughly doubles lint time to cover nine files, and CI's
@@ -224,8 +238,10 @@ lint:
 lint-cross:
 	@other=$$(if [ "$$(go env GOOS)" = "darwin" ]; then echo linux; else echo darwin; fi); \
 		echo "lint-cross: linting the $$other tree (current GOOS=$$(go env GOOS))"; \
-		GOOS=$$other golangci-lint run && GOOS=$$other go vet ./... && \
-		echo "lint-cross: OK ($$other tree clean)"
+		tags=$$(./scripts/build-tags.sh) || exit 1; \
+		GOOS=$$other golangci-lint run && GOOS=$$other golangci-lint run --build-tags="$$tags" && \
+		GOOS=$$other go vet ./... && \
+		echo "lint-cross: OK ($$other tree clean, tagged files included)"
 
 # check-size fails if any Go file exceeds its line rule — 600 for source, 900 for
 # tests (with a grandfather baseline for files still awaiting a split). Keeps the
@@ -396,9 +412,10 @@ site: blog
 blog:
 	python3 scripts/build-blog.py
 
-# verify is the fast gate: build + test + lint + an integration-tag COMPILE pass
-# (build-integration) + the file-size, brief, changelog, site-claims and
-# disclosure guards + go.mod tidiness. Coverage (`make cover`) and vulnerabilities
+# verify is the fast gate: build + test + lint, of the default and the tagged
+# files (lint-tags) + an integration-tag COMPILE pass (build-integration) + the
+# file-size, brief, changelog, site-claims and disclosure guards + go.mod
+# tidiness. Coverage (`make cover`) and vulnerabilities
 # (`make vuln`) are deliberately NOT here — the first doubles the suite runtime,
 # the second needs the network; CI runs both on every push.
 #
@@ -412,7 +429,7 @@ blog:
 # VERIFY_CHECKS is the check list verify and verify-full share. verify-full omits
 # `test` because `go test -tags=integration ./...` already runs every non-tagged
 # test too, so listing both would run the unit suite twice.
-VERIFY_CHECKS := lint build-integration build-clients check-size check-brief check-changelog check-site-claims check-verify-disclosure check-pre-commit tidy-check
+VERIFY_CHECKS := lint lint-tags build-integration build-clients check-size check-brief check-changelog check-site-claims check-verify-disclosure check-pre-commit tidy-check
 verify: build test $(VERIFY_CHECKS)
 	@printf '\n%s\n%s\n%s\n%s\n%s\n\n' \
 		'verify: PASSED — but the //go:build integration suite was COMPILED, not RUN.' \

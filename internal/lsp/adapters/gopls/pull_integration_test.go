@@ -285,7 +285,7 @@ func TestIntegration_ForcedPull_Latency(t *testing.T) {
 	const warmup = 3
 
 	// Warm-up: let gopls settle (first analyses are cold outliers).
-	for i := 0; i < warmup; i++ {
+	for i := range warmup {
 		writeAndNotify(i)
 		if _, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
 			TextDocument: protocol.TextDocumentIdentifier{URI: measureURI},
@@ -296,7 +296,7 @@ func TestIntegration_ForcedPull_Latency(t *testing.T) {
 
 	// Phase PULL — time the forced document pull request→response.
 	pullDurs := make([]time.Duration, 0, iters)
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		writeAndNotify(warmup + i)
 		start := time.Now()
 		if _, err := ad.Diagnostic(ctx, protocol.DocumentDiagnosticParams{
@@ -321,7 +321,7 @@ draining:
 	// Phase PUSH — time DidChangeWatchedFiles → publishDiagnostics arrival.
 	pushDurs := make([]time.Duration, 0, iters)
 	misses := 0
-	for i := 0; i < iters; i++ {
+	for i := range iters {
 		// Drain stragglers so we time this edit's push, not a previous one.
 		for {
 			select {

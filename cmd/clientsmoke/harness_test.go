@@ -227,7 +227,7 @@ func clientSpecs() []clientSpec {
 // Unix-socket limit), removed at test end.
 func mkTmpHome(t *testing.T) string {
 	t.Helper()
-	tmpHome, err := os.MkdirTemp("/tmp", "plcl")
+	tmpHome, err := os.MkdirTemp("/tmp", "plcl") //nolint:usetesting // the daemon's unix socket lives under this HOME; macOS t.TempDir() would push it past the ~104-byte limit
 	if err != nil {
 		t.Fatal("create tmpHome:", err)
 	}
@@ -432,8 +432,8 @@ func TestDaemonPIDPathsCoverClientEnvironmentFiltering(t *testing.T) {
 func makeBareFixture(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if real, err := filepath.EvalSymlinks(dir); err == nil {
-		dir = real
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolved
 	}
 	if err := os.Mkdir(filepath.Join(dir, ".plumb"), 0o755); err != nil {
 		t.Fatal(err)
@@ -470,7 +470,7 @@ func daemonLogPath(tmpHome string) string {
 // config or auth state — outside the test's temporary HOME before it is removed.
 func preserveFailureEvidence(t *testing.T, tmpHome string) {
 	t.Helper()
-	dst, err := os.MkdirTemp("", "clientsmoke-failure-")
+	dst, err := os.MkdirTemp("", "clientsmoke-failure-") //nolint:usetesting // the evidence must outlive the test; t.TempDir() is removed when it ends
 	if err != nil {
 		t.Logf("preserve failure evidence: %v", err)
 		return
@@ -780,10 +780,10 @@ func firstSetEnv(names []string) (name, value string, ok bool) {
 }
 
 // truncate clips long command output for log readability.
-func truncate(b []byte, max int) string {
+func truncate(b []byte, limit int) string {
 	s := string(b)
-	if len(s) <= max {
+	if len(s) <= limit {
 		return s
 	}
-	return s[:max] + "\n…(truncated)"
+	return s[:limit] + "\n…(truncated)"
 }
