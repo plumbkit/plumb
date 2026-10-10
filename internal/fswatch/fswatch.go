@@ -41,11 +41,12 @@
 //     inside an unwatched gap. A Lost that follows a root's return is likewise
 //     signalled only once the new run has finished adding its watches.
 //   - When it can no longer see every change, it closes Failed for good: the
-//     backend stopped on its own, or (on Linux) the inotify watch limit left
-//     part of the tree unwatched. A consumer then falls back to periodic
+//     backend stopped on its own, a restart's initial walk did not finish
+//     within a minute (a stalled mount, say), or (on Linux) the inotify
+//     watch limit left part of the tree unwatched, in the initial walk or in
+//     a directory that arrived later (probed, so best effort: see
+//     sgtdiRun.limitReached). A consumer then falls back to periodic
 //     reconciliation; the backend keeps delivering what it still watches.
-//     A directory created later, at the limit, is not detected: sgtdi
-//     discards that error.
 //   - A directory that arrives whole (created, or moved in) is reported with
 //     its contents. A directory moved away is reported under its own name
 //     only: no OS reports the entries it took with it, so a consumer drops
@@ -191,19 +192,19 @@ func (w *Watcher) Events() <-chan Event { return w.events }
 func (w *Watcher) Lost() <-chan struct{} { return w.lost }
 
 // Failed is closed, for good, once the Watcher can no longer see every change:
-// the backend stopped on its own (no further events will arrive), or the
-// inotify watch limit left part of the tree unwatched (events keep arriving for
-// the rest). It is a degraded state, not a loss to reconcile once. Lost is
-// signalled too, but a single reconcile restores nothing after it, so a
-// consumer relying on events for freshness must fall back to something
-// periodic. A lost root is NOT a failure: the Watcher waits for the root to
-// return. Close does not close Failed.
+// the backend stopped on its own, or a restart's walk hung (no further events
+// will arrive), or the inotify watch limit left part of the tree unwatched
+// (events keep arriving for the rest). It is a degraded state, not a loss to
+// reconcile once. Lost is signalled too, but a single reconcile restores
+// nothing after it, so a consumer relying on events for freshness must fall
+// back to something periodic. A lost root is NOT a failure: the Watcher waits
+// for the root to return. Close does not close Failed.
 func (w *Watcher) Failed() <-chan struct{} { return w.failed }
 
-// Close stops watching and waits for the backend to finish. On Linux and
-// Windows that includes a restart walk in progress, which sgtdi cannot
-// interrupt: a root that came back on a stalled mount holds Close until the
-// walk ends.
+// Close stops watching and waits for the backend to finish, but on Linux and
+// Windows for at most two seconds for a running sgtdi watcher: a walk sgtdi
+// cannot interrupt (a restart's initial walk, or a new directory's, on a
+// stalled mount) is stopped and left to end on its own.
 func (w *Watcher) Close() {
 	w.closeOnce.Do(func() {
 		close(w.done)

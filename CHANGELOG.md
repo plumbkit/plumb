@@ -210,9 +210,12 @@
   - A watcher that can no longer see every change now says so: on Linux and
     Windows when the backend stops on its own, and on Linux when the inotify
     watch limit leaves part of the tree unwatched (sgtdi skips those
-    directories and carries on). The topology index then falls back to its
-    `resync_interval_minutes`, and the LSP watcher logs a warning. A
-    directory created later, at the limit, is still not detected.
+    directories and carries on), in its initial walk or in a directory
+    created later. sgtdi discards the error for a directory created later,
+    so plumb probes each new directory with a throwaway inotify watch; CI
+    drives a real watcher past a lowered limit to prove it. The topology
+    index then falls back to its `resync_interval_minutes`, and the LSP
+    watcher logs a warning.
   - A watcher also uses far fewer descriptors on macOS release builds: a
     500-file tree went from about 520 descriptors per watcher to about 12.
   - A populated directory moved into a workspace now has its files reported;
@@ -229,7 +232,12 @@
     index's start), and the full resync after the workspace directory returns
     is requested only once the new watches are added. Before, a resync could
     finish while watches were still being added, and a change made in that
-    gap was never seen.
+    gap was never seen. A restart's walk has the same one-minute bound: one
+    that hangs degrades the watcher instead of leaving it silently blind.
+    Closing a watcher waits at most two seconds for a walk sgtdi cannot
+    interrupt (a restart's, or a new directory's, on a stalled mount), and
+    waits in full for a normal stop, so a watcher started right after on the
+    same tree never overlaps the old one's inotify watches.
   - Accepted behaviour change for macOS release builds: editing the target of
     an indexed in-workspace symlink no longer re-indexes the symlink until the
     next resync. kqueue happened to report the link too, because opening it
@@ -243,6 +251,14 @@
   - When the watcher is unavailable and `resync_interval_minutes` is 0, the
     topology index now warns that it will not see external changes until the
     next start.
+- **Stopping a file watcher on Linux or Windows can no longer panic the
+  daemon.** sgtdi/fswatcher v1.3.0 closes the event channels it owns when
+  its watch ends, but does not wait for its debounce goroutine. A flush
+  already under way could then send on a closed channel and panic. Watchers
+  stop on topology close, LSP hibernation and reconfiguration. The race
+  detector caught it in CI (`TestWatcher_CyclesDoNotLeak`). Plumb now passes
+  its own channels (`WithCustomChannels`), which sgtdi never closes; a late
+  send lands in a buffer nobody reads.
 - **Topology recovery guidance no longer says to delete the index under a
   running daemon, and `plumb doctor` now reports an index with a corrupt
   header or schema.** (PLAN-467)

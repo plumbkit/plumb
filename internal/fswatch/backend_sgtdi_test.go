@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -92,8 +93,14 @@ const notBeforeReady = 300 * time.Millisecond
 // a supervisor that then fails to return is reported rather than waited on.
 func supervise(t *testing.T, w *Watcher, first *sgtdiRun, start startFunc) <-chan struct{} {
 	t.Helper()
+	return superviseWithin(t, w, first, start, readyWithin)
+}
+
+// superviseWithin is supervise with the bound on a restart's walk.
+func superviseWithin(t *testing.T, w *Watcher, first *sgtdiRun, start startFunc, within time.Duration) <-chan struct{} {
+	t.Helper()
 	finished := make(chan struct{})
-	go func() { w.superviseSgtdi(Options{}, first, start); close(finished) }()
+	go func() { w.superviseSgtdi(Options{}, first, start, within); close(finished) }()
 	t.Cleanup(func() {
 		if !isClosed(w.done) {
 			close(w.done)
@@ -133,7 +140,7 @@ func TestSuperviseSgtdi_FailureIsDegraded(t *testing.T) {
 		return nil, errors.New("no restart")
 	}
 	finished := make(chan struct{})
-	go func() { w.superviseSgtdi(Options{}, run, restarted); close(finished) }()
+	go func() { w.superviseSgtdi(Options{}, run, restarted, readyWithin); close(finished) }()
 	select {
 	case <-finished:
 	case <-time.After(5 * time.Second):
@@ -407,10 +414,16 @@ func TestSuperviseSgtdi_RootGoneAgainBeforeReadyIsWaitedFor(t *testing.T) {
 	}
 }
 
-// runPump runs pumpSgtdi on its own goroutine and returns how it ended.
+// runPump runs pumpSgtdi on its own goroutine, never at the watch limit, and
+// returns how it ended.
 func runPump(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent, stopped <-chan struct{}) <-chan runEnd {
+	return runPumpLimited(w, evs, dropped, stopped, func(string) bool { return false })
+}
+
+// runPumpLimited is runPump with the watch-limit check the test gives it.
+func runPumpLimited(w *Watcher, evs, dropped <-chan fswatcher.WatchEvent, stopped <-chan struct{}, limitReached func(string) bool) <-chan runEnd {
 	end := make(chan runEnd, 1)
-	go func() { end <- pumpSgtdi(w, evs, dropped, stopped) }()
+	go func() { end <- pumpSgtdi(w, evs, dropped, stopped, limitReached) }()
 	return end
 }
 
@@ -558,5 +571,45 @@ func TestPumpSgtdi_ExpandsNewDirectory(t *testing.T) {
 	}
 	if rels := relPaths(root, got); !slices.Equal(rels, []string{"a", "a/b", "a/b/c", "a/b/c/new.go"}) {
 		t.Errorf("got %v", rels)
+	}
+}
+
+// TestStartSgtdi_ChannelsOutliveTheRun: sgtdi v1.3.0 closes the event channels
+// it owns when Watch returns, while its debounce goroutine may still be
+// flushing into them, a send on a closed channel that panics (the race detector
+// caught it under TestWatcher_CyclesDoNotLeak). A run owns its channels, so
+// they are still open after the run has ended.
+func TestStartSgtdi_ChannelsOutliveTheRun(t *testing.T) {
+	run, err := startSgtdi(t.TempDir(), Options{Cooldown: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready, err := run.awaitReady(nil, 30*time.Second); !ready {
+		t.Fatalf("the run was not ready: %v", err)
+	}
+	run.close()
+	for name, ch := range map[string]<-chan fswatcher.WatchEvent{"events": run.src.Events(), "dropped": run.src.Dropped()} {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				t.Errorf("the %s channel was closed when the run ended; sgtdi's debounce goroutine can still send on it", name)
+			}
+		default:
+		}
+	}
+}
+
+// TestStartSgtdi_ProbesTheWatchLimit: a real run carries the inotify probe.
+// Without it only sgtdi's own count is left, which never covers a new
+// directory itself, and only the end-to-end test under a lowered limit
+// (scripts/test-watch-limit.sh) would notice.
+func TestStartSgtdi_ProbesTheWatchLimit(t *testing.T) {
+	run, err := startSgtdi(t.TempDir(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(run.close)
+	if run.probe == nil || reflect.ValueOf(run.probe).Pointer() != reflect.ValueOf(inotifyLimitReached).Pointer() {
+		t.Fatal("startSgtdi does not probe the inotify watch limit; a directory created at the limit would go unreported")
 	}
 }
