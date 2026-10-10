@@ -271,10 +271,11 @@ plumb hooks uninstall [client] --only context   # remove just the context-hint h
 plumb hooks uptake [--since 168h] [--json]       # are context hints configured, trusted, invoked, consumed
 ```
 
-**Experimental context hints.** `--context` adds two advisory hint handlers for
-Claude Code, UserPromptSubmit and SubagentStart; with hints turned on
-(`[context] hints = true` or `PLUMB_CONTEXT_HINTS=on`) its SessionStart handler
-also appends a hint after the linkage sentence. Once added, a later plain
+**Experimental context hints.** `--context` adds two advisory hint handlers,
+UserPromptSubmit and SubagentStart, for Claude Code and for Codex (which asks you
+to trust them in `/hooks` before they run); with hints turned on
+(`[context] hints = true` or `PLUMB_CONTEXT_HINTS=on`) the client's SessionStart
+handler also appends a hint after the linkage sentence. Once added, a later plain
 `install` keeps them current. A hint names code (selectors and locations, never source) when a
 prompt names files or symbols explicitly, after a resume or compaction, and when
 a subagent starts; it is capped at 1 KiB a turn and 8 KiB per agent, and never

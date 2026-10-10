@@ -62,6 +62,11 @@ type codexHookInput struct {
 	// Source is SessionStart's reason. Codex 0.161.0's hook schema lists startup,
 	// resume, clear, compact and fork; only clear hands the identity over.
 	Source string `json:"source"`
+	// Prompt (UserPromptSubmit), TurnID and AgentID (SubagentStart) feed context
+	// hints only; the prompt never leaves the hook process.
+	Prompt  string `json:"prompt"`
+	TurnID  string `json:"turn_id"`
+	AgentID string `json:"agent_id"`
 }
 
 func runCodexHook(_ *cobra.Command, _ []string) error {
@@ -69,17 +74,21 @@ func runCodexHook(_ *cobra.Command, _ []string) error {
 }
 
 func runCodexHookIO(in io.Reader, out io.Writer) error {
-	return runCodexHookIOWith(in, out, hookStopMailReport, notifyConversationCleared)
+	return runCodexHookIOWithHints(in, out, hookStopMailReport, notifyConversationCleared, askContextHint)
 }
 
-// runCodexHookIOWith is runCodexHookIO with the daemon probes injected, so tests
-// can drive the real stdin/stdout path without a daemon.
+// runCodexHookIOWith is runCodexHookIO with the daemon probes injected and no
+// context hints, so tests can drive the real stdin/stdout path without a daemon.
 func runCodexHookIOWith(in io.Reader, out io.Writer, probe func(string, string) (mailReport, bool), notify func(string)) error {
+	return runCodexHookIOWithHints(in, out, probe, notify, nil)
+}
+
+func runCodexHookIOWithHints(in io.Reader, out io.Writer, probe func(string, string) (mailReport, bool), notify func(string), ask func(contextHintRequest) string) error {
 	var input codexHookInput
 	if err := json.NewDecoder(io.LimitReader(in, 64<<10)).Decode(&input); err != nil {
 		return nil // Hook failures must never strand a Codex turn.
 	}
-	output := codexHookResult(input, probe, notify)
+	output := codexHookOutput(input, probe, notify, ask)
 	if output == nil {
 		return nil
 	}

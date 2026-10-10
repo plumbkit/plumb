@@ -90,6 +90,54 @@ func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest)
 	return string(out) + "\n"
 }
 
+// codexHookOutput is codexHookResult plus context hints. A SessionStart hint
+// joins the linkage sentence in the one additionalContext Codex reads; a
+// UserPromptSubmit or SubagentStart hint is that event's whole output, and no
+// hint is no output. Every failure is silence.
+func codexHookOutput(input codexHookInput, probe func(string, string) (mailReport, bool), notify func(string), ask func(contextHintRequest) string) map[string]any {
+	switch input.Event {
+	case "SessionStart":
+		out := codexHookResult(input, probe, notify)
+		if out == nil {
+			return nil
+		}
+		if hint := codexContextHintText(input, ask); hint != "" {
+			spec, _ := out["hookSpecificOutput"].(map[string]any)
+			if linkage, ok := spec["additionalContext"].(string); ok {
+				spec["additionalContext"] = linkage + "\n\n" + strings.TrimRight(hint, "\n")
+			}
+		}
+		return out
+	case "UserPromptSubmit", "SubagentStart":
+		hint := codexContextHintText(input, ask)
+		if hint == "" {
+			return nil
+		}
+		return map[string]any{"hookSpecificOutput": map[string]any{
+			"hookEventName":     input.Event,
+			"additionalContext": strings.TrimRight(hint, "\n"),
+		}}
+	}
+	return codexHookResult(input, probe, notify)
+}
+
+// codexContextHintText asks for a Codex event's hint. Codex supplies a real
+// turn_id, so the per-turn allowance is keyed on Codex's own turn. Outside a
+// plumb workspace it asks nothing, as for Claude Code.
+func codexContextHintText(input codexHookInput, ask func(contextHintRequest) string) string {
+	if _, inside := plumbWorkspaceRoot(input.CWD); !inside || ask == nil {
+		return ""
+	}
+	req := contextHintRequest{
+		Host: "codex", Event: input.Event, Source: input.Source,
+		SessionID: input.SessionID, AgentID: input.AgentID, TurnID: input.TurnID,
+	}
+	if input.Event == "UserPromptSubmit" {
+		req.Selectors = promptSelectors(input.Prompt)
+	}
+	return ask(req)
+}
+
 // contextHintEvents are the hook events that exist only for context hints, and
 // so are what `plumb hooks uninstall --only context` removes. SessionStart is
 // not among them: its handler also links the session.
@@ -171,6 +219,26 @@ func askContextHint(req contextHintRequest) string {
 // spawn a process on every prompt of every user.
 func claudeContextHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, claudeHookVerb)
+	return []hookEntry{
+		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+		{event: "SubagentStart", label: "subagent context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+	}
+}
+
+// codexContextHookEntries are Codex's opt-in context-hint handlers, on the same
+// terms as Claude Code's. They carry no statusMessage: Codex would show it on
+// every prompt, and a hint that is usually silent must not announce itself.
+// Codex asks the user to trust each new handler (/hooks) before it runs.
+func codexContextHookEntries(plumbBin string) []hookEntry {
+	command := plumbHookCommand(plumbBin, codexHookVerb)
 	return []hookEntry{
 		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
 			"type":    "command",
