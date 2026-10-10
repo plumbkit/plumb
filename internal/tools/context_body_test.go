@@ -32,11 +32,35 @@ type deliveredBody struct {
 
 type deliveredGuard struct{ path, mtime, sha string }
 
-// parseBodies reads every body block out of a rendered pack, stripping the
+// splitRelated cuts a rendered pack at the related section: what comes before it
+// is the seeds, with the bodies the caller asked for by name; what follows is the
+// expansion (A3), whose bodies are a different thing and are counted apart.
+func splitRelated(out string) (seeds, rest string) {
+	seeds, rest, found := strings.Cut(out, "\nrelated (")
+	if found {
+		rest = "related (" + rest
+	}
+	return seeds, rest
+}
+
+// parseBodies reads the body blocks of a rendered pack's SEEDS, stripping the
 // display gutter exactly as a client would before using a line as old_string.
 func parseBodies(t *testing.T, out string) []deliveredBody {
 	t.Helper()
-	lines := strings.Split(out, "\n")
+	seeds, _ := splitRelated(out)
+	return parseBodyBlocks(t, seeds)
+}
+
+// parseRelatedBodies reads the body blocks of a rendered pack's related section.
+func parseRelatedBodies(t *testing.T, out string) []deliveredBody {
+	t.Helper()
+	_, rest := splitRelated(out)
+	return parseBodyBlocks(t, rest)
+}
+
+func parseBodyBlocks(t *testing.T, text string) []deliveredBody {
+	t.Helper()
+	lines := strings.Split(text, "\n")
 	var bodies []deliveredBody
 	for i := 0; i < len(lines); i++ {
 		m := bodyHeadRe.FindStringSubmatch(lines[i])
@@ -488,8 +512,8 @@ func TestContextForTask_ABodyDeliveredToOneAgentIsNotAReadForAnother(t *testing.
 }
 
 // Recording is once per file, with the snapshot's own version, and only for what
-// was delivered: two bodies from one file record once; a file seed, a status line
-// and a hint-free omission record nothing.
+// was delivered: two bodies from one file record once; an ambiguous selector, an
+// unresolved one and a hint-free omission record nothing.
 func TestContextForTask_RecordsOncePerDeliveredFileWithTheSnapshotVersion(t *testing.T) {
 	s := newShop(t)
 	var calls []string
@@ -500,11 +524,11 @@ func TestContextForTask_RecordsOncePerDeliveredFileWithTheSnapshotVersion(t *tes
 	s.tool.WithReads(tracker)
 	cart := filepath.Join(canonicalRoot(s.root), "cart", "cart.go")
 
-	if _, err := s.run(t, map[string]any{"files": []string{"cart/cart.go"}, "symbols": []string{"Total"}}); err != nil {
+	if _, err := s.run(t, map[string]any{"symbols": []string{"Total", "cart/cart.go#Cart.Coupon"}, "max_bytes": contextMinMaxBytes}); err != nil {
 		t.Fatal(err)
 	}
 	if len(calls) != 0 {
-		t.Fatalf("a file seed and an ambiguous selector recorded reads: %v", calls)
+		t.Fatalf("an ambiguous selector, an unresolved one and an omitted body recorded reads: %v", calls)
 	}
 	if _, err := s.run(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Add", "cart/cart.go#Cart.Remove"}}); err != nil {
 		t.Fatal(err)

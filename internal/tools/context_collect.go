@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ const (
 // pack (contextBody) and never inside it.
 type contextSeed struct {
 	Kind     string // seedFile or seedSymbol
+	ID       int64  // symbols only: the index node, which expansion walks from
 	Path     string // root-relative, slash-separated
 	Abs      string // absolute path under the canonical root, for follow-up calls
 	Selector string // symbols only: the qualified selector as the index spells it
@@ -75,6 +77,10 @@ type contextPack struct {
 	Files []bodyFile
 	// Bodies holds one entry per symbol seed, in seed order.
 	Bodies []contextBody
+	// Related is the bounded neighbourhood of the seeds in rank order, then the
+	// gap candidates; Expansion records what produced it and what it could not do.
+	Related   []contextRelated
+	Expansion contextExpansion
 }
 
 // budget is the byte limit for the rendered pack: max_bytes less the reserve the
@@ -92,7 +98,15 @@ type ContextCollector struct {
 	ws        WorkspaceFn
 	guard     BoundaryGuard
 	contested ContestedFn
+	sensitive SensitivePathFn
+	deadline  time.Duration // zero means contextExpansionDeadline
 }
+
+// SensitivePathFn reports whether a path's content must be withheld from a
+// response. It is the decision write tools already take (WriteDeps.SensitivePathFn,
+// the daemon's changeSensitive): path is absolute, from is a copy source or "". nil
+// withholds nothing.
+type SensitivePathFn = func(ctx context.Context, path, from string) bool
 
 // NewContextCollector returns a collector over the topology store storeFn
 // supplies (it may return nil when indexing is disabled; symbol seeds are then
@@ -120,6 +134,22 @@ func (c *ContextCollector) WithBoundary(guard BoundaryGuard) *ContextCollector {
 func (c *ContextCollector) WithContested(fn ContestedFn) *ContextCollector {
 	c.contested = fn
 	return c
+}
+
+// WithSensitive wires the sensitive-path decision, the same one write responses
+// and history use, so a body the expansion reaches (not one the caller named) in a
+// sensitive file is reduced to its location and a label.
+func (c *ContextCollector) WithSensitive(fn SensitivePathFn) *ContextCollector {
+	c.sensitive = fn
+	return c
+}
+
+// expansionDeadline is the wall-clock budget for the walk.
+func (c *ContextCollector) expansionDeadline() time.Duration {
+	if c.deadline > 0 {
+		return c.deadline
+	}
+	return contextExpansionDeadline
 }
 
 func (c *ContextCollector) store() *topology.Store {
@@ -203,10 +233,11 @@ func (r *contextRequest) seedInputs() []seedInput {
 	return out
 }
 
-// Collect resolves req's seeds under the calling agent's root, then reads one
-// snapshot of each symbol seed's file and slices the bodies from it. A refusal
-// (no workspace, a boundary violation, a directory seed, a document selector) is
-// an error; a seed that simply does not resolve is reported in the pack.
+// Collect resolves req's seeds under the calling agent's root, walks their
+// bounded neighbourhood and ranks it, then reads one snapshot of each file a body
+// is wanted from and slices the bodies from it. A refusal (no workspace, a
+// boundary violation, a directory seed, a document selector) is an error; a seed
+// that simply does not resolve is reported in the pack.
 func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (contextPack, error) {
 	root, err := c.agentRoot(ctx)
 	if err != nil {
@@ -227,9 +258,63 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 			return contextPack{}, err
 		}
 	}
+	c.expand(ctx, &pack, scope, index, req)
 	bodyGaps := c.collectBodies(ctx, &pack, index.store)
+	pack.markStale()
 	pack.Gaps = append(collectGaps(req, index), bodyGaps...)
+	pack.Gaps = append(pack.Gaps, pack.relationGaps()...)
+	pack.Gaps = append(pack.Gaps, pack.unreadBodyGap()...)
+	pack.Gaps = append(pack.Gaps, coverageGap(index.store, pack.Seeds)...)
 	return pack, nil
+}
+
+// expand walks the neighbourhood of the resolved seeds, but only when the index
+// can be trusted to describe it. A failing, missing or foreign index gets no walk
+// at all: a caller or callee read from a snapshot known to be behind is the
+// absence claim this tool exists not to make (C09b).
+func (c *ContextCollector) expand(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, req contextRequest) {
+	if len(pack.Seeds) == 0 || index.store == nil || index.store.Health().Failing {
+		return
+	}
+	walkCtx, cancel := context.WithTimeout(ctx, c.expansionDeadline())
+	defer cancel()
+	seedDirs := map[string]bool{}
+	for _, s := range pack.Seeds {
+		seedDirs[path.Dir(s.Path)] = true
+	}
+	ex := newExpander(index.store, scope, newRanker(req.Task, req.Intent, seedDirs), c.sensitiveFor(ctx, pack.Root))
+	ex.run(walkCtx, ex.addSeeds(walkCtx, pack.Seeds))
+	pack.Related = ex.finish(walkCtx)
+	pack.Expansion = ex.summarise(ctx, pack.Related)
+}
+
+// sensitiveFor adapts the injected decision to the index's root-relative paths.
+// It is nil when no decision is wired, which withholds nothing.
+func (c *ContextCollector) sensitiveFor(ctx context.Context, root string) func(string) bool {
+	if c.sensitive == nil {
+		return nil
+	}
+	return func(rel string) bool { return c.sensitive(ctx, absUnder(root, rel), "") }
+}
+
+// markStale marks the relationships that come from a file whose bytes changed
+// since the index parsed them. Only files a body was read from can be known to
+// have changed; for the rest the index's freshness is the only evidence there is,
+// and the pack says so.
+func (p *contextPack) markStale() {
+	changed := map[string]bool{}
+	for _, f := range p.Files {
+		if f.Changed {
+			changed[f.Path] = true
+		}
+	}
+	if len(changed) == 0 {
+		return
+	}
+	for i := range p.Related {
+		r := &p.Related[i]
+		r.Stale = changed[r.Node.Path] || changed[r.ViaPath]
+	}
 }
 
 func (p *contextPack) miss(input, reason string) {
@@ -272,24 +357,25 @@ func absUnder(root, rel string) string {
 	return filepath.Join(root, filepath.FromSlash(rel))
 }
 
-// collectGaps lists what this pack cannot claim. A2 collects seeds and the
-// bodies of symbol seeds only, and says so; later chunks narrow the list as they
-// add relationships.
+// collectGaps lists what this pack cannot claim about the index it was built
+// from, and what a later slice adds. An index that is missing, another root's or
+// failing supports no relationship or test-impact claim at all, and the pack
+// says so in the words the cases require.
 func collectGaps(req contextRequest, index contextIndex) []string {
 	var gaps []string
 	switch {
 	case index.foreign != "":
-		gaps = append(gaps, "topology index belongs to another root: symbol seeds and graph answers are refused, and its health is not reported")
+		gaps = append(gaps, "topology index belongs to another root: symbol seeds and graph answers are refused, and its health is not reported", labelIndexFailing)
 	case index.store == nil:
-		gaps = append(gaps, "topology index unavailable: symbol seeds cannot be resolved and no relationship is known")
+		gaps = append(gaps, "topology index unavailable: symbol seeds cannot be resolved and no relationship is known", labelIndexFailing)
 	default:
 		if note := indexHealthNote(index.store.Health(), time.Now()); note != "" {
-			gaps = append(gaps, note)
+			gaps = append(gaps, note, labelIndexFailing)
 		}
 	}
-	gaps = append(gaps, "file-seed bodies, neighbours, callers, affected tests and constraints are not collected yet")
-	if req.Task != "" || len(req.Have) > 0 {
-		gaps = append(gaps, "task and have were accepted but are not applied yet")
+	gaps = append(gaps, "affected tests and constraints are not collected yet")
+	if len(req.Have) > 0 {
+		gaps = append(gaps, "have was accepted but is not applied yet")
 	}
 	return gaps
 }

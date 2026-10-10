@@ -330,8 +330,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	// context_for_task is experimental and deliberately unpinned and non-lean (see
 	// tools.PinnedTools / tools.LeanTools): it is found by name, not pushed. The
 	// collector carries no read tracker, so gathering a pack never records a read;
-	// the tool records, per agent, only the bodies it actually delivered.
-	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested)).
+	// the tool records, per agent, only the bodies it actually delivered. A body it
+	// reaches by expansion, rather than being named, is withheld under the same
+	// decision write responses and history take (changeSensitive).
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive)).
 		WithReads(s.readTracker).WithReadsFor(s.readTrackerFor))
 }
 

@@ -142,6 +142,13 @@ func (t *ContextForTask) ReadDeps() (tracker, readsFor, writes, client bool) {
 	return t.tracker != nil, t.readsFor != nil, writesNotApplicable, clientNotApplicable
 }
 
+// SensitiveWired reports whether the collector holds the sensitive-path decision.
+// Without it a body reached by expansion would never be withheld, so the daemon's
+// registration test pins it, as ReadDeps pins the tracker.
+func (t *ContextForTask) SensitiveWired() bool {
+	return t.collector != nil && t.collector.sensitive != nil
+}
+
 func (*ContextForTask) Name() string                 { return "context_for_task" }
 func (*ContextForTask) InputSchema() json.RawMessage { return contextForTaskSchema }
 func (*ContextForTask) Description() string {

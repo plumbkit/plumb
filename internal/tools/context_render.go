@@ -23,6 +23,8 @@ import (
 const (
 	secHeader = iota
 	secSeeds
+	secRelated
+	secGapCandidates
 	secGaps
 	secNext
 )
@@ -51,6 +53,8 @@ func renderContext(p contextPack) packResult {
 func (p *contextPack) lines() []packLine {
 	ls := []packLine{{text: p.headerLine(), prio: prioHeader, section: secHeader}}
 	ls = append(ls, p.seedLines()...)
+	ls = append(ls, p.relatedLines()...)
+	ls = append(ls, p.gapCandidateLines()...)
 	ls = append(ls, p.gapLines()...)
 	return append(ls, p.nextLines()...)
 }
@@ -129,21 +133,22 @@ func (p *contextPack) bodyLine(i int) (packLine, bool) {
 		bare := fmt.Sprintf("    body unavailable (%s): %s", b.Why, call)
 		unit.lean = degrade(withSignature(bare, sig), bare)
 	} else {
-		unit = p.readyUnit(b, s, call, sig)
+		unit = p.readyUnit(b, p.seedHeading(), len(seedText(s))+2, call, sig)
 	}
 	return packLine{prio: prioBody, section: secSeeds, class: classBody, body: unit}, true
 }
 
 // readyUnit builds the renderings of a body that exists. It is offered whole only
-// when it could fit alone in the budget; a body larger than anything the budget
-// can hold becomes a handoff that names the size and the snapshot it was taken
-// from, so a later read can be checked against it.
-func (p *contextPack) readyUnit(b contextBody, s contextSeed, call, sig string) *bodyUnit {
+// when it could fit alone in the budget under heading and its own line of lineLen
+// bytes; a body larger than anything the budget can hold becomes a handoff that
+// names the size and the snapshot it was taken from, so a later read can be
+// checked against it.
+func (p *contextPack) readyUnit(b contextBody, heading string, lineLen int, call, sig string) *bodyUnit {
 	meta := fmt.Sprintf("%d B, lines %d–%d", len(b.Text), b.Start, b.End)
 	head := fmt.Sprintf("    body lines %d–%d (%d B) content_sha256=%s", b.Start, b.End, len(b.Text), b.SHA)
 	gutter := strings.TrimSuffix(withLineGutter(b.Text, b.Start), "\n")
 	full := head + "\n" + p.guardLine(b.File) + "\n" + gutter
-	if p.fitsAlone(len(full), len(seedText(s))+2) {
+	if p.fitsAlone(heading, len(full), lineLen) {
 		omitted := fmt.Sprintf("    body omitted for budget (%s): %s", meta, call)
 		bare := "    body omitted for budget: " + call
 		return &bodyUnit{
@@ -167,10 +172,10 @@ func (p *contextPack) guardLine(file int) string {
 }
 
 // fitsAlone reports whether a block of blockLen bytes could ever be delivered:
-// whether it fits in the budget next to the header, the seeds heading, its own
-// seed line and the omission footer, with every other record dropped.
-func (p *contextPack) fitsAlone(blockLen, seedLineLen int) bool {
-	fixed := len(p.headerLine()) + 1 + len(p.seedHeading()) + 1 + seedLineLen + 1 + footerCeiling()
+// whether it fits in the budget next to the header, its section heading, its own
+// line and the omission footer, with every other record dropped.
+func (p *contextPack) fitsAlone(heading string, blockLen, lineLen int) bool {
+	fixed := len(p.headerLine()) + 1 + len(heading) + 1 + lineLen + 1 + footerCeiling()
 	return fixed+blockLen+1 <= p.budget()
 }
 

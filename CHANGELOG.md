@@ -52,6 +52,35 @@
   seed is refused with a `session_start` handoff when the topology index belongs
   to another root than the calling agent's (file seeds still work), `within` may
   name the workspace root, and files under `.plumb/` are never seeds.
+- **`context_for_task` walks the neighbourhood of its seeds, ranks it and labels
+  what the call graph cannot see (PLAN-462, third slice).** From a symbol seed, or
+  from the top declarations of a file seed, the pack now follows call, containment
+  and type edges two hops out, up to 60 nodes and within a 2 s deadline, one hop at
+  a time so that the scope filter (`within`, `corpora`, the root and `.plumb/`)
+  runs on every node before it is kept or expanded through: a neighbour outside the
+  scope is dropped and nothing past it is reached. Every relationship carries its
+  evidence class (`e3` extractor edge, `e2` derived call- or import-resolver edge,
+  `e1` heuristic edge, `e0` gap candidate) and its source and confidence, and
+  derived call edges are followed only around a subject whose language the
+  call-graph admission rule accepts. The result is ranked, before any body is read,
+  by the frozen score 8·seed + 4·task coverage + 2/(1+hops) + evidence + 0.5·role,
+  with ties broken by path and selector so the same index and request give the
+  same pack; task prose only re-ranks and never adds a node. The best-ranked few
+  related declarations carry their complete body, packed after the seeds' own. The
+  call graph is Go-only and syntactic, so a method's callers are shown as resolved
+  callers plus labelled gap candidates: declarations of the files that import the
+  method's package, marked "unresolved receiver calls possible — not a resolved
+  caller", and an empty or capped caller list is never reported as "no callers".
+  A type seed lists its members and says a struct's fields are not graph members;
+  Python relationships are labelled heuristic (confidence 0.8) with "cross-file
+  call graph unavailable for python"; a file seed in a language with no extractor
+  adds the index's count of unparsed files. While the index is failing, absent or
+  another root's, no relationship is claimed at all and the pack says so;
+  relationships from a file that changed since it was indexed are marked possibly
+  stale. A body reached by the walk, rather than named, in a file matching
+  `[history] sensitive_globs` is reduced to its location and a label, under the same
+  decision write responses and history use. The tool's description and schema are
+  unchanged.
 
 ## 0.24.0 (2026-10-10)
 

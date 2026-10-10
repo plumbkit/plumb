@@ -110,6 +110,21 @@ func TestContextForTask_PinnedWiringResolvesAgainstThePinAndRefusesOutsideIt(t *
 	}
 }
 
+// Expansion reaches bodies the caller never named. Their withholding rests on the
+// same sensitive-path decision write responses and history use, so the real
+// registration must hand the tool that decision: without it every body the walk
+// reaches would be delivered, whatever sensitive_globs says.
+func TestContextForTask_ExpansionIsWiredToTheSensitivePathDecision(t *testing.T) {
+	_, tool := contextForTaskTool(t)
+	wired, ok := tool.(interface{ SensitiveWired() bool })
+	if !ok {
+		t.Fatalf("%T has no SensitiveWired", tool)
+	}
+	if !wired.SensitiveWired() {
+		t.Error("context_for_task is registered without the sensitive-path decision (changeSensitive)")
+	}
+}
+
 // An unpinned connection that calls the tool with an absolute file is refused
 // with a session_start handoff, and its pin is exactly as it was: the tool
 // resolves against an existing pin and never creates or moves one.

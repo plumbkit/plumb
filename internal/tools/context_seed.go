@@ -248,7 +248,7 @@ func (p *contextPack) addMatch(input, pathHint string, m symbolMatch) {
 	case matchOne:
 		n := m.nodes[0]
 		p.Seeds = append(p.Seeds, contextSeed{
-			Kind: seedSymbol, Path: n.Path, Abs: absUnder(p.Root, n.Path), Selector: nodeSelector(n), Name: n.Name,
+			Kind: seedSymbol, ID: n.ID, Path: n.Path, Abs: absUnder(p.Root, n.Path), Selector: nodeSelector(n), Name: n.Name,
 			NodeKind: string(n.Kind), Line: n.StartLine, EndLine: n.EndLine, Language: n.Language,
 			Signature: n.Signature, Doc: firstLine(n.Docstring), Shadowed: m.shadowed,
 		})
