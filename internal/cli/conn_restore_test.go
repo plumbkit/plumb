@@ -668,23 +668,20 @@ func TestRestore_DegradedConvergesOnBoundedRetry(t *testing.T) {
 	first := newPersistSession(t, store, ss, "proxyX")
 	provenID, provenName := first.sessionID(), first.sessionName()
 
-	overlapping := newPersistSessionWithBackoff(t, store, ss, "proxyX", func(int) time.Duration { return time.Millisecond })
+	overlapping, retry := newPersistSessionGated(t, store, ss, "proxyX")
 	if overlapping.recovery() != recoveryDegraded {
 		t.Fatalf("the overlap did not degrade; the test is not set up as intended")
 	}
 
 	// The blocker detaches; the scheduled retry — not a new connection — is
-	// what must converge the still-open degraded session.
+	// what must converge the still-open degraded session. It is the only thing
+	// that can restore a long-lived conversation without waiting for a lucky
+	// reconnect.
 	first.close()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for overlapping.recovery() != recoveryRestored {
-		if time.Now().After(deadline) {
-			t.Fatalf("the degraded connection never converged after the blocker detached; " +
-				"the bounded retry is the only thing that can restore a long-lived " +
-				"conversation without waiting for a lucky reconnect")
-		}
-		time.Sleep(10 * time.Millisecond)
+	retry.awaitConverged(t)
+	if got := overlapping.recovery(); got != recoveryRestored {
+		t.Fatalf("the converged connection is %q, want restored", got)
 	}
 	if got := overlapping.sessionID(); got != provenID {
 		t.Errorf("the converged session runs under %q, want the proven %q", got, provenID)

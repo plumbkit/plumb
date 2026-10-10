@@ -105,27 +105,18 @@ func TestDeclarationsRestoreWhenALegacyHealConverges(t *testing.T) {
 		t.Fatalf("save legacy record: %v", err)
 	}
 
-	release := make(chan struct{})
-	s := newPersistSessionWithBackoff(t, store, ss, proxyID, func(int) time.Duration {
-		<-release
-		return 0
-	})
+	s, retry := newPersistSessionGated(t, store, ss, proxyID)
 	if s.recovery() != recoveryDegraded {
-		close(release)
 		t.Fatalf("precondition: the held legacy name must degrade the restore, got %q", s.recovery())
 	}
 	if err := ss.RecordDeclaredLinkage(proxyID, "conv-late"); err != nil {
 		t.Fatalf("record declaration: %v", err)
 	}
 	holder.close()
-	close(release)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for s.recovery() != recoveryEstablished {
-		if time.Now().After(deadline) {
-			t.Fatalf("the legacy heal never converged (recovery %q)", s.recovery())
-		}
-		time.Sleep(10 * time.Millisecond)
+	retry.awaitConverged(t)
+	if got := s.recovery(); got != recoveryEstablished {
+		t.Fatalf("the legacy heal converged to %q, want established", got)
 	}
 	s.recordLogicalAgentCall("conv-late")
 	s.recordLogicalAgentCall("other")

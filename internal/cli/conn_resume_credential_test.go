@@ -185,7 +185,7 @@ func TestResumeCredential_RetryConvergedConnectionIsDisclosedOnce(t *testing.T) 
 	oldRows := credentialRows(t)
 
 	overlapping := w.conn("")
-	overlapping.s.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+	retry := gateRestoreRetry(overlapping.s)
 	if got := disclosed(overlapping.initialize("P1")); got != "" {
 		t.Fatalf("the degraded initialize disclosed %q", got)
 	}
@@ -194,12 +194,9 @@ func TestResumeCredential_RetryConvergedConnectionIsDisclosedOnce(t *testing.T) 
 	}
 	first.s.close() // the blocker detaches; the retry converges the open connection
 
-	deadline := time.Now().Add(3 * time.Second)
-	for overlapping.s.recovery() != recoveryRestored {
-		if time.Now().After(deadline) {
-			t.Fatal("the degraded connection never converged on the retry")
-		}
-		time.Sleep(5 * time.Millisecond)
+	retry.awaitConverged(t)
+	if got := overlapping.s.recovery(); got != recoveryRestored {
+		t.Fatalf("the converged connection is %q, want restored", got)
 	}
 	if got := credentialRows(t); got <= oldRows {
 		t.Fatalf("convergence minted no credential (rows %d, was %d)", got, oldRows)
@@ -278,18 +275,15 @@ func TestResumeCredential_OnlyAProxyThatStripsTheKeyIsDisclosedAnything(t *testi
 				first.initializeAs("P1", consumer)
 				first.start("conv-1", ws, "conv-1", nil)
 				overlapping := w.conn("")
-				overlapping.s.restoreRetryBackoff = func(int) time.Duration { return time.Millisecond }
+				retry := gateRestoreRetry(overlapping.s)
 				overlapping.initializeAs("P1", consumer)
 				if overlapping.s.recovery() != recoveryDegraded {
 					t.Fatal("precondition: the overlap did not degrade")
 				}
 				first.s.close()
-				deadline := time.Now().Add(3 * time.Second)
-				for overlapping.s.recovery() != recoveryRestored {
-					if time.Now().After(deadline) {
-						t.Fatal("the degraded connection never converged on the retry")
-					}
-					time.Sleep(5 * time.Millisecond)
+				retry.awaitConverged(t)
+				if got := overlapping.s.recovery(); got != recoveryRestored {
+					t.Fatalf("the converged connection is %q, want restored", got)
 				}
 				rows := credentialRows(t)
 				r := overlapping.callMeta("", "daemon_info", nil, nil)

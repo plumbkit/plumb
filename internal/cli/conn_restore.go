@@ -237,6 +237,9 @@ func (s *connSession) scheduleRestoreRetry(proxyID string) {
 			if s.retryRestoreIdentity(proxyID) {
 				s.log().Info("daemon: identity recovery converged on retry; the proven identity is live again",
 					"attempt", attempt, "session_id", s.sessionID())
+				if s.restoreRetryConverged != nil {
+					s.restoreRetryConverged()
+				}
 				return
 			}
 		}
