@@ -117,6 +117,7 @@ var defaults = Config{
 		IdleSummaryMinutes:  0,
 		GeneratedMemoryKeep: 50,
 	},
+	Context: ContextConfig{Hints: true},
 	Collab: CollabConfig{
 		PeerAwareness:    true,
 		HintBudgetBytes:  512,

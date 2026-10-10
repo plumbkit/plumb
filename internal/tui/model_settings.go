@@ -111,6 +111,8 @@ const (
 	skSemAPIKey
 	skSemRerankCandidates
 	skSemTimeout
+	// [context] row (the General tab, "Context" group).
+	skContextHints
 	// [collab] rows (the General tab, "Collab" group).
 	skCollabPeerAwareness
 	skCollabHintBudgetBytes
@@ -337,6 +339,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Memory", label: "Idle summary (min)", kind: settingNumber, key: skMemoryIdleSummaryMin, value: itoa(cfg.Memory.IdleSummaryMinutes)},
 		{group: "Memory", label: "Generated keep", kind: settingNumber, key: skMemoryGeneratedKeep, value: itoa(cfg.Memory.GeneratedMemoryKeep)},
 
+		{group: "Context", label: "Context hints", kind: settingToggle, key: skContextHints, value: onOff(cfg.Context.Hints)},
 		{group: "Collab", label: "Peer awareness", kind: settingToggle, key: skCollabPeerAwareness, value: onOff(cfg.Collab.PeerAwareness)},
 		{group: "Collab", label: "Hint budget (B)", kind: settingNumber, key: skCollabHintBudgetBytes, value: itoa(cfg.Collab.HintBudgetBytes)},
 		{group: "Collab", label: "Intents", kind: settingToggle, key: skCollabIntents, value: onOff(cfg.Collab.Intents)},

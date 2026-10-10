@@ -543,6 +543,7 @@ type Config struct {
 	Semantics SemanticsConfig      `toml:"semantics"`
 	Memory    MemoryConfig         `toml:"memory"`
 	Collab    CollabConfig         `toml:"collab"`
+	Context   ContextConfig        `toml:"context"`
 	Rastro    RastroConfig         `toml:"rastro"`
 	Xcode     XcodeConfig          `toml:"xcode"`
 	// Tools governs which tools appear in tools/list (lean/full/auto profiles).

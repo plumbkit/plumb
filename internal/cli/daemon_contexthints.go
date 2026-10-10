@@ -35,13 +35,17 @@ func contextHintsEnabled() bool {
 //
 // hinter is the Slice A collector; nil until it lands, which answers every
 // seeded request with noop(no-collector).
-func startContextHints(ctx context.Context, registry *connRegistry, hinter tools.ContextHinter) (func(context.Context, contextHintRequest) contextHintReply, func()) {
+//
+// configOn reads the live global [context] hints switch; the daemon's own
+// PLUMB_CONTEXT_HINTS is honoured beside it.
+func startContextHints(ctx context.Context, registry *connRegistry, hinter tools.ContextHinter, configOn func() bool) (func(context.Context, contextHintRequest) contextHintReply, func()) {
 	ledger, err := contexthints.Open()
 	if err != nil {
 		slog.Warn("daemon: context-hint ledger unavailable; hooks will receive no hints", "err", err)
 		return nil, func() {}
 	}
-	svc := newContextHintService(hinter, ledger, registry.hintRoot, contextHintsEnabled)
+	enabled := func() bool { return contextHintsEnabled() && (configOn == nil || configOn()) }
+	svc := newContextHintService(hinter, ledger, registry.hintRoot, enabled)
 	go pruneContextHints(ctx, ledger, reaperInterval)
 	return svc.serve, ledger.Close
 }

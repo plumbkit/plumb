@@ -770,6 +770,35 @@ memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
 agent supplies the text; no LLM summary.
 
+## `[context]` — advisory context hints (global only)
+
+```toml
+[context]
+hints = true   # default
+```
+
+The lifecycle hooks `plumb hooks install` writes can put a short, advisory
+hint in front of an agent: a few code selectors with their locations, never
+source, documentation, memory or mail text. A hint is offered when a prompt names
+files or symbols explicitly (backticked selectors and path-shaped tokens; the
+prompt itself never leaves the hook process), after a resume or compaction, and
+when a subagent starts. Hints are capped at 1 KiB per turn and 8 KiB per
+logical agent, and neither a compaction nor a daemon restart refills the
+allowance. Asking for a hint never counts as reading a file: the edit guards
+still require an explicit read.
+
+`hints = false` turns every hint off, and so does `PLUMB_CONTEXT_HINTS=off`
+(also `0` or `false`), which the hook reads from its own environment as well
+as the daemon's. Off, the hooks still run, and the daemon records each request
+as a no-op, so an off switch is never mistaken for an outage. To remove the
+hint-only hooks instead, run `plumb hooks uninstall <client> --only context`;
+the SessionStart hook stays, because it also links the session.
+
+The daemon keeps one bounded observation ledger for hints, `context_hints.db`
+in the data directory: metadata only (session, agent, event, capped selectors,
+bytes, outcome), at most 1000 rows and 1 MiB per workspace, seven days. A
+project config's `[context]` has no effect.
+
 ## `[rastro]` — Rastro associative-memory integration
 
 ```toml

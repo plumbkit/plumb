@@ -276,6 +276,10 @@ var projectFieldClasses = map[string]ProjectFieldClass{
 	"memory.idle_summary_minutes":  ClassPreference,
 	"memory.generated_memory_keep": ClassPreference,
 
+	// --- Context. The daemon answers every advisory context hint from the global
+	// config, so a project's value has no reader.
+	"context.hints": ClassInert,
+
 	// --- Collab. The four switches below each open a cross-agent CHANNEL, and a
 	// channel a cloned repository can open is a channel it can use: a payload
 	// that has already steered one agent through some other file in the repo can

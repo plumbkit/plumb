@@ -470,6 +470,7 @@ var settingTOMLPaths = map[settingKey][]string{
 	skMemoryMaxHints:                {"memory", "max_hints"},
 	skMemoryIdleSummaryMin:          {"memory", "idle_summary_minutes"},
 	skMemoryGeneratedKeep:           {"memory", "generated_memory_keep"},
+	skContextHints:                  {"context", "hints"},
 	skCollabPeerAwareness:           {"collab", "peer_awareness"},
 	skCollabHintBudgetBytes:         {"collab", "hint_budget_bytes"},
 	skCollabIntents:                 {"collab", "intents"},
