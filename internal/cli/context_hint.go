@@ -468,6 +468,11 @@ func renderContextHint(res tools.HintResult, maxBytes int, note string) (string,
 	var b strings.Builder
 	b.WriteString(hintHeader)
 	b.WriteString(note)
+	// An index that is not fresh qualifies every line, so its caveat is written
+	// before them and is never what the budget drops.
+	if f := hintField(res.Freshness); f != "" && f != "fresh" {
+		fmt.Fprintf(&b, "index %s: locations may be out of date\n", f)
+	}
 	shown := 0
 	for _, l := range res.Lines {
 		line := "- " + hintField(l.Selector)
@@ -500,7 +505,27 @@ func renderContextHint(res tools.HintResult, maxBytes int, note string) (string,
 	if more := len(res.Lines) - shown + res.Omitted; more > 0 {
 		fmt.Fprintf(&b, "(+%d more)\n", more)
 	}
+	writeHintGaps(&b, res.Gaps, maxBytes)
 	return b.String(), shown
+}
+
+// writeHintGaps appends what the hint could not cover. Gaps follow the lines
+// while they fit, and the rest are counted, so a short hint never reads as a
+// whole one.
+func writeHintGaps(b *strings.Builder, gaps []string, maxBytes int) {
+	const tail = "(+00 gaps)\n"
+	unsaid := 0
+	for _, g := range gaps {
+		line := "gap: " + hintField(g) + "\n"
+		if unsaid > 0 || b.Len()+len(line)+len(tail) > maxBytes {
+			unsaid++
+			continue
+		}
+		b.WriteString(line)
+	}
+	if unsaid > 0 && b.Len()+len(tail) <= maxBytes {
+		fmt.Fprintf(b, "(+%d gaps)\n", unsaid)
+	}
 }
 
 // handleContextHintCommand answers `context-hint <json>` on the control

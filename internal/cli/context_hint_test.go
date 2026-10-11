@@ -479,6 +479,33 @@ func TestRenderContextHint(t *testing.T) {
 	}
 }
 
+// A hint from an index that is not fresh carries the caveat ahead of its lines,
+// and the collector's gaps follow them, counted when they do not fit: a hint
+// never presents stale or partial locations as current and complete.
+func TestRenderContextHint_FreshnessAndGaps(t *testing.T) {
+	line := tools.HintLine{Selector: "Cart.Total", Path: "cart/cart.go", Line: 3}
+	fresh, _ := renderContextHint(tools.HintResult{Lines: []tools.HintLine{line}, Freshness: "fresh"}, 1024, "")
+	if strings.Contains(fresh, "out of date") || strings.Contains(fresh, "gap:") {
+		t.Fatalf("a fresh, complete hint carries a caveat:\n%s", fresh)
+	}
+	for _, f := range []string{"stale", "building", "unavailable"} {
+		got, _ := renderContextHint(tools.HintResult{Lines: []tools.HintLine{line}, Freshness: f}, 1024, "")
+		caveat, lineAt := strings.Index(got, "index "+f+": locations may be out of date"), strings.Index(got, "Cart.Total")
+		if caveat < 0 || caveat > lineAt {
+			t.Errorf("freshness %s: caveat missing or after the line:\n%s", f, got)
+		}
+	}
+	gaps := []string{"\"Total\": 2 declarations match", strings.Repeat("g", 190), strings.Repeat("h", 190)}
+	got, _ := renderContextHint(tools.HintResult{Lines: []tools.HintLine{line}, Gaps: gaps}, 1024, "")
+	if !strings.Contains(got, "gap: \"Total\": 2 declarations match") || strings.Index(got, "gap:") < strings.Index(got, "Cart.Total") {
+		t.Errorf("gaps missing or ahead of the lines:\n%s", got)
+	}
+	tight, shown := renderContextHint(tools.HintResult{Lines: []tools.HintLine{line}, Gaps: gaps}, 260, "")
+	if shown != 1 || len(tight) > 260 || !strings.Contains(tight, "gaps)") {
+		t.Errorf("over budget: shown %d, len %d, want the line kept, the rest counted within 260:\n%s", shown, len(tight), tight)
+	}
+}
+
 // The service has no route to a read tracker: no field of it, at any depth of
 // its own struct, is or returns one. Hints never create edit-ready reads.
 func TestContextHintService_HasNoReadTracker(t *testing.T) {
