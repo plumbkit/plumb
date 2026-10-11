@@ -39,6 +39,11 @@ func TestCheckReadArgs(t *testing.T) {
 		{"grep", []string{"--no-index", "foo", "/etc"}},
 		{"grep", []string{"--no-ind", "foo"}},
 		{"grep", []string{"-e", "x", "-O"}}, // -e took "x"; -O is live
+		{"blame", []string{"--output=/tmp/x", "f"}},
+		{"blame", []string{"-CL", "-S", "/etc/hosts", "f"}},         // -C took "L" as its score
+		{"blame", []string{"-ML", "--contents", "/etc/hosts", "f"}}, // likewise -M
+		{"grep", []string{"-f", "/etc/hosts"}},
+		{"grep", []string{"-nf/etc/hosts"}},
 	}
 	for _, c := range refused {
 		if err := checkReadArgs(c.sub, c.args); err == nil {
@@ -59,7 +64,8 @@ func TestCheckReadArgs(t *testing.T) {
 		{"log", []string{"--oneline", "-5"}},
 		{"show", []string{"HEAD:go.mod"}},
 		{"blame", []string{"-L", "1,5", "--", "f"}},
-		{"blame", []string{"-L/S/,+2", "f"}},   // -L takes the rest of the token: no -S here
+		{"blame", []string{"-L/S/,+2", "f"}}, // -L takes the rest of the token: no -S here
+		{"blame", []string{"-C", "-L", "1,5", "f"}},
 		{"grep", []string{"-e", "-O", "HEAD"}}, // -e takes "-O" as the pattern
 		{"grep", []string{"-e", "--no-index"}}, // likewise
 		{"grep", []string{"-n", "--untracked", "x"}},
@@ -135,5 +141,49 @@ func TestGit_ReadTierRefusesAnOutputFile(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(victim); string(data) == "keep me\n" {
 		t.Fatal("control: git diff --output did not rewrite the file, so the refusal test proves nothing")
+	}
+}
+
+func TestGit_ReadTierRefusesAnArgumentOutsideTheRepo(t *testing.T) {
+	// git diff leaves the repository with NO option at all: given two paths, one
+	// outside the working tree, it switches to no-index mode and prints the
+	// outside file. The structural check refuses any argument naming an existing
+	// path outside the repository, however git would have used it.
+	requireGit(t)
+	repo := initTestRepo(t)
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("secret-line-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(repo, outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repo, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	tool := NewGit(WriteDeps{}, nil)
+	for _, args := range [][]string{
+		{rel, "init.txt"},               // implicit no-index, relative
+		{"--stat", outside, "init.txt"}, // absolute
+		{"--", "init.txt", outside},     // after --
+		{"escape", "init.txt"},          // a symlink inside that resolves outside
+	} {
+		out, err := callGit(t, tool, map[string]any{"subcommand": "diff", "args": args, "repo": repo})
+		if err == nil || strings.Contains(out, "secret-line-1") {
+			t.Errorf("diff %v must be refused before git runs; got %v\n%s", args, err, out)
+		}
+	}
+	// Positive control: git really does print the outside file for the first form.
+	cmd := exec.Command("git", "diff", rel, "init.txt")
+	cmd.Dir = repo
+	if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "secret-line-1") {
+		t.Fatalf("control: git diff did not read the outside file, so the refusal proves nothing:\n%s", out)
+	}
+	// Reads that stay inside are untouched: a path, a revision, a missing pathspec.
+	for _, args := range [][]string{{"HEAD", "--", "init.txt"}, {"HEAD~0"}, {"--", "no/such/path"}} {
+		if _, err := callGit(t, tool, map[string]any{"subcommand": "diff", "args": args, "repo": repo}); err != nil {
+			t.Errorf("diff %v must run: %v", args, err)
+		}
 	}
 }

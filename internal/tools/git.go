@@ -222,7 +222,7 @@ func (t *Git) guardCall(ctx context.Context, a gitToolArgs) error {
 	if err := checkCommitAmend(ctx, a); err != nil {
 		return err
 	}
-	return nil
+	return checkReadCallPaths(a)
 }
 
 // gate applies the tier policy (gateGit), adding the untrusted-project note
