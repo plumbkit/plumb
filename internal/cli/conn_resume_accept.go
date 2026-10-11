@@ -46,7 +46,9 @@ package cli
 // can present three junk credentials against a victim's conversation and revoke it:
 // the accepted, bounded griefing vector of design §5 (docs/threat-model.md, residual
 // risks). The worst case is name-only continuity until the victim re-establishes one,
-// with a loud log line.
+// with a loud log line, and re-establishing is automatic: a REVOKED presentation is
+// answered with a fresh credential for the presenting connection (reissueAfterRevocation),
+// so its proxy files that over the dead entry and the next replacement resumes in full.
 
 import (
 	"context"
@@ -259,6 +261,40 @@ func (s *connSession) issueSuccessor(ctx context.Context, p presentation, consum
 	mcp.NoteResultMeta(ctx, mcp.MetaResumeCredentialKey, succ)
 	s.log().Info("daemon: a resume credential restored the full identity and rotated",
 		"external_id", p.linkage, "generation", generation, "session_id", s.sessionID())
+}
+
+// reissueAfterRevocation answers a presentation refused as REVOKED with a fresh resume
+// credential for this connection, disclosed in the same session_start response, so the
+// conversation's continuity heals on the next replacement instead of never (PLAN-515).
+//
+// Why it is needed. A proxy that presented a stored credential and was handed no
+// successor leaves the stored entry alone (serve_resume.go), because from its side a
+// refusal looks like a restore that could not finish and that a retry may still
+// complete. For a revoked credential no retry ever can, so every later replacement
+// presented the same dead entry, was refused, and forked a new session ID, until the file
+// was deleted by hand. A credential disclosed in the response is what makes the proxy
+// own the entry again, and proxies already in the field read it, so this fix needs a
+// daemon restart and no client restart.
+//
+// Why it grants nothing. The connection was already minted a credential of its own when
+// it was proven at initialize; it holds that one and could have filed it, had its proxy
+// not kept the dead entry. This re-mints the same thing (a new generation of THIS
+// connection's credential, which supersedes the first) under mintResumeCredential's own
+// gates: a consumer proxy, persistence on, a proven identity. The predecessor's session
+// ID, mail and threads stay where the revocation left them.
+//
+// Why REVOKED and not SUPERSEDED. A superseded credential means a successor exists: a
+// process resumed the conversation and filed that successor, very likely in the same
+// store entry. Overwriting it from here would hand the entry to whichever process
+// presented the stale copy, so a superseded presentation keeps today's behaviour. A
+// lookup that failed (an unreadable table) says nothing at all, and also keeps it.
+func (s *connSession) reissueAfterRevocation(linkage string) {
+	s.mintResumeCredential()
+	if s.view().pendingCredential == "" {
+		return // not eligible, or the mint failed and said so: the status quo
+	}
+	s.log().Info("daemon: issued a fresh resume credential in place of the revoked one; "+
+		"the next serve replacement resumes this session", "external_id", linkage, "session_id", s.sessionID())
 }
 
 // finishRestore records the result of a full restore on the connection: the outcome,

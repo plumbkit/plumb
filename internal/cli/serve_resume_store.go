@@ -25,10 +25,12 @@ package cli
 // Retention. The design leaves it open (open question 7). The store is capped at
 // resumeStoreMaxEntries and evicts the oldest entry by modification time, so it cannot
 // grow without bound across conversations that never return. An entry is replaced by the
-// next credential disclosed for its conversation; the daemon does not (yet) tell a proxy
-// that it refused a credential as superseded or revoked, so a refused entry stays until
-// the cap evicts it. A lost, truncated or foreign-scope entry is read as "absent", which
-// is the name-only continuity that shipped before the credential existed.
+// next credential disclosed for its conversation. A REVOKED presentation is answered with
+// a fresh credential (conn_resume_accept.go, reissueAfterRevocation), which replaces the
+// dead entry the same way; a superseded one is not, so its entry stays until the cap
+// evicts it or a later disclosure replaces it. A lost, truncated or foreign-scope entry
+// is read as "absent", which is the name-only continuity that shipped before the
+// credential existed.
 //
 // Nothing here logs a secret.
 

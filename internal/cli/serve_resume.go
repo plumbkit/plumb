@@ -45,10 +45,13 @@ package cli
 // credential this process was issued is never filed under a conversation a model named.
 // The exception is a process that PRESENTED a stored credential and was not
 // given a successor: it was refused, or could not complete (a live session still holds the
-// predecessor's ID), and the daemon does not say which. The stored entry is then left
-// alone for the life of the process, because overwriting it with this process's fresh
-// credential would trade a retry that can still restore the predecessor's mail and threads
-// for one that restores a name-only fork.
+// predecessor's ID). The stored entry is then left alone for the life of the process,
+// because overwriting it with this process's fresh credential would trade a retry that
+// can still restore the predecessor's mail and threads for one that restores a name-only
+// fork. A refusal no retry can ever overturn, a REVOKED credential, is answered by the
+// daemon with a fresh credential in the same response (reissueAfterRevocation), and a
+// credential disclosed in the response is what makes this process own the entry again,
+// so observe's ownership rule already files it over the dead one.
 
 import (
 	"encoding/json"

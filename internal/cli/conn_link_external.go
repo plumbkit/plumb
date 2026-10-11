@@ -94,6 +94,9 @@ func (s *connSession) linkExternalID(ctx context.Context, externalID string) too
 	// name-only relink below runs (and finds nothing left to resume).
 	resumed := s.resumeWithCredential(ctx, linkage)
 	s.relinkTo(externalID)
+	if resumed == tools.ResumeRevoked {
+		s.reissueAfterRevocation(linkage)
+	}
 	if resumed == tools.ResumeRestored {
 		// The full restore supersedes the name resume the linkage would have reported.
 		s.takeResume(linkage)
