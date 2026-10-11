@@ -105,7 +105,12 @@ exit "$rc"
   "$image" bash -c "$inside"
 rc=$?
 
-if docker container inspect "$name" > /dev/null 2>&1; then
+# Container exit is what ends a SIGKILL'd run's processes, so "gone" must be
+# an answer from the engine, never the failure to get one.
+if ! listed=$(docker ps -a --filter "name=^/$name\$" --format '{{.Names}}'); then
+  echo "verify-full-container: could not ask docker whether container $name is gone" >&2
+  rc=1
+elif [ -n "$listed" ]; then
   echo "verify-full-container: container $name still exists" >&2
   rc=1
 else
