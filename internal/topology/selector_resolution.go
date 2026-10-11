@@ -39,9 +39,9 @@ type SelectorResolution struct {
 	Shadowed   []Node
 }
 
-// isReference reports a node kind that names something declared elsewhere — an
+// IsReference reports a node kind that names something declared elsewhere — an
 // import, a package clause, a file — rather than being a declaration itself.
-func isReference(k NodeKind) bool {
+func IsReference(k NodeKind) bool {
 	return k == KindImport || k == KindPackage || k == KindFile
 }
 
@@ -63,10 +63,17 @@ func ResolveSelector(ctx context.Context, db *sql.DB, name string, hint NodeHint
 	return classifyResolution(nodes), nil
 }
 
+// ClassifyNodes sorts nodes already resolved for one selector into the same
+// none, one or ambiguous answer ResolveSelector gives, by the same rule. It is
+// for a caller that must narrow the candidates itself before classifying (an
+// access scope that must not even influence ambiguity): handing it the narrowed
+// set keeps a single classifier rather than a second, drifting one.
+func ClassifyNodes(nodes []Node) SelectorResolution { return classifyResolution(nodes) }
+
 func classifyResolution(nodes []Node) SelectorResolution {
 	var decls, refs []Node
 	for _, n := range nodes {
-		if isReference(n.Kind) {
+		if IsReference(n.Kind) {
 			refs = append(refs, n)
 		} else {
 			decls = append(decls, n)

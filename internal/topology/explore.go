@@ -159,13 +159,18 @@ func clampOpts(opts ExploreOpts) ExploreOpts {
 }
 
 // NodeHint narrows an ambiguous symbol-name resolution to a specific node.
-// Both fields are optional; an empty hint matches every candidate.
+// Every field is optional; an empty hint matches every candidate.
 type NodeHint struct {
 	PathSubstr string // case-insensitive substring of the node's file path
-	Kind       string // exact NodeKind match (e.g. "function", "method")
+	// Path is an exact, case-sensitive workspace-relative path: the node's file is
+	// Path itself, or lies under Path when Path names a directory. Unlike
+	// PathSubstr it cannot reach a different file that merely contains the text
+	// (a hint of "x.go" does not match "pkg/x.go", nor "a.go" "data.go").
+	Path string
+	Kind string // exact NodeKind match (e.g. "function", "method")
 }
 
-func (h NodeHint) empty() bool { return h.PathSubstr == "" && h.Kind == "" }
+func (h NodeHint) empty() bool { return h.PathSubstr == "" && h.Path == "" && h.Kind == "" }
 
 func (h NodeHint) matches(n Node) bool {
 	if h.Kind != "" && string(n.Kind) != h.Kind {
@@ -174,7 +179,13 @@ func (h NodeHint) matches(n Node) bool {
 	if h.PathSubstr != "" && !strings.Contains(strings.ToLower(n.Path), strings.ToLower(h.PathSubstr)) {
 		return false
 	}
-	return true
+	return h.Path == "" || pathIsOrUnder(n.Path, h.Path)
+}
+
+// pathIsOrUnder reports whether p is base or lies beneath it as a directory.
+func pathIsOrUnder(p, base string) bool {
+	base = strings.TrimSuffix(base, "/")
+	return p == base || strings.HasPrefix(p, base+"/")
 }
 
 // HintMismatchError is returned when a symbol exists in the topology index but
@@ -190,6 +201,9 @@ func (e *HintMismatchError) Error() string {
 	var hintDesc []string
 	if e.Hint.PathSubstr != "" {
 		hintDesc = append(hintDesc, fmt.Sprintf("path: %q", e.Hint.PathSubstr))
+	}
+	if e.Hint.Path != "" {
+		hintDesc = append(hintDesc, fmt.Sprintf("exact path: %q", e.Hint.Path))
 	}
 	if e.Hint.Kind != "" {
 		hintDesc = append(hintDesc, fmt.Sprintf("kind: %q", e.Hint.Kind))

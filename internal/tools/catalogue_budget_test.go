@@ -21,7 +21,7 @@ import (
 	"github.com/plumbkit/plumb/internal/mcp"
 )
 
-// maxCatalogueBytes is the full 59-tool catalogue budget, measured as the
+// maxCatalogueBytes is the full 60-tool catalogue budget, measured as the
 // tools/list result the LARGEST client receives (wireCatalogueBytes): with
 // the identity argument declared on every schema, as a client that strips
 // undeclared arguments gets it, and the alwaysLoad _meta on pinned tools.

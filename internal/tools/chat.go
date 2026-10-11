@@ -425,6 +425,19 @@ func RenderBacklog(waiting int) string {
 	return fmt.Sprintf("  %d more waiting as of this call — call check_messages (no wait_seconds) to read them now, before replying; the newest may answer the oldest.\n", waiting)
 }
 
+// RenderWaitingPointer is the one-line stand-in for a message preview that would not
+// fit where it was due: it says how many messages wait and which call takes
+// delivery, and shows none of them. A tool whose result is budgeted (AppendRoom)
+// gets this in place of a preview too large for the room it has left.
+func RenderWaitingPointer(n int) string {
+	noun := "message"
+	if n != 1 {
+		noun = "messages"
+	}
+	return fmt.Sprintf("\n\n[Messages — %d %s waiting for you; the preview is left out to keep this result within its size limit. "+
+		"Call check_messages to take delivery.]", n, noun)
+}
+
 // clampWithTruncationMarker clamps body to budget bytes and, if that cut
 // anything, returns a marker naming exactly how much arrived and how much did
 // not — so a recipient never mistakes a bare ellipsis for a sender who simply

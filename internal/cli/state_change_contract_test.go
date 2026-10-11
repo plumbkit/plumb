@@ -46,6 +46,7 @@ var stateChanging = map[string]string{
 	"file_outline":      readOnly, "file_status": readOnly, "file_diff": readOnly,
 	"write_history":       readOnly,
 	"minimal_diff_review": readOnly,
+	"context_for_task":    readOnly, // collects seeds from the index and the filesystem; changes nothing a peer could observe
 	"find_files":          readOnly, "search_in_files": readOnly, "find_references": readOnly,
 	"get_definition": readOnly, "explain_symbol": readOnly,
 	"call_hierarchy": readOnly, "type_hierarchy": readOnly,

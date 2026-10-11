@@ -15,7 +15,8 @@ import (
 // registration path (registerAllTools). read_file's search mode
 // (internal/tools/read_file_search.go) is the SAME registered *ReadFile
 // instance as read_file, not a separate tool, so it needs no separate entry.
-var readRecordingToolNames = []string{"read_file", "read_symbol", "read_multiple_files"}
+// context_for_task records the bodies it delivers, so it is on the list.
+var readRecordingToolNames = []string{"read_file", "read_symbol", "read_multiple_files", "context_for_task"}
 
 // readDepsTool mirrors tools.readRecordingTool (internal/tools/read_deps.go)
 // locally: internal/cli cannot import that unexported interface, but Go's
@@ -47,7 +48,7 @@ func buildTestConnSession(t *testing.T) (*connSession, *mcp.Server) {
 
 // TestToolWiringParity is the registration-parity guard (PLAN-361, worth-it
 // W1-7): every read-recording tool (read_file, read_symbol,
-// read_multiple_files) must be registered with its ReadTracker/readsFor
+// read_multiple_files, context_for_task) must be registered with its ReadTracker/readsFor
 // wiring non-nil, or [edits] strict mode's edit_file gate silently rejects
 // every edit that follows a read via that tool — the exact defect PLAN-357
 // fixed for read_multiple_files, which shipped registered with NO tracker at

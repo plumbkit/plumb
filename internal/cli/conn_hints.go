@@ -14,6 +14,7 @@ import (
 	"github.com/plumbkit/plumb/internal/memory"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/textfmt"
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // hintAllowedTools is the small set of path-bearing tools whose responses are
@@ -97,7 +98,16 @@ var mailboxSilentTools = map[string]bool{
 // Cheap and non-blocking, as required of an EnrichToolOutput hook: the message
 // check short-circuits on an in-process generation counter and touches the
 // database only when a peer has actually written something (see conn_chat.go).
+//
+// A tool whose result is budgeted (tools.AppendRoom: context_for_task promises that
+// max_bytes bounds the whole response) gets at most that much appended in all; every
+// other tool is untouched. The room is spent in order, hints and notice first, and
+// the message block gets what is left (see messageHintWithin).
 func (s *connSession) enrichToolOutput(ctx context.Context, name string, args json.RawMessage, text string) string {
+	room := unboundedRoom
+	if r, bounded := tools.AppendRoom(name); bounded {
+		room = r
+	}
 	// The ordering below was load-bearing while this path claimed: claiming marked
 	// a row delivered for good, runHookSafely discards this entire string if
 	// anything here panics, and a panic after the claim therefore destroyed a
@@ -112,19 +122,32 @@ func (s *connSession) enrichToolOutput(ctx context.Context, name string, args js
 	// Extracting the hints is what lets the message block sit after their early
 	// returns, so it still rides on EVERY tool call rather than only the
 	// path-bearing ones the hints are restricted to.
-	text += s.pathHints(ctx, name, args)
+	text += fitRoom(s.pathHints(ctx, name, args), &room)
 	// A collaboration-policy change (PLAN-414) reaches the agent on its next
 	// result — including session_start, which the mailbox block below skips.
 	// Read-and-clear is safe here: it sits between the read-only hints (a panic
 	// there never reaches it) and message delivery (whose panic path discards
 	// the whole string, notice included — advisory, so loss there is accepted).
 	if notice := s.collabPolicyNotice(); notice != "" {
-		text += "\n\n" + notice
+		text += fitRoom("\n\n"+notice, &room)
 	}
 	if !mailboxSilentTools[name] {
-		text += s.messageHint(ctx)
+		text += s.messageHintWithin(ctx, room)
 	}
 	return text
+}
+
+// fitRoom clamps block to the room left (unboundedRoom for no limit) and spends it.
+func fitRoom(block string, room *int) string {
+	switch {
+	case *room < 0:
+		return block
+	case *room == 0:
+		return ""
+	}
+	block = textfmt.ClampBytes(block, *room)
+	*room -= len(block)
+	return block
 }
 
 // Deliberately NOT gated on the size of the result, though it looks like it

@@ -327,6 +327,20 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
 	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))
 	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
+	// context_for_task is experimental and deliberately unpinned and non-lean (see
+	// tools.PinnedTools / tools.LeanTools): it is found by name, not pushed. The
+	// collector carries no read tracker, so gathering a pack never records a read;
+	// the tool records, per agent, only the bodies it actually delivered. A body it
+	// reaches by expansion, rather than being named, is withheld under the same
+	// decision write responses and history take (changeSensitive). Its index is
+	// keyed by the calling agent's root (topologyStoreForRoot), not by the
+	// connection's: a pack for an agent pinned elsewhere never reads this
+	// connection's index. The top symbol seeds are also put to the language server
+	// (call hierarchy, under its own sub-deadline), through the same routing proxy and
+	// warm-up probe call_hierarchy uses; a server that is absent or slow only costs the
+	// pack that line of enrichment.
+	srv.Register(tools.NewContextForTask(tools.NewContextCollector(s.topologyStoreForRoot).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested).WithSensitive(s.changeSensitive).WithTestScope(s.testScope).WithLSP(s.sessionProxy, warmupFn)).
+		WithReads(s.readTracker).WithReadsFor(s.readTrackerFor))
 }
 
 // registerHooks wires up the MCP lifecycle callbacks to connSession methods.

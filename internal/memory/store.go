@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -83,11 +84,8 @@ func List(workspace string) ([]Memory, error) {
 	}
 	var out []Memory
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".md")
-		if !nameRegexp.MatchString(name) {
+		name, ok := memoryFileName(e)
+		if !ok {
 			continue
 		}
 		path := filepath.Join(dir, e.Name())
@@ -109,6 +107,95 @@ func List(workspace string) ([]Memory, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// memoryFileName is the memory name a directory entry holds, and false for
+// anything that is not a memory file.
+func memoryFileName(e os.DirEntry) (string, bool) {
+	if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+		return "", false
+	}
+	name := strings.TrimSuffix(e.Name(), ".md")
+	return name, nameRegexp.MatchString(name)
+}
+
+// ListHeadBytes is how much of each file ListBounded reads: enough for the
+// frontmatter of any ordinary memory, never the body.
+const ListHeadBytes = 4096
+
+// ListBounded is List for a caller with a read budget. It reads at most the first
+// ListHeadBytes of each memory file (the frontmatter, so ContentSHA stays empty),
+// considers at most maxFiles of them in directory order (0 means no limit), and
+// asks admit before touching a file, passing the bytes it is about to read; a false
+// answer spares the file, and the caller owns the accounting behind it (nil admits
+// everything). A file not read, for either reason or because its frontmatter runs
+// past the head, is counted in skipped and is absent from the result: a caller must
+// say so, since that memory could have been the one that mattered.
+func ListBounded(workspace string, maxFiles int, admit func(read int64) bool) (mems []Memory, skipped int, err error) {
+	dir := Dir(workspace)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("reading memories dir: %w", err)
+	}
+	considered := 0
+	for _, e := range entries {
+		name, ok := memoryFileName(e)
+		if !ok {
+			continue
+		}
+		info, ierr := e.Info()
+		if ierr != nil {
+			continue
+		}
+		if maxFiles > 0 && considered >= maxFiles {
+			skipped++
+			continue
+		}
+		considered++
+		if admit != nil && !admit(min(info.Size(), ListHeadBytes)) {
+			skipped++
+			continue
+		}
+		m, ok := readMemoryHead(filepath.Join(dir, e.Name()), name, info)
+		if !ok {
+			skipped++
+			continue
+		}
+		mems = append(mems, m)
+	}
+	sort.Slice(mems, func(i, j int) bool { return mems[i].Name < mems[j].Name })
+	return mems, skipped, nil
+}
+
+// readMemoryHead builds a memory's metadata from the head of its file. ok is false
+// when the file cannot be read, or when its frontmatter is not closed within the
+// head, so that what was read does not describe it.
+func readMemoryHead(path, name string, info os.FileInfo) (Memory, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Memory{}, false
+	}
+	defer f.Close()
+	head := make([]byte, ListHeadBytes)
+	n, err := io.ReadFull(f, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return Memory{}, false
+	}
+	head = head[:n]
+	if info.Size() > int64(n) && bytes.HasPrefix(head, []byte("---\n")) {
+		if fm, _ := splitFrontmatter(head); fm == nil {
+			return Memory{}, false // the closing delimiter lies past the head
+		}
+	}
+	fm := parseFrontmatterFull(head)
+	return Memory{
+		Name: name, Path: path, SizeBytes: info.Size(), ModTime: info.ModTime(),
+		Description: fm.description, Paths: fm.paths, Confidence: fm.confidence, CreatedAt: fm.createdAt,
+		SourcePaths: fm.sourcePaths, SourceSymbols: fm.sourceSymbols,
+	}, true
 }
 
 // Read returns the full content of a memory.
