@@ -11,12 +11,14 @@ Under a lean tool profile `file_status` and `minimal_diff_review` are not advert
 
 | Tier | Subcommands | Gate |
 |---|---|---|
-| read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore`, `merge-tree`, `check-attr` | always allowed |
+| read | `status`, `log`, `diff`, `show`, `blame`, `shortlog`, `check-ignore`, `merge-tree`, `check-attr`, `cherry`, `ls-files`, `grep` | always allowed |
 | write | `add`, `commit`, `mv` | `[git] allow_writes` |
 | destructive | `reset`, `clean`, `rebase`, `revert`, `cherry-pick` | `[git] allow_destructive` **and** a confirmation |
 | network | `push`, `fetch`, `pull` | `[git] allow_push` **and** a confirmation |
 
 `rm` is refused at every tier: delete the file with `delete_file`, then stage the deletion with `add`.
+
+Because the read tier is always on, a read verb's options that would do anything but read this repository are refused. `--output` (on `diff`, `log`, `show`, `shortlog` and `stash show`) writes a file. `grep -O` runs a pager. `--no-index`, `blame --contents` and `blame -S` / `--ignore-revs-file` read files outside the repository. Use `git grep <pattern> <rev>` to search a past revision, `ls-files` to ask whether a path is tracked, and `cherry -v <upstream>` to see which commits are already upstream after a squash merge.
 
 **Eight subcommands are classified by their arguments**, biased towards the safer-to-deny higher tier — so the same subcommand can land in different tiers on different calls. Options are read as git reads them: an abbreviation (`--disc`), a bundle (`-dr`) or a value (`tag -m -d`) counts exactly as git counts it:
 

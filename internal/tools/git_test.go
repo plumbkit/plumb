@@ -68,6 +68,10 @@ func TestClassifyGit(t *testing.T) {
 		{"merge-tree", []string{"--write-tree", "HEAD", "topic"}, tierRead},
 		{"merge-tree", []string{"base", "branch1", "branch2"}, tierRead},
 		{"check-attr", []string{"-a", "merge", "CHANGELOG.md"}, tierRead},
+		// #636's read-tier additions, absolute for the same reason.
+		{"cherry", []string{"-v", "origin/main", "HEAD"}, tierRead},
+		{"ls-files", []string{"--", "go.mod"}, tierRead},
+		{"grep", []string{"-n", "TODO", "HEAD~3", "--", "*.go"}, tierRead},
 		{"worktree", []string{"list"}, tierRead},
 		{"worktree", []string{"add", "wt"}, tierWrite},
 		{"worktree", []string{"add", "-B", "topic", "wt"}, tierDestructive},

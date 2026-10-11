@@ -158,7 +158,7 @@ func classifyGitCall(a gitToolArgs) (gitTier, error) {
 func classifyGit(sub string, args []string) gitTier {
 	switch sub {
 	case "diff", "log", "show", "blame", "status", "shortlog", "check-ignore",
-		"merge-tree", "check-attr":
+		"merge-tree", "check-attr", "cherry", "ls-files", "grep":
 		// merge-tree and check-attr are git's read-only merge and attribute
 		// plumbing. merge-tree computes a tree and may write unreferenced objects
 		// into the object store, but it moves no ref and touches neither the index
@@ -166,6 +166,12 @@ func classifyGit(sub string, args []string) gitTier {
 		// path. A reviewer needs both to answer "does this conflict with main, and
 		// where" and "which merge driver is actually in force here" without
 		// leaving the tool for a shell.
+		//
+		// cherry, ls-files and grep (#636) read the object store and the index
+		// only: which commits are already upstream after a squash merge, whether
+		// a path is tracked, and a search of a historical revision, which
+		// search_in_files cannot do. grep's options that would run a program or
+		// leave the repository are refused by checkReadArgs (git_read_args.go).
 		return tierRead
 	case "add", "commit", "mv":
 		return tierWrite

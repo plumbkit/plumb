@@ -8,8 +8,9 @@ import (
 	"testing"
 )
 
-// git_read_args_test.go covers the read-tier option refusals: the options on
-// read verbs that write a file or read outside the repository.
+// git_read_args_test.go covers #636's three read verbs end to end and the
+// read-tier option refusals that came with them: the options on read verbs that
+// write a file, run a program, or read outside the repository.
 
 func TestCheckReadArgs(t *testing.T) {
 	refused := []struct {
@@ -30,6 +31,14 @@ func TestCheckReadArgs(t *testing.T) {
 		{"blame", []string{"-S", "/etc/hosts", "f"}},
 		{"blame", []string{"-wS", "/etc/hosts", "f"}}, // inside a bundle
 		{"blame", []string{"--ignore-revs-file=/etc/hosts", "f"}},
+		{"grep", []string{"-O", "foo"}},
+		{"grep", []string{"-Ovim", "foo"}},
+		{"grep", []string{"-nO", "foo"}},
+		{"grep", []string{"--open-files-in-pager=vim", "foo"}},
+		{"grep", []string{"--open", "foo"}},
+		{"grep", []string{"--no-index", "foo", "/etc"}},
+		{"grep", []string{"--no-ind", "foo"}},
+		{"grep", []string{"-e", "x", "-O"}}, // -e took "x"; -O is live
 	}
 	for _, c := range refused {
 		if err := checkReadArgs(c.sub, c.args); err == nil {
@@ -50,12 +59,55 @@ func TestCheckReadArgs(t *testing.T) {
 		{"log", []string{"--oneline", "-5"}},
 		{"show", []string{"HEAD:go.mod"}},
 		{"blame", []string{"-L", "1,5", "--", "f"}},
-		{"blame", []string{"-L/S/,+2", "f"}}, // -L takes the rest of the token: no -S here
+		{"blame", []string{"-L/S/,+2", "f"}},   // -L takes the rest of the token: no -S here
+		{"grep", []string{"-e", "-O", "HEAD"}}, // -e takes "-O" as the pattern
+		{"grep", []string{"-e", "--no-index"}}, // likewise
+		{"grep", []string{"-n", "--untracked", "x"}},
+		{"cherry", []string{"-v", "origin/main", "HEAD"}},
+		{"ls-files", []string{"--error-unmatch", "go.mod"}},
 	}
 	for _, c := range allowed {
 		if err := checkReadArgs(c.sub, c.args); err != nil {
 			t.Errorf("git %s %v must be allowed: %v", c.sub, c.args, err)
 		}
+	}
+}
+
+func TestGit_ReadVerbsRunWithTheOutputWindow(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("alpha\nneedle one\nbeta\nneedle two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "notes.txt")
+	run("commit", "-m", "notes")
+	run("branch", "base", "HEAD~1")
+	tool := NewGit(WriteDeps{}, nil)
+
+	// cherry: the one commit not upstream of base.
+	out, err := callGit(t, tool, map[string]any{"subcommand": "cherry", "args": []string{"-v", "base", "HEAD"}, "repo": repo})
+	if err != nil || !strings.Contains(out, "+ ") || !strings.Contains(out, "notes") {
+		t.Fatalf("cherry: %v\n%s", err, out)
+	}
+	// ls-files: is a path tracked?
+	out, err = callGit(t, tool, map[string]any{"subcommand": "ls-files", "args": []string{"--", "notes.txt"}, "repo": repo})
+	if err != nil || strings.TrimSpace(out) != "notes.txt" {
+		t.Fatalf("ls-files: %v\n%q", err, out)
+	}
+	// grep a historical revision, windowed by pattern like every read.
+	out, err = callGit(t, tool, map[string]any{
+		"subcommand": "grep", "args": []string{"-n", "needle", "HEAD"}, "repo": repo, "pattern": "two",
+	})
+	if err != nil || !strings.Contains(out, "needle two") || strings.Contains(out, "needle one") {
+		t.Fatalf("grep with a pattern window: %v\n%s", err, out)
 	}
 }
 

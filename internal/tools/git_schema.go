@@ -13,12 +13,12 @@ var gitSchema = json.RawMessage(`{
   "properties": {
     "subcommand": {
       "type": "string",
-      "description": "Git subcommand. Read: diff, log, show, blame, status, shortlog, check-ignore, merge-tree, check-attr, worktree list, branch/tag/stash listing. Write: add, commit, switch, mv, merge, worktree add/remove/lock/unlock, branch/tag create, stash push/pop. Destructive: reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, worktree move/prune/repair, branch/tag delete, stash drop. Network: push, fetch, pull."
+      "description": "Git subcommand. Read: diff, log, show, blame, status, shortlog, check-ignore, merge-tree, check-attr, cherry, ls-files, grep, worktree list, branch/tag/stash listing. Write: add, commit, switch, mv, merge, worktree add/remove/lock/unlock, branch/tag create, stash push/pop. Destructive: reset, clean, checkout, restore, rebase, revert, cherry-pick, merge --abort/--quit, worktree move/prune/repair, branch/tag delete, stash drop. Network: push, fetch, pull."
     },
     "args": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Arguments passed to git, e.g. [\"--oneline\",\"-10\"] for log or [\"--staged\"] for diff. Not for add or commit."
+      "description": "Arguments passed to git, e.g. [\"--oneline\",\"-10\"] for log. Not for add or commit."
     },
     "files": {
       "type": "array",
