@@ -49,19 +49,23 @@ type pkgTarget struct {
 	fileID int64
 }
 
-// receiverInfo is what a method's own declaration says about its receiver.
-type receiverInfo struct {
-	name string // the receiver variable, e.g. "idx"
-	base string // the receiver type without pointer or type parameters, e.g. "Indexer"
+// enclosingInfo is what a function or method's own declaration says about the
+// variables a call inside it can be qualified by: its receiver, and its
+// parameters with a named type.
+type enclosingInfo struct {
+	recvName string            // the receiver variable, e.g. "idx"; "" for a function
+	recvBase string            // the receiver type without pointer or type parameters, e.g. "Indexer"
+	params   map[string]string // parameter name → named type, "Store" or "topology.Store"
 }
 
-// samePackageTables are the lookups the two same-package tiers need. Keys of
-// funcs and methods are dirPkgKey(dir, package clause).
+// samePackageTables are the lookups the receiver-aware tiers need. Keys of funcs
+// and methods are dirPkgKey(dir, package clause).
 type samePackageTables struct {
 	filePkg   map[int64]string                  // file id → package clause
+	dirPkg    map[string]string                 // directory → its non-test package clause
 	funcs     map[string]map[string][]pkgTarget // top-level functions by name
 	methods   map[string]map[string][]pkgTarget // methods by "Base.Name"
-	receivers map[int64]receiverInfo            // method node id → its receiver
+	enclosing map[int64]enclosingInfo           // function/method node id → its variables
 }
 
 func dirPkgKey(dir, pkg string) string { return dir + "\x00" + pkg }
@@ -69,14 +73,15 @@ func dirPkgKey(dir, pkg string) string { return dir + "\x00" + pkg }
 func loadSamePackageTables(ctx context.Context, tx *sql.Tx, lang string) (samePackageTables, error) {
 	t := samePackageTables{
 		filePkg:   map[int64]string{},
+		dirPkg:    map[string]string{},
 		funcs:     map[string]map[string][]pkgTarget{},
 		methods:   map[string]map[string][]pkgTarget{},
-		receivers: map[int64]receiverInfo{},
+		enclosing: map[int64]enclosingInfo{},
 	}
 	if lang != "go" {
 		return t, nil
 	}
-	if err := loadFilePackages(ctx, tx, lang, t.filePkg); err != nil {
+	if err := loadFilePackages(ctx, tx, lang, t.filePkg, t.dirPkg); err != nil {
 		return t, err
 	}
 	rows, err := tx.QueryContext(ctx,
@@ -102,13 +107,17 @@ func loadSamePackageTables(ctx context.Context, tx *sql.Tx, lang string) (samePa
 		key := dirPkgKey(path.Dir(p), pkg)
 		target := pkgTarget{callTarget: callTarget{id: id, identity: nodeIdentity(p, qualified, name)}, fileID: fileID}
 		base, isMethod := receiverBase(qualified)
+		info := enclosingInfo{params: namedParams(signature)}
+		if isMethod {
+			info.recvName, info.recvBase = receiverVar(signature), base
+		}
+		if info.recvName != "" || len(info.params) > 0 {
+			t.enclosing[id] = info
+		}
 		switch {
 		case !isMethod && NodeKind(kind) == KindFunction:
 			addPkgTarget(t.funcs, key, name, target)
 		case isMethod:
-			if v := receiverVar(signature); v != "" {
-				t.receivers[id] = receiverInfo{name: v, base: base}
-			}
 			// A Test-kind method (a suite's TestX) is an entry point, not a
 			// callee anyone writes `s.TestX()` for; it can enclose a call but is
 			// not offered as a target.
@@ -128,10 +137,13 @@ func addPkgTarget(m map[string]map[string][]pkgTarget, key, name string, target 
 }
 
 // loadFilePackages maps each file to its package clause, from the package node
-// the extractor emits once per file.
-func loadFilePackages(ctx context.Context, tx *sql.Tx, lang string, out map[int64]string) error {
+// the extractor emits once per file, and each directory to its non-test clause
+// (the package another directory's import of it names).
+func loadFilePackages(ctx context.Context, tx *sql.Tx, lang string, out map[int64]string, dirs map[string]string) error {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT file_id, name FROM topology_nodes WHERE kind = ? AND language = ?`,
+		`SELECT n.file_id, n.name, f.path FROM topology_nodes n
+		   JOIN topology_files f ON f.id = n.file_id
+		  WHERE n.kind = ? AND n.language = ?`,
 		string(KindPackage), lang)
 	if err != nil {
 		return fmt.Errorf("topology: resolve calls: package clauses: %w", err)
@@ -139,11 +151,14 @@ func loadFilePackages(ctx context.Context, tx *sql.Tx, lang string, out map[int6
 	defer rows.Close()
 	for rows.Next() {
 		var fileID int64
-		var name string
-		if err := rows.Scan(&fileID, &name); err != nil {
+		var name, p string
+		if err := rows.Scan(&fileID, &name, &p); err != nil {
 			return fmt.Errorf("topology: resolve calls: package clause scan: %w", err)
 		}
 		out[fileID] = name
+		if !strings.HasSuffix(name, "_test") {
+			dirs[path.Dir(p)] = name
+		}
 	}
 	return rows.Err()
 }
@@ -193,26 +208,6 @@ func receiverVar(signature string) string {
 		return ""
 	}
 	return fields[0]
-}
-
-// samePackageCandidates returns the targets a bare or receiver-self site may
-// resolve to, and whether the site belongs to one of the two tiers at all. A
-// qualified site whose qualifier is not the enclosing method's receiver
-// variable is not a same-package site; the caller keeps its receiver bucket.
-func (t samePackageTables) samePackageCandidates(fileID, enclosing int64, callerPath, callee string, qualifier sql.NullString) ([]pkgTarget, bool) {
-	pkg, ok := t.filePkg[fileID]
-	if !ok {
-		return nil, !qualifier.Valid
-	}
-	key := dirPkgKey(path.Dir(callerPath), pkg)
-	if !qualifier.Valid {
-		return t.funcs[key][callee], true
-	}
-	recv, ok := t.receivers[enclosing]
-	if !ok || recv.name != qualifier.String {
-		return nil, false
-	}
-	return t.methods[key][recv.base+"."+callee], true
 }
 
 // samePackageScope widens a scoped pass from the changed files to every indexed

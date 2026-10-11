@@ -313,7 +313,7 @@ type CallSite struct {
 // is what makes "how much of the call graph is this" a number rather than an
 // impression.
 //
-// Two of the six are not resolution outcomes and exist because they were the two
+// Two of the eight are not resolution outcomes and exist because they were the two
 // ways a site used to leave the count: a repeat of an edge already emitted was
 // skipped in silence, and a site with no caller node was folded into
 // UnmatchedTarget, whose printed wording is a claim about the TARGET and untrue
@@ -330,11 +330,14 @@ type CallGraphStatus struct {
 	// edge. It equals the edge count except for bare calls to a function with
 	// build-tag variants, which produce one edge per variant.
 	Resolved int
-	// ResolvedSamePackage and ResolvedReceiverSelf split Resolved by tier: bare
-	// `F()` calls into the caller's own package, and `r.M()` calls on the
-	// enclosing method's own receiver. The rest is the package-qualified tier.
+	// ResolvedSamePackage, ResolvedReceiverSelf and ResolvedParamTyped split
+	// Resolved by tier: bare `F()` calls into the caller's own package, `r.M()`
+	// calls on the enclosing method's own receiver, and `p.M()` calls on a
+	// parameter declared with a named type. The rest is the package-qualified
+	// tier.
 	ResolvedSamePackage  int
 	ResolvedReceiverSelf int
+	ResolvedParamTyped   int
 	// ResolvedNonTest is the subset of Resolved whose caller is not a Go test
 	// file. Test callers are resolved and counted; this is the split, published
 	// so a consumer that must exclude them can, and so neither number can be

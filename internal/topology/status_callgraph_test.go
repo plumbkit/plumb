@@ -23,6 +23,7 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 
 		ResolvedSamePackage:  9,
 		ResolvedReceiverSelf: 4,
+		ResolvedParamTyped:   2,
 		SameFile:             300,
 		BareUnmatched:        100,
 	}}
@@ -39,9 +40,10 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 		// The two buckets a reader would otherwise have to discover by
 		// subtracting and finding the breakdown short.
 		"8 repeat", "2 sit outside any function",
-		// The tier split: 25 resolved = 12 qualified + 9 bare + 4 receiver-self,
-		// and the same-file share the extractor already links.
-		"12 package-qualified", "9 same-package bare calls", "4 calls on the method's own receiver",
+		// The tier split: 25 resolved = 10 qualified + 9 bare + 4 receiver-self
+		// + 2 typed-parameter, and the same-file share the extractor links.
+		"10 package-qualified", "9 same-package bare calls", "4 calls on the method's own receiver",
+		"2 on a typed parameter",
 		"300 more (30.0%)", "100 bare calls naming no",
 	} {
 		if !strings.Contains(out, want) {

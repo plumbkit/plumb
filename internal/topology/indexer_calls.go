@@ -36,6 +36,7 @@ const (
 
 	metaCallResolvedSamePkg  = "callgraph.resolved_same_package"
 	metaCallResolvedRecvSelf = "callgraph.resolved_receiver_self"
+	metaCallResolvedParam    = "callgraph.resolved_param_typed"
 	metaCallSameFile         = "callgraph.same_file"
 	metaCallBareUnmatched    = "callgraph.bare_unmatched"
 )
@@ -64,9 +65,11 @@ type callResolution struct {
 	// remainder of resolved is the package-qualified tier.
 	resolvedSamePackage  int
 	resolvedReceiverSelf int
-	unresolvedRecv       int
-	externalPackage      int
-	unmatchedTarget      int
+	// resolvedParamTyped counts `p.M()` sites on a parameter with a named type.
+	resolvedParamTyped int
+	unresolvedRecv     int
+	externalPackage    int
+	unmatchedTarget    int
 	// repeatOfEdge counts qualified sites that resolved to a caller→target pair
 	// an earlier site already produced an edge for. The edge is emitted once, so
 	// these sites contribute no edge and must not be counted as if they had.
@@ -186,6 +189,7 @@ func (r *callResolution) add(o callResolution) {
 	r.resolvedNonTest += o.resolvedNonTest
 	r.resolvedSamePackage += o.resolvedSamePackage
 	r.resolvedReceiverSelf += o.resolvedReceiverSelf
+	r.resolvedParamTyped += o.resolvedParamTyped
 	r.sameFile += o.sameFile
 	r.bareUnmatched += o.bareUnmatched
 	r.unresolvedRecv += o.unresolvedRecv
@@ -283,12 +287,10 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 		}
 		var bucket resolveBucket
 		var emitted []resolvedEdge
-		if cands, ok := t.same.samePackageCandidates(fileID, enclosing, callerPath, callee, qualifier); ok {
-			bucket, emitted = samePackageOutcome(fileID, enclosing, cands, !qualifier.Valid, seen)
-			if bucket == bucketResolved && qualifier.Valid {
-				r.resolvedReceiverSelf++
-			} else if bucket == bucketResolved {
-				r.resolvedSamePackage++
+		if cands, tier, ok := t.receiverCandidates(fileID, enclosing, callerPath, callee, qualifier); ok {
+			bucket, emitted = samePackageOutcome(fileID, enclosing, cands, tier == tierBare, seen)
+			if bucket == bucketResolved {
+				r.countTier(tier)
 			}
 		} else {
 			bucket, emitted = qualifiedOutcome(t, fileID, enclosing, callee, qualifier.String, seen)
@@ -570,6 +572,7 @@ func writeCallMeta(tx *sql.Tx, r callResolution) error {
 		{metaCallQualifiedSites, r.qualifiedSites},
 		{metaCallResolvedSamePkg, r.resolvedSamePackage},
 		{metaCallResolvedRecvSelf, r.resolvedReceiverSelf},
+		{metaCallResolvedParam, r.resolvedParamTyped},
 		{metaCallSameFile, r.sameFile},
 		{metaCallBareUnmatched, r.bareUnmatched},
 	}
