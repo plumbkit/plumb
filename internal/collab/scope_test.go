@@ -272,6 +272,12 @@ func TestScope_TargetStillScopesFamilyMail(t *testing.T) {
 	if got := countsFor(t, g, Claimant{Name: "alice", ID: "sess-alice", Workspace: b}, now); got != (readerCounts{}) {
 		t.Fatalf("a sibling worktree must not read a note aimed at the main checkout: %+v", got)
 	}
+	// Now b has family mail of its own, so the origin lookup finds the family's
+	// stamp for b too: only the target term keeps the main checkout's note out.
+	sendFrom(t, g, a, b, "for the sibling", now)
+	if got := countsFor(t, g, Claimant{Name: "alice", ID: "sess-alice", Workspace: b}, now); got != (readerCounts{1, 1, 1, 1, 1}) {
+		t.Fatalf("the sibling must read exactly its own note, not the main checkout's: %+v", got)
+	}
 }
 
 func TestConversationFor_WithoutConsentKeepsOnlyFamilyRows(t *testing.T) {

@@ -278,3 +278,29 @@ func TestWorkspaceSessions_FamilyVolumeNeedsNoConsent(t *testing.T) {
 		t.Fatalf("a thread with this project's own worktree must be shown without consent:\n%s", out)
 	}
 }
+
+func TestLeaveNote_ConsentingReplyIntoAForeignThread(t *testing.T) {
+	// The thread-reply path reads participants through the reader's scope, so
+	// consent must reach it: a project that opted in replies into a thread with an
+	// unrelated project without naming `to`, exactly as before #635.
+	repo := familyRepo(t, t.TempDir())
+	other := familyRepo(t, t.TempDir())
+	global := familyGlobal(t)
+	alice := newFamilySession(t, repo, "alice", global)
+	alice.deps.Policy = func() CollabPolicy { return CollabPolicy{Mailbox: true, CrossProject: true} }
+	carol := newFamilySession(t, other, "carol", global)
+	carol.deps.TargetAllowsCrossProject = func(string) bool { return true }
+	carol = carol.sees(alice)
+	alice = alice.sees(carol)
+
+	send(t, carol, `{"to":"alice","body":"from an unrelated project"}`)
+	rows, err := alice.inbox().ClaimResult(context.Background())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("alice claimed %d, err %v; want carol's note", len(rows), err)
+	}
+	alice.deps.TargetAllowsCrossProject = func(string) bool { return true }
+	out := send(t, alice, `{"body":"reply","conversation_id":`+jsonStr(rows[0].ConversationID)+`}`)
+	if !strings.Contains(out, "Message sent") {
+		t.Fatalf("a consenting participant must be able to reply into its cross-project thread; got:\n%s", out)
+	}
+}
