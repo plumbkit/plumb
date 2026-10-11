@@ -52,30 +52,51 @@ daemons() {
   echo "$n"
 }
 
-# The peak during the suite, written to /tmp/peak ("?" sticks once seen).
+# The peak during the suite and the number of samples, rewritten atomically to
+# /tmp/peak after every sample ("?" sticks once the table could not be read).
 supervise() {
-  local peak=0 n
+  local peak=0 samples=0 n
   while :; do
     n=$(daemons)
+    samples=$((samples + 1))
     if [ "$n" = "?" ]; then peak="?"; elif [ "$peak" != "?" ] && [ "$n" -gt "$peak" ]; then peak=$n; fi
-    echo "$peak" > /tmp/peak
+    echo "$peak $samples" > /tmp/peak.new && mv /tmp/peak.new /tmp/peak
     sleep 0.2
   done
 }
+rm -f /tmp/peak /tmp/peak.new
 supervise &
 supervisor=$!
 
 make verify-full
 rc=$?
 echo "verify-full-container: make verify-full exited $rc"
-kill "$supervisor" 2> /dev/null
-peak=$(cat /tmp/peak 2> /dev/null || echo "?")
-case "$peak" in
-  0) echo "verify-full-container: no plumb daemon was seen during the suite" ;;
-  1) echo "verify-full-container: at most 1 plumb daemon ran at a time during the suite" ;;
-  "?") echo "verify-full-container: the process table could not be read during the suite"; [ "$rc" -eq 0 ] && rc=1 ;;
-  *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1 ;;
-esac
+
+# Trust the peak only from a watcher that ran for the whole suite: alive now,
+# stopped by us (TERM, so it exits 143), with a readable, numeric record.
+watched=yes
+if kill -0 "$supervisor" 2> /dev/null; then
+  kill -TERM "$supervisor"
+  wait "$supervisor"
+  status=$?
+  [ "$status" -eq 143 ] || { watched=no; echo "verify-full-container: the daemon watcher exited $status, not 143 on our TERM"; }
+else
+  watched=no
+  echo "verify-full-container: the daemon watcher died during the suite"
+fi
+peak="?" samples=0
+read -r peak samples < /tmp/peak 2> /dev/null
+[[ "$samples" =~ ^[0-9]+$ ]] && [ "$samples" -gt 0 ] || { watched=no; echo "verify-full-container: the daemon watcher left no samples"; }
+if [ "$watched" = no ]; then
+  [ "$rc" -eq 0 ] && rc=1
+else
+  case "$peak" in
+    0) echo "verify-full-container: no plumb daemon was seen during the suite ($samples samples)" ;;
+    1) echo "verify-full-container: at most 1 plumb daemon ran at a time during the suite ($samples samples)" ;;
+    "?") echo "verify-full-container: the process table could not be read during the suite"; [ "$rc" -eq 0 ] && rc=1 ;;
+    *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1 ;;
+  esac
+fi
 
 seen=0
 for _ in $(seq 1 60); do
