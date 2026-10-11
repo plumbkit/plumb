@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -40,8 +41,18 @@ import (
 type readRefusal struct {
 	shorts string   // short spellings, as gitOption.is takes them
 	longs  []string // long names, matched by unambiguous prefix
-	does   string   // what the option would do, for the refusal
+	// exact are long names git matches EXACTLY to a different option, so a
+	// prefix of a refused name that equals one of them is not that name:
+	// blame's --ignore-rev (a revision) is a prefix of --ignore-revs-file.
+	exact []string
+	does  string // what the option would do, for the refusal
 }
+
+// diffFamilyGrammar is the value-taking shorts of the diff and log options the
+// read verbs share: -S, -G, -l, -n, -L, -U and -O take a value (joined or the
+// next argument), and -M, -C and -B an optional one as the rest of their token.
+// Without it a pickaxe such as `-SOpen` would read as -O.
+var diffFamilyGrammar = gitOptionGrammar{valueShort: "SGlnLUO", optionalShort: "MCB"}
 
 // readArgGrammars give each policed verb the options that take a value, so a
 // value is not mistaken for an option (`grep -e -O` searches for "-O"; it opens
@@ -52,25 +63,39 @@ type readRefusal struct {
 // "L" and a live -S, never a -L swallowing it. A verb not listed reads every
 // token as a possible option, which can only over-refuse.
 var readArgGrammars = map[string]gitOptionGrammar{
-	"grep":  {valueShort: "efABCm", valueLong: []string{"after-context", "before-context", "context", "max-count", "max-depth", "threads"}, optionalShort: "O"},
-	"blame": {valueShort: "LS", optionalShort: "CM"},
+	"grep":     {valueShort: "efABCm", valueLong: []string{"after-context", "before-context", "context", "max-count", "max-depth", "threads"}, optionalShort: "O"},
+	"blame":    {valueShort: "LS", optionalShort: "CM"},
+	"diff":     diffFamilyGrammar,
+	"log":      diffFamilyGrammar,
+	"show":     diffFamilyGrammar,
+	"stash":    diffFamilyGrammar,
+	"ls-files": {valueShort: "xX"},
 }
+
+// orderFile refuses diff's -O<orderfile>: it reads the named file whole, with no
+// bound — `-O/dev/zero` grows the git child by gigabytes a second — and only the
+// joined spelling escapes checkReadArgPaths, which sees separate arguments.
+var orderFile = readRefusal{shorts: "O", does: "reads a file of any size from anywhere as a path order"}
 
 var readRefusals = map[string][]readRefusal{
 	"diff": {
 		{longs: []string{"output"}, does: "writes the output to a file"},
 		{longs: []string{"no-index"}, does: "reads files outside the repository"},
+		orderFile,
 	},
-	"log":      {{longs: []string{"output"}, does: "writes the output to a file"}},
-	"show":     {{longs: []string{"output"}, does: "writes the output to a file"}},
+	"log":      {{longs: []string{"output"}, does: "writes the output to a file"}, orderFile},
+	"show":     {{longs: []string{"output"}, does: "writes the output to a file"}, orderFile},
 	"shortlog": {{longs: []string{"output"}, does: "writes the output to a file"}},
 	// Only `stash show` and `stash list` reach the read tier, and both take diff
 	// and log options.
-	"stash": {{longs: []string{"output"}, does: "writes the output to a file"}},
+	"stash": {{longs: []string{"output"}, does: "writes the output to a file"}, orderFile},
 	"blame": {
 		{longs: []string{"output"}, does: "writes the output to a file"},
 		{longs: []string{"contents"}, does: "reads a file outside the repository"},
-		{shorts: "S", longs: []string{"ignore-revs-file"}, does: "reads a file outside the repository"},
+		{shorts: "S", longs: []string{"ignore-revs-file"}, exact: []string{"ignore-rev"}, does: "reads a file outside the repository"},
+	},
+	"ls-files": {
+		{shorts: "X", longs: []string{"exclude-from"}, does: "reads patterns from a file, which then tell what that file holds"},
 	},
 	"grep": {
 		{shorts: "O", longs: []string{"open-files-in-pager"}, does: "runs a program"},
@@ -88,12 +113,22 @@ func checkReadArgs(sub string, args []string) error {
 	}
 	grammar := readArgGrammars[sub]
 	for _, r := range refusals {
-		if grammar.has(args, r.shorts, r.longs...) {
+		if refusedIn(grammar, args, r) {
 			return fmt.Errorf("git %s: %s is not permitted — it %s, and the read tier only reads this repository",
 				sub, readRefusalName(r), r.does)
 		}
 	}
 	return nil
+}
+
+// refusedIn reports whether args carry r's option, as grammar reads them.
+func refusedIn(grammar gitOptionGrammar, args []string, r readRefusal) bool {
+	found := false
+	grammar.scan(args, false, func(o gitOption) bool {
+		found = o.is(r.shorts, r.longs...) && (o.long == "" || !slices.Contains(r.exact, o.long))
+		return !found
+	})
+	return found
 }
 
 // readRefusalName spells a refusal's option the way a caller would look for it.

@@ -260,11 +260,14 @@
   `diff --no-index`, `blame --contents`, `blame -S`, `--ignore-revs-file` and
   `grep -f` printed or echoed files from outside the repository. So did a plain
   `git diff <outside-path> <file>`, which switches to no-index mode by itself.
-  Those options are now refused on the read tier, read the way git parses them:
-  a bundle such as `-wS` or `-CL -S` and a value given as the next argument both
-  count. Separately, any argument that names an existing path outside the
-  repository is refused, whatever option it belongs to. A refusal names the
-  argument and why.
+  The diff options' `-O<orderfile>` read a file of any size from anywhere
+  (`-O/dev/zero` grew git by gigabytes a second). `ls-files -X` matched
+  repository paths against an outside file's lines. Those options are now
+  refused on the read tier, read the way git parses them: a bundle such as `-wS`
+  or `-CL -S` and a value given as the next argument both count. Separately,
+  any separate argument, long option's `=value`, or argument after `--` that
+  names an existing path outside the repository is refused, a search pattern
+  such as `/usr` included. A refusal names the argument and why.
 
 ## 0.24.0 (2026-10-10)
 

@@ -1135,10 +1135,14 @@ Unified tiered git tool. **Read** subcommands always run (`status`, `log`,
 `diff`, `show`, `blame`, `shortlog`, `check-ignore`, `merge-tree`, `check-attr`,
 `cherry`, `ls-files`, `grep`, and branch/tag/stash listing). Because the read
 tier is always on, it refuses the options on those verbs that do something other
-than read this repository. `--output` (on `diff`, `log`, `show`, `shortlog` and
-`stash show`) writes a file. `grep -O`/`--open-files-in-pager` runs a program.
-`--no-index` (on `diff` and `grep`), `blame --contents`, and `blame -S` or
-`--ignore-revs-file` read files outside the repository. **Write**
+than read this repository. `--output` (on `diff`, `log`, `show`, `shortlog`,
+`blame` and `stash show`) writes a file. `grep -O`/`--open-files-in-pager` runs
+a program. `--no-index` (on `diff` and `grep`), `blame --contents`, `blame -S` or
+`--ignore-revs-file`, `grep -f`, `ls-files -X`/`--exclude-from` and the diff
+options' `-O<orderfile>` read files outside the repository. Beyond those, a
+separate argument, a long option's `=value` or anything after `--` that names an
+existing path outside the repository is refused — even a search pattern such as
+`/usr`. **Write**
 needs `[git] allow_writes` (`add` via `files`, `commit` via `message`, `switch`,
 `merge`, branch/tag create, stash push/pop). **Destructive** (`reset`, `clean`,
 `checkout`, `restore`, `rebase`, `revert`, `cherry-pick`, …) needs

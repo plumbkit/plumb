@@ -44,6 +44,12 @@ func TestCheckReadArgs(t *testing.T) {
 		{"blame", []string{"-ML", "--contents", "/etc/hosts", "f"}}, // likewise -M
 		{"grep", []string{"-f", "/etc/hosts"}},
 		{"grep", []string{"-nf/etc/hosts"}},
+		{"diff", []string{"-O/dev/zero", "HEAD~1"}}, // joined: the path net sees only separate arguments
+		{"log", []string{"-p", "-O/dev/zero"}},
+		{"show", []string{"-pO/dev/zero"}},
+		{"stash", []string{"show", "-p", "-O/dev/zero"}},
+		{"ls-files", []string{"-i", "-o", "-X/etc/hosts"}},
+		{"ls-files", []string{"--exclude-from=/etc/hosts"}},
 	}
 	for _, c := range refused {
 		if err := checkReadArgs(c.sub, c.args); err == nil {
@@ -66,6 +72,9 @@ func TestCheckReadArgs(t *testing.T) {
 		{"blame", []string{"-L", "1,5", "--", "f"}},
 		{"blame", []string{"-L/S/,+2", "f"}}, // -L takes the rest of the token: no -S here
 		{"blame", []string{"-C", "-L", "1,5", "f"}},
+		{"log", []string{"-SOpen", "-p"}},                // a pickaxe for "Open", not -O
+		{"blame", []string{"--ignore-rev", "HEAD", "f"}}, // git matches --ignore-rev exactly: a revision
+		{"ls-files", []string{"-x", "*.tmp", "-o"}},
 		{"grep", []string{"-e", "-O", "HEAD"}}, // -e takes "-O" as the pattern
 		{"grep", []string{"-e", "--no-index"}}, // likewise
 		{"grep", []string{"-n", "--untracked", "x"}},
@@ -169,11 +178,13 @@ func TestGit_ReadTierRefusesAnArgumentOutsideTheRepo(t *testing.T) {
 	}
 	tool := NewGit(WriteDeps{}, nil)
 	for _, args := range [][]string{
-		{rel, "init.txt"},                  // implicit no-index, relative
-		{"--stat", outside, "init.txt"},    // absolute
-		{"--", "init.txt", outside},        // after --
-		{"--", "init.txt", "-x/../" + rel}, // after --, a path that starts with "-"
-		{"escape", "init.txt"},             // a symlink inside that resolves outside
+		{rel, "init.txt"},                                // implicit no-index, relative
+		{"--stat", outside, "init.txt"},                  // absolute
+		{"--", "init.txt", outside},                      // after --
+		{"--", "init.txt", "-x/../" + rel},               // after --, a path that starts with "-"
+		{"escape", "init.txt"},                           // a symlink inside that resolves outside
+		{"--end-of-options", "init.txt", "-x/../" + rel}, // the other end-of-options spelling, dash-led
+		{"--relative=" + outside, "HEAD"},                // a long option's joined value
 	} {
 		out, err := callGit(t, tool, map[string]any{"subcommand": "diff", "args": args, "repo": repo})
 		// The refusal itself, not any error: a no-index diff with differences exits
