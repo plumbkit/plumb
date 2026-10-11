@@ -233,6 +233,23 @@
   the project also counts as a peer for the wake watcher's longer window. No
   read path runs git.
 
+### Changed
+
+- **The daemon-starting test suites no longer run on a developer machine.**
+  `cmd/smoke` (the `integration` tag) and `cmd/clientsmoke` (the `clients`,
+  `clients_e2e` and `clients_conformance` tags) start plumb daemons of their
+  own, and a developer machine should run exactly one: the daemon its sessions
+  use. Their `TestMain` now refuses, exit status 2, before building or starting
+  anything, unless it finds `GITHUB_ACTIONS=true`, a Linux container marker
+  (`/.dockerenv`, `/run/.containerenv`), or `PLUMB_SEPARATE_ENV=vm` on Linux
+  (`internal/separateenv`). This guards against running them by accident; it is
+  not a security boundary. CI is unaffected. The new
+  `make verify-full-container` runs `make verify-full` in a Linux container
+  with pinned Go, golangci-lint and language servers. It streams in the working
+  tree and fails if a plumb daemon is still running after the suite. It replaces
+  a host `make verify-full` as the pre-submit gate. `make docker-integration`
+  now runs with `--init`.
+
 ### Fixed
 
 - **A revoked resume credential no longer breaks continuity for good.** A

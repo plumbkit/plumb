@@ -51,6 +51,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/separateenv"
 	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
@@ -65,6 +66,9 @@ var plumbBin string
 var realHome string
 
 func TestMain(m *testing.M) {
+	// The clients start plumb daemons of their own: refuse on a developer
+	// machine before anything is built or created (internal/separateenv).
+	separateenv.RequireForTestMain("cmd/clientsmoke")
 	realHome = os.Getenv("HOME")
 	root, err := findRepoRoot()
 	if err != nil {

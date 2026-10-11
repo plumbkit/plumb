@@ -94,6 +94,7 @@ var Layers = map[string]Layer{
 	"internal/textfmt":              LayerFoundation, // stdlib-only text primitives, no lipgloss
 	"internal/toolerror":            LayerFoundation, // stdlib-only structured tool-error contract
 	"internal/redact":               LayerFoundation,
+	"internal/separateenv":          LayerFoundation, // where a test suite may start its own plumb daemon
 	"internal/theme":                LayerFoundation, // UI-agnostic hex palettes, no lipgloss
 	"internal/render":               LayerFoundation, // pure presentation helpers
 	"internal/quality":              LayerFoundation, // post-write analyser interface

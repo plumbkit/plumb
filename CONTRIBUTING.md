@@ -43,18 +43,24 @@ would have fixed.
 ## The definition of "ready to commit"
 
 ```sh
-make verify-full     # build + test + lint + the integration suite — run before every push
+make verify-full-container   # the full gate, in Docker — run before every push
 ```
 
 `make verify-full` is the full gate: the same checks as `make verify` plus
-`make integration-test`, with the unit tests run once rather than twice.
-`make verify` alone is the fast gate CI runs on every pull request; it COMPILES
-the `//go:build integration` suite without running it, printing that on success,
-and a failing integration test does not turn it red. `make integration-test`
-SKIPS tests whose language server is absent, so install gopls and pyright if you
-want the whole suite to execute. Run `make verify-full` before submitting, and
-`make lint-cross` after platform-constrained or linter-config changes. Other
-useful targets: `make test`, `make test-race`, `make lint`, `make tidy`.
+`make integration-test`, with the unit tests run once rather than twice. Its
+`cmd/smoke` suite starts plumb daemons of its own, and a developer machine must
+run exactly one plumb daemon (the one its sessions use), so that suite refuses
+to run outside CI, a container or a declared VM. `make verify-full-container`
+runs the whole gate in a Linux container with pinned tools, streams in your
+working tree, and fails if a plumb daemon outlives it.
+`make verify` alone is the fast gate CI runs on every pull request, and the one
+to run on your machine; it COMPILES the `//go:build integration` suite without
+running it, printing that on success, and a failing integration test does not
+turn it red. `make integration-test` SKIPS tests whose language server is
+absent; the container has gopls, pyright and the npm language servers. Run
+`make verify-full-container` before submitting, and `make lint-cross` after
+platform-constrained or linter-config changes. Other useful targets: `make test`,
+`make test-race`, `make lint`, `make tidy`.
 
 **Formatting note:** apply formatting via `golangci-lint run --fix ./...`, never the
 standalone `gofumpt -w` binary — the two can pin different versions and produce phantom
@@ -100,6 +106,10 @@ real-client tier also gates releases and runs nightly.
 ```sh
 make install-clients      # or: ./scripts/install-clients.sh
 ```
+
+These tiers start plumb daemons of their own, so like `cmd/smoke` they refuse on a
+developer machine: run them in CI (the client-conformance workflow), a container, or a
+disposable VM with `PLUMB_SEPARATE_ENV=vm`.
 
 Prerequisites: Node 20+ (npm clients), Python 3.8+ (hermes), `curl` (script-installed
 clients). Some installers drop binaries in `~/.local/bin` or `~/.npm-global/bin` — add
@@ -182,7 +192,7 @@ From a fork, the flow is:
 ```sh
 git checkout -b my-change            # branch off an up-to-date main
 # … make your change, then:
-make verify-full                     # must be green
+make verify-full-container           # must be green
 git push origin my-change            # push to YOUR fork
 ```
 
@@ -190,7 +200,7 @@ Then open a pull request from your fork's branch against `plumbkit/plumb`'s `mai
 refresh a long-running branch, `git fetch upstream && git rebase upstream/main`.
 
 - Keep PRs focused and reviewable.
-- Ensure `make verify-full` is green and a `CHANGELOG.md` entry is included.
+- Ensure `make verify-full-container` is green and a `CHANGELOG.md` entry is included.
 - Fill out the PR template — it asks the questions that speed up review.
 
 **What to expect on `main`.** `main` is a protected branch: every PR must pass the full
