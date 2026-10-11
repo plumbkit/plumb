@@ -233,6 +233,7 @@ func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.
 	var out []contextConstraint
 	var gaps []string
 	var pool []docSection
+	var unread unreadDocs
 	for _, f := range files {
 		abs := absUnder(root, f.path)
 		if c.sensitive != nil && c.sensitive(ctx, abs, "") {
@@ -241,7 +242,7 @@ func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.
 		}
 		src, why := openDoc(ctx, store, f, abs, budget)
 		if src == nil {
-			gaps = append(gaps, fmt.Sprintf("document sections: %s was not read: %s", textfmt.TerminalSafeLine(f.path), why))
+			unread.add(f.path, why)
 			continue
 		}
 		pool = append(pool, src.sections(q, f)...)
@@ -249,6 +250,7 @@ func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.
 			gaps = append(gaps, fmt.Sprintf("document sections: %s changed since it was indexed; its sections come from the current file", textfmt.TerminalSafeLine(f.path)))
 		}
 	}
+	gaps = append(gaps, unread.lines()...)
 	slices.SortStableFunc(pool, func(a, b docSection) int {
 		return cmp.Or(cmp.Compare(b.score, a.score), cmp.Compare(a.file.path, b.file.path), cmp.Compare(a.node.StartLine, b.node.StartLine))
 	})
@@ -261,6 +263,37 @@ func (c *ContextCollector) readDocSections(ctx context.Context, store *topology.
 		out = append(out, s.constraint())
 	}
 	return out, gaps
+}
+
+// unreadDocs groups the documents that could not be read by reason, in the order
+// met, so a budget that runs out before several documents costs one gap line, not
+// one per document: every gap line is packed ahead of every body.
+type unreadDocs struct {
+	reasons []string
+	paths   map[string][]string
+}
+
+func (u *unreadDocs) add(path, why string) {
+	if u.paths == nil {
+		u.paths = map[string][]string{}
+	}
+	if _, ok := u.paths[why]; !ok {
+		u.reasons = append(u.reasons, why)
+	}
+	u.paths[why] = append(u.paths[why], textfmt.TerminalSafeLine(path))
+}
+
+func (u *unreadDocs) lines() []string {
+	out := make([]string, 0, len(u.reasons))
+	for _, why := range u.reasons {
+		ps := u.paths[why]
+		if len(ps) == 1 {
+			out = append(out, fmt.Sprintf("document sections: %s was not read: %s", ps[0], why))
+			continue
+		}
+		out = append(out, fmt.Sprintf("document sections: %d were not read (%s): %s", len(ps), why, strings.Join(ps, ", ")))
+	}
+	return out
 }
 
 // constraint is the section as the pack presents it.

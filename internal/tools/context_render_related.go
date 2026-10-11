@@ -60,8 +60,16 @@ func relatedText(r contextRelated) string {
 		sb.WriteString(" — location only: sensitive path, content withheld")
 		return sb.String()
 	}
-	if sig := signatureDoc(n.Signature, firstLine(n.Docstring)); sig != "" {
-		sb.WriteString(" — " + sig)
+	// A declaration whose body follows shows only its doc line here: the body opens
+	// with the signature, and if the body is cut for budget its omission line
+	// carries the signature instead (relatedBodyLine). Printing it twice cost a
+	// related entry 100-200 bytes the budget could have spent on another body.
+	sig := n.Signature
+	if r.Body.State == bodyReady {
+		sig = ""
+	}
+	if text := signatureDoc(sig, firstLine(n.Docstring)); text != "" {
+		sb.WriteString(" — " + text)
 	}
 	return sb.String()
 }
@@ -144,7 +152,9 @@ func (p *contextPack) relatedBodyLine(i int) (packLine, bool) {
 		return packLine{}, false
 	}
 	call := callText("read_symbol", "path", absUnder(p.Root, r.Node.Path), "name", readSymbolName(nodeSelector(r.Node), r.Node.Name))
-	unit := p.readyUnit(r.Body, p.relatedHeading(), len(relatedText(r))+2, call, "")
+	// The related line leaves the signature to the body (relatedText), so a body
+	// cut for budget carries it on its omission line.
+	unit := p.readyUnit(r.Body, p.relatedHeading(), len(relatedText(r))+2, call, signatureDoc(r.Node.Signature, ""))
 	return packLine{prio: prioRelTop, section: secRelated, class: classBody, body: unit}, true
 }
 
