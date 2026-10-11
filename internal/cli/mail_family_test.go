@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/sqlitex"
 )
 
 // noGlobalMailbox stands in for a machine with no daemon-level store, so a test
@@ -97,5 +98,47 @@ func TestMailWaiting_AnUnreadableDaemonStoreKeepsTheWorkspaceCount(t *testing.T)
 	ages, err := mailWaitingIn(collab.Claimant{Name: "alice", ID: "sess-alice", Workspace: ws}, broken)
 	if err != nil || len(ages) != 1 {
 		t.Fatalf("ages = %v, err %v; want the workspace note counted despite the daemon store", ages, err)
+	}
+}
+
+// TestMailWaiting_AnUnmigratedDaemonStoreKeepsTheWorkspaceCount: the store opens
+// but cannot be READ by this binary — an older daemon's, without
+// origin_git_common_dir. The workspace count must survive that too.
+func TestMailWaiting_AnUnmigratedDaemonStoreKeepsTheWorkspaceCount(t *testing.T) {
+	ws := t.TempDir()
+	local, err := collab.Open(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = local.Close() })
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "sess-bob", Body: "local", Addressee: "alice", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// The production opener, pointed at a data dir of this test's own.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	g, err := collab.OpenGlobalAt(collab.GlobalDBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = g.Close()
+	db, err := sqlitex.Open(collab.GlobalDBPath(), sqlitex.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`DROP INDEX idx_collab_target`,
+		`ALTER TABLE collab_rows DROP COLUMN origin_git_common_dir`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	_ = db.Close()
+	open := openGlobalMailbox
+	ages, err := mailWaitingIn(collab.Claimant{Name: "alice", ID: "sess-alice", Workspace: ws}, open)
+	if err != nil || len(ages) != 1 {
+		t.Fatalf("ages = %v, err %v; want the workspace note counted despite the unmigrated store", ages, err)
 	}
 }

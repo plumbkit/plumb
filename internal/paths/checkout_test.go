@@ -412,3 +412,74 @@ func TestSameProject_CaseInsensitiveSpellings(t *testing.T) {
 		t.Error("a superproject spelled in another case is still the submodule's superproject")
 	}
 }
+
+func TestSameProject_RefusesACloneInsideABareRepositorysWorktree(t *testing.T) {
+	// `git clone --bare url B.git && git worktree add B.git/main`: the worktree,
+	// and anything cloned into it, lives INSIDE the common directory. Containment
+	// alone would make an unrelated clone there the same project; only git's own
+	// nesting shapes (modules/, worktrees/<id>/modules/) count.
+	bare := filepath.Join(t.TempDir(), "B.git")
+	gitDirAt(t, bare)
+	main := filepath.Join(bare, "main")
+	linkedWorktree(t, bare, "main", main, false)
+	other := filepath.Join(bare, "other")
+	linkedWorktree(t, bare, "other", other, true)
+	clone := mainCheckout(t, filepath.Join(main, "vendor", "evil"))
+
+	if SameProject(main, clone) || SameProject(clone, main) {
+		t.Error("a clone inside a bare repository's worktree is another project")
+	}
+	if c, _ := CheckoutAt(clone); SameCommonDir(c.CommonDir, main) {
+		t.Error("its stamp must not verify against the worktree either")
+	}
+	// Positive control: the bare repository's two worktrees are one project.
+	if !SameProject(main, other) {
+		t.Error("two worktrees of one bare repository are one project")
+	}
+}
+
+func TestSameProject_SubmoduleCheckedOutInALinkedWorktree(t *testing.T) {
+	// In a linked worktree of the superproject, `git submodule update` puts the
+	// submodule's git directory at <common>/worktrees/<id>/modules/<name>.
+	super := mainCheckout(t, t.TempDir())
+	common := filepath.Join(super, ".git")
+	superWT := filepath.Join(t.TempDir(), "super-wt")
+	linkedWorktree(t, common, "swt", superWT, false)
+	sub := filepath.Join(superWT, "plumb")
+	gitDir := filepath.Join(common, "worktrees", "swt", "modules", "plumb")
+	gitDirAt(t, gitDir)
+	write(t, filepath.Join(sub, ".git"), "gitdir: "+gitDir+"\n")
+	write(t, filepath.Join(gitDir, "config"), "[core]\n\tworktree = "+sub+"\n")
+
+	for _, other := range []string{superWT, super} {
+		if !SameProject(sub, other) || !SameProject(other, sub) {
+			t.Errorf("a submodule in a linked worktree is one project with %s", other)
+		}
+	}
+}
+
+func TestCheckoutAt_AGitDirNeedsHeadFileAndObjects(t *testing.T) {
+	// Both halves of isGitDir are load-bearing: an ancestor with a HEAD but no
+	// objects/, or with a HEAD that is a directory, is not a git directory.
+	for name, plant := range map[string]func(dir string){
+		"HEAD without objects": func(dir string) { write(t, filepath.Join(dir, "HEAD"), "x\n") },
+		"HEAD as a directory": func(dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "HEAD"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		base := t.TempDir()
+		plant(base)
+		evil := filepath.Join(base, "worktrees", "evil")
+		write(t, filepath.Join(evil, ".git"), "gitdir: .\n")
+		write(t, filepath.Join(evil, "commondir"), "../..\n")
+		write(t, filepath.Join(evil, "gitdir"), ".git\n")
+		if _, ok := CheckoutAt(evil); ok {
+			t.Errorf("%s: an ancestor that is not a git directory must not verify as a common directory", name)
+		}
+	}
+}
