@@ -90,16 +90,19 @@ type contextRelated struct {
 	Evidence int
 	Source   string // edge source, "" for a node reached by structure alone
 	Conf     float64
-	Via      string            // the relationship in words, e.g. "callee of (*Cart).Total"
-	ViaPath  string            // the file of the node it was reached from, for staleness
-	Root     bool              // a declaration of a seed file, not reached through an edge
-	Gap      bool              // a reverse-import candidate: evidence 0, never a resolved caller
-	Withheld bool              // a sensitive path: location only, never content
-	Stale    bool              // its file, or the file it was reached from, changed since indexing
-	CallerOf int64             // the node this one is a resolved caller of, when it is
-	ParentID int64             // the node it was reached from (0 for a declaration of a seed file)
-	Edge     topology.EdgeKind // the relationship that reached it, "" when none did
-	GapFor   int64             // the seed a gap candidate is evidence about
+	Via      string // the relationship in words, e.g. "callee of (*Cart).Total"
+	ViaPath  string // the file of the node it was reached from, for staleness
+	Root     bool   // a declaration of a seed file, not reached through an edge
+	Gap      bool   // a reverse-import candidate: evidence 0, never a resolved caller
+	// NameMatch marks a declaration reached by a same-package name match (context_samepkg.go):
+	// a heuristic caller at evidence 1, or an evidence-0 gap candidate, never a resolved edge.
+	NameMatch bool
+	Withheld  bool              // a sensitive path: location only, never content
+	Stale     bool              // its file, or the file it was reached from, changed since indexing
+	CallerOf  int64             // the node this one is a resolved caller of, when it is
+	ParentID  int64             // the node it was reached from (0 for a declaration of a seed file)
+	Edge      topology.EdgeKind // the relationship that reached it, "" when none did
+	GapFor    int64             // the seed a gap candidate is evidence about
 	// IndexHash is the content hash the index held for the node's file when its span
 	// was read ("" when unknown, which no body is sliced on trust of).
 	IndexHash string
@@ -140,6 +143,12 @@ type expansionStats struct {
 	ImportersCapped int  // importer lists that hit the per-hop ceiling, so gap candidates may be missing
 	Deadline        bool
 	Failed          string // the first store error, if any
+
+	// The same-package search (context_samepkg.go):
+	SamePkgMore    int // name-match callers beyond the per-declaration cap
+	SamePkgSkipped int // sibling files not examined: changed since indexing, unreadable, over the read budget
+	SamePkgCut     int // call sites beyond the per-declaration scan bound
+	SamePkgDirsCut int // directories whose call-site list hit its ceiling
 }
 
 // hopNode is a node being expanded, and what children should call it.
@@ -170,6 +179,9 @@ type expander struct {
 	seeds []hopNode
 	kept  []contextRelated
 	stats expansionStats
+
+	// sp finds same-package callers by name; nil where nothing may be read (a hint).
+	sp *samePackage
 }
 
 func newExpander(store *topology.Store, scope contextScope, rk ranker, sensitive func(string) bool) *expander {
@@ -358,6 +370,7 @@ func rootKind(k topology.NodeKind, testFile bool) bool {
 func (e *expander) run(ctx context.Context, roots []hopNode) {
 	frontier := roots
 	for depth := 0; depth < contextExpansionDepth && len(frontier) > 0; depth++ {
+		e.prefetchSites(ctx, frontier)
 		var cands []contextRelated
 		for _, h := range frontier {
 			if ctx.Err() != nil {
@@ -411,7 +424,8 @@ func (e *expander) neighbours(ctx context.Context, h hopNode) []contextRelated {
 	out := e.hood(h, res.DependsOn, false)
 	out = append(out, e.hood(h, res.DependedOnBy, true)...)
 	out = append(out, e.members(ctx, h)...)
-	return append(out, e.mates(ctx, h)...)
+	out = append(out, e.mates(ctx, h)...)
+	return append(out, e.samePackageCallers(ctx, h)...)
 }
 
 // contextTraversalOpts sizes one hop in one place, so a test can assert the exact

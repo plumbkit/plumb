@@ -83,6 +83,21 @@
     caller"); an empty, capped or cut caller list is never reported as "no callers".
     A type lists its members and says a struct's fields are not graph members; a file
     seed in a language with no extractor adds the index's count of unparsed files.
+  - **Same-package callers.** The Go call resolver follows package-qualified calls
+    only, so a declaration's callers in its sibling files (bare calls, and calls on a
+    receiver) are never edges. The pack reads the call sites the index recorded in the
+    same directory and package clause and lists a declaration holding a call of the
+    seed's name at `e1`, labelled "same-package name match" ("test" for a test file)
+    and never counted among the resolved callers. A function's match is a bare call no
+    local declaration shadows; a method's needs receiver evidence in the caller itself
+    (its receiver, a parameter, `var x T`, `x := T{}`, `&T{}`, `new(T)`); a receiver of
+    no evident type, a name declared twice in the package and a sensitive file are
+    `e0` gap candidates only. The sibling is parsed only if it still hashes to what the
+    index parsed, the scope filter runs before it is read, a sensitive file is never
+    read, at most 12 are listed per declaration (the cut is stated), and a hint
+    searches none. The `read_symbol` call the pack prints for a method now names
+    `Recv.Method`, which `read_symbol` accepts with or without a language server (the
+    index's `(*Recv).Method` was refused by its topology fallback).
   - **Freshness, labelled apart.** A missing, failing or foreign index makes no
     relationship or test-impact claim at all and the pack says so; a file that changed
     since it was indexed has its relationships marked possibly stale; and the language

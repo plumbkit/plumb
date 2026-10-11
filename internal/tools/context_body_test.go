@@ -533,14 +533,22 @@ func TestContextForTask_RecordsOncePerDeliveredFileWithTheSnapshotVersion(t *tes
 	if _, err := s.run(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Add", "cart/cart.go#Cart.Remove"}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("two bodies from one file recorded %d times, want once: %v", len(calls), calls)
+	// The test file that calls the seeds by name is a related body of its own file, so
+	// the count is of the seeds' file.
+	var ofCart []string
+	for _, c := range calls {
+		if strings.HasPrefix(c, lockPathKey(cart)+"|") {
+			ofCart = append(ofCart, c)
+		}
+	}
+	if len(ofCart) != 1 {
+		t.Fatalf("two bodies from one file recorded %d times, want once: %v", len(ofCart), calls)
 	}
 	info, err := os.Stat(cart)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := lockPathKey(cart) + "|" + info.ModTime().Format(time.RFC3339Nano) + "|" + fileSHA(t, cart); calls[0] != want {
-		t.Errorf("recorded %q, want the snapshot's own version %q", calls[0], want)
+	if want := lockPathKey(cart) + "|" + info.ModTime().Format(time.RFC3339Nano) + "|" + fileSHA(t, cart); ofCart[0] != want {
+		t.Errorf("recorded %q, want the snapshot's own version %q", ofCart[0], want)
 	}
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,16 @@ func TestContextForTask_ARelatedBodyIsARecordedReadOnlyWhenDelivered(t *testing.
 	if len(related) < 2 {
 		t.Fatalf("want the callees' bodies delivered, got %d:\n%s", len(related), out)
 	}
-	if len(calls) != 2 || calls[0] != lockPathKey(cart) || calls[1] != lockPathKey(pricing) {
-		t.Errorf("recorded %v, want cart.go (the seed) and pricing/discount.go (the callees), once each", calls)
+	// The seed's file, then the callees', each once; after them the files of the
+	// same-package callers (the tests and the sibling that call Apply by name), also once.
+	callers := []string{
+		lockPathKey(filepath.Join(canon, "cart", "cart_test.go")),
+		lockPathKey(filepath.Join(canon, "pricing", "discount_test.go")),
+		lockPathKey(filepath.Join(canon, "pricing", "receipt.go")),
+	}
+	if len(calls) != 2+len(callers) || calls[0] != lockPathKey(cart) || calls[1] != lockPathKey(pricing) ||
+		!slices.Equal(slices.Sorted(slices.Values(calls[2:])), slices.Sorted(slices.Values(callers))) {
+		t.Errorf("recorded %v, want cart.go (the seed) and pricing/discount.go (the callees), then %v, once each", calls, callers)
 	}
 	if related[0].guard == nil || related[0].guard.path != "pricing/discount.go" || related[0].guard.sha != fileSHA(t, filepath.Join(s.root, "pricing", "discount.go")) {
 		t.Errorf("the first related body of a file must carry that file's guard, got %+v", related[0].guard)

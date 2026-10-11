@@ -1014,7 +1014,8 @@ hops and 60 nodes under a 2 s deadline, with the scope filter (`within`,
 `corpora`, the root, `.plumb/`) applied at every hop; complete bodies for the seeds
 and for the 8 best-ranked related declarations, as the budget allows; source reads
 of at most 4 × `max_bytes` bytes in all, shared by the bodies, the memories and the
-documents; at most 3 memories (out of at most 200 memory files scanned) and 4
+documents (the sibling files read for same-package callers, at most 4 MiB, are
+parsed and not delivered); at most 3 memories (out of at most 200 memory files scanned) and 4
 document sections, each quoted at most 200 bytes; up to 16 acknowledgements; and
 the language-server step below. Every cut is stated in the pack, with its count.
 
@@ -1058,11 +1059,29 @@ stronger one: `e4` a call the language server confirmed (call hierarchy); `e3` a
 extractor edge (a containment, a same-file call, an import); `e2` a derived edge
 from the call or import resolver, followed only around a subject the call-graph
 admission rule accepts; `e1` a heuristic edge (Python's intra-file calls, with
-confidence 0.8); `e0` a gap candidate. The Go call graph is syntactic, so a
-method's callers are shown as the resolved callers plus gap candidates (the
-declarations of files that import the method's package), marked "not a resolved
-caller"; an empty, short or cut caller list is never reported as "no callers", and
-a walk that was cut says so before it says anything about the index.
+confidence 0.8) or a same-package name match (below); `e0` a gap candidate. The Go
+call graph is syntactic, so a method's callers are shown as the resolved callers
+plus gap candidates (the declarations of files that import the method's package),
+marked "not a resolved caller"; an empty, short or cut caller list is never
+reported as "no callers", and a walk that was cut says so before it says anything
+about the index.
+
+**Same-package callers.** The Go call resolver follows package-qualified calls
+only, so a function's callers in the sibling files of its own package (bare
+calls), and a method's callers (calls on a receiver), are not edges. For each
+callable seed, and each callable one hop out, the pack reads the call sites the
+index recorded in the files of the same directory and package clause, and lists
+the declaration holding a call of the seed's name as a caller at `e1`, labelled
+"same-package name match" (and "test" for a `_test.go` file) and never counted
+among the resolved callers. A function's match is a bare call that no local
+declaration of the caller shadows; a method's needs receiver evidence in the
+caller itself (its receiver, a parameter, `var x T`, `x := T{}`, `&T{}` or
+`new(T)`). A call whose receiver type is not evident, a name declared twice in the
+package, and a file withheld as sensitive are `e0` gap candidates only. A sibling
+file is parsed only if it still hashes to what the index parsed, the scope filter
+runs before it is read, and a sensitive file is never read. At most 12 are listed
+per declaration (the pack says how many more there were), 64 call sites are
+examined per declaration, production code before tests, and a hint searches none.
 
 **Freshness components.** The `gaps` section labels three things apart, so one
 cannot be mistaken for another. *The index:* a missing, failing or foreign index

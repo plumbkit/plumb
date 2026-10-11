@@ -103,6 +103,7 @@ func (e *expander) gapCandidates(ctx context.Context) []contextRelated {
 		}
 		out = append(out, e.gapFor(ctx, sub, seen)...)
 	}
+	out = append(out, e.samePkgGapCandidates()...)
 	slices.SortFunc(out, compareRelated)
 	if len(out) > contextGapQuota {
 		e.stats.GapMore += len(out) - contextGapQuota
@@ -202,8 +203,9 @@ func coverageGap(store *topology.Store, seeds []contextSeed) []string {
 
 // callerNote is what a callable seed's resolved caller list does and does not say.
 type callerNote struct {
-	Selector string
-	Resolved int
+	Selector    string
+	Resolved    int
+	NameMatched int // same-package name-match callers listed (heuristic, never counted as resolved)
 }
 
 // languageNote is what the call graph covers for one language in the pack.
@@ -220,6 +222,9 @@ type contextExpansion struct {
 	Stats     expansionStats
 	Callers   []callerNote
 	Languages []languageNote
+	// NameMatches counts the related entries and gap candidates found by a same-package
+	// name match, which the gaps section explains once.
+	NameMatches int
 }
 
 // finish adds the gap candidates, applies the node cap and returns the pool in
@@ -258,6 +263,9 @@ func (e *expander) summarise(ctx context.Context, related []contextRelated) cont
 		if r.Source == sourceHeuristic {
 			heuristic[r.Node.Language] = true
 		}
+		if r.NameMatch {
+			x.NameMatches++
+		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(langs)) {
 		x.Languages = append(x.Languages, languageNote{
@@ -268,13 +276,16 @@ func (e *expander) summarise(ctx context.Context, related []contextRelated) cont
 }
 
 func (e *expander) callerNote(s hopNode, related []contextRelated) callerNote {
-	n := 0
+	n, matched := 0, 0
 	for _, r := range related {
 		if r.CallerOf == s.node.ID {
 			n++
 		}
+		if r.NameMatch && !r.Gap && r.ParentID == s.node.ID {
+			matched++
+		}
 	}
-	return callerNote{Selector: s.sel, Resolved: n}
+	return callerNote{Selector: s.sel, Resolved: n, NameMatched: matched}
 }
 
 // relationGaps is the disclosure text for the expansion, in the order a reader
@@ -295,6 +306,9 @@ func (p *contextPack) relationGaps() []string {
 	}
 	if slices.ContainsFunc(p.Files, func(f bodyFile) bool { return f.Changed }) {
 		gaps = append(gaps, labelStale)
+	}
+	if x.NameMatches > 0 {
+		gaps = append(gaps, labelSamePackage)
 	}
 	for _, c := range x.Callers {
 		gaps = append(gaps, c.text(x.Stats.capped()))
@@ -323,16 +337,40 @@ func (c callerNote) text(capped bool) string {
 	case capped && c.Resolved == 0:
 		return fmt.Sprintf("callers of %s: none reached before the walk was cut (a cap, the deadline or an index error stopped it), so the index was not fully asked; this is not proof of no callers", c.Selector)
 	case capped:
-		return fmt.Sprintf("callers of %s: %d resolved and listed; the list may be incomplete (a cap or the deadline cut the walk)", c.Selector, c.Resolved)
+		return fmt.Sprintf("callers of %s: %d resolved and listed%s; the list may be incomplete (a cap or the deadline cut the walk)", c.Selector, c.Resolved, c.matched())
 	case c.Resolved == 0:
-		return fmt.Sprintf("callers of %s: none resolved in the index; this is not proof of no callers (gap candidates, if any, are listed separately)", c.Selector)
+		return fmt.Sprintf("callers of %s: none resolved in the index%s; this is not proof of no callers (gap candidates, if any, are listed separately)", c.Selector, c.matched())
 	}
-	return fmt.Sprintf("callers of %s: %d resolved and listed; the call graph is syntactic, so more may exist", c.Selector, c.Resolved)
+	return fmt.Sprintf("callers of %s: %d resolved and listed%s; the call graph is syntactic, so more may exist", c.Selector, c.Resolved, c.matched())
+}
+
+// matched words the same-package name matches beside the resolved callers, so the
+// two are never one count.
+func (c callerNote) matched() string {
+	if c.NameMatched == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", plus %d same-package name match(es) (e1)", c.NameMatched)
 }
 
 // capped reports that a cap, the deadline or an error may have cut the walk.
 func (s expansionStats) capped() bool {
 	return s.Deadline || s.Failed != "" || s.HopCapped > 0 || s.Truncated > 0
+}
+
+// samePackageGaps words what the same-package search did not examine or list.
+func (s expansionStats) samePackageGaps() []string {
+	var out []string
+	if s.SamePkgMore > 0 {
+		out = append(out, fmt.Sprintf("%d further same-package name match(es) beyond the per-declaration cap of %d were not listed", s.SamePkgMore, contextSamePkgPerSeed))
+	}
+	if s.SamePkgSkipped > 0 {
+		out = append(out, fmt.Sprintf("%d sibling file(s) changed since indexing or could not be read, so their call sites were not checked for same-package callers", s.SamePkgSkipped))
+	}
+	if s.SamePkgCut > 0 || s.SamePkgDirsCut > 0 {
+		out = append(out, fmt.Sprintf("same-package callers may be missing: %d call site(s) were beyond the scan bound of %d per declaration, %d directory call-site list(s) were cut", s.SamePkgCut, contextSamePkgSiteScan, s.SamePkgDirsCut))
+	}
+	return out
 }
 
 // gaps words what the caps and the scope cut.
@@ -360,6 +398,7 @@ func (s expansionStats) gaps() []string {
 	if s.ImportersCapped > 0 {
 		add("%d importer list(s) exceeded %d and were cut; gap candidates may be missing", s.ImportersCapped, contextHopNodes)
 	}
+	out = append(out, s.samePackageGaps()...)
 	if s.Excluded > 0 {
 		add("%d file(s) reached from the seeds are outside within/corpora and were left out; nothing was expanded through them", s.Excluded)
 	}

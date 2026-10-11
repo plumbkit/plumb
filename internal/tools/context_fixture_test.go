@@ -17,7 +17,7 @@ import (
 // shopFixtureFiles is how many files of testdata/contextpack/shop the extractors
 // below index: the Go, Python and Markdown sources. The Svelte file and go.mod
 // are recorded by the indexer without symbols.
-const shopFixtureFiles = 12
+const shopFixtureFiles = 13
 
 // copyShopFixture copies the contextpack "shop" fixture into a fresh temporary
 // workspace and returns its root. The copy keeps each test's index and any file

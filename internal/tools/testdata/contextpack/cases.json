@@ -261,7 +261,7 @@
       },
       "required_labels": [],
       "forbidden": [
-        "listing individual TestSummariseCase* rows inside the compact pack"
+        "listing individual TestSummariseCase* rows in the affected-tests section of the compact pack (gate v2: a test that calls the seed by name in its package may be a labelled, capped related declaration)"
       ]
     },
     {
@@ -560,10 +560,86 @@
         "an acknowledgement creating a read record",
         "content_sha256 accepted as an edit guard"
       ]
+    },
+    {
+      "id": "C16",
+      "category": "same-package-caller-function",
+      "mode": "discovery",
+      "split": "dev",
+      "added_in": "gate-v2",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "pricing/discount.go",
+            "name": "Apply"
+          }
+        ]
+      },
+      "task": "Change Apply so percentage discounts round half up. Which callers are affected?",
+      "gold": {
+        "bodies": [
+          "pricing/discount.go::Apply"
+        ],
+        "related": [
+          "pricing/receipt.go::Savings"
+        ],
+        "residual": [
+          "pricing/receipt.go::Savings"
+        ]
+      },
+      "required_labels": [
+        "same-package callers are call sites in sibling files of the package that name the declaration, matched by name and not resolved by the call graph (e1, heuristic)"
+      ],
+      "forbidden": [
+        "presenting the name match as a resolved edge, or counting it among the resolved callers",
+        "stating that Apply has no callers"
+      ],
+      "gold_rationale": "Savings calls Apply by its bare name from a sibling file of the same package. The syntactic call graph never resolves a bare same-package call, so the only route is the recorded call site: it is a same-package name match at evidence 1, labelled as such, never a resolved caller."
+    },
+    {
+      "id": "C17",
+      "category": "same-package-caller-method",
+      "mode": "discovery",
+      "split": "dev",
+      "added_in": "gate-v2",
+      "intent": "change",
+      "seeds": {
+        "symbols": [
+          {
+            "path": "cart/cart.go",
+            "name": "(*Cart).Total"
+          }
+        ]
+      },
+      "gold": {
+        "bodies": [
+          "cart/cart.go::(*Cart).Total"
+        ],
+        "related": [
+          "cart/cart_test.go::TestAddMergesRepeatedSKU",
+          "cart/cart_test.go::TestTotalAppliesPercentCode"
+        ],
+        "residual": [
+          "cart/cart_test.go::TestAddMergesRepeatedSKU",
+          "cart/cart_test.go::TestTotalAppliesPercentCode"
+        ]
+      },
+      "required_labels": [
+        "same-package callers are call sites in sibling files of the package that name the declaration, matched by name and not resolved by the call graph (e1, heuristic)"
+      ],
+      "forbidden": [
+        "admitting a call on a receiver nothing identifies as a Cart at evidence 1"
+      ],
+      "gold_rationale": "Both tests call c.Total() on a local declared `var c Cart`: the caller's own declaration is the receiver evidence a method needs. A method call whose receiver has no evident type is only an evidence-0 gap candidate."
     }
   ],
   "coverage": {
-    "cases": 17,
+    "cases": 19,
+    "same_package_callers": [
+      "C16",
+      "C17"
+    ],
     "headline_discovery_residual": [
       "C02",
       "C06"

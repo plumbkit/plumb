@@ -72,8 +72,22 @@ func TestContextForTask_Affected_C07_OneRowWithTheCountAndNoTestNames(t *testing
 	if !slices.Equal(rows, want) {
 		t.Fatalf("affected rows = %q, want exactly %q", rows, want)
 	}
-	if strings.Contains(out, "TestSummariseCase") {
-		t.Errorf("forbidden: individual tests are listed in the compact pack:\n%s", out)
+	// The estimate lists no test (the rows above are the whole section). A test that
+	// calls the seed by name in its package is a related declaration of its own: it
+	// says so, is labelled a test, and is bounded by the per-declaration cap rather than
+	// listed row by row.
+	listed := 0
+	for _, line := range strings.Split(out, "\n") {
+		if !strings.HasPrefix(line, "  [e") || !strings.Contains(line, "TestSummariseCase") {
+			continue
+		}
+		listed++
+		if !strings.Contains(line, "(same-package name match, test)") {
+			t.Errorf("a test is related to Summarise without the same-package, test label: %q", line)
+		}
+	}
+	if listed > contextSamePkgPerSeed {
+		t.Errorf("forbidden: %d individual tests are listed in the compact pack, over the cap of %d:\n%s", listed, contextSamePkgPerSeed, out)
 	}
 	for _, line := range append([]string{affectedHeading}, rows...) {
 		if m := executionWords.FindString(line); m != "" {

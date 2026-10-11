@@ -320,6 +320,7 @@ func (r *lspRun) merge(seed hopNode, it protocol.CallHierarchyItem, inward bool)
 	if i := r.ex.keptIndex(n.ID); i >= 0 {
 		if r.ex.kept[i].confirmsCall(seed.node.ID, inward) {
 			r.ex.kept[i].Evidence, r.ex.kept[i].Source, r.ex.kept[i].Conf = evidenceLSP, sourceLSP, 1.0
+			r.ex.kept[i] = r.ex.kept[i].adoptedCall(seed, inward)
 			r.ex.rk.score(&r.ex.kept[i])
 			r.res.Confirmed++
 		}
@@ -362,9 +363,9 @@ func (r contextRelated) confirmsCall(seedID int64, inward bool) bool {
 		return false
 	}
 	if inward {
-		return r.CallerOf == seedID
+		return r.CallerOf == seedID || (r.NameMatch && !r.Gap && r.ParentID == seedID)
 	}
-	return r.CallerOf == 0 && r.ParentID == seedID
+	return !r.NameMatch && r.CallerOf == 0 && r.ParentID == seedID
 }
 
 // declaration places a server item in the index: the smallest indexed declaration of

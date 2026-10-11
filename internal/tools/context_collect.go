@@ -109,13 +109,14 @@ func (p *contextPack) budget() int { return p.MaxBytes - contextReserveBytes }
 //
 // Concurrency: all methods are safe for concurrent use.
 type ContextCollector struct {
-	storeFor  TopologyForRootFn
-	ws        WorkspaceFn
-	guard     BoundaryGuard
-	contested ContestedFn
-	sensitive SensitivePathFn
-	testScope func(context.Context) TestScope // optional; without it test packages are named by directory
-	deadline  time.Duration                   // zero means contextExpansionDeadline
+	storeFor   TopologyForRootFn
+	ws         WorkspaceFn
+	guard      BoundaryGuard
+	contested  ContestedFn
+	sensitive  SensitivePathFn
+	testScope  func(context.Context) TestScope // optional; without it test packages are named by directory
+	deadline   time.Duration                   // zero means contextExpansionDeadline
+	samePkgCap int                             // a test's per-declaration cap on same-package callers; zero means contextSamePkgPerSeed
 
 	// lsp, with lspWarm, refines the top symbol seeds (context_lsp.go); lspDeadline is
 	// its sub-deadline, zero meaning contextLSPSubDeadline. Optional: without lsp the
@@ -313,6 +314,9 @@ func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack
 	ex := newExpander(index.store, scope, newRanker(req.Task, req.Intent, seedDirs), c.sensitiveFor(ctx, pack.Root))
 	if forPack {
 		ex.indexHash = hashCache(graphCtx, index.store)
+		// Only a pack reads source, as a hint never does, so only a pack searches for
+		// same-package callers, which needs the sibling files the index vouches for.
+		ex.sp = newSamePackage(c.sourceReader(graphCtx, pack.Root), ex.indexHash, c.samePackageCap())
 	}
 	ex.run(graphCtx, ex.addSeeds(graphCtx, pack.Seeds))
 	if forPack {
