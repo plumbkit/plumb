@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/contexthints"
@@ -41,6 +42,34 @@ func TestStartContextHints_LedgerOpensOnlyOnceHintsAreOn(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("hints on did not create the ledger: %v", err)
+	}
+}
+
+// The daemon's handler resolves through the working-directory fallback: a first
+// prompt from a session no connection knows, in a workspace one serves, is
+// hinted. Control: the same prompt without the workspace is no root.
+func TestStartContextHints_FirstPromptReachesAServedWorkspace(t *testing.T) {
+	t.Setenv(contextHintsEnv, "")
+	path := filepath.Join(t.TempDir(), "context_hints.db")
+	prev := openContextHintLedger
+	openContextHintLedger = func() (*contexthints.Store, error) { return contexthints.OpenAt(path) }
+	t.Cleanup(func() { openContextHintLedger = prev })
+
+	root := t.TempDir()
+	registry := newConnRegistry()
+	registry.add("a", connHandle{workspace: func() string { return root }})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler, closeLedger := startContextHints(ctx, registry, &fakeHinter{}, func() bool { return true })
+	defer closeLedger()
+
+	req := prompt("fresh", "Total")
+	if r := handler(ctx, req); r.Outcome != contexthints.OutcomeNoop {
+		t.Fatalf("no workspace: %+v, want noop", r)
+	}
+	req.Workspace = root
+	if r := handler(ctx, req); r.Outcome != contexthints.OutcomeEmitted || !strings.Contains(r.Text, cwdRootNote) {
+		t.Fatalf("first prompt in a served workspace: %+v, want an emitted hint from the working-directory root", r)
 	}
 }
 
