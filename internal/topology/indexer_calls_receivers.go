@@ -42,6 +42,11 @@ func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, 
 	s := t.same
 	pkg, havePkg := s.filePkg[fileID]
 	here := dirPkgKey(path.Dir(callerPath), pkg)
+	if qualifier.Valid && qualifier.String == QualifierLocal {
+		// A bare call of a name the caller declares itself: a local value, never
+		// the package function of the same name.
+		return nil, tierBare, true
+	}
 	if !qualifier.Valid {
 		if !havePkg {
 			return nil, tierBare, true

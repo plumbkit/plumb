@@ -227,9 +227,12 @@ func samePackageScope(ctx context.Context, tx *sql.Tx, changed []string) ([]int6
 		if dir == "." {
 			rows, err = tx.QueryContext(ctx, `SELECT id, path FROM topology_files WHERE instr(path, '/') = 0`)
 		} else {
-			prefix := dir + "/"
+			// A range on the path, not substr: SQLite's substr counts characters and
+			// Go's len counts bytes, so a directory with a non-ASCII name matched
+			// nothing. "0" is the byte after "/", so [dir/, dir0) is every path under
+			// dir/; the path.Dir check below keeps only the direct children.
 			rows, err = tx.QueryContext(ctx,
-				`SELECT id, path FROM topology_files WHERE substr(path, 1, ?) = ?`, len(prefix), prefix)
+				`SELECT id, path FROM topology_files WHERE path >= ? AND path < ?`, dir+"/", dir+"0")
 		}
 		if err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: sibling scope: %w", err)

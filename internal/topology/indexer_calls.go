@@ -282,7 +282,7 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 		if err := rows.Scan(&fileID, &enclosing, &callee, &qualifier, &callerPath); err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: scan site: %w", err)
 		}
-		if qualifier.Valid {
+		if qualifier.Valid && qualifier.String != QualifierLocal {
 			r.qualifiedSites++
 		}
 		var bucket resolveBucket

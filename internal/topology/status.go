@@ -261,7 +261,7 @@ func formatCallGraph(c CallGraphStatus) string {
 	pct := float64(c.Resolved) / float64(c.CallSites) * 100
 	samePct := float64(c.SameFile) / float64(c.CallSites) * 100
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "  call graph:    %d cross-file call edges — %.1f%% of this workspace's %d\n",
+	fmt.Fprintf(&sb, "  call graph:    %d call sites resolved across files — %.1f%% of this workspace's %d\n",
 		c.Resolved, pct, c.CallSites)
 	fmt.Fprintf(&sb, "                 recorded call sites (%d from non-test callers). Go only.\n",
 		c.ResolvedNonTest)

@@ -285,7 +285,10 @@ type CallSite struct {
 	Callee string
 	// Qualifier is the text to the left of the final dot — an imported package
 	// name, a receiver variable, or a composite literal's type for a field site.
-	// Empty when the call is a bare identifier.
+	// Empty when the call is a bare identifier. Two markers stand for what has no
+	// name: QualifierOpaque and a name followed by QualifierIndexedSuffix.
+	// QualifierLocal marks a bare call whose name the enclosing function declares
+	// itself.
 	Qualifier string
 	StartByte int
 	StartLine int
@@ -305,6 +308,24 @@ type CallSite struct {
 	// the slice's name and would otherwise read as a single ordinary argument.
 	ArgSpread bool
 }
+
+// Qualifier markers for call sites whose receiver has no name of its own. None of
+// them can equal an identifier, so the resolver can never read one as an import,
+// a receiver variable or a parameter.
+const (
+	// QualifierOpaque is the receiver of a call on a value with no name chain:
+	// `f().M()`, `x.(T).M()`, `T{}.M()`. Recording it as a bare call (an empty
+	// qualifier) once linked `NewX(s).Execute()` to a package function Execute.
+	QualifierOpaque = "()"
+	// QualifierIndexedSuffix follows the name of an indexed receiver: `r[k].M()`
+	// records "r[]", because the method belongs to the element, not to r.
+	QualifierIndexedSuffix = "[]"
+	// QualifierLocal marks a bare call `f()` whose name the enclosing function
+	// declares itself (a parameter, a result, a := or var, a range variable, a
+	// closure parameter): the call is to that local value, not to the package's
+	// function of the same name.
+	QualifierLocal = "(local)"
+)
 
 // CallGraphStatus is what the cross-file call resolver measured on its last
 // pass. Every call site falls into exactly one of the eight buckets — Resolved,

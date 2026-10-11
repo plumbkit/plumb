@@ -35,7 +35,7 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 		t.Errorf("reach share missing or computed against the wrong denominator:\n%s", out)
 	}
 	for _, want := range []string{
-		"25 cross-file call edges", "10 from non-test callers",
+		"25 call sites resolved across files", "10 from non-test callers",
 		"500", "absent, not caller-free", "Go only",
 		// The two buckets a reader would otherwise have to discover by
 		// subtracting and finding the breakdown short.
