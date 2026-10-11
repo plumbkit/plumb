@@ -135,7 +135,9 @@ func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiver
 		return nil
 	}
 	typ := results[idx]
-	if strings.Contains(typ, ".") && crossPackage {
+	if crossPackage && (strings.Contains(typ, ".") || !isExportedName(callee)) {
+		// F's file has its own import names, and the caller can reach only the
+		// exported methods of another package's type.
 		return nil
 	}
 	return t.methodsOf(fileID, fnHome, typ, callee)
