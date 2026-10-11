@@ -429,6 +429,18 @@ func TestSameProject_RefusesACloneInsideABareRepositorysWorktree(t *testing.T) {
 	if SameProject(main, clone) || SameProject(clone, main) {
 		t.Error("a clone inside a bare repository's worktree is another project")
 	}
+	// A clone under a directory called modules is still not git's own nesting:
+	// one in the worktree's own modules/, and one in a worktree literally named
+	// "modules", which puts it at <common>/modules/<x>.
+	inModules := mainCheckout(t, filepath.Join(main, "modules", "x"))
+	named := filepath.Join(bare, "modules")
+	linkedWorktree(t, bare, "modules", named, false)
+	inNamed := mainCheckout(t, filepath.Join(named, "evil"))
+	for _, c := range []string{inModules, inNamed} {
+		if SameProject(main, c) || SameProject(c, main) {
+			t.Errorf("%s is another project", c)
+		}
+	}
 	if c, _ := CheckoutAt(clone); SameCommonDir(c.CommonDir, main) {
 		t.Error("its stamp must not verify against the worktree either")
 	}
