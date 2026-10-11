@@ -264,8 +264,11 @@ func (s *connSession) issueSuccessor(ctx context.Context, p presentation, consum
 }
 
 // reissueAfterRevocation answers a presentation refused as REVOKED with a fresh resume
-// credential for this connection, disclosed in the same session_start response, so the
-// conversation's continuity heals on the next replacement instead of never (PLAN-515).
+// credential for this connection, so the conversation's continuity heals on the next
+// replacement instead of never (PLAN-515). Like any minted credential it rides this
+// connection's next successful tool result (resumeCredentialMeta), which here is the
+// session_start response that carried the refusal; that is the frame the proxy must
+// see it on.
 //
 // Why it is needed. A proxy that presented a stored credential and was handed no
 // successor leaves the stored entry alone (serve_resume.go), because from its side a
