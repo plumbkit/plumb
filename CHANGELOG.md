@@ -13,6 +13,18 @@
 
 ### Added
 
+- **The Go call graph resolves method calls on local variables of evident type.**
+  `x.M()` now links to the method of `x`'s type when the enclosing function
+  declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or
+  `x := F()` / `x, err := pkg.F()` (through `F`'s declared results; exported only
+  across packages). A name declared more than once in the function — a loop
+  variable re-declaring a parameter, say — is left unresolved by every receiver
+  rule, which also closes that false-edge shape for receivers and parameters. On
+  plumb's own tree the graph now holds 85.5% of the cross-file caller→callee pairs
+  the Go type checker finds (64.5% before; same-package method calls 15% → 70%),
+  with none of the 19,700 judgeable new edges wrong. The topology index is rebuilt
+  once on upgrade (schema 7).
+
 - **The Go call graph resolves same-package calls, receiver calls and calls on
   typed parameters (#632).** The topology call resolver used to link only
   package-qualified calls (`pkg.F()`), about 3% of call sites, so a function's
