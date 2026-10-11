@@ -10,6 +10,7 @@
   documentation are removed, and so is the line the shared-connection refusal
   added when the key was set. A config that still sets it loads as before:
   plumb ignores keys it does not know.
+
 ### Added
 
 - **Experimental, opt-in context hints for Claude Code and Codex.**
@@ -30,50 +31,6 @@
   ledger (`context_hints.db`: 1000 rows, 1 MiB, 7 days per workspace).
   Hints are experimental: `context_for_task` is the supported path, and the
   `plumb-explore` skill now points at it as one call.
-
-### Fixed
-
-- **A revoked resume credential no longer breaks continuity for good.** A
-  `plumb serve` proxy keeps the resume credential it was given and presents it
-  when a replacement serve takes over the conversation. If the daemon refused it
-  as revoked (because the conversation's linkage was replaced, or after three
-  presentations that matched nothing), the proxy was not given a successor, so
-  by design it kept the stored entry. Every later replacement then presented the
-  same dead credential, was refused again, and started under a new session ID,
-  leaving mail bound to the old one stranded, until the stored file was deleted
-  by hand. The daemon now answers a revoked presentation with a fresh credential
-  for the presenting connection, in the same `session_start` response. The proxy
-  files it over the dead entry, so the next replacement resumes the full
-  identity. Proxies already running read it, so a daemon restart is enough. A
-  superseded presentation is unchanged: a successor exists, and overwriting its
-  entry could hand the conversation to the stale copy.
-- **A note to a merely disconnected session no longer reads as "most likely
-  ended — re-send".** The outbox receipt advised a re-send whenever no live
-  session answered to the name, which is wrong for a session that is only
-  detached: the note stays bound to it and is delivered if it comes back.
-  Observed live on 2026-10-11 — a sender was told its note had "most likely
-  ended" while the recipient was merely between reconnects, and the note arrived,
-  unchanged, minutes later. A bound note whose session record has not ended now
-  says exactly that, and the re-send advice is kept for a record that really has
-  ended.
-
-- **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**
-  `plumb hooks run-codex` decoded only the session id, cwd and event name, so
-  a Codex conversation begun by `/clear` was indistinguishable from any other
-  start. The Codex hook input now carries `source`. Codex 0.161.0's hook schema
-  lists `startup`, `resume`, `clear`, `compact` and `fork`. On `clear` it sends
-  the same `conversation-cleared <id>` control-socket notification as the
-  Claude Code hook, before printing the linkage document. It is best effort and
-  fails open: the same one-second budget, and stdout byte-identical to before
-  for every source. `fork`, `compact` and `resume` never announce.
-
-  Codex calls carry no identity stamp, so its next `session_start` already
-  relinks the connection on its own. The marker is evidence that the old
-  conversation ended, kept for the follow-up that stops the new id from
-  counting as a second conversation on the connection. Hooks installed by
-  `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
-
-### Added
 
 - **`context_for_task`, an experimental seeds-first context tool (PLAN-462).** It
   takes at least one explicit `files` or `symbols` seed and returns one bounded text
@@ -170,6 +127,48 @@
     for advisory hooks: selectors, locations and evidence classes from the index only,
     with no bodies, reads, memories, documents or language server, an ambiguous
     selector as a gap and never as candidate lines, bounded by bytes and a deadline.
+
+### Fixed
+
+- **A revoked resume credential no longer breaks continuity for good.** A
+  `plumb serve` proxy keeps the resume credential it was given and presents it
+  when a replacement serve takes over the conversation. If the daemon refused it
+  as revoked (because the conversation's linkage was replaced, or after three
+  presentations that matched nothing), the proxy was not given a successor, so
+  by design it kept the stored entry. Every later replacement then presented the
+  same dead credential, was refused again, and started under a new session ID,
+  leaving mail bound to the old one stranded, until the stored file was deleted
+  by hand. The daemon now answers a revoked presentation with a fresh credential
+  for the presenting connection, in the same `session_start` response. The proxy
+  files it over the dead entry, so the next replacement resumes the full
+  identity. Proxies already running read it, so a daemon restart is enough. A
+  superseded presentation is unchanged: a successor exists, and overwriting its
+  entry could hand the conversation to the stale copy.
+- **A note to a merely disconnected session no longer reads as "most likely
+  ended — re-send".** The outbox receipt advised a re-send whenever no live
+  session answered to the name, which is wrong for a session that is only
+  detached: the note stays bound to it and is delivered if it comes back.
+  Observed live on 2026-10-11 — a sender was told its note had "most likely
+  ended" while the recipient was merely between reconnects, and the note arrived,
+  unchanged, minutes later. A bound note whose session record has not ended now
+  says exactly that, and the re-send advice is kept for a record that really has
+  ended.
+
+- **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**
+  `plumb hooks run-codex` decoded only the session id, cwd and event name, so
+  a Codex conversation begun by `/clear` was indistinguishable from any other
+  start. The Codex hook input now carries `source`. Codex 0.161.0's hook schema
+  lists `startup`, `resume`, `clear`, `compact` and `fork`. On `clear` it sends
+  the same `conversation-cleared <id>` control-socket notification as the
+  Claude Code hook, before printing the linkage document. It is best effort and
+  fails open: the same one-second budget, and stdout byte-identical to before
+  for every source. `fork`, `compact` and `resume` never announce.
+
+  Codex calls carry no identity stamp, so its next `session_start` already
+  relinks the connection on its own. The marker is evidence that the old
+  conversation ended, kept for the follow-up that stops the new id from
+  counting as a second conversation on the connection. Hooks installed by
+  `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
 
 ## 0.24.0 (2026-10-10)
 
