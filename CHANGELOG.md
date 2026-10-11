@@ -50,7 +50,7 @@
 - **A note to a merely disconnected session no longer reads as "most likely
   ended — re-send".** The outbox receipt advised a re-send whenever no live
   session answered to the name, which is wrong for a session that is only
-  detached: the note stays bound to it and is delivered when it comes back.
+  detached: the note stays bound to it and is delivered if it comes back.
   Observed live on 2026-10-11 — a sender was told its note had "most likely
   ended" while the recipient was merely between reconnects, and the note arrived,
   unchanged, minutes later. A bound note whose session record has not ended now

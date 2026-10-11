@@ -180,9 +180,9 @@ type CollabDeps struct {
 	// RecordUnended reports whether a session record for this ID exists and has
 	// not been marked ended: the "disconnected, not (yet) gone" state a receipt
 	// words differently from an ending. It is NOT evidence the session returns —
-	// a client that quit leaves the record un-ended until the next session List —
-	// so its caller hedges. May be nil, and nil (or an unknown ID) keeps today's
-	// wording.
+	// a client that quit leaves the record un-ended until something calls
+	// Unregister or List — so its caller hedges. May be nil, and nil (or an
+	// unknown ID) keeps today's wording.
 	RecordUnended func(id string) bool
 	// InheritedSessionIDs returns the predecessor session IDs the CALLER provably
 	// continues, so it can still read mail bound to the session a daemon restart
