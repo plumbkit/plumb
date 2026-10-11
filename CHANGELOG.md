@@ -28,7 +28,6 @@
   conversation ended, kept for the follow-up that stops the new id from
   counting as a second conversation on the connection. Hooks installed by
   `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
-## Unreleased
 
 ### Added
 
