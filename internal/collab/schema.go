@@ -65,6 +65,12 @@ var chatColumns = []struct{ name, ddl string }{
 	// claimants their own threads, and every such row ages out at
 	// intent_ttl_minutes, so the exposure ends with the TTL rather than persisting.
 	{"delivered_to_id", `ALTER TABLE collab_rows ADD COLUMN delivered_to_id TEXT NOT NULL DEFAULT ''`},
+	// origin_git_common_dir (v4) is the sender's verified git common directory,
+	// stamped on a daemon-level note so a reader without cross_project consent can
+	// still read mail from its own repository family (scope.go, #635). An existing
+	// row backfills to '', which no reader treats as its own family: an older note
+	// stays readable exactly by whoever could read it before.
+	{"origin_git_common_dir", `ALTER TABLE collab_rows ADD COLUMN origin_git_common_dir TEXT NOT NULL DEFAULT ''`},
 }
 
 // chatIndexes accelerate the two hot chat queries: "what is unread for me" and
@@ -94,6 +100,7 @@ const chatIndexes = `
 CREATE INDEX IF NOT EXISTS idx_collab_inbox ON collab_rows(addressee, delivered_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_collab_inbox_id ON collab_rows(addressee_id, delivered_at, expires_at);
 CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_collab_target ON collab_rows(target_workspace, origin_git_common_dir);
 `
 
 // schemaVersion is the current on-disk collab schema version, stamped in PRAGMA
@@ -101,8 +108,9 @@ CREATE INDEX IF NOT EXISTS idx_collab_conv  ON collab_rows(conversation_id);
 // rows are the only copy of expiring advisory data — so a schema change must
 // migrate additively rather than dropping the table. v1 was the initial shape;
 // v2 added the chat columns and v3 addressee_id (see chatColumns), applied in
-// place.
-const schemaVersion = 3
+// place. v4 added origin_git_common_dir and idx_collab_target, which serves the
+// read scope's per-call lookup of a workspace's sending repositories (scope.go).
+const schemaVersion = 4
 
 func initDB(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {

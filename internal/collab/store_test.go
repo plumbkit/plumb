@@ -453,7 +453,7 @@ func TestClaimNotes_TargetWorkspaceScopesCrossProjectMail(t *testing.T) {
 	}
 
 	// An impostor in another project, using the same session name.
-	got, err := g.ClaimNotes(ctx, Claimant{Name: "alice", Workspace: "/proj/evil"}, now, 0)
+	got, err := g.ClaimNotes(ctx, Claimant{Name: "alice", Workspace: "/proj/evil", CrossProject: true}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,8 +461,9 @@ func TestClaimNotes_TargetWorkspaceScopesCrossProjectMail(t *testing.T) {
 		t.Fatalf("a session in another workspace claimed %d cross-project message(s) by name alone", len(got))
 	}
 
-	// The real recipient still gets it.
-	got, err = g.ClaimNotes(ctx, Claimant{Name: "alice", Workspace: "/proj/a"}, now, 0)
+	// The real recipient still gets it — having consented, since the sender is an
+	// unrelated project (a same-project sender needs none; see scope_test.go).
+	got, err = g.ClaimNotes(ctx, Claimant{Name: "alice", Workspace: "/proj/a", CrossProject: true}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

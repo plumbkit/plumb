@@ -23,7 +23,16 @@ func (s *Store) Snapshot(ctx context.Context, who Claimant, now time.Time) (Mail
 	if s == nil || s.db == nil || who.Name == "" {
 		return MailboxSnapshot{}, nil
 	}
-	where, args := claimable(who, now)
+	sc, err := s.scope(ctx, who, now, true)
+	if err != nil {
+		return MailboxSnapshot{}, err
+	}
+	if sc.none {
+		// The digest of an empty set, so "nothing here" fingerprints identically
+		// whether or not the query ran.
+		return MailboxSnapshot{Fingerprint: hex.EncodeToString(sha256.New().Sum(nil))}, nil
+	}
+	where, args := claimable(sc, now)
 	//nolint:gosec // G202: claimable emits fixed SQL and placeholder lists only;
 	// every identity is bound as a parameter, as on ClaimNotes.
 	rows, err := s.db.QueryContext(ctx, "SELECT id, created_at FROM collab_rows WHERE "+where+" ORDER BY id", args...)

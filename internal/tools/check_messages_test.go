@@ -263,7 +263,7 @@ func TestLeaveNote_OfflinePeerIsPlacedByConversation(t *testing.T) {
 
 	// It must be in the cross-project store addressed back to bob's workspace —
 	// NOT in alice's own mailbox where bob could never see it.
-	back, err := global.ClaimNotes(context.Background(), collab.Claimant{Name: "bob", Workspace: "/proj/bob"}, time.Now(), 0)
+	back, err := global.ClaimNotes(context.Background(), collab.Claimant{Name: "bob", Workspace: "/proj/bob", CrossProject: true}, time.Now(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

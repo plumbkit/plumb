@@ -136,12 +136,12 @@ func benchClaimant(sessionName, workspace string) Claimant {
 // text cannot fall behind; TestMailprobePreparedClaim_MirrorsClaimNotes still
 // checks the result, since agreeing on SQL is not the same as agreeing on rows.
 func pendingProbeSQL() string {
-	where, _ := claimable(benchClaimant("", ""), time.Time{})
+	where, _ := claimable(workspaceScope(benchClaimant("", "")), time.Time{})
 	return `SELECT 1 FROM collab_rows WHERE ` + where + ` LIMIT 1`
 }
 
 func preparedClaimSQL() string {
-	where, _ := claimable(benchClaimant("", ""), time.Time{})
+	where, _ := claimable(workspaceScope(benchClaimant("", "")), time.Time{})
 	// The SET list must match ClaimNotes column for column, not just the WHERE.
 	// It drifted once already — delivered_to_id arrived in production and this
 	// kept setting two columns, so the benchmark was timing a cheaper statement
@@ -158,13 +158,13 @@ func preparedClaimSQL() string {
 // expect, in ClaimNotes' order: for the claim, the SET pair first, then the
 // subquery's predicates, then the limit.
 func pendingProbeArgs(sessionName, workspace string, now time.Time) []any {
-	_, args := claimable(benchClaimant(sessionName, workspace), now)
+	_, args := claimable(workspaceScope(benchClaimant(sessionName, workspace)), now)
 	return args
 }
 
 func preparedClaimArgs(sessionName, workspace string, now time.Time, limit int) []any {
 	who := benchClaimant(sessionName, workspace)
-	_, whereArgs := claimable(who, now)
+	_, whereArgs := claimable(workspaceScope(who), now)
 	// Three SET values, matching preparedClaimSQL and ClaimNotes: delivered_at,
 	// delivered_to, delivered_to_id.
 	args := append([]any{now.UnixNano(), sessionName, who.ID}, whereArgs...)

@@ -90,10 +90,16 @@ type Row struct {
 	// which membershipPredicate treats as "fall back to the name" — the same
 	// concession AddresseeID makes.
 	DeliveredToID string
-	// OriginWorkspace is the sender's workspace root, stamped only on a
-	// cross-project note so the recipient can see which project it came from.
-	// Empty for a same-project note.
+	// OriginWorkspace is the sender's workspace root, stamped only on a note in
+	// the daemon-level store so the recipient can see where it came from. Empty
+	// for a note in a workspace's own collab.db.
 	OriginWorkspace string
+	// OriginGitCommonDir is the git common directory of the sender's VERIFIED
+	// checkout, stamped by PutNote on a daemon-level note — empty when the sender's
+	// workspace is not a checkout the probe could verify. It is what lets a reader
+	// without cross_project consent recognise mail from its own repository family
+	// (see scope.go), and it outlives the sender's worktree.
+	OriginGitCommonDir string
 	// TargetWorkspace is the workspace the recipient must be pinned to for this
 	// note to be claimable. Set on every cross-project note; empty on a
 	// same-project one, where the containing collab.db is itself the scope.

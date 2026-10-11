@@ -114,8 +114,9 @@ func writeConversationVolumes(sb *strings.Builder, vols []collab.ConversationSum
 // CROSS-PROJECT METADATA IS SHOWN ONLY TO THE RECIPIENT. The daemon-level store
 // holds traffic between every project on the machine, and this listing runs
 // inside one of them. It is queried with ConversationSummariesForWorkspace,
-// scoped to THIS workspace as the target, and only when this workspace has
-// opted in with [collab] cross_project.
+// scoped to THIS workspace as the target and under this workspace's [collab]
+// cross_project consent, which the store's read scope applies: without it, only
+// the threads this repository family's own checkouts wrote are counted.
 //
 // The consent that matters is the RECIPIENT's, not the sender's. A sender
 // choosing to write across projects cannot consent on the recipient's behalf to
@@ -167,13 +168,12 @@ func (t *WorkspaceSessions) collabObservations(
 		local = nil
 	}
 	var global []collab.ConversationSummary
-	if t.crossProjectOn() {
-		if g := t.globalStoreIfExists(); g != nil {
-			if rows, gErr := g.ConversationSummariesForWorkspace(
-				ctx, workspace, now, collabVolumeCap,
-			); gErr == nil {
-				global = rows
-			}
+	if g := t.globalStoreIfExists(); g != nil {
+		reader := collab.Claimant{Workspace: workspace, CrossProject: t.crossProjectOn()}
+		if rows, gErr := g.ConversationSummariesForWorkspace(
+			ctx, reader, now, collabVolumeCap,
+		); gErr == nil {
+			global = rows
 		}
 	}
 	// Merged rather than concatenated: one thread can hold notes in both stores

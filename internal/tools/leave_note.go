@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // LeaveNote is the leave_note MCP tool: a session leaves a short message for a
@@ -134,10 +135,15 @@ func (e *refusalError) Error() string { return e.msg }
 // so the recipient can see where it came from. The sender never writes into the
 // recipient's directory.
 type noteTarget struct {
-	store         *collab.Store
-	crossProject  bool
+	store        *collab.Store
+	crossProject bool
+	// sameProject marks a daemon-level note between two checkouts of ONE
+	// repository family (a worktree and its main checkout, a submodule and its
+	// superproject): it travels like a cross-project note but needs no consent,
+	// because no project boundary is crossed (#635).
+	sameProject   bool
 	peerWorkspace string
-	origin        string // the sender's workspace; stamped only when crossProject
+	origin        string // the sender's workspace; stamped only on a daemon-level note
 	// addresseeID binds the message to the one live session that answered to the
 	// addressee's name. Empty when the peer is not live (or the name resolves
 	// ambiguously), which leaves the message addressed by name alone — the
@@ -186,26 +192,7 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 		}
 	}
 	if found && peer.Workspace != "" && !sameWorkspace(peer.Workspace, ws) {
-		if t.deps.TargetAllowsCrossProject == nil || !t.deps.TargetAllowsCrossProject(peer.Workspace) {
-			return noteTarget{}, &refusalError{"Not sent: the recipient's project has not enabled " +
-				"[collab] cross_project, or its project config could not be confirmed — either way it will never " +
-				"read messages from other projects, and this note would sit unclaimed until it expires with you " +
-				"never told. cross_project is a trust-gated setting: a value in that project's own " +
-				".plumb/config.toml only takes effect after `plumb trust` runs there, so whoever administers it " +
-				"needs to either set cross_project = true in their GLOBAL config, or set it in-project and trust " +
-				"it. Otherwise, address a peer in your own workspace instead."}
-		}
-		if t.deps.GlobalStore == nil {
-			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
-		}
-		store := t.deps.GlobalStore()
-		if store == nil {
-			return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
-		}
-		return noteTarget{
-			store: store, crossProject: true, peerWorkspace: peer.Workspace,
-			origin: ws, addresseeID: peer.ID,
-		}, nil
+		return t.daemonTarget(peer, ws)
 	}
 	local, err := t.localTarget(ctx)
 	if err != nil {
@@ -214,6 +201,38 @@ func (t *LeaveNote) resolveTarget(ctx context.Context, to, ws, convID string) (n
 	local.peerUnknown = !found
 	local.addresseeID = peer.ID
 	return local, nil
+}
+
+// daemonTarget routes a note to a peer pinned to another workspace, which always
+// means the daemon-level store. One repository family needs no consent: the
+// recipient reads the note through its store's read scope, which re-verifies the
+// stamp PutNote takes from this sender's checkout. Verified on the live checkouts
+// here, from the disk, never from the workspace paths' spelling — a directory
+// nested inside the project but holding no checkout of its own is a different
+// project, and so is a repository cloned inside it.
+func (t *LeaveNote) daemonTarget(peer PeerSession, ws string) (noteTarget, error) {
+	sameProject := paths.SameProject(ws, peer.Workspace)
+	if !sameProject && (t.deps.TargetAllowsCrossProject == nil || !t.deps.TargetAllowsCrossProject(peer.Workspace)) {
+		return noteTarget{}, &refusalError{"Not sent: the recipient's project has not enabled " +
+			"[collab] cross_project, or its project config could not be confirmed — either way it will never " +
+			"read messages from other projects, and this note would sit unclaimed until it expires with you " +
+			"never told. cross_project is a trust-gated setting: a value in that project's own " +
+			".plumb/config.toml only takes effect after `plumb trust` runs there, so whoever administers it " +
+			"needs to either set cross_project = true in their GLOBAL config, or set it in-project and trust " +
+			"it. Otherwise, address a peer in your own workspace, or in another checkout of this repository " +
+			"(a worktree or submodule), instead."}
+	}
+	if t.deps.GlobalStore == nil {
+		return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
+	}
+	store := t.deps.GlobalStore()
+	if store == nil {
+		return noteTarget{}, errors.New("leave_note: cross-project store unavailable")
+	}
+	return noteTarget{
+		store: store, crossProject: !sameProject, sameProject: sameProject,
+		peerWorkspace: peer.Workspace, origin: ws, addresseeID: peer.ID,
+	}, nil
 }
 
 func (t *LeaveNote) localTarget(ctx context.Context) (noteTarget, error) {
@@ -313,7 +332,7 @@ func (t *LeaveNote) run(ctx context.Context, target noteTarget, policy CollabPol
 	}
 	t.deps.Notifier.Bump(keys...)
 	return formatNoteResult(body, args.To, conv, ttl, redacted, target, policy.ChatBudget(),
-		policy.KeepDeliveredNotes && !target.crossProject), nil
+		policy.KeepDeliveredNotes && !target.store.IsGlobal()), nil
 }
 
 // replyDeliveryLine names BOTH paths, because they are not alternatives an agent
@@ -358,6 +377,10 @@ func formatNoteResult(body, to, conv string, ttl time.Duration, redacted bool, t
 	if target.crossProject {
 		fmt.Fprintf(&sb, "  cross-project:  the recipient is pinned to %s, which has confirmed [collab] "+
 			"cross_project = true and will read this.\n", target.peerWorkspace)
+	}
+	if target.sameProject {
+		fmt.Fprintf(&sb, "  same project:   the recipient is pinned to %s, another checkout of this "+
+			"repository (a worktree or submodule), so no cross_project opt-in is needed.\n", target.peerWorkspace)
 	}
 	if target.peerUnknown {
 		fmt.Fprintf(&sb, "  unplaced:       no session named %q is connected, and no conversation places it. "+

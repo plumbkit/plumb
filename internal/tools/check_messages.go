@@ -353,7 +353,8 @@ func (t *CheckMessages) empty(policy CollabPolicy) string {
 	var sb strings.Builder
 	sb.WriteString("No messages.\n")
 	if !policy.CrossProject {
-		sb.WriteString("  (Only this workspace's sessions can reach you — [collab] cross_project is off.)\n")
+		sb.WriteString("  (Only sessions in this project — this workspace and its git worktrees and submodules — " +
+			"can reach you; [collab] cross_project is off.)\n")
 	}
 	sb.WriteString("  A peer that is idle waiting on its human makes no tool calls, so it may not " +
 		"have read yours yet. Silence is not a refusal.\n")

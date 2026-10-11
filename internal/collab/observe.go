@@ -56,7 +56,7 @@ type ConversationSummary struct {
 func (s *Store) ConversationSummaries(
 	ctx context.Context, who Claimant, now time.Time, limit int,
 ) ([]ConversationSummary, error) {
-	return s.conversationSummaries(ctx, now, limit, "", &who)
+	return s.conversationSummaries(ctx, now, limit, nil, &who)
 }
 
 // ConversationSummariesForWorkspace counts the live conversations in the
@@ -75,21 +75,31 @@ func (s *Store) ConversationSummaries(
 // caller's own threads, so every cross-project note aimed at this workspace is
 // counted, including exchanges between two other sessions here. That is
 // deliberate — the question it answers is "how much traffic is aimed at this
-// project", a property of the project rather than of one session in it — and it
-// is why the caller must gate it on the workspace's own cross_project consent.
+// project", a property of the project rather than of one session in it.
+//
+// Consent is applied HERE, through the read scope, rather than left to the
+// caller: only reader.Workspace and reader.CrossProject are consulted. With
+// consent, every conversation aimed at the workspace is counted; without it, only
+// the rows its own repository family wrote — so a same-project thread between a
+// worktree and its main checkout is visible to a project that never opted in to
+// cross-project mail, and another project's traffic is not.
 func (s *Store) ConversationSummariesForWorkspace(
-	ctx context.Context, workspace string, now time.Time, limit int,
+	ctx context.Context, reader Claimant, now time.Time, limit int,
 ) ([]ConversationSummary, error) {
-	if s == nil || workspace == "" || !s.IsGlobal() {
+	if s == nil || reader.Workspace == "" || !s.IsGlobal() {
 		return nil, nil
 	}
-	return s.conversationSummaries(ctx, now, limit, workspace, nil)
+	sc, err := s.scope(ctx, reader, now, false)
+	if err != nil || sc.none {
+		return nil, err
+	}
+	return s.conversationSummaries(ctx, now, limit, &sc, nil)
 }
 
-// conversationSummaries aggregates counts, optionally narrowed to a target
-// workspace and/or to the threads one claimant takes part in.
+// conversationSummaries aggregates counts, optionally narrowed by a read scope
+// and/or to the threads one claimant takes part in.
 func (s *Store) conversationSummaries(
-	ctx context.Context, now time.Time, limit int, workspace string, who *Claimant,
+	ctx context.Context, now time.Time, limit int, sc *readScope, who *Claimant,
 ) ([]ConversationSummary, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -100,9 +110,9 @@ func (s *Store) conversationSummaries(
 	// for a number.
 	where := `WHERE kind = ? AND expires_at > ?`
 	args := []any{string(KindNote), now.UnixNano()}
-	if workspace != "" {
-		where += ` AND target_workspace = ?`
-		args = append(args, workspace)
+	if sc != nil {
+		where += ` ` + sc.term
+		args = append(args, sc.args...)
 	}
 	if who != nil {
 		// Membership is a property of the THREAD, not of the row, so this selects
@@ -254,7 +264,7 @@ func (s *Store) FilterDaemonWideConversations(
 	// session's own threads, which is the wrong question here. This view is the
 	// daemon operator's, and its access rule is the unanimous-consent filter below
 	// rather than session membership.
-	all, err := s.conversationSummaries(ctx, now, fetch, "", nil)
+	all, err := s.conversationSummaries(ctx, now, fetch, nil, nil)
 	if err != nil {
 		return nil, err
 	}

@@ -605,7 +605,7 @@ func TestAddresseeMatch_InterpolatesNoData(t *testing.T) {
 	}
 
 	// And the whole predicate composes the same way.
-	where, whereArgs := claimable(hostile, time.Now())
+	where, whereArgs := claimable(workspaceScope(hostile), time.Now())
 	for _, v := range values {
 		if strings.Contains(where, v) {
 			t.Fatalf("claimable() carries the caller value %q: %q", v, where)
