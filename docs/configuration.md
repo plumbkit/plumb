@@ -774,7 +774,12 @@ advisory hint in front of an agent: a few code selectors with their locations, n
 source, documentation, memory or mail text. A hint is offered when a prompt names
 files or symbols explicitly (backticked selectors and path-shaped tokens; the
 prompt itself never leaves the hook process), after a resume or compaction, and
-when a subagent starts. Hints are capped at 1 KiB per turn and 8 KiB per
+when a subagent starts. A hint is for the workspace the session already uses.
+The first prompt of a session usually arrives before its first plumb call, when
+the daemon does not know the session yet. That prompt is hinted from the
+workspace the hook runs in, but only when a running plumb session already serves
+that workspace, and the hint says so. It never attaches or moves a workspace.
+Hints are capped at 1 KiB per turn and 8 KiB per
 logical agent, and neither a compaction nor a daemon restart refills the
 allowance. Asking for a hint never counts as reading a file: the edit guards
 still require an explicit read.

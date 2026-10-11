@@ -61,7 +61,7 @@ func newHintFixture(t *testing.T) *hintFixture {
 	t.Cleanup(ledger.Close)
 	f := &hintFixture{hinter: &fakeHinter{}, ledger: ledger, roots: map[string]string{}, on: true}
 	f.svc = newContextHintService(f.hinter, ledger,
-		func(ext string) (hintRoot, bool) { r, ok := f.roots[ext]; return hintRoot{Path: r}, ok },
+		func(ext, _ string) (hintRoot, bool) { r, ok := f.roots[ext]; return hintRoot{Path: r}, ok },
 		func() bool { return f.on })
 	return f
 }
@@ -267,7 +267,7 @@ func TestContextHint_LedgerFileHoldsNoHintText(t *testing.T) {
 	}}
 	root := hintRepo(t)
 	svc := newContextHintService(hinter, ledger,
-		func(string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
+		func(_, _ string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
 	r := svc.serve(context.Background(), prompt("conv-1", "Cart.Total"))
 	if r.Outcome != contexthints.OutcomeEmitted || !strings.Contains(r.Text, marker) {
 		t.Fatalf("reply = %+v; the positive control needs the marker in the emitted text", r)
@@ -410,7 +410,7 @@ func TestContextHint_SubagentStartRevalidatesAgainstChildRoot(t *testing.T) {
 func TestContextHint_InheritedRootIsLabelled(t *testing.T) {
 	f := newHintFixture(t)
 	root := hintRepo(t)
-	f.svc.resolve = func(ext string) (hintRoot, bool) {
+	f.svc.resolve = func(ext, _ string) (hintRoot, bool) {
 		return hintRoot{Path: root, Inherited: strings.Contains(ext, "/")}, true
 	}
 	f.svc.serve(context.Background(), prompt("conv-1", "Parent.Func"))
@@ -441,7 +441,7 @@ func TestContextHint_CollectorErrorIsSilent(t *testing.T) {
 // path fails closed rather than spending an unmetered budget.
 func TestContextHint_NoLedgerFailsClosed(t *testing.T) {
 	root := hintRepo(t)
-	svc := newContextHintService(&fakeHinter{}, nil, func(string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
+	svc := newContextHintService(&fakeHinter{}, nil, func(_, _ string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
 	if r := svc.serve(context.Background(), prompt("conv-1", "Seed")); r.Outcome == contexthints.OutcomeEmitted || r.Text != "" {
 		t.Fatalf("reply = %+v, want nothing emitted without a ledger", r)
 	}

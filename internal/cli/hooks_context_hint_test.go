@@ -134,7 +134,7 @@ func hintWorkspace(t *testing.T) (root, sub string) {
 // UserPromptSubmit and SessionStart, and as additionalContext JSON for
 // SubagentStart; a failed ask prints nothing.
 func TestClaudeContextHintOutput(t *testing.T) {
-	_, sub := hintWorkspace(t)
+	root, sub := hintWorkspace(t)
 	var asked []contextHintRequest
 	ask := func(r contextHintRequest) string { asked = append(asked, r); return "HINT\n" }
 
@@ -150,8 +150,9 @@ func TestClaudeContextHintOutput(t *testing.T) {
 		t.Fatalf("UserPromptSubmit printed %q", got)
 	}
 	req := asked[0]
-	if req.Host != "claude-code" || !reflect.DeepEqual(req.Selectors, []string{"Cart.Total"}) {
-		t.Fatalf("request = %+v", req)
+	// The workspace is the marker root the cwd sits under, not the cwd itself.
+	if req.Host != "claude-code" || !reflect.DeepEqual(req.Selectors, []string{"Cart.Total"}) || req.Workspace != root {
+		t.Fatalf("request = %+v, want workspace %s", req, root)
 	}
 	if b, _ := json.Marshal(req); strings.Contains(string(b), "secret plan") {
 		t.Fatalf("the prompt text left the hook: %s", b)

@@ -8,11 +8,13 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/contexthints"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -79,7 +81,7 @@ func startContextHints(ctx context.Context, registry *connRegistry, hinter tools
 			return nil
 		}
 		ledger = l
-		svc = newContextHintService(hinter, l, registry.hintRoot, enabled)
+		svc = newContextHintService(hinter, l, registry.hintRootFor, enabled)
 		go pruneContextHints(ctx, l, reaperInterval)
 		return svc
 	}
@@ -123,11 +125,25 @@ func pruneContextHints(ctx context.Context, ledger *contexthints.Store, every ti
 // mailbox probe uses to find a recipient: exactly one live connection must know
 // the caller. Zero or several means no root — a hint is never routed by a guess.
 func (r *connRegistry) hintRoot(external string) (hintRoot, bool) {
+	return r.hintRootFor(external, "")
+}
+
+// hintRootFor is hintRoot with one fallback, for the first prompt of a session
+// that has made no plumb call (so no connection knows it yet): workspace, the
+// root the hook's working directory sits in, when it is absolute and is already
+// the workspace of a live connection. The fallback applies only when NO
+// connection knows the caller; two that do is still no root. It reads the
+// registry and nothing else: no index is opened, and no pin or shard is created.
+func (r *connRegistry) hintRootFor(external, workspace string) (hintRoot, bool) {
 	r.mu.Lock()
 	var resolvers []func(string) (string, bool, bool)
+	var served []func() string
 	for _, h := range r.conns {
 		if h.hintRoot != nil {
 			resolvers = append(resolvers, h.hintRoot)
+		}
+		if h.workspace != nil {
+			served = append(served, h.workspace)
 		}
 	}
 	r.mu.Unlock()
@@ -139,7 +155,26 @@ func (r *connRegistry) hintRoot(external string) (hintRoot, bool) {
 			matches++
 		}
 	}
-	return found, matches == 1
+	if matches > 0 {
+		return found, matches == 1
+	}
+	return servedHintRoot(workspace, served)
+}
+
+// servedHintRoot is workspace as a hint root when a live connection already
+// serves it, compared canonically so a symlinked spelling of the same directory
+// matches. It returns the connection's own spelling, the one its index is keyed by.
+func servedHintRoot(workspace string, served []func() string) (hintRoot, bool) {
+	if !filepath.IsAbs(workspace) {
+		return hintRoot{}, false
+	}
+	want := paths.Canonical(workspace)
+	for _, ws := range served {
+		if w := ws(); filepath.IsAbs(w) && paths.Canonical(w) == want {
+			return hintRoot{Path: w, FromCWD: true}, true
+		}
+	}
+	return hintRoot{}, false
 }
 
 // hookHintRoot is one connection's answer to hintRoot. An identity this

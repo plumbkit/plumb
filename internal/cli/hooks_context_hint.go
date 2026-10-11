@@ -66,12 +66,13 @@ func promptSelectors(prompt string) []string {
 // (SubagentStart), and "" for every failure. Outside a plumb workspace it asks
 // nothing: the hooks are user-scoped and fire for every session on the machine.
 func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest) string) string {
-	if _, inside := plumbWorkspaceRoot(input.CWD); !inside || ask == nil {
+	root, inside := plumbWorkspaceRoot(input.CWD)
+	if !inside || ask == nil {
 		return ""
 	}
 	req := contextHintRequest{
 		Host: "claude-code", Event: input.Event, Source: input.Source,
-		SessionID: input.SessionID, AgentID: input.AgentID,
+		SessionID: input.SessionID, AgentID: input.AgentID, Workspace: root,
 	}
 	if input.Event == "UserPromptSubmit" {
 		req.Selectors = promptSelectors(input.Prompt)
@@ -125,12 +126,13 @@ func codexHookOutput(input codexHookInput, probe func(string, string) (mailRepor
 // turn_id, so the per-turn allowance is keyed on Codex's own turn. Outside a
 // plumb workspace it asks nothing, as for Claude Code.
 func codexContextHintText(input codexHookInput, ask func(contextHintRequest) string) string {
-	if _, inside := plumbWorkspaceRoot(input.CWD); !inside || ask == nil {
+	root, inside := plumbWorkspaceRoot(input.CWD)
+	if !inside || ask == nil {
 		return ""
 	}
 	req := contextHintRequest{
 		Host: "codex", Event: input.Event, Source: input.Source,
-		SessionID: input.SessionID, AgentID: input.AgentID, TurnID: input.TurnID,
+		SessionID: input.SessionID, AgentID: input.AgentID, TurnID: input.TurnID, Workspace: root,
 	}
 	if input.Event == "UserPromptSubmit" {
 		req.Selectors = promptSelectors(input.Prompt)

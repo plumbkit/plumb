@@ -36,7 +36,7 @@ func decodeCodexOutput(t *testing.T, out map[string]any) codexSpecific {
 // answers UserPromptSubmit and SubagentStart with additionalContext; no hint is
 // no output at all.
 func TestCodexHookOutput_ContextHints(t *testing.T) {
-	_, sub := hintWorkspace(t)
+	root, sub := hintWorkspace(t)
 	var asked []contextHintRequest
 	ask := func(r contextHintRequest) string { asked = append(asked, r); return "HINT\n" }
 
@@ -51,7 +51,7 @@ func TestCodexHookOutput_ContextHints(t *testing.T) {
 		t.Fatalf("UserPromptSubmit output = %+v", doc)
 	}
 	req := asked[0]
-	want := contextHintRequest{Host: "codex", Event: "UserPromptSubmit", SessionID: "thr-1", TurnID: "turn-9", Selectors: []string{"Cart.Total"}}
+	want := contextHintRequest{Host: "codex", Event: "UserPromptSubmit", SessionID: "thr-1", TurnID: "turn-9", Selectors: []string{"Cart.Total"}, Workspace: root}
 	if !reflect.DeepEqual(req, want) {
 		t.Fatalf("request = %+v, want %+v", req, want)
 	}

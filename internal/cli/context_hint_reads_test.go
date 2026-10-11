@@ -37,7 +37,7 @@ func TestContextHint_ServingAHintRecordsNoRead(t *testing.T) {
 	hinter := &fakeHinter{lines: func(tools.HintRequest) []tools.HintLine {
 		return []tools.HintLine{{Selector: "Total", Path: "cart.go", Kind: "func", Provenance: "code", Line: 3}}
 	}}
-	svc := newContextHintService(hinter, ledger, world.registry.hintRoot, func() bool { return true })
+	svc := newContextHintService(hinter, ledger, world.registry.hintRootFor, func() bool { return true })
 	if r := svc.serve(context.Background(), prompt("conversation", "cart.go")); r.Outcome != contexthints.OutcomeEmitted || !strings.Contains(r.Text, "cart.go") {
 		t.Fatalf("hint = %+v; the test needs a hint that names the file", r)
 	}

@@ -63,6 +63,11 @@ type contextHintRequest struct {
 	AgentID     string   `json:"agent_id,omitempty"`
 	TurnID      string   `json:"turn_id,omitempty"`
 	Selectors   []string `json:"selectors,omitempty"`
+	// Workspace is the plumb workspace root the hook's working directory sits in
+	// (the .plumb marker walk the hook already gates on). It is consulted only for
+	// an identity no live connection knows yet, and only if the daemon already
+	// serves that root (connRegistry.hintRootFor).
+	Workspace string `json:"workspace,omitempty"`
 	// Off and On carry PLUMB_CONTEXT_HINTS from the hook's environment, which a
 	// user's shell export reaches and the daemon's may not. Either outranks the
 	// daemon's own setting; Off outranks On.
@@ -85,20 +90,27 @@ const hintHeader = "Plumb context hint (selectors only; pull bodies with context
 
 // hintRoot is where a hint's caller works. Inherited marks a subagent that has
 // made no call yet: the root is the one its first call will be seeded with.
+// FromCWD marks a caller no connection knows yet (a session before its first
+// plumb call): the root is the served workspace its hook runs in.
 type hintRoot struct {
 	Path      string
 	Inherited bool
+	FromCWD   bool
 }
 
 // inheritedRootNote labels a hint whose root a subagent has not used yet.
 const inheritedRootNote = "root: inherited (child has made no call yet)\n"
+
+// cwdRootNote labels a hint whose root came from the session's working
+// directory, because the session has made no plumb call yet.
+const cwdRootNote = "root: this session's working directory (no plumb call yet)\n"
 
 // contextHintService answers context-hint. Every dependency is injected; there
 // is deliberately no field through which it could reach a read tracker.
 type contextHintService struct {
 	hinter  tools.ContextHinter
 	ledger  *contexthints.Store
-	resolve func(external string) (hintRoot, bool)
+	resolve func(external, workspace string) (hintRoot, bool)
 	enabled func() bool
 	now     func() time.Time
 	limits  contexthints.Limits
@@ -119,7 +131,7 @@ type hintAgentState struct {
 }
 
 func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Store,
-	resolve func(string) (hintRoot, bool), enabled func() bool,
+	resolve func(external, workspace string) (hintRoot, bool), enabled func() bool,
 ) *contextHintService {
 	return &contextHintService{
 		hinter: hinter, ledger: ledger, resolve: resolve, enabled: enabled, now: time.Now,
@@ -220,7 +232,7 @@ func (c *contextHintService) ledgerRoot(req contextHintRequest) string {
 	if req.SessionID == "" || c.resolve == nil {
 		return ""
 	}
-	root, _ := c.resolve(hintExternal(req.SessionID, req.AgentID))
+	root, _ := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace)
 	return root.Path
 }
 
@@ -256,6 +268,9 @@ func (c *contextHintService) decide(ctx context.Context, req contextHintRequest,
 	}
 	seeds, ruleOnly, detail := c.seedsFor(req, root.Path)
 	d := c.compose(ctx, req, root, seeds, ruleOnly, detail)
+	if root.FromCWD && d.detail == "" {
+		d.detail = "cwd-root"
+	}
 	if d.text == "" {
 		return d
 	}
@@ -272,7 +287,7 @@ func (c *contextHintService) admit(req contextHintRequest) (root hintRoot, refus
 	case c.resolve == nil:
 		return hintRoot{}, "no-root"
 	}
-	root, ok := c.resolve(hintExternal(req.SessionID, req.AgentID))
+	root, ok := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace)
 	if !ok || root.Path == "" {
 		return hintRoot{}, "no-root"
 	}
@@ -300,8 +315,11 @@ func (c *contextHintService) compose(ctx context.Context, req contextHintRequest
 		return hintDecision{outcome: contexthints.OutcomeError, detail: "collector", seeds: seeds}
 	}
 	note := ""
-	if root.Inherited {
+	switch {
+	case root.Inherited:
 		note = inheritedRootNote
+	case root.FromCWD:
+		note = cwdRootNote
 	}
 	if text, shown := renderContextHint(res, c.limits.PerTurn, note); text != "" {
 		return hintDecision{text: text, seeds: seeds, emitted: lineSelectors(res.Lines[:shown])}
