@@ -10,6 +10,26 @@
   documentation are removed, and so is the line the shared-connection refusal
   added when the key was set. A config that still sets it loads as before:
   plumb ignores keys it does not know.
+### Added
+
+- **Experimental, opt-in context hints for Claude Code and Codex.**
+  `plumb hooks install <client> --context` adds two advisory handlers,
+  `UserPromptSubmit` and `SubagentStart`; `[context] hints = true` or
+  `PLUMB_CONTEXT_HINTS=on` turns them on. Both are off by default. When on, a
+  hook may put a few code selectors with their locations in front of the agent:
+  when a prompt names files or symbols explicitly, after a resume or compaction,
+  and when a subagent starts. A hint never carries source, documentation,
+  memory or mail text, never counts as reading a file, and is capped at 1 KiB a
+  turn and 8 KiB per agent. Only a prompt's explicit selectors leave the hook
+  process, never the prompt, and the daemon re-checks each one against the
+  agent's own root. Every failure is silence.
+  `plumb hooks uninstall <client> --only context` removes just these handlers,
+  and `plumb hooks` says whether hints are not installed, installed but off, or
+  on. `plumb hooks uptake` reports whether hints are configured, trusted
+  (Codex's own approval record), invoked and consumed, from a bounded metadata
+  ledger (`context_hints.db`: 1000 rows, 1 MiB, 7 days per workspace).
+  Hints are experimental: `context_for_task` is the supported path, and the
+  `plumb-explore` skill now points at it as one call.
 
 ### Fixed
 

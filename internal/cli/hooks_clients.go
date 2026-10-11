@@ -83,8 +83,11 @@ type hooksTarget struct {
 	setup   setupTarget
 	pathFn  func() (string, error)
 	entries func(plumbBin string) []hookEntry
-	ours    ownershipTest
-	notes   []string
+	// contextEntries are the opt-in context-hint handlers: written on
+	// `install --context`, kept fresh while present. nil when the client has none.
+	contextEntries func(plumbBin string) []hookEntry
+	ours           ownershipTest
+	notes          []string
 }
 
 // hooksTargets is the display order for every command that walks clients. It is
@@ -95,12 +98,13 @@ func hooksTargets() []hooksTarget {
 }
 
 var claudeCodeHooksTarget = hooksTarget{
-	use:     "claude-code",
-	name:    "Claude Code",
-	setup:   claudeCodeTarget,
-	pathFn:  claudeSettingsPath,
-	entries: claudeHookEntries,
-	ours:    claudeHookOwned,
+	use:            "claude-code",
+	name:           "Claude Code",
+	setup:          claudeCodeTarget,
+	pathFn:         claudeSettingsPath,
+	entries:        claudeHookEntries,
+	contextEntries: claudeContextHookEntries,
+	ours:           claudeHookOwned,
 	notes: []string{
 		"Claude Code — settings.json hot-reloads, so sessions already running pick these up without a restart.",
 		"Claude Code — the Stop hook stays silent, and costs nothing, unless `plumb mail` reports unread peer messages.",
@@ -109,14 +113,15 @@ var claudeCodeHooksTarget = hooksTarget{
 }
 
 var codexHooksTarget = hooksTarget{
-	use:     "codex",
-	name:    "Codex",
-	setup:   codexTarget,
-	pathFn:  codexHooksPath,
-	entries: codexHookEntries,
-	ours:    codexHookOwned,
+	use:            "codex",
+	name:           "Codex",
+	setup:          codexTarget,
+	pathFn:         codexHooksPath,
+	entries:        codexHookEntries,
+	contextEntries: codexContextHookEntries,
+	ours:           codexHookOwned,
 	notes: []string{
-		"Codex — run /hooks in Codex to review and trust the two plumb command hooks.",
+		"Codex — run /hooks in Codex to review and trust the plumb command hooks (two; four with --context).",
 		"Codex — the Stop hook checks only as a turn ends; Codex cannot wake an already-idle session.",
 	},
 }

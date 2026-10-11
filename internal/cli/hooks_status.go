@@ -4,9 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/render"
 	"github.com/plumbkit/plumb/internal/tui"
@@ -30,7 +32,7 @@ func runHooksStatus(cmd *cobra.Command) error {
 
 	report := newHookReport()
 	for _, t := range hooksTargets() {
-		path, _, states, err := hookPlan(t, plumbBin)
+		path, _, states, err := hookPlan(t, plumbBin, false)
 		if err != nil {
 			report.clientError(t, err)
 			continue
@@ -43,9 +45,39 @@ func runHooksStatus(cmd *cobra.Command) error {
 		if note := identityHookSkewNote(t, states, probeDaemonIdentity); note != "" {
 			report.note(note)
 		}
+		if note := contextHintStatusNote(t, states, configHintsOn); note != "" {
+			report.note(note)
+		}
 	}
 	report.render(nil, cmd)
 	return nil
+}
+
+// configHintsOn reads [context] hints from the global config; an unreadable
+// config reads as the default, off.
+func configHintsOn() bool {
+	cfg, err := config.Load()
+	return err == nil && cfg.Context.Hints
+}
+
+// contextHintStatusNote says where a client's experimental context hints stand:
+// not installed, installed but off, or on. It is one line, not table rows,
+// because an opt-in feature a user never installed is not a missing hook.
+func contextHintStatusNote(t hooksTarget, states []hookState, configOn func() bool) string {
+	if t.contextEntries == nil {
+		return ""
+	}
+	installed := slices.ContainsFunc(states, func(s hookState) bool {
+		return slices.Contains(contextHintEvents, s.entry.event) && s.state != hookStateMissing
+	})
+	switch {
+	case !installed:
+		return fmt.Sprintf("%s — context hints (experimental): not installed. `plumb hooks install %s --context` adds them.", t.name, t.use)
+	case contextHintsEnabled(configOn):
+		return t.name + " — context hints (experimental): on."
+	default:
+		return t.name + " — context hints (experimental): installed, off. Turn on with [context] hints = true or PLUMB_CONTEXT_HINTS=on."
+	}
 }
 
 // identityHookSkewNote explains an identity hook that is stamping nothing, or

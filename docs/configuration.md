@@ -759,6 +759,47 @@ memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
 agent supplies the text; no LLM summary.
 
+## `[context]` — advisory context hints (experimental, global only)
+
+```toml
+[context]
+hints = false   # default
+```
+
+Experimental and opt-in. `plumb hooks install <client> --context` adds two
+hint-only hook handlers (UserPromptSubmit and SubagentStart), and `hints = true`
+(or `PLUMB_CONTEXT_HINTS=on`) turns hints on. The explicit `context_for_task`
+tool is the supported path; hints point at it. When on, a hook can put a short,
+advisory hint in front of an agent: a few code selectors with their locations, never
+source, documentation, memory or mail text. A hint is offered when a prompt names
+files or symbols explicitly (backticked selectors and path-shaped tokens; the
+prompt itself never leaves the hook process), after a resume or compaction, and
+when a subagent starts. A hint is for the workspace the session already uses.
+The first prompt of a session usually arrives before its first plumb call, when
+the daemon does not know the session yet. That prompt is hinted from the
+workspace the hook runs in, but only when a running plumb session already serves
+that workspace, and the hint says so. It never attaches or moves a workspace.
+Hints are capped at 1 KiB per turn and 8 KiB per
+logical agent, and neither a compaction nor a daemon restart refills the
+allowance. Asking for a hint never counts as reading a file: the edit guards
+still require an explicit read.
+
+`PLUMB_CONTEXT_HINTS` overrides `hints` in either direction (`on`/`1`/`true`,
+`off`/`0`/`false`), and the hook reads it from its own environment as well as
+the daemon's. Off costs nothing: an installed hook still starts, but with
+`PLUMB_CONTEXT_HINTS=off`, or with it unset and `hints = false`, it does not
+call the daemon, and a daemon asked while off answers without touching the
+ledger. To remove
+the hint-only hooks, run `plumb hooks uninstall <client> --only context`; the
+SessionStart hook stays, because it also links the session. `plumb hooks` says
+whether hints are not installed, installed but off, or on.
+
+The daemon keeps one bounded observation ledger for hints, `context_hints.db`
+in the data directory, created by the first request that finds hints on (a user
+who never turns them on has none): metadata only (session, agent, event, capped
+selectors, bytes, outcome), at most 1000 rows and 1 MiB per workspace, seven
+days. A project config's `[context]` has no effect.
+
 ## `[rastro]` — Rastro associative-memory integration
 
 ```toml

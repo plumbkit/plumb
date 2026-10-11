@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -166,9 +167,9 @@ func TestInstallHooksAt_MigratesLegacyScriptHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range states {
-		if s.entry.event == "PreToolUse" {
-			// The identity hook postdates the shell recipe: nothing legacy
-			// to migrate, so it is simply missing until installed.
+		if !slices.Contains(legacyClaudeHookEvents, s.entry.event) {
+			// The identity and context-hint hooks postdate the shell recipe:
+			// nothing legacy to migrate, so each is simply missing until installed.
 			if s.state != hookStateMissing {
 				t.Errorf("%s state = %q, want missing", s.entry.label, s.state)
 			}

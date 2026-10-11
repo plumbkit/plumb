@@ -121,6 +121,9 @@ type claudeHookInput struct {
 	StopHookActive bool   `json:"stop_hook_active"`
 	// Source is SessionStart's reason: startup, resume, clear or compact.
 	Source string `json:"source"`
+	// Prompt is UserPromptSubmit's text. It never leaves the hook process: only
+	// the explicit selectors promptSelectors lifts out of it are sent.
+	Prompt string `json:"prompt"`
 	// PreToolUse fields. AgentID is present only inside a subagent; ToolInput
 	// is the tool's arguments, which the identity hook echoes back with one
 	// key added (updatedInput replaces the whole input).
@@ -150,6 +153,10 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 		return nil
 	case "SessionStart":
 		runClaudeSessionStart(input, notifyConversationCleared, os.Stdout)
+		fmt.Fprint(os.Stdout, claudeContextHintOutput(input, askContextHint))
+		return nil
+	case "UserPromptSubmit", "SubagentStart":
+		fmt.Fprint(os.Stdout, claudeContextHintOutput(input, askContextHint))
 		return nil
 	case "Stop":
 		wake := claudeStopHook(input, hookWakeProbe)

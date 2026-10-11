@@ -117,6 +117,9 @@ var defaults = Config{
 		IdleSummaryMinutes:  0,
 		GeneratedMemoryKeep: 50,
 	},
+	// Experimental and opt-in: hooks-as-primary promotion was stopped by the
+	// PLAN-462 guidance pilot.
+	Context: ContextConfig{Hints: false},
 	Collab: CollabConfig{
 		PeerAwareness:    true,
 		HintBudgetBytes:  512,

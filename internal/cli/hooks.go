@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -79,12 +80,28 @@ named one. Only plumb's own handlers go — hooks the user wrote on the same
 events survive, the file is backed up first, and a client plumb has no hooks in
 is a no-op. Hooks installed by an earlier plumb, including the hand-installed
 shell scripts plumb's own recipe documented, are recognised and removed too;
-script files on disk are left alone.`,
+script files on disk are left alone.
+
+--only context removes just the advisory context-hint handlers
+(UserPromptSubmit, SubagentStart) and leaves session linkage, mailbox and
+identity hooks in place. The SessionStart handler also carries the session
+linkage, so it stays; [context] hints = false or PLUMB_CONTEXT_HINTS=off
+silences the hint it adds.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error { return runHooksUninstall(args) },
 }
 
+// hooksUninstallOnly narrows `plumb hooks uninstall` to one group of handlers.
+var hooksUninstallOnly string
+
+// hooksInstallContext opts a client into the advisory context-hint handlers.
+var hooksInstallContext bool
+
 func init() {
+	hooksUninstallCmd.Flags().StringVar(&hooksUninstallOnly, "only", "",
+		"remove only this group of plumb's handlers: context")
+	hooksInstallCmd.Flags().BoolVar(&hooksInstallContext, "context", false,
+		"also install the experimental advisory context-hint handlers (then turn hints on with [context] hints = true or PLUMB_CONTEXT_HINTS=on)")
 	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd)
 }
 
@@ -136,7 +153,7 @@ func runHooksInstall(args []string) error {
 		report.note(fmt.Sprintf("Could not create the resume proof key (%v); a replacement serve will resume by name only.", err))
 	}
 	for _, t := range targets {
-		path, entries, before, err := hookPlan(t, plumbBin)
+		path, entries, before, err := hookPlan(t, plumbBin, hooksInstallContext)
 		if err != nil {
 			report.clientError(t, err)
 			continue
@@ -160,6 +177,10 @@ func runHooksInstall(args []string) error {
 // registration: removing a registration and then being unable to remove its
 // hooks would be the wrong way round.
 func runHooksUninstall(args []string) error {
+	only, err := hooksUninstallScope(hooksUninstallOnly)
+	if err != nil {
+		return err
+	}
 	PrintLogo()
 	targets, _, err := resolveHooksTargets(args, false)
 	if err != nil {
@@ -172,17 +193,22 @@ func runHooksUninstall(args []string) error {
 
 	report := newHookReport()
 	for _, t := range targets {
-		path, _, before, err := hookPlan(t, plumbBin)
+		path, _, before, err := hookPlan(t, plumbBin, false)
 		if err != nil {
 			report.clientError(t, err)
 			continue
 		}
-		removed, err := removeHooksAt(path, t.ours)
+		before = only.states(before)
+		removed, err := removeHooksAt(path, only.ownership(t.ours))
 		if err != nil {
 			report.clientError(t, err)
 			continue
 		}
 		report.group(t, path, before, uninstallAction)
+		if only.events != nil {
+			report.note(fmt.Sprintf("%s: the SessionStart hook stays (it also links the session); "+
+				"set [context] hints = false or PLUMB_CONTEXT_HINTS=off to silence its hint.", t.name))
+		}
 		// Every handler plumb owns goes, including one an older plumb installed
 		// on an event this version no longer writes. Saying so keeps the count
 		// in the output honest when it exceeds the rows above.
@@ -198,12 +224,29 @@ func runHooksUninstall(args []string) error {
 // hookPlan resolves one client's config path, the entries this binary would
 // write, and their current state on disk — the common preamble of both writers
 // and of the status table.
-func hookPlan(t hooksTarget, plumbBin string) (path string, entries []hookEntry, before []hookState, err error) {
+//
+// The opt-in context-hint entries are part of the plan when withContext asks
+// for them or when any of them is already installed: present ones are kept
+// fresh and reported, absent ones are neither written nor listed as missing.
+func hookPlan(t hooksTarget, plumbBin string, withContext bool) (path string, entries []hookEntry, before []hookState, err error) {
 	path, err = t.pathFn()
 	if err != nil {
 		return "", nil, nil, fmt.Errorf("locating %s hooks config: %w", t.name, err)
 	}
 	entries = t.entries(plumbBin)
+	if t.contextEntries != nil {
+		ctx := t.contextEntries(plumbBin)
+		if !withContext {
+			states, err := hookStatesAt(path, ctx, t.ours)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			withContext = slices.ContainsFunc(states, func(s hookState) bool { return s.state != hookStateMissing })
+		}
+		if withContext {
+			entries = append(entries, ctx...)
+		}
+	}
 	before, err = hookStatesAt(path, entries, t.ours)
 	if err != nil {
 		return "", nil, nil, err

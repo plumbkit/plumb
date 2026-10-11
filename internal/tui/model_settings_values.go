@@ -373,6 +373,8 @@ func boolFieldCollab(c *config.Config, key settingKey) *bool {
 		return &c.Collab.PeerAwareness
 	case skCollabIntents:
 		return &c.Collab.Intents
+	case skContextHints:
+		return &c.Context.Hints
 	case skCollabMailbox:
 		return &c.Collab.Mailbox
 	case skCollabCrossProject:
@@ -552,6 +554,8 @@ func toggleLabelMore(key settingKey) string {
 		return "peer awareness"
 	case skCollabIntents:
 		return "intents"
+	case skContextHints:
+		return "context hints"
 	case skCollabMailbox:
 		return "mailbox"
 	case skCollabCrossProject:
