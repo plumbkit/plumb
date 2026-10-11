@@ -162,23 +162,35 @@ func TestGit_ReadTierRefusesAnArgumentOutsideTheRepo(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(repo, "escape")); err != nil {
 		t.Fatal(err)
 	}
+	// A directory whose name starts with "-": after "--", git reads "-x/../<path>"
+	// as a path, and with -x present it resolves out of the repository.
+	if err := os.Mkdir(filepath.Join(repo, "-x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	tool := NewGit(WriteDeps{}, nil)
 	for _, args := range [][]string{
-		{rel, "init.txt"},               // implicit no-index, relative
-		{"--stat", outside, "init.txt"}, // absolute
-		{"--", "init.txt", outside},     // after --
-		{"escape", "init.txt"},          // a symlink inside that resolves outside
+		{rel, "init.txt"},                  // implicit no-index, relative
+		{"--stat", outside, "init.txt"},    // absolute
+		{"--", "init.txt", outside},        // after --
+		{"--", "init.txt", "-x/../" + rel}, // after --, a path that starts with "-"
+		{"escape", "init.txt"},             // a symlink inside that resolves outside
 	} {
 		out, err := callGit(t, tool, map[string]any{"subcommand": "diff", "args": args, "repo": repo})
-		if err == nil || strings.Contains(out, "secret-line-1") {
+		// The refusal itself, not any error: a no-index diff with differences exits
+		// 1, which the tool reports as a failure — that would hide the output by
+		// accident and pass a weaker assertion.
+		if err == nil || !strings.Contains(err.Error(), "outside the repository") || strings.Contains(out, "secret-line-1") {
 			t.Errorf("diff %v must be refused before git runs; got %v\n%s", args, err, out)
 		}
 	}
-	// Positive control: git really does print the outside file for the first form.
-	cmd := exec.Command("git", "diff", rel, "init.txt")
-	cmd.Dir = repo
-	if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "secret-line-1") {
-		t.Fatalf("control: git diff did not read the outside file, so the refusal proves nothing:\n%s", out)
+	// Positive controls: git really does print the outside file for the first
+	// form and for the dash-led path after "--".
+	for _, control := range [][]string{{"diff", rel, "init.txt"}, {"diff", "--", "init.txt", "-x/../" + rel}} {
+		cmd := exec.Command("git", control...)
+		cmd.Dir = repo
+		if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "secret-line-1") {
+			t.Fatalf("control: git %v did not read the outside file, so the refusal proves nothing:\n%s", control, out)
+		}
 	}
 	// Reads that stay inside are untouched: a path, a revision, a missing pathspec.
 	for _, args := range [][]string{{"HEAD", "--", "init.txt"}, {"HEAD~0"}, {"--", "no/such/path"}} {

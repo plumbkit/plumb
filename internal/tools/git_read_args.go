@@ -111,15 +111,21 @@ func readRefusalName(r readRefusal) string {
 // checkReadArgPaths refuses a read whose arguments name an existing path outside
 // the repository at root — the net behind readRefusals for the cases no option
 // marks, such as diff's implicit no-index mode. It looks at every argument that
-// does not start with "-" and at every long option's joined value, resolves a
-// relative one against root (git's working directory), and refuses it when it
+// does not start with "-", at every long option's joined value, and at EVERY
+// argument after "--" or "--end-of-options" — git reads those as paths whatever
+// they spell, a leading "-" included. It resolves a relative one against root (git's working directory), and refuses it when it
 // exists and its real location is not inside root. A revision, a pathspec that
 // matches nothing on disk, or a path inside the repository passes untouched.
 func checkReadArgPaths(root string, args []string) error {
 	canonRoot := paths.Canonical(root)
+	endOfOptions := false
 	for _, a := range args {
 		candidate := a
-		if strings.HasPrefix(a, "-") {
+		if !endOfOptions && isEndOfOptions(a) {
+			endOfOptions = true
+			continue
+		}
+		if !endOfOptions && strings.HasPrefix(a, "-") {
 			_, value, joined := strings.Cut(a, "=")
 			if !joined || !strings.HasPrefix(a, "--") {
 				continue
@@ -138,7 +144,9 @@ func checkReadArgPaths(root string, args []string) error {
 			continue
 		}
 		if !dirWithinRoot(paths.Canonical(p), canonRoot) {
-			return fmt.Errorf("git: argument %q names a path outside the repository, and the read tier only reads this repository", a)
+			return fmt.Errorf("git: argument %q names a path outside the repository, and the read tier only reads this "+
+				"repository. Any argument that resolves to an existing file or directory outside it is refused, even "+
+				"a search pattern such as \"/usr\"; anchor such a pattern so it is not a path (e.g. \"^/usr\")", a)
 		}
 	}
 	return nil
@@ -148,7 +156,7 @@ func checkReadArgPaths(root string, args []string) error {
 // repository root — a git subprocess away — is resolved only when it matters.
 func readArgsNamePaths(args []string) bool {
 	for _, a := range args {
-		if !strings.HasPrefix(a, "-") || (strings.HasPrefix(a, "--") && strings.Contains(a, "=")) {
+		if !strings.HasPrefix(a, "-") || isEndOfOptions(a) || (strings.HasPrefix(a, "--") && strings.Contains(a, "=")) {
 			return true
 		}
 	}
