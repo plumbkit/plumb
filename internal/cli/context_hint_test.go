@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -248,6 +249,72 @@ func TestContextHint_PerTurnBudgetAcrossEvents(t *testing.T) {
 	// The next prompt opens a new window.
 	if r := f.svc.serve(context.Background(), prompt("conv-1", "Seed")); r.Outcome != contexthints.OutcomeEmitted {
 		t.Fatalf("a new turn was refused: %+v", r)
+	}
+}
+
+// Codex carries a turn id on prompts but not on SessionStart. Both must land in
+// the same numbered window, or a compaction inside a Codex turn spends a second
+// full allowance (cross-review S1).
+func TestContextHint_CodexTurnIDsShareTheWindowWithStarts(t *testing.T) {
+	f := newHintFixture(t)
+	f.roots["thr-1"] = hintRepo(t)
+	long := strings.Repeat("y", 150)
+	f.hinter.lines = func(tools.HintRequest) []tools.HintLine {
+		out := make([]tools.HintLine, 0, 5)
+		for range 5 {
+			out = append(out, tools.HintLine{Selector: long})
+		}
+		return out
+	}
+	codexPrompt := func(turn string) contextHintRequest {
+		return contextHintRequest{Host: "codex", Event: "UserPromptSubmit", SessionID: "thr-1", TurnID: turn, Selectors: []string{"Seed"}}
+	}
+	ctx := context.Background()
+	if r := f.svc.serve(ctx, codexPrompt("turn-A")); r.Outcome != contexthints.OutcomeEmitted || len(r.Text) < 700 {
+		t.Fatalf("turn A = %+v (len %d), want a large emitted hint", r.Outcome, len(r.Text))
+	}
+	compact := contextHintRequest{Host: "codex", Event: "SessionStart", Source: "compact", SessionID: "thr-1"}
+	if r := f.svc.serve(ctx, compact); r.Outcome != contexthints.OutcomeThrottled {
+		t.Fatalf("compaction inside turn A = %+v, want throttled (one allowance per turn)", r)
+	}
+	if r := f.svc.serve(ctx, codexPrompt("turn-A")); r.Outcome != contexthints.OutcomeThrottled {
+		t.Fatalf("turn A again = %+v, want throttled", r)
+	}
+	if r := f.svc.serve(ctx, codexPrompt("turn-B")); r.Outcome != contexthints.OutcomeEmitted {
+		t.Fatalf("turn B = %+v, want a fresh window", r)
+	}
+	if got := f.svc.window(compact); got != "w:2" {
+		t.Errorf("a start after turn B is charged to %q, want w:2", got)
+	}
+}
+
+// The per-agent state is bounded and evicts the least recently used agent, so a
+// daemon that has seen many agents still admits a new one (cross-review S2).
+func TestContextHint_AgentStateEvictsLeastRecentlyUsed(t *testing.T) {
+	f := newHintFixture(t)
+	now := time.Unix(1_700_000_000, 0)
+	f.svc.now = func() time.Time { now = now.Add(time.Second); return now }
+	agent := func(i int) contextHintRequest {
+		return contextHintRequest{Event: "UserPromptSubmit", SessionID: "conv", AgentID: strconv.Itoa(i)}
+	}
+	for i := range maxContextHintStates {
+		f.svc.window(agent(i))
+	}
+	f.svc.remember(hintAgentKey("conv", "0"), []tools.ContextSeed{{Symbol: "Kept"}}) // agent 0 is now the most recent
+	if got := f.svc.window(agent(maxContextHintStates)); got != "w:1" {
+		t.Fatalf("a new agent past the cap got %q, want its own first window", got)
+	}
+	if got := f.svc.window(agent(maxContextHintStates)); got != "w:2" {
+		t.Fatalf("the new agent's second prompt got %q, want w:2 (its state was kept)", got)
+	}
+	if n := len(f.svc.states); n != maxContextHintStates {
+		t.Fatalf("states = %d, want the cap %d", n, maxContextHintStates)
+	}
+	if _, ok := f.svc.states[hintAgentKey("conv", "1")]; ok {
+		t.Error("the least recently used agent (1) was not evicted")
+	}
+	if got := f.svc.recall(hintAgentKey("conv", "0")); len(got) != 1 || got[0].Symbol != "Kept" {
+		t.Errorf("the recently used agent lost its seeds: %+v", got)
 	}
 }
 

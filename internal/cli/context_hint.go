@@ -103,9 +103,19 @@ type contextHintService struct {
 	now     func() time.Time
 	limits  contexthints.Limits
 
-	mu    sync.Mutex
-	turns map[string]int                 // agent key → prompts seen, for hosts with no turn id
-	last  map[string][]tools.ContextSeed // agent key → the seeds behind its last emitted hint
+	mu     sync.Mutex
+	states map[string]*hintAgentState // agent key → state; at most maxContextHintStates, least recently used evicted
+}
+
+// hintAgentState is what the service remembers about one logical agent: its
+// turn window and the seeds behind its last emitted hint. Losing it to eviction
+// costs a resumed agent its seed memory and restarts its window count; it can
+// never widen an allowance, which the ledger keys by window name.
+type hintAgentState struct {
+	seq      int    // the agent's current turn window, 0 before the first
+	lastTurn string // the host turn id that opened seq, when the host has one
+	seeds    []tools.ContextSeed
+	used     time.Time
 }
 
 func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Store,
@@ -114,7 +124,7 @@ func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Stor
 	return &contextHintService{
 		hinter: hinter, ledger: ledger, resolve: resolve, enabled: enabled, now: time.Now,
 		limits: contexthints.Limits{PerTurn: contextHintPerTurn, PerAgent: contextHintPerAgent},
-		turns:  map[string]int{}, last: map[string][]tools.ContextSeed{},
+		states: map[string]*hintAgentState{},
 	}
 }
 
@@ -130,39 +140,64 @@ func hintExternal(sessionID, agentID string) string {
 	return sessionID + "/" + agentID
 }
 
-// window returns the turn window this request is charged to. A host turn id
-// wins. Otherwise each UserPromptSubmit opens a new window, and anything before
-// the first prompt (SessionStart, SubagentStart) counts toward window 1. Stop
-// is not used: it is skipped when a turn is interrupted.
+// window returns the turn window this request is charged to, as one numbered
+// sequence per agent whatever the host. A new window opens on a host turn id the
+// agent has not seen (Codex), or on a UserPromptSubmit from a host with no turn
+// ids (Claude Code). A request with no turn id — SessionStart, SubagentStart —
+// counts toward the agent's current window, or window 1 before any turn, so a
+// start and the first prompt share one allowance on every host. Stop is not
+// used: it is skipped when a turn is interrupted.
 func (c *contextHintService) window(req contextHintRequest) string {
-	if req.TurnID != "" {
-		return "t:" + req.TurnID
-	}
-	key := hintAgentKey(req.SessionID, req.AgentID)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	seq := c.turns[key]
-	if req.Event == "UserPromptSubmit" {
-		if _, ok := c.turns[key]; ok || len(c.turns) < maxContextHintStates {
-			seq++
-			c.turns[key] = seq
-		}
+	st := c.stateLocked(hintAgentKey(req.SessionID, req.AgentID))
+	switch {
+	case req.TurnID != "" && req.TurnID != st.lastTurn:
+		st.seq++
+		st.lastTurn = req.TurnID
+	case req.TurnID == "" && req.Event == "UserPromptSubmit":
+		st.seq++
 	}
-	return fmt.Sprintf("w:%d", max(seq, 1))
+	return fmt.Sprintf("w:%d", max(st.seq, 1))
+}
+
+// stateLocked returns key's state, creating it and evicting the least recently
+// used agent when the map is full. c.mu must be held.
+func (c *contextHintService) stateLocked(key string) *hintAgentState {
+	now := c.now()
+	if st, ok := c.states[key]; ok {
+		st.used = now
+		return st
+	}
+	if len(c.states) >= maxContextHintStates {
+		oldest := ""
+		for k, st := range c.states {
+			if oldest == "" || st.used.Before(c.states[oldest].used) {
+				oldest = k
+			}
+		}
+		delete(c.states, oldest)
+	}
+	st := &hintAgentState{used: now}
+	c.states[key] = st
+	return st
 }
 
 func (c *contextHintService) remember(key string, seeds []tools.ContextSeed) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.last[key]; ok || len(c.last) < maxContextHintStates {
-		c.last[key] = seeds
-	}
+	c.stateLocked(key).seeds = seeds
 }
 
 func (c *contextHintService) recall(key string) []tools.ContextSeed {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.last[key]
+	st, ok := c.states[key]
+	if !ok {
+		return nil
+	}
+	st.used = c.now()
+	return st.seeds
 }
 
 // serve answers one request and records it. It never returns an error: every
