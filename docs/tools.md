@@ -367,7 +367,13 @@ record is left untouched and a later reconnect resumes the identity properly.
 Addressing a session pinned to a **different workspace** is refused up front
 unless *that* project has already set `[collab] cross_project = true` — the
 send fails with a clear reason rather than being accepted only to sit
-unclaimed until it expires. Once confirmed, cross-project messages are stored
+unclaimed until it expires. The exception is another checkout of the **same
+repository**: a linked worktree and its main checkout, sibling worktrees, or a
+submodule and its superproject (either way round, and transitively). Those are
+one project and need no opt-in. Membership is git ownership verified on disk,
+never path nesting: a worktree's link must be confirmed by the back-link git
+writes inside the repository's own `.git`, so a plain directory nested in a
+project, or a repository cloned inside it, is still another project. Once confirmed, cross-project messages are stored
 in a daemon-level database, never in the recipient's directory — no session
 ever writes into another project's workspace — and are labelled with the
 sending project when read. `next` is always same-project: "whoever attaches

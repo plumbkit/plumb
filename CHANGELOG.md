@@ -175,6 +175,28 @@
     with no bodies, reads, memories, documents or language server, an ambiguous
     selector as a gap and never as candidate lines, bounded by bytes and a deadline.
 
+### Changed
+
+- **Mail between worktrees and submodules of one repository no longer needs
+  `cross_project` (#635).** A session pinned to a nested worktree could not
+  `leave_note` a peer pinned to the enclosing checkout: any two workspace roots
+  counted as two projects, so the note needed the recipient's
+  `[collab] cross_project` opt-in, which is off by default. Two checkouts of one
+  repository family are now one project for mail, either way round: a linked
+  worktree and its main checkout, sibling worktrees, and a submodule and its
+  superproject, transitively. **Boundary change:** a submodule and its
+  superproject, such as a public repository checked out inside a private one,
+  now exchange mail without consent in both directions. Membership is git
+  ownership verified on disk, never path nesting. A worktree's `.git` link must
+  be confirmed by the back-link git writes inside the repository's own `.git`,
+  and a `.git` symlink is refused, so a plain directory nested in a project, or
+  a repository cloned inside it, is still another project. The note records the
+  sender's git common directory when it is sent, and the reader re-verifies it.
+  A note from a worktree removed after sending is therefore still delivered and
+  still wakes its recipient. Every mail reader applies the same rule:
+  `check_messages`, the preview, the Stop-hook wake, thread replies,
+  `workspace_sessions`, and `plumb mail`. No read path runs git.
+
 ### Fixed
 
 - **A revoked resume credential no longer breaks continuity for good.** A
