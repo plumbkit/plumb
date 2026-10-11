@@ -22,17 +22,24 @@
   links a bare `F()` to a function of the caller's own directory and package
   clause (every build-tag variant), `r.M()` inside `func (r *T)` to `T`'s method,
   and `p.M()` on a parameter declared `p *T` or `p *pkg.T` to that type's method
-  (exported only across packages). On plumb's own tree cross-file call edges rose
-  from 3,719 to 18,209 (13.2% of call sites), and the graph holds 64.5% of the
-  cross-file caller→callee pairs the Go type checker finds, against 10% before.
-  Checked against the type checker on every edge, the new edges are 99.92% right;
-  the misses are a local value shadowing a package function's name, which is why
-  they carry confidence 0.85. A method call on a local variable or a field stays
-  unresolved and counted. `topology_status` now accounts for every call site in
-  eight buckets and prints the split by kind. On a large Go index a
-  `context_for_task` pack is also about 5x faster (warm p95 222 ms on plumb's
-  retrospective tasks): admitting derived edges no longer counts every edge in the
-  index once per declaration it expands.
+  (exported only across packages). On plumb's own tree the call sites resolved
+  across files rose from 3,719 to 18,206 (13.2% of call sites), and the graph holds
+  64.5% of the cross-file caller→callee pairs the Go type checker finds, against
+  10% before. Checked against the type checker on every edge, none of the new ones
+  is wrong (14,050 of 14,050 judgeable). The extractor now marks a call on a
+  receiver with no name (`f().M()`, `x.(T).M()`, `r[k].M()`) and a bare call of a
+  name the function declares itself, so neither can be read as a call of a package
+  function; the topology index is rebuilt once on upgrade (schema 6) to pick that
+  up. The new edges carry confidence 0.85, below the qualified tier's 0.9: a local
+  re-declaring a receiver or parameter name is the residual risk. A method call on
+  a local variable or a field stays unresolved and counted. `topology_status` now
+  accounts for every call site in eight buckets and prints the split by kind. On a
+  large Go index a `context_for_task` pack is also about 5x faster (warm p95 222 ms
+  on plumb's retrospective tasks): admitting derived edges no longer counts every
+  edge in the index once per declaration it expands. Its pack also spends less of
+  the budget on frame text: a related declaration whose body follows prints its
+  signature once (in the body, or on the omission line if the body is cut), and
+  documents left unread for one reason share one gap line.
 
 - **Experimental, opt-in context hints for Claude Code and Codex.**
   `plumb hooks install <client> --context` adds two advisory handlers,

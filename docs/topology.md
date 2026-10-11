@@ -336,40 +336,43 @@ indices into that file's own node slice, so nothing they produce can name a symb
 another file; every cross-file call edge comes from this resolver.
 
 **Read the reach number before you read the graph.** Measured on plumb's own tree
-(1,846 indexed files, Go only):
+(1,849 indexed files, Go only):
 
 | | |
 |---|---:|
-| recorded Go call sites | 137,944 |
-| cross-file `call-resolver` edges (sites) | **18,209** |
-| …package-qualified `pkg.F()` | 3,757 |
-| …bare same-package `F()` | 12,950 |
+| recorded Go call sites | 138,051 |
+| call sites resolved into cross-file `call-resolver` edges | **18,206** |
+| …package-qualified `pkg.F()` | 3,758 |
+| …bare same-package `F()` | 12,946 |
 | …on the method's own receiver `r.M()` | 1,040 |
 | …on a typed parameter `p.M()` | 462 |
-| …with a non-`_test.go` caller | 5,376 |
+| …with a non-`_test.go` caller | 5,373 |
 | **share of all call sites resolved across files** | **13.2%** |
-| same-file calls the extractor links directly | 13,765 (10.0%) |
+| same-file calls the extractor links directly | 13,771 (10.0%) |
 
-Every call site lands in exactly one bucket, and the eight add up to the 137,944 above —
+Every call site lands in exactly one bucket, and the eight add up to the 138,051 above —
 that is what makes this a measurement rather than an impression:
 
 | call-site bucket | |
 |---|---:|
-| resolved into a cross-file edge | 18,209 |
-| method call on another receiver (a local, a field chain, a returned value), left unresolved | 53,729 |
-| qualified call leaving the indexed tree (stdlib, third party) | 30,271 |
-| bare call naming no function of the package (builtin, local value, conversion) | 17,921 |
-| bare or receiver call whose target is in the same file (the extractor's edge) | 13,765 |
-| repeat of a caller→target edge already emitted | 4,043 |
+| resolved into a cross-file edge | 18,206 |
+| method call on another receiver (a local, a field chain, a returned or indexed value), left unresolved | 56,966 |
+| qualified call leaving the indexed tree (stdlib, third party) | 30,289 |
+| bare call naming no function of the package (builtin, local value, conversion) | 14,775 |
+| bare or receiver call whose target is in the same file (the extractor's edge) | 13,771 |
+| repeat of a caller→target edge already emitted | 4,038 |
 | names no exported top-level function in the target package | 6 |
 | no enclosing declaration to hang the edge on | 0 |
 
 **How good the edges are.** Checked against the Go type checker (`go/packages`) on every
-edge, not a sample: the package-qualified tier is exact (3,489 of 3,489 judgeable edges),
-and the three newer tiers are right 99.92% of the time (13,977 of 13,988; the 11 misses
-are all a local value shadowing a package function's name, `walk := …; walk()`). Of the
-cross-file caller→callee pairs the type checker finds, the graph holds **64.5%**: every
-function call, same-package or not, but only 15% of same-package method calls and 7% of
+edge, not a sample, none is wrong: 3,528 of 3,528 judgeable package-qualified edges and
+14,050 of 14,050 from the three newer tiers (the rest point at a file the type checker
+did not load for this platform). Two extractor markers are what keep it there: a call on a
+receiver with no name (`f().M()`, `x.(T).M()`, `r[k].M()`) is never read as a bare call,
+and a bare call of a name the function declares itself (`walk := …; walk()`) is counted as
+a local value, not linked to the package function of the same name. Of the cross-file
+caller→callee pairs the type checker finds, the graph holds **64.5%**: every function
+call, same-package or not, but only 15% of same-package method calls and 7% of
 cross-package ones.
 
 `topology_status` prints these for your own workspace. The Go extractor parses with
@@ -396,8 +399,13 @@ callable, so textual receiver matching would manufacture wrong edges at scale.
   imported package for `db.DB` (exported methods only). A parameter shadows an import of
   the same name, as in Go.
 
-The last three carry confidence **0.85** (the qualified tier 0.9): their residual risk is
-a local value re-declaring the name. A target in the caller's own file is left to the
+The last three carry confidence **0.85** (the qualified tier 0.9). Their residual false
+edges are known shapes, none seen on plumb's tree: a loop or closure variable re-declaring
+the receiver's or a parameter's name; a type parameter named like a package type
+(`func F[Store any](s Store)`), since type parameters are not in the stored signature;
+several `//go:build ignore` `package main` programs in one directory, which share one
+package key; and a directory with more than one non-test package clause, where an
+import resolves to the last one seen. A target in the caller's own file is left to the
 extractor's intra-file edge rather than written twice.
 
 One shape is invisible to this: Go does not require a package's name to match its
