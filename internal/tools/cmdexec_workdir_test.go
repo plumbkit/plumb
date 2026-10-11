@@ -23,7 +23,7 @@ func TestRunArgv_MissingWorkingDirIsNamed(t *testing.T) {
 			return RunArgv(context.Background(), missing, []string{"echo", "hi"}, time.Minute)
 		},
 		"RunTaskArgv": func() (ExecResult, error) {
-			return RunTaskArgv(context.Background(), missing, []string{"echo", "hi"}, nil, time.Minute)
+			return RunTaskArgv(context.Background(), missing, []string{"echo", "hi"}, nil, nil, time.Minute)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -121,6 +121,17 @@ type WriteDeps struct {
 	// Used by transaction_apply to locate .plumb/tx-log/ for the durable
 	// rollback log. nil or a function returning "" disables the txlog.
 	WorkspaceFn func(ctx context.Context) string
+	// TaskEnvRefusal, when non-nil, refuses a run_task call's per-call env
+	// changes (its env and unset arguments): the name shape, the loader and
+	// execution-steering taxonomy, and one name in both lists. The cli seam wires
+	// config.ValidateTaskEnvOverrides, because that taxonomy is config's and this
+	// package does not import config.
+	//
+	// nil means run_task REFUSES any env/unset argument rather than applying an
+	// unvalidated one. That direction is deliberate: a second NewTasks caller with
+	// its own resolver must not be able to skip the rule by forgetting to wire it
+	// (#634 review).
+	TaskEnvRefusal func(set map[string]string, unset []string) error
 	// ShowWriteDiff, when true, appends a diff of the change to every
 	// content-changing write response: create, update, delete, rename, copy and
 	// revert alike (write_diff_response.go owns the policy). Defaults to true

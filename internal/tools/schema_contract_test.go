@@ -157,6 +157,11 @@ var nestedSchemaExemptions = map[string]string{
 	// the config allowlist, not by the schema). It declares no "properties",
 	// so additionalProperties:false would reject every legitimate key.
 	"agent_config.set": "free-form key/value config batch, no fixed property set",
+	// run_task's "env" is a free-form NAME -> value map for the same reason: the
+	// variable names ARE the keys, and each one is checked downstream by
+	// config.ValidateTaskEnvOverrides (shape, loader denial, and the
+	// execution-steering taxonomy), not by a fixed property set.
+	"run_task.env": "free-form environment NAME -> value map, validated by ValidateTaskEnvOverrides",
 }
 
 // TestNestedSchemasRejectUnknownProperties guards the nested-args contract

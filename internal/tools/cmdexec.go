@@ -46,7 +46,7 @@ type ExecResult struct {
 //
 // Concurrency: safe for concurrent use — each call owns its process and buffers.
 func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Duration) (ExecResult, error) {
-	return runArgv(ctx, workdir, argv, nil, timeout, false)
+	return runArgv(ctx, workdir, argv, nil, nil, timeout, false)
 }
 
 // RunTaskArgv is RunArgv for a stored [tasks.<lang>] command (run_task,
@@ -56,18 +56,26 @@ func RunArgv(ctx context.Context, workdir string, argv []string, timeout time.Du
 // workdir (git_gowork.go says when, and why run_command is not included).
 // res.GoWorkOff names the go.work that was switched off.
 //
-// env is the command's [tasks.<lang>] env, already expanded (KEY=VALUE). Each
-// entry replaces an inherited one of that name, and they are in place BEFORE the
-// GOWORK decision looks at the environment, so an explicit GOWORK there is used
-// as is — the rule an inherited GOWORK already follows — and a GOENV or PATH
-// set there informs the decision the way it will inform go.
+// env is the command's [tasks.<lang>] env plus any per-call override, already
+// expanded (KEY=VALUE). Each entry replaces an inherited one of that name, and
+// they are in place BEFORE the GOWORK decision looks at the environment, so an
+// explicit GOWORK there is used as is — the rule an inherited GOWORK already
+// follows — and a GOENV or PATH set there informs the decision the way it will
+// inform go.
+//
+// unset names variables REMOVED from the child's environment once env is applied,
+// so it removes an inherited entry and a configured one alike — the shape
+// run_task's `unset` argument needs, because the configured entry is the one a
+// caller most often wants gone (GOTMPDIR). It too is applied BEFORE the GOWORK
+// decision, so unsetting GOWORK leaves that switch free to decide, exactly as
+// never setting it does.
 //
 // Concurrency: as RunArgv.
-func RunTaskArgv(ctx context.Context, workdir string, argv, env []string, timeout time.Duration) (ExecResult, error) {
-	return runArgv(ctx, workdir, argv, env, timeout, true)
+func RunTaskArgv(ctx context.Context, workdir string, argv, env, unset []string, timeout time.Duration) (ExecResult, error) {
+	return runArgv(ctx, workdir, argv, env, unset, timeout, true)
 }
 
-func runArgv(ctx context.Context, workdir string, argv, env []string, timeout time.Duration, autoGoWork bool) (ExecResult, error) {
+func runArgv(ctx context.Context, workdir string, argv, env, unset []string, timeout time.Duration, autoGoWork bool) (ExecResult, error) {
 	if len(argv) == 0 {
 		return ExecResult{}, errors.New("run task: empty command")
 	}
@@ -89,15 +97,17 @@ func runArgv(ctx context.Context, workdir string, argv, env []string, timeout ti
 	// config.ParseTaskCommand. The argv is never built from agent free-text.
 	cmd := exec.CommandContext(cctx, argv[0], argv[1:]...) //nolint:gosec // see comment above
 	cmd.Dir = workdir
-	if len(env) > 0 {
+	if len(env) > 0 || len(unset) > 0 {
 		// cmd.Environ(), not os.Environ(): for a nil Env it is the inherited
 		// environment plus PWD=<workdir>, which os/exec adds only while Env is nil.
+		// Sets first, removals second: a removal has to beat an entry env just
+		// applied, which is the whole point of run_task's `unset`.
 		child := cmd.Environ()
 		for _, kv := range env {
 			k, v, _ := strings.Cut(kv, "=")
 			child = withEnvVar(child, k, v)
 		}
-		cmd.Env = child
+		cmd.Env = withoutEnvVars(child, unset)
 	}
 	goWorkOff := ""
 	if autoGoWork {
@@ -144,4 +154,26 @@ func networkLabel(denied bool) string {
 		return "off"
 	}
 	return "on"
+}
+
+// withoutEnvVars returns env without every entry naming one of keys. Every
+// entry, not the first: os/exec keeps the LAST duplicate, so removing one and
+// leaving another would leave the variable set. A nil keys (the mutation_test
+// and CLI paths) returns env unchanged.
+func withoutEnvVars(env []string, keys []string) []string {
+	if len(keys) == 0 {
+		return env
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		if k, _, _ := strings.Cut(e, "="); drop[k] {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }

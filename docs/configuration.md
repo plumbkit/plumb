@@ -1716,8 +1716,41 @@ code runs (`PATH`, `GOFLAGS`, `GOENV`, `GOPROXY`, `CC`, `HOME`, `GIT_*`, `CGO_*`
 (`^[A-Za-z_][A-Za-z0-9_]*$`), values may not contain NUL, and the dynamic-loader
 injection variables `LD_PRELOAD`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and
 `DYLD_FORCE_FLAT_NAMESPACE` are refused in every layer: they run extra code in
-every process a command starts, and no build or test needs them. `env` is not
-agent-writable.
+every process a command starts, and no build or test needs them. The table itself
+is config-only; a single call's own changes are the subsection below.
+
+**Per-call overrides — `run_task`'s `env` and `unset`.** The table above is the
+project's standing environment; a call may change the environment for itself
+without touching it. `env = { MODE = "experiment" }` sets names for that call,
+and `unset = ["GOTMPDIR"]` removes them — an inherited entry and a table entry
+alike, so a stored command that mirrors CI's temp directory can be reproduced
+under the system one. Values take the same `{workspace}` and `{working_dir}`
+placeholders, a `GOTMPDIR`/`TMPDIR` inside the workspace is created for them the
+same way, and the response lists what was applied, noting any value that replaced
+a table entry or removed one.
+
+The constraint is the point, and it cuts both ways. A name that decides *which
+program or code* a command runs — `PATH`, `GOFLAGS`, `GOWORK`, `GOENV`, `GOPROXY`,
+`CC`, `HOME`, `GIT_*`, `CGO_*`, `NODE_OPTIONS`, `PYTHONPATH`, `RUSTC_WRAPPER`,
+`CARGO_TARGET_*`, `DYLD_*`, `MAKEFLAGS`, … — is refused whether a call sets it or
+removes it: setting one replaces what the stored command runs, and removing a
+configured `GOFLAGS=-mod=vendor` or `GOWORK=off` changes what it builds just as
+surely — the state being removed is the one `plumb trust` approved. The
+dynamic-loader variables above are refused here too. A project that needs one of
+these writes it in the table, where `plumb trust` lists it and flags it.
+
+That refusal list is a **guard rail, not a boundary**, and it cannot be completed:
+`make` imports every variable of its environment as a make variable, so any name a
+Makefile reads with `?=` — or leaves undefined — steers that build by name alone.
+The table's `plumb trust` gate is the real consent; the per-call rule exists so a
+call cannot change what a trusted command does through the names that list is
+known to read, and what `run_task` promises is the argv: the stored command, with
+no shell and no agent-supplied command line. Everything else about a per-call
+change is the shape rule — a portable name, one bounded line with no control
+characters, at most 4096 bytes, no
+unknown `{…}` token (refused here exactly as it is at load, so a typo does not
+reach the command as literal text), at most 64 names in one call — and naming one
+variable in both lists is refused as contradictory.
 
 ## `[[command]]` / `[commands]` — safe command execution
 

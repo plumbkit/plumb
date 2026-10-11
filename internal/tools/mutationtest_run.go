@@ -313,7 +313,7 @@ func (t *MutationTest) runStep(ctx context.Context, cmd TaskCommand, timeout tim
 	env := taskEnviron(cmd, ws)
 	for i, argv := range cmd.Steps {
 		out.step = i
-		res, err := RunTaskArgv(ctx, ws, argv, env, timeout)
+		res, err := RunTaskArgv(ctx, ws, argv, env, nil, timeout)
 		out.goWorkOff = firstNonEmpty(out.goWorkOff, res.GoWorkOff)
 		if err != nil {
 			out.startErr = true

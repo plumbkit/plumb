@@ -1289,12 +1289,16 @@ tree vs `base_ref` | `staged` = index vs `base_ref`), `max_findings` (default
 
 ### `run_task`
 Run a stored per-language `[tasks.<lang>]` command — no shell, bounded output
-(100 KiB/200 lines) and timeout. **Inputs:** `slot` (`build`/`lint`/`test`/`e2e`/`verify`;
+(100 KiB/200 lines) and timeout — from the workspace root, or from the task's
+`working_dir` when `[tasks.<lang>] working_dir` sets one. **Inputs:** `slot`
+(`build`/`lint`/`test`/`e2e`/`verify`;
 `verify` runs build then test), `target` (optional, fills a `{target}` placeholder;
-one shell-safe argument), `run` (optional test-name filter for a `{run}`
+one shell-safe argument — it is one positional, in practice a package), `run`
+(optional test-name filter for a `{run}`
 placeholder — `go test -run`, `pytest -k`, cargo's libtest filter — e.g.
 `TestA|TestB`), `verbose` (optional, fills a `{verbose:<flag>}` placeholder, e.g.
-`go test -v` to see skipped tests), `language` (optional, see below). The shipped
+`go test -v` to see skipped tests), `language` (optional, see below), `env` and
+`unset` (optional, per-call environment changes — see below). The shipped
 go/python test defaults carry all three placeholders (rust: `{target}` and
 `{run}`); a `run` on a command without `{run}` is refused, an unplaceable
 `verbose` is noted — see
@@ -1304,6 +1308,25 @@ Commands run with the language's `[tasks.<lang>] env`, which the response lists
 command must be trusted first (`plumb trust`); defaults and global-config
 commands always run. Pairs with `topology_affected` (which says *which* tests to
 run) — the `plumb-testing` skill walks the whole post-edit loop.
+
+**`env` and `unset` change the environment, never the command.** `env` sets
+variables for that call only (`{"MODE": "experiment"}`; `{workspace}` and
+`{working_dir}` expand exactly as they do in `[tasks.<lang>] env`), and `unset`
+removes names from it — an inherited entry and a configured one alike, so
+`unset: ["GOTMPDIR"]` runs the stored command under the system temporary
+directory instead of the checkout-local one the project mirrors CI with. The
+response lists both (`env: …`, `unset: …`), and says so when a value replaced a
+configured entry or removed one. A name that decides *which program or code* the
+stored command runs (`PATH`, `GOFLAGS`, `GOWORK`, `GIT_*`, `NODE_OPTIONS`,
+`MAKEFLAGS`, `LD_PRELOAD`, …) is refused in BOTH directions — setting one
+replaces what runs, and removing a configured `GOFLAGS=-mod=vendor` or
+`GOWORK=off` changes what the command builds just as surely. A project that needs
+such a name writes it into `[tasks.<lang>] env`, where `plumb trust` lists it and
+flags it. That list is a guard rail rather than a boundary — `make` reads any
+variable, so no enumeration of "names that steer execution" is ever complete —
+and what `run_task` actually promises is the argv: the stored command, with no
+shell and no agent-supplied command line. See
+[`configuration.md`](configuration.md#env--the-environment-the-commands-run-with).
 
 **Polyglot workspaces.** Without `language`, resolution uses the workspace's
 primary — the one `session_start` reports. A repo with Python and TypeScript has

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/memory"
@@ -75,10 +76,15 @@ func (s *connSession) buildWriteDeps() tools.WriteDeps {
 		CrossFileSettleFn:     func() time.Duration { return crossFileSettle(s.editsConfig()) },
 		ConcurrentWriteSkewFn: func() time.Duration { return concurrentWriteSkew(s.editsConfig()) },
 		WorkspaceFn:           s.workspaceFor,
-		Boundary:              s.writeBoundaryGuardFor,
-		Contested:             s.pinContested,
-		ShowWriteDiffFn:       func() bool { return s.editsConfig().ShowWriteDiff },
-		RelayDiffFn:           func() bool { return s.editsConfig().RelayWriteDiff },
+		// The rule a per-call run_task env change must pass, wired here because
+		// the taxonomy (a name that steers execution) is config's and
+		// internal/tools does not import config. A session that did not wire it
+		// refuses the overrides rather than applying them unchecked.
+		TaskEnvRefusal:  config.ValidateTaskEnvOverrides,
+		Boundary:        s.writeBoundaryGuardFor,
+		Contested:       s.pinContested,
+		ShowWriteDiffFn: func() bool { return s.editsConfig().ShowWriteDiff },
+		RelayDiffFn:     func() bool { return s.editsConfig().RelayWriteDiff },
 		// The response diff takes the store's own sensitive-file decision
 		// (changeSensitive, which recordHistory also uses), so content withheld
 		// from history.db is withheld from the transcript too (which leaves the

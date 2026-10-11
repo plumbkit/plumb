@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -60,16 +62,29 @@ var deniedTaskEnvKeys = map[string]bool{
 
 // steeringEnvKeys change which program, or which code, a command runs. They are
 // allowed — a toolchain on a custom PATH is ordinary — but `plumb trust` flags
-// each one a project sets, so the consent is informed.
+// each one a project sets, so the consent is informed, and a per-call run_task
+// override may not touch one at all (ValidateTaskEnvOverrides).
+//
+// This is a GUARD RAIL, not a boundary, and it cannot be completed: make imports
+// every variable of its environment as a make variable, so any name a Makefile
+// reads with ?= or leaves undefined steers that build by name alone. What it does
+// protect is the argv — the command line is still the one the project saved — and
+// every name it catches is a name a project can still choose in [tasks.<lang>]
+// env, where `plumb trust` shows it and a human consents to it.
 var steeringEnvKeys = map[string]bool{
 	"PATH": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOROOT": true, "GOENV": true,
 	"GOPROXY": true, "GOSUMDB": true, "GONOSUMDB": true, "GOINSECURE": true, "GOPRIVATE": true,
+	"GOWORK": true, "GOMODCACHE": true, "GOPATH": true,
 	"CC": true, "CXX": true, "HOME": true, "XDG_CONFIG_HOME": true,
 	"NODE_OPTIONS": true, "NODE_PATH": true, "PYTHONPATH": true, "PYTHONSTARTUP": true, "PYTHONHOME": true,
+	"PYTEST_ADDOPTS": true, "PYTEST_PLUGINS": true,
 	"RUSTC_WRAPPER": true, "RUSTC_WORKSPACE_WRAPPER": true, "RUSTFLAGS": true, "RUSTC": true,
-	"CARGO_BUILD_RUSTC_WRAPPER": true, "CARGO_HOME": true,
+	"RUSTUP_TOOLCHAIN": true, "CARGO_BUILD_RUSTC_WRAPPER": true, "CARGO_HOME": true,
 	"BASH_ENV": true, "ENV": true, "PERL5OPT": true, "PERL5LIB": true, "RUBYOPT": true, "RUBYLIB": true,
-	"JAVA_TOOL_OPTIONS": true, "LD_LIBRARY_PATH": true,
+	"JAVA_TOOL_OPTIONS": true, "JDK_JAVA_OPTIONS": true, "_JAVA_OPTIONS": true, "LD_LIBRARY_PATH": true,
+	// make reads its flags and its makefiles from the environment, ahead of
+	// anything the Makefile itself sets.
+	"MAKEFLAGS": true, "MAKEFILES": true,
 }
 
 // steeringEnvPrefixes are families of variables that steer execution the same way:
@@ -160,6 +175,132 @@ func validateTaskEnv(lang string, env map[string]string) error {
 				return fmt.Errorf("tasks.%s.env.%s: unknown placeholder %s (the placeholders are %s and %s)",
 					lang, k, p, TaskEnvWorkspace, TaskEnvWorkingDir)
 			}
+		}
+	}
+	return nil
+}
+
+// --- per-call overrides (run_task's env/unset, #634) --------------------------
+//
+// The [tasks.<lang>] env above is TRUSTED CONTENT: the project writes it, its
+// entries are in the hash `plumb trust` records, and the ones that change which
+// program or code runs are disclosed by name. A per-call override has no such
+// gate — its caller is an agent, not the project — so it is held to two rules
+// instead. Both are honest guard rails, not a sandbox, and neither is complete:
+//
+//   - A name that steers execution is refused, in BOTH directions. Setting
+//     PATH, GOFLAGS=-toolexec=… or LD_PRELOAD replaces what the stored command
+//     ends up executing; REMOVING a configured GOFLAGS=-mod=vendor or
+//     GOWORK=off changes what it builds just as surely, and the state being
+//     removed is the one the project chose and `plumb trust` approved — so "a
+//     removal can only shrink the environment" was never the safety argument it
+//     looked like. See steeringEnvKeys for what such a list cannot cover.
+//   - Every other name is a plain value in the child's environment. Nothing
+//     interprets it — the command is an argv, never a shell — so the hygiene
+//     rule is the shape one: a portable name, one bounded line with no control
+//     characters, and no unknown {…} token, which would otherwise reach the
+//     command as literal text where the same typo in config is refused at load.
+//
+// What run_task promises is the ARGV: the stored command, with no shell and no
+// agent-supplied command line. The environment is guarded, not sealed.
+
+// maxTaskEnvOverride is the longest per-call env value. The cap is hygiene
+// against a malformed client, not a limit any build or test comes near.
+const maxTaskEnvOverride = 4096
+
+// maxTaskEnvOverrides bounds how many names ONE call may change, in both
+// directions together, so a client cannot build an unbounded environment block.
+const maxTaskEnvOverrides = 64
+
+// ValidateTaskEnvOverrides refuses a run_task call's per-call env changes as a
+// whole: every name, every value, the two lists against each other, and the size
+// of the input. nil means the call may run.
+//
+// The resolver at the cli seam calls this, not the tool, because the taxonomy it
+// applies (deniedTaskEnvKeys, EnvKeySteersExecution) lives in this package and
+// internal/tools deliberately does not import config — the resolver is the one
+// layer that sees both. One rule with one owner: an agent env name half-checked
+// in the tool and half here is how the two would drift.
+//
+// Refusals are ordered deterministically (sorted names) so a call that is wrong
+// in several ways is refused for the same reason every time.
+func ValidateTaskEnvOverrides(set map[string]string, unset []string) error {
+	if len(set)+len(unset) > maxTaskEnvOverrides {
+		return fmt.Errorf("run_task: %d environment changes in one call is more than the %d allowed",
+			len(set)+len(unset), maxTaskEnvOverrides)
+	}
+	for _, name := range slices.Sorted(slices.Values(unset)) {
+		if err := validateTaskEnvOverrideName(name, "unset"); err != nil {
+			return err
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(set)) {
+		if err := validateTaskEnvOverrideName(name, TaskEnvKey); err != nil {
+			return err
+		}
+		if err := validateTaskEnvOverrideValue(name, set[name]); err != nil {
+			return err
+		}
+	}
+	// Last, so a caller who spelled the same variable in both lists hears about
+	// the variable itself first.
+	for _, name := range slices.Sorted(maps.Keys(set)) {
+		if slices.Contains(unset, name) {
+			return fmt.Errorf("run_task: %s is named in both env and unset; one call cannot set a variable and remove it", name)
+		}
+	}
+	return nil
+}
+
+// validateTaskEnvOverrideName applies the one name rule both directions share:
+// portable, and not a name that decides what the command runs. list is the
+// argument the caller used, so the refusal names the list they wrote.
+//
+// Removal is held to the same rule as setting, which is not obvious and was the
+// other way round in the first draft of this file. Taking a configured
+// `GOWORK=off` or `GOFLAGS=-mod=vendor` back out changes what the command builds
+// as surely as putting one in does, and what it removes is the state the project
+// chose and `plumb trust` approved.
+func validateTaskEnvOverrideName(name, list string) error {
+	switch {
+	case !taskEnvName.MatchString(name):
+		return fmt.Errorf("run_task: %s %q is not a valid environment variable name "+
+			"(a letter or _ first, then letters, digits or _)", list, name)
+	case deniedTaskEnvKeys[strings.ToUpper(name)]:
+		return fmt.Errorf("run_task: %s %s is refused — a dynamic-loader variable makes every process "+
+			"the command starts run extra code, and no build or test needs that", list, name)
+	case EnvKeySteersExecution(name):
+		if list == "unset" {
+			return fmt.Errorf("run_task: unset %s is refused — removing it changes what the stored "+
+				"command would run (a configured value, or one it inherits). A project that wants it "+
+				"gone changes [tasks.<lang>] env, where `plumb trust` shows it", name)
+		}
+		return fmt.Errorf("run_task: env %s is refused for a single call — it changes which program, "+
+			"or which code, the stored command runs. A project that needs it sets it in "+
+			"[tasks.<lang>] env, where `plumb trust` lists it and flags it", name)
+	}
+	return nil
+}
+
+// validateTaskEnvOverrideValue holds a per-call value to the shape a caller can
+// predict: one bounded line, and no brace token that is not one of the two
+// placeholders — the rule a config entry is refused at load for, so the same
+// typo does not reach the command as literal text here.
+func validateTaskEnvOverrideValue(name, value string) error {
+	control := func(r rune) bool { return r < 0x20 || r == 0x7f }
+	switch {
+	case strings.ContainsRune(value, 0):
+		return fmt.Errorf("run_task: env %s: a value must not contain a NUL byte", name)
+	case strings.ContainsFunc(value, control):
+		return fmt.Errorf("run_task: env %s: a value must be one line with no control characters", name)
+	case len(value) > maxTaskEnvOverride:
+		return fmt.Errorf("run_task: env %s: %d bytes is longer than the %d a per-call value may be",
+			name, len(value), maxTaskEnvOverride)
+	}
+	for _, p := range taskEnvPlaceholder.FindAllString(value, -1) {
+		if p != TaskEnvWorkspace && p != TaskEnvWorkingDir {
+			return fmt.Errorf("run_task: env %s: unknown placeholder %s (the placeholders are %s and %s)",
+				name, p, TaskEnvWorkspace, TaskEnvWorkingDir)
 		}
 	}
 	return nil
