@@ -60,6 +60,13 @@ func CheckoutAt(root string) (Checkout, bool) {
 	if info.IsDir() {
 		return Checkout{Root: canon, GitDir: dotGit, CommonDir: dotGit}, true
 	}
+	// Lstat reported what the name IS, but every read after this one follows
+	// links: a `.git` symlink to a real worktree's .git file would read that
+	// file's gitdir line, and its back-link — compared by file identity — would
+	// then name "this" checkout. Only a regular file is a link git wrote here.
+	if !info.Mode().IsRegular() {
+		return Checkout{}, false
+	}
 	gitDir, ok := readGitDirLink(dotGit, canon)
 	if !ok {
 		return Checkout{}, false
@@ -75,9 +82,16 @@ func CheckoutAt(root string) (Checkout, bool) {
 
 // SameProject reports whether two workspace roots belong to one repository family:
 // equal roots, equal common directories (a main checkout and its worktrees, or two
-// sibling worktrees), or one side's common directory inside the other side's git
-// directory (a submodule inside its superproject, either way round — and nested
-// submodules follow transitively).
+// sibling worktrees), or one side's common directory inside the other's (a
+// submodule inside its superproject, either way round — and nested submodules
+// follow transitively).
+//
+// The containing side is the COMMON directory, not the checkout's own git
+// directory, so a linked worktree of the superproject reaches the submodule just
+// as the main checkout does: the submodule's git directory sits in
+// <common>/modules/, never in <common>/worktrees/<id>/. Containment is evidence
+// for the same reason the back-link is: only the repository's owner writes inside
+// its common directory, and both sides were verified before they got here.
 //
 // It is symmetric by construction: every clause is either an equality or a
 // containment tested in both directions.
@@ -87,10 +101,14 @@ func SameProject(a, b string) bool {
 	if !oka || !okb {
 		return false
 	}
-	if samePath(ca.Root, cb.Root) || samePath(ca.CommonDir, cb.CommonDir) {
-		return true
-	}
-	return withinDir(cb.CommonDir, ca.GitDir) || withinDir(ca.CommonDir, cb.GitDir)
+	return samePath(ca.Root, cb.Root) || sameFamily(ca.CommonDir, cb.CommonDir)
+}
+
+// sameFamily is the clause SameProject and SameCommonDir share: two verified
+// common directories are one family when they are the same directory or one lies
+// inside the other.
+func sameFamily(a, b string) bool {
+	return samePath(a, b) || withinDir(a, b) || withinDir(b, a)
 }
 
 // SameCommonDir reports whether a workspace root belongs to the same project as a
@@ -100,10 +118,8 @@ func SameProject(a, b string) bool {
 // removed minutes after sending): the recorded common directory is then the only
 // side available, and the caller's own checkout is the one verified here.
 //
-// The recorded value stands in for the sender's git directory in both containment
-// directions, which is sound because the containing side in every accepted case is
-// a directory git owns: a main checkout's .git, a superproject's .git, or a
-// submodule's git directory inside one.
+// It applies exactly SameProject's family clause, so the two answers agree for any
+// pair of live checkouts: SameProject(a, b) == SameCommonDir(CheckoutAt(a).CommonDir, b).
 func SameCommonDir(stampedCommon, root string) bool {
 	if stampedCommon == "" {
 		return false
@@ -112,10 +128,7 @@ func SameCommonDir(stampedCommon, root string) bool {
 	if !ok {
 		return false
 	}
-	if samePath(stampedCommon, c.CommonDir) {
-		return true
-	}
-	return withinDir(stampedCommon, c.GitDir) || withinDir(c.CommonDir, stampedCommon)
+	return sameFamily(stampedCommon, c.CommonDir)
 }
 
 // readGitDirLink reads a checkout's `.git` FILE, "gitdir: <dir>", resolving the

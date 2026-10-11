@@ -251,3 +251,79 @@ func TestCheckoutAt_RelativeLinks(t *testing.T) {
 		t.Error("a relative .git target must still make the submodule part of the superproject")
 	}
 }
+
+func TestSameProject_RefusesASymlinkedDotGit(t *testing.T) {
+	super := mainCheckout(t, t.TempDir())
+	realWT := filepath.Join(t.TempDir(), "real")
+	linkedWorktree(t, filepath.Join(super, ".git"), "real", realWT, false)
+
+	// The forgery that file identity alone cannot see: the clone's .git is a
+	// SYMLINK to the real worktree's .git file. Reading through it yields the real
+	// gitdir line, and the back-link, compared by os.SameFile, then names "this"
+	// .git — so the probe must refuse the symlink before it reads anything.
+	evil := filepath.Join(super, "vendor", "evil")
+	if err := os.MkdirAll(evil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(realWT, ".git"), filepath.Join(evil, ".git")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, ok := CheckoutAt(evil); ok {
+		t.Error("a .git symlink must not verify, even when it points at a real worktree's link file")
+	}
+	if SameProject(super, evil) || SameProject(evil, super) {
+		t.Error("a symlinked .git must not make the clone part of the project")
+	}
+	// Positive control: the real worktree the symlink points at still verifies.
+	if !SameProject(super, realWT) {
+		t.Error("the real worktree must remain part of the project")
+	}
+}
+
+func TestSameProject_SuperprojectWorktreeAndSubmodule(t *testing.T) {
+	// A LINKED worktree of the superproject has its own git directory in
+	// <common>/worktrees/<id>, while the submodule's sits in <common>/modules/.
+	// Containment is therefore tested against the common directory: tested against
+	// the worktree's own git directory, the superproject's main checkout would
+	// reach the submodule and its worktree would not.
+	super := mainCheckout(t, t.TempDir())
+	sub := filepath.Join(super, "sub")
+	modules := submodule(t, super, "sub", sub, "../../../sub")
+	superWT := filepath.Join(t.TempDir(), "super-wt")
+	linkedWorktree(t, filepath.Join(super, ".git"), "swt", superWT, false)
+	subWT := filepath.Join(t.TempDir(), "sub-wt")
+	linkedWorktree(t, modules, "subwt", subWT, true)
+
+	for _, pair := range [][2]string{{superWT, sub}, {superWT, subWT}, {super, subWT}} {
+		if !SameProject(pair[0], pair[1]) || !SameProject(pair[1], pair[0]) {
+			t.Errorf("%s and %s are one project, either way round", pair[0], pair[1])
+		}
+	}
+}
+
+func TestSameCommonDir_AgreesWithSameProject(t *testing.T) {
+	// The read-time check sees only the stamped common directory of a sender that
+	// may be gone; for any two LIVE checkouts it must give SameProject's answer, or
+	// a note the sender was allowed to send is one its recipient cannot read.
+	super := mainCheckout(t, t.TempDir())
+	sub := filepath.Join(super, "sub")
+	modules := submodule(t, super, "sub", sub, "../../../sub")
+	superWT := filepath.Join(t.TempDir(), "super-wt")
+	linkedWorktree(t, filepath.Join(super, ".git"), "swt", superWT, false)
+	subWT := filepath.Join(t.TempDir(), "sub-wt")
+	linkedWorktree(t, modules, "subwt", subWT, false)
+	clone := mainCheckout(t, filepath.Join(super, "vendor", "clone"))
+
+	all := []string{super, sub, superWT, subWT, clone}
+	for _, a := range all {
+		ca, ok := CheckoutAt(a)
+		if !ok {
+			t.Fatalf("%s did not resolve", a)
+		}
+		for _, b := range all {
+			if got, want := SameCommonDir(ca.CommonDir, b), SameProject(a, b); got != want {
+				t.Errorf("SameCommonDir(stamp of %s, %s) = %v, SameProject = %v", a, b, got, want)
+			}
+		}
+	}
+}
