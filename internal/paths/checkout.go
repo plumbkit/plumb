@@ -58,6 +58,9 @@ func CheckoutAt(root string) (Checkout, bool) {
 		return Checkout{}, false
 	}
 	if info.IsDir() {
+		if !isGitDir(dotGit) {
+			return Checkout{}, false
+		}
 		return Checkout{Root: canon, GitDir: dotGit, CommonDir: dotGit}, true
 	}
 	// Lstat reported what the name IS, but every read after this one follows
@@ -170,6 +173,14 @@ func linkedWorktreeCommon(gitDir, dotGit string) (string, bool) {
 	if !samePath(filepath.Dir(gitDir), filepath.Join(common, "worktrees")) {
 		return "", false
 	}
+	// The commondir line is written by whoever wrote this git directory, and a
+	// forged one sitting at <A>/worktrees/<id> names <A> — any ancestor — with
+	// "../..". The parent test above cannot tell, so the claimed common directory
+	// must also BE a repository's git directory: something an attacker cannot
+	// plant in a directory it does not own.
+	if !isGitDir(common) {
+		return "", false
+	}
 	back, err := os.ReadFile(filepath.Join(gitDir, "gitdir"))
 	if err != nil {
 		return "", false
@@ -183,6 +194,9 @@ func linkedWorktreeCommon(gitDir, dotGit string) (string, bool) {
 // submoduleServes reports whether gitDir is the git directory of the submodule
 // checked out at root: its config's core.worktree must name that checkout.
 func submoduleServes(root, gitDir string) bool {
+	if !isGitDir(gitDir) {
+		return false
+	}
 	worktree := gitConfigWorktree(filepath.Join(gitDir, "config"))
 	if worktree == "" {
 		return false
@@ -214,6 +228,23 @@ func gitConfigWorktree(path string) string {
 		}
 	}
 	return ""
+}
+
+// isGitDir reports whether dir is a repository's git directory as git lays one
+// out: a regular HEAD file and an objects directory. It is the check that keeps
+// a claimed directory from being any directory at all — every common directory
+// this file accepts must pass it, because containment in one is what makes two
+// checkouts one project.
+func isGitDir(dir string) bool {
+	//nolint:gosec // G703: dir is a candidate git directory derived from a .git file and
+	// is being VERIFIED here — only stat-ed, never opened for writing or exec'd.
+	head, err := os.Lstat(filepath.Join(dir, "HEAD"))
+	if err != nil || !head.Mode().IsRegular() {
+		return false
+	}
+	//nolint:gosec // G703: as above.
+	objects, err := os.Stat(filepath.Join(dir, "objects"))
+	return err == nil && objects.IsDir()
 }
 
 // resolveAgainst makes p absolute against base when it is relative, which is how
@@ -252,9 +283,11 @@ func samePath(a, b string) bool {
 	return os.SameFile(ia, ib)
 }
 
-// withinDir reports whether child lies inside parent (or IS parent). Both sides
-// are canonicalised first, so a symlink cannot smuggle a path out of the tree it
-// names; a path that no longer exists is not inside anything.
+// withinDir reports whether child lies inside parent (or IS parent), by file
+// identity: it walks child's real ancestors and compares each with parent using
+// os.SameFile, so a symlink cannot smuggle a path out of the tree it names and a
+// case-insensitive filesystem's two spellings of one directory agree. A path that
+// no longer exists is not inside anything.
 func withinDir(child, parent string) bool {
 	if child == "" || parent == "" {
 		return false
@@ -263,13 +296,19 @@ func withinDir(child, parent string) bool {
 	if err != nil {
 		return false
 	}
-	p, err := filepath.EvalSymlinks(parent)
+	//nolint:gosec // G703: parent is a verified common directory (see samePath); only stat-ed.
+	p, err := os.Stat(parent)
 	if err != nil {
 		return false
 	}
-	rel, err := filepath.Rel(p, c)
-	if err != nil {
-		return false
+	for dir := c; ; {
+		if info, err := os.Stat(dir); err == nil && os.SameFile(info, p) {
+			return true
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			return false
+		}
+		dir = up
 	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }

@@ -195,7 +195,9 @@
   A note from a worktree removed after sending is therefore still delivered and
   still wakes its recipient. Every mail reader applies the same rule:
   `check_messages`, the preview, the Stop-hook wake, thread replies,
-  `workspace_sessions`, and `plumb mail`. No read path runs git.
+  `workspace_sessions`, and `plumb mail`. A live session in another checkout of
+  the project also counts as a peer for the wake watcher's longer window. No
+  read path runs git.
 
 ### Fixed
 

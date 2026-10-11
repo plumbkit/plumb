@@ -24,7 +24,10 @@ func TestMailWaiting_CountsSameProjectMailFromTheDaemonStore(t *testing.T) {
 	common := filepath.Join(repo, ".git")
 	wt := filepath.Join(t.TempDir(), "wt")
 	other := t.TempDir()
-	for _, dir := range []string{common, filepath.Join(other, ".git"), filepath.Join(common, "worktrees", "wt"), wt} {
+	for _, dir := range []string{
+		common, filepath.Join(common, "objects"), filepath.Join(other, ".git", "objects"),
+		filepath.Join(common, "worktrees", "wt"), wt,
+	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -33,6 +36,8 @@ func TestMailWaiting_CountsSameProjectMailFromTheDaemonStore(t *testing.T) {
 		filepath.Join(wt, ".git"):                             "gitdir: " + filepath.Join(common, "worktrees", "wt") + "\n",
 		filepath.Join(common, "worktrees", "wt", "commondir"): "../..\n",
 		filepath.Join(common, "worktrees", "wt", "gitdir"):    filepath.Join(wt, ".git") + "\n",
+		filepath.Join(common, "HEAD"):                         "ref: refs/heads/main\n",
+		filepath.Join(other, ".git", "HEAD"):                  "ref: refs/heads/main\n",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -70,5 +75,27 @@ func TestMailWaiting_CountsSameProjectMailFromTheDaemonStore(t *testing.T) {
 	who.CrossProject = true
 	if ages, err = mailWaitingIn(who, open); err != nil || len(ages) != 1 {
 		t.Fatalf("plumb mail counted %d, err %v; consent is not this probe's to grant", len(ages), err)
+	}
+}
+
+// TestMailWaiting_AnUnreadableDaemonStoreKeepsTheWorkspaceCount: the daemon-level
+// store is best-effort for this probe, so a store it cannot open or read — one an
+// older daemon wrote and has not migrated — must not cost the workspace count.
+func TestMailWaiting_AnUnreadableDaemonStoreKeepsTheWorkspaceCount(t *testing.T) {
+	ws := t.TempDir()
+	local, err := collab.Open(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = local.Close() })
+	if _, err := local.PutNote(context.Background(), collab.NoteInput{
+		AuthorSession: "bob", AuthorID: "sess-bob", Body: "local", Addressee: "alice", TTL: time.Hour,
+	}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	broken := func() (*collab.Store, error) { return nil, os.ErrPermission }
+	ages, err := mailWaitingIn(collab.Claimant{Name: "alice", ID: "sess-alice", Workspace: ws}, broken)
+	if err != nil || len(ages) != 1 {
+		t.Fatalf("ages = %v, err %v; want the workspace note counted despite the daemon store", ages, err)
 	}
 }

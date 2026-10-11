@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
@@ -295,12 +296,14 @@ func hookWakeProbe(sessionID, cwd string) (mailReport, int, bool) {
 	return report, hookPeerCount(report.Workspace, report.Session), true
 }
 
-// hookPeerCount counts the live sessions rooted at exactly this workspace, other
-// than self. Exact-root equality rather than the nearest-root rule mailReportFor
-// resolves with: a session on a parent or child root is a different workspace
-// for mail purposes, and counting it would extend a watcher for a peer that
-// cannot reach it. Every failure reads as zero peers, which costs only the
-// extension — the fail-open direction this whole path is built on.
+// hookPeerCount counts the live sessions that can write to this workspace's
+// mailbox without consent, other than self: those rooted at exactly this
+// workspace, and those in another checkout of the same repository family — a
+// worktree or a submodule, which mail this workspace as one project (#635).
+// Path nesting alone does not count: a session on a parent or child root that is
+// not the same project cannot reach this mailbox uninvited, and counting it would
+// extend a watcher for nobody. Every failure reads as zero peers, which costs only
+// the extension — the fail-open direction this whole path is built on.
 func hookPeerCount(workspace, self string) int {
 	if strings.TrimSpace(workspace) == "" {
 		return 0
@@ -315,7 +318,7 @@ func hookPeerCount(workspace, self string) int {
 		if s.Folder == "" || (self != "" && s.Name == self) {
 			continue
 		}
-		if filepath.Clean(s.Folder) == root {
+		if filepath.Clean(s.Folder) == root || paths.SameProject(root, s.Folder) {
 			n++
 		}
 	}

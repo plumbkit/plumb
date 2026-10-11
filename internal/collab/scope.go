@@ -47,7 +47,8 @@ type readScope struct {
 	args []any
 	// none reports that the scope admits no row at all — the global store, read
 	// without consent, holding nothing this workspace's project wrote — so the
-	// caller can answer without running its query.
+	// caller can answer without running its query. term is then "AND 0", so a
+	// read that forgot to check none still matches nothing.
 	none bool
 }
 
@@ -64,7 +65,7 @@ func (s *Store) scope(ctx context.Context, who Claimant, now time.Time, unreadOn
 		return sc, err
 	}
 	if len(origins) == 0 {
-		sc.none = true
+		sc.none, sc.term = true, `AND 0`
 		return sc, nil
 	}
 	marks := make([]string, len(origins))
