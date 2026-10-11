@@ -128,6 +128,13 @@ func nestedGitDir(child, parent string) bool {
 	if !ok || len(rel) == 0 {
 		return false
 	}
+	// Git writes core.worktree into every submodule git directory it creates or
+	// absorbs; a plain clone's .git/config has none, and a clone cannot ship one.
+	// Without this, a bare repository's worktree literally named "modules" would
+	// hold clones at <common>/modules/<x> in the accepted shape.
+	if gitConfigWorktree(filepath.Join(child, "config")) == "" {
+		return false
+	}
 	if rel[0] == "modules" {
 		return true
 	}
