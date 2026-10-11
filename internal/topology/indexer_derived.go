@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strings"
 )
 
 // This file holds the LIFECYCLE for the index's derived cross-file edges — the
@@ -126,7 +127,7 @@ func (idx *Indexer) planRebuild(ctx context.Context, c indexChanges) (rebuildMod
 // store before this clause existed.
 func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace string) (string, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT n.kind, n.language, f.path, n.qualified, n.name
+		`SELECT n.kind, n.language, f.path, n.qualified, n.name, n.signature
            FROM topology_nodes n
            JOIN topology_files f ON f.id = n.file_id
           WHERE n.kind = ? OR (n.kind IN (?, ?) AND n.language = 'go')`,
@@ -137,8 +138,8 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace strin
 	defer rows.Close()
 	seen := make(map[string]struct{})
 	for rows.Next() {
-		var kind, lang, p, qualified, name string
-		if err := rows.Scan(&kind, &lang, &p, &qualified, &name); err != nil {
+		var kind, lang, p, qualified, name, signature string
+		if err := rows.Scan(&kind, &lang, &p, &qualified, &name, &signature); err != nil {
 			return "", fmt.Errorf("topology: resolver surface fingerprint scan: %w", err)
 		}
 		if kind != string(KindPackage) && !isExportedName(name) {
@@ -147,6 +148,12 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace strin
 		identity := qualified
 		if identity == "" {
 			identity = name
+		}
+		if kind == string(KindFunction) {
+			// An exported function's result types are surface too: a caller in
+			// another package resolves `x := pkg.NewT(); x.M()` through them
+			// (localTypeCandidates), and its file does not change when they do.
+			identity += "\x00" + strings.Join(resultTypes(signature), ",")
 		}
 		seen[kind+"\x00"+lang+"\x00"+p+"\x00"+identity] = struct{}{}
 	}

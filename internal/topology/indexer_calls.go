@@ -37,6 +37,7 @@ const (
 	metaCallResolvedSamePkg  = "callgraph.resolved_same_package"
 	metaCallResolvedRecvSelf = "callgraph.resolved_receiver_self"
 	metaCallResolvedParam    = "callgraph.resolved_param_typed"
+	metaCallResolvedLocal    = "callgraph.resolved_local_typed"
 	metaCallSameFile         = "callgraph.same_file"
 	metaCallBareUnmatched    = "callgraph.bare_unmatched"
 )
@@ -65,8 +66,10 @@ type callResolution struct {
 	// remainder of resolved is the package-qualified tier.
 	resolvedSamePackage  int
 	resolvedReceiverSelf int
-	// resolvedParamTyped counts `p.M()` sites on a parameter with a named type.
+	// resolvedParamTyped counts `p.M()` sites on a parameter with a named type,
+	// resolvedLocalTyped `x.M()` sites on a local variable of evident type.
 	resolvedParamTyped int
+	resolvedLocalTyped int
 	unresolvedRecv     int
 	externalPackage    int
 	unmatchedTarget    int
@@ -190,6 +193,7 @@ func (r *callResolution) add(o callResolution) {
 	r.resolvedSamePackage += o.resolvedSamePackage
 	r.resolvedReceiverSelf += o.resolvedReceiverSelf
 	r.resolvedParamTyped += o.resolvedParamTyped
+	r.resolvedLocalTyped += o.resolvedLocalTyped
 	r.sameFile += o.sameFile
 	r.bareUnmatched += o.bareUnmatched
 	r.unresolvedRecv += o.unresolvedRecv
@@ -261,7 +265,7 @@ type resolvedEdge struct {
 }
 
 func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution, scoped bool) ([]resolvedEdge, error) {
-	query := `SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path
+	query := `SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path, cs.receiver_type
            FROM topology_call_sites cs
            JOIN topology_files f ON f.id = cs.file_id
           WHERE cs.language = ? AND cs.site_kind = ?`
@@ -277,9 +281,9 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 	var edges []resolvedEdge
 	for rows.Next() {
 		var fileID, enclosing int64
-		var callee, callerPath string
+		var callee, callerPath, receiverType string
 		var qualifier sql.NullString
-		if err := rows.Scan(&fileID, &enclosing, &callee, &qualifier, &callerPath); err != nil {
+		if err := rows.Scan(&fileID, &enclosing, &callee, &qualifier, &callerPath, &receiverType); err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: scan site: %w", err)
 		}
 		if qualifier.Valid && qualifier.String != QualifierLocal {
@@ -287,7 +291,7 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 		}
 		var bucket resolveBucket
 		var emitted []resolvedEdge
-		if cands, tier, ok := t.receiverCandidates(fileID, enclosing, callerPath, callee, qualifier); ok {
+		if cands, tier, ok := t.receiverCandidates(fileID, enclosing, callerPath, callee, qualifier, receiverType); ok {
 			bucket, emitted = samePackageOutcome(fileID, enclosing, cands, tier == tierBare, seen)
 			if bucket == bucketResolved {
 				r.countTier(tier)
@@ -573,6 +577,7 @@ func writeCallMeta(tx *sql.Tx, r callResolution) error {
 		{metaCallResolvedSamePkg, r.resolvedSamePackage},
 		{metaCallResolvedRecvSelf, r.resolvedReceiverSelf},
 		{metaCallResolvedParam, r.resolvedParamTyped},
+		{metaCallResolvedLocal, r.resolvedLocalTyped},
 		{metaCallSameFile, r.sameFile},
 		{metaCallBareUnmatched, r.bareUnmatched},
 	}

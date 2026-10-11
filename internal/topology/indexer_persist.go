@@ -231,8 +231,8 @@ func insertCallSites(tx *sql.Tx, fileID int64, lang string, nodeIDs []int64, sit
 	}
 	stmt, err := tx.Prepare(
 		`INSERT INTO topology_call_sites(file_id, enclosing_id, language, site_kind, callee, qualifier,
-            start_byte, start_line, first_string_arg, arg_idents, arg_count, arg_spread)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            start_byte, start_line, first_string_arg, arg_idents, arg_count, arg_spread, receiver_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("topology: prepare call site: %w", err)
 	}
@@ -252,7 +252,7 @@ func insertCallSites(tx *sql.Tx, fileID int64, lang string, nodeIDs []int64, sit
 		}
 		if _, err := stmt.Exec(fileID, enclosing, lang, string(s.Kind), s.Callee, qualifier,
 			s.StartByte, s.StartLine, firstString, strings.Join(s.ArgIdents, ","),
-			s.ArgCount, boolToInt(s.ArgSpread)); err != nil {
+			s.ArgCount, boolToInt(s.ArgSpread), s.ReceiverType); err != nil {
 			return fmt.Errorf("topology: insert call site: %w", err)
 		}
 	}

@@ -27,9 +27,9 @@ import (
 type siteCollector struct {
 	fset  *token.FileSet
 	sites []topology.CallSite
-	// locals are the names the function being walked declares itself; nil
-	// outside a function body.
-	locals map[string]bool
+	// scope is what the function being walked declares itself; the zero value
+	// outside a function body declares nothing.
+	scope localScope
 }
 
 // collectFunc walks a function declaration's body. It checks the CONCRETE
@@ -37,68 +37,17 @@ type siteCollector struct {
 // Sqrt(float64) float64` — is caught here: passed as an ast.Node it would be a
 // non-nil interface wrapping a nil pointer, sail past a `root == nil` check, and
 // panic inside ast.Walk on the first field access.
+//
+// A bare call of a name the function declares (scanLocals) is marked local
+// (topology.QualifierLocal) rather than resolved to a package function: a
+// missed edge is the price, a false one is what it avoids.
 func (c *siteCollector) collectFunc(d *ast.FuncDecl, enclosing int) {
 	if d.Body == nil {
 		return
 	}
-	c.locals = localNames(d)
+	c.scope = scanLocals(d)
 	c.collect(d.Body, enclosing)
-	c.locals = nil
-}
-
-// localNames is every name a function declaration declares for itself: its
-// receiver, parameters and results, and in its body every := and var name, range
-// variable and closure parameter or result. It is function-wide, not block-scoped,
-// so a bare call of such a name anywhere in the function is marked local
-// (topology.QualifierLocal) rather than resolved to a package function: a missed
-// edge is the price, a false one is what it avoids.
-func localNames(d *ast.FuncDecl) map[string]bool {
-	names := map[string]bool{}
-	addFields := func(fl *ast.FieldList) {
-		if fl == nil {
-			return
-		}
-		for _, f := range fl.List {
-			for _, n := range f.Names {
-				names[n.Name] = true
-			}
-		}
-	}
-	addIdents := func(exprs ...ast.Expr) {
-		for _, e := range exprs {
-			if id, ok := e.(*ast.Ident); ok {
-				names[id.Name] = true
-			}
-		}
-	}
-	addFields(d.Recv)
-	addFields(d.Type.Params)
-	addFields(d.Type.Results)
-	ast.Inspect(d.Body, func(n ast.Node) bool {
-		switch s := n.(type) {
-		case *ast.AssignStmt:
-			if s.Tok == token.DEFINE {
-				addIdents(s.Lhs...)
-			}
-		case *ast.ValueSpec:
-			for _, id := range s.Names {
-				names[id.Name] = true
-			}
-		case *ast.RangeStmt:
-			if s.Tok == token.DEFINE {
-				addIdents(s.Key, s.Value)
-			}
-		case *ast.FuncLit:
-			addFields(s.Type.Params)
-			addFields(s.Type.Results)
-		case *ast.TypeSpec:
-			// A local type: Foo(x) is a conversion to it, not a package call.
-			names[s.Name.Name] = true
-		}
-		return true
-	})
-	delete(names, "_")
-	return names
+	c.scope = localScope{}
 }
 
 // collect walks root, recording every call expression and composite-literal
@@ -140,8 +89,12 @@ func (c *siteCollector) collectValueSpec(s *ast.ValueSpec, baseIdx, nameCount in
 
 func (c *siteCollector) addCall(call *ast.CallExpr, enclosing int) {
 	callee, qualifier := calleeParts(call.Fun)
-	if qualifier == "" && c.locals[callee] {
+	if qualifier == "" && c.scope.declared(callee) {
 		qualifier = topology.QualifierLocal
+	}
+	var receiverType string
+	if isIdent(qualifier) {
+		receiverType = c.scope.receiverType(qualifier)
 	}
 	if callee == "" {
 		// A conversion (`[]byte(s)`), a call on a function literal, or a call on
@@ -160,6 +113,7 @@ func (c *siteCollector) addCall(call *ast.CallExpr, enclosing int) {
 		StartLine:    pos.Line,
 		ArgCount:     len(call.Args),
 		ArgSpread:    call.Ellipsis.IsValid(),
+		ReceiverType: receiverType,
 	}
 	for _, arg := range call.Args {
 		if lit, ok := stringLit(arg); ok && !site.HasStringArg {
