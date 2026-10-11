@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -220,11 +221,20 @@ func TestUninstallOnlyContext(t *testing.T) {
 	}
 }
 
+// hintsConfigured stands in for the user's [context] hints as the hook reads it.
+func hintsConfigured(t *testing.T, on bool) {
+	t.Helper()
+	prev := hookHintsConfigured
+	hookHintsConfigured = func() bool { return on }
+	t.Cleanup(func() { hookHintsConfigured = prev })
+}
+
 // askContextHint round-trips through a daemon's control socket: an emitted hint
 // comes back as text; an error line, a non-emitted outcome, an oversized text or
-// no daemon at all come back as nothing. The hook's own off switch travels with
-// the request.
+// no daemon at all come back as nothing. Off, by environment or by config, asks
+// the daemon nothing at all; an explicit on travels with the request.
 func TestAskContextHint(t *testing.T) {
+	configured := hintsConfigured
 	for name, tc := range map[string]struct {
 		reply string
 		want  string
@@ -237,6 +247,7 @@ func TestAskContextHint(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			probeTestEnv(t)
+			configured(t, true)
 			fakeCtrlDaemon(t, func(c net.Conn, _ string) { _, _ = c.Write([]byte(tc.reply + "\n")) })
 			if got := askContextHint(contextHintRequest{SessionID: "c", Event: "UserPromptSubmit"}); got != tc.want {
 				t.Errorf("askContextHint = %q, want %q", got, tc.want)
@@ -245,21 +256,41 @@ func TestAskContextHint(t *testing.T) {
 	}
 	t.Run("no daemon", func(t *testing.T) {
 		probeTestEnv(t)
+		configured(t, true)
 		if got := askContextHint(contextHintRequest{SessionID: "c"}); got != "" {
 			t.Errorf("askContextHint = %q with no daemon, want nothing", got)
 		}
 	})
-	for env, want := range map[string][2]bool{"off": {true, false}, "on": {false, true}, "": {false, false}} {
-		t.Run("env="+env+" travels", func(t *testing.T) {
+	for _, tc := range []struct {
+		env      string
+		config   bool
+		asks, on bool
+	}{
+		{"off", true, false, false}, // env off beats config on
+		{"", false, false, false},   // neither: the default user pays nothing
+		{"on", false, true, true},   // env on beats config off, and travels
+		{"", true, true, false},     // config on: the daemon reads its own config
+	} {
+		t.Run("env="+tc.env+"/config="+strconv.FormatBool(tc.config), func(t *testing.T) {
 			probeTestEnv(t)
-			t.Setenv(contextHintsEnv, env)
+			configured(t, tc.config)
+			t.Setenv(contextHintsEnv, tc.env)
 			got := make(chan string, 1)
 			fakeCtrlDaemon(t, func(c net.Conn, line string) { got <- line; _, _ = c.Write([]byte("ok {\"outcome\":\"noop\"}\n")) })
 			askContextHint(contextHintRequest{SessionID: "c"})
-			line := <-got
-			var req contextHintRequest
-			if json.Unmarshal([]byte(strings.TrimPrefix(line, ctrlContextHintCommand)), &req) != nil || req.Off != want[0] || req.On != want[1] {
-				t.Errorf("request %q: off=%v on=%v, want %v", line, req.Off, req.On, want)
+			select {
+			case line := <-got:
+				var req contextHintRequest
+				if !tc.asks {
+					t.Fatalf("asked the daemon %q with hints off", line)
+				}
+				if json.Unmarshal([]byte(strings.TrimPrefix(line, ctrlContextHintCommand)), &req) != nil || req.Off || req.On != tc.on {
+					t.Errorf("request %q: off=%v on=%v, want on=%v", line, req.Off, req.On, tc.on)
+				}
+			default:
+				if tc.asks {
+					t.Fatal("hints on, but the daemon was not asked")
+				}
 			}
 		})
 	}

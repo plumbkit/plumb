@@ -1,9 +1,48 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/contexthints"
 )
+
+// A daemon whose hints are off never opens the ledger, so a user who never
+// turns hints on gets no context_hints.db; the first request that finds them on
+// opens it, once (cross-review S3).
+func TestStartContextHints_LedgerOpensOnlyOnceHintsAreOn(t *testing.T) {
+	t.Setenv(contextHintsEnv, "")
+	path := filepath.Join(t.TempDir(), "context_hints.db")
+	opened := 0
+	prev := openContextHintLedger
+	openContextHintLedger = func() (*contexthints.Store, error) { opened++; return contexthints.OpenAt(path) }
+	t.Cleanup(func() { openContextHintLedger = prev })
+
+	on := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handler, closeLedger := startContextHints(ctx, newConnRegistry(), nil, func() bool { return on })
+	defer closeLedger()
+	req := contextHintRequest{Host: "claude-code", Event: "UserPromptSubmit", SessionID: "c"}
+
+	if r := handler(ctx, req); r.Outcome != contexthints.OutcomeNoop || opened != 0 {
+		t.Fatalf("hints off: outcome %q after %d opens, want noop and none", r.Outcome, opened)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("hints off created the ledger file (stat err %v)", err)
+	}
+	on = true
+	handler(ctx, req)
+	handler(ctx, req)
+	if opened != 1 {
+		t.Fatalf("ledger opened %d times once hints were on, want 1", opened)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("hints on did not create the ledger: %v", err)
+	}
+}
 
 // A hint is routed only to an identity exactly one live connection knows: none
 // or two is no root at all.

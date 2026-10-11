@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/contexthints"
@@ -17,8 +18,8 @@ import (
 
 // contextHintsEnv overrides [context] hints in either direction: on|1|true
 // turns hints on, off|0|false turns them off, anything else leaves the config
-// in charge. Off is recorded as a noop, so it is measurable and never mistaken
-// for an outage.
+// in charge. Off costs nothing: the hook does not call the daemon, and a daemon
+// that is asked anyway answers noop without opening or writing the ledger.
 const contextHintsEnv = "PLUMB_CONTEXT_HINTS"
 
 // hintEnvSwitch reads the override: set reports whether it says anything, on
@@ -42,10 +43,15 @@ func contextHintsEnabled(configOn func() bool) bool {
 	return configOn != nil && configOn()
 }
 
-// startContextHints opens the ledger and returns the control-socket handler and
-// a closer. A ledger that cannot be opened leaves hints unavailable (the hook
-// gets an error line and says nothing): the allowance lives in the ledger, so
-// there is no unmetered fallback.
+// openContextHintLedger opens the daemon's hint ledger; a var so tests can see
+// whether, and when, it is opened.
+var openContextHintLedger = contexthints.Open
+
+// startContextHints returns the control-socket handler and a closer. The ledger
+// is opened lazily, by the first request that finds hints on: a user who never
+// turns hints on gets no context_hints.db at all. A ledger that cannot be opened
+// leaves hints unavailable until the daemon restarts (the hook says nothing):
+// the allowance lives in the ledger, so there is no unmetered fallback.
 //
 // hinter is the Slice A collector; nil until it lands, which answers every
 // seeded request with noop(no-collector).
@@ -53,15 +59,48 @@ func contextHintsEnabled(configOn func() bool) bool {
 // configOn reads the live global [context] hints switch; the daemon's own
 // PLUMB_CONTEXT_HINTS is honoured beside it.
 func startContextHints(ctx context.Context, registry *connRegistry, hinter tools.ContextHinter, configOn func() bool) (func(context.Context, contextHintRequest) contextHintReply, func()) {
-	ledger, err := contexthints.Open()
-	if err != nil {
-		slog.Warn("daemon: context-hint ledger unavailable; hooks will receive no hints", "err", err)
-		return nil, func() {}
-	}
 	enabled := func() bool { return contextHintsEnabled(configOn) }
-	svc := newContextHintService(hinter, ledger, registry.hintRoot, enabled)
-	go pruneContextHints(ctx, ledger, reaperInterval)
-	return svc.serve, ledger.Close
+	var (
+		mu     sync.Mutex
+		svc    *contextHintService
+		ledger *contexthints.Store
+		failed bool
+	)
+	service := func() *contextHintService {
+		mu.Lock()
+		defer mu.Unlock()
+		if svc != nil || failed {
+			return svc
+		}
+		l, err := openContextHintLedger()
+		if err != nil {
+			failed = true
+			slog.Warn("daemon: context-hint ledger unavailable; hooks will receive no hints", "err", err)
+			return nil
+		}
+		ledger = l
+		svc = newContextHintService(hinter, l, registry.hintRoot, enabled)
+		go pruneContextHints(ctx, l, reaperInterval)
+		return svc
+	}
+	handler := func(ctx context.Context, req contextHintRequest) contextHintReply {
+		if req.Off || !req.On && !enabled() {
+			return contextHintReply{Outcome: contexthints.OutcomeNoop}
+		}
+		s := service()
+		if s == nil {
+			return contextHintReply{Outcome: contexthints.OutcomeError}
+		}
+		return s.serve(ctx, req)
+	}
+	closeLedger := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if ledger != nil {
+			ledger.Close()
+		}
+	}
+	return handler, closeLedger
 }
 
 // pruneContextHints ages the ledger out on its own tick, best effort.

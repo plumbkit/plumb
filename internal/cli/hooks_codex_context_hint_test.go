@@ -133,6 +133,7 @@ func TestRunCodexHookIO_UserPromptSubmitPayload(t *testing.T) {
 // as the event's additionalContext.
 func TestRunCodexHookIO_HintReachesTheDaemon(t *testing.T) {
 	probeTestEnv(t)
+	hintsConfigured(t, true)
 	_, sub := hintWorkspace(t)
 	got := make(chan string, 1)
 	fakeCtrlDaemon(t, func(c net.Conn, line string) {

@@ -781,16 +781,18 @@ still require an explicit read.
 
 `PLUMB_CONTEXT_HINTS` overrides `hints` in either direction (`on`/`1`/`true`,
 `off`/`0`/`false`), and the hook reads it from its own environment as well as
-the daemon's. Off, any installed hook still runs and the daemon records each
-request as a no-op, so an off switch is never mistaken for an outage. To remove
+the daemon's. Off costs nothing: an installed hook still starts, but with hints
+off in both its environment and the global config it does not call the daemon,
+and a daemon asked while off answers without touching the ledger. To remove
 the hint-only hooks, run `plumb hooks uninstall <client> --only context`; the
 SessionStart hook stays, because it also links the session. `plumb hooks` says
 whether hints are not installed, installed but off, or on.
 
 The daemon keeps one bounded observation ledger for hints, `context_hints.db`
-in the data directory: metadata only (session, agent, event, capped selectors,
-bytes, outcome), at most 1000 rows and 1 MiB per workspace, seven days. A
-project config's `[context]` has no effect.
+in the data directory, created by the first request that finds hints on (a user
+who never turns them on has none): metadata only (session, agent, event, capped
+selectors, bytes, outcome), at most 1000 rows and 1 MiB per workspace, seven
+days. A project config's `[context]` has no effect.
 
 ## `[rastro]` — Rastro associative-memory integration
 

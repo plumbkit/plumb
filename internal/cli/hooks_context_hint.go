@@ -181,14 +181,23 @@ func (u uninstallScope) states(all []hookState) []hookState {
 	return out
 }
 
+// hookHintsConfigured reads [context] hints for the hook process; a var so tests
+// can stand in for the user's config.
+var hookHintsConfigured = configHintsOn
+
 // askContextHint asks the daemon for a hint and returns its text, or "" for
 // every outcome but emitted and for every failure.
 func askContextHint(req contextHintRequest) string {
-	// The hook's own environment is the one a user's shell export reaches; the
-	// daemon's may predate it. Either way the request still goes out, so the
-	// daemon records the outcome and the switch stays measurable.
-	if set, on := hintEnvSwitch(os.Getenv); set {
-		req.Off, req.On = !on, on
+	// Off costs a user nothing: neither a socket round trip nor a ledger row.
+	// The hook's own environment is the one a user's shell export reaches, so an
+	// explicit on travels with the request for a daemon whose environment
+	// predates it.
+	set, on := hintEnvSwitch(os.Getenv)
+	switch {
+	case set && !on, !set && !hookHintsConfigured():
+		return ""
+	case set:
+		req.On = true
 	}
 	if strings.TrimSpace(req.SessionID) == "" {
 		return ""
