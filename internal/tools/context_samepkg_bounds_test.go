@@ -21,7 +21,8 @@ import (
 
 // calcFile declares the method the callers in these tests call on a local Calc: a
 // method, because the index resolves a function's bare callers itself, on a local,
-// because the call graph cannot resolve a receiver that is only a local variable.
+// because an index from before the local tier (newSamePkgTool) cannot resolve a
+// receiver that is only a local variable.
 const calcFile = "package p\n\ntype Calc struct{}\n\nfunc (c *Calc) Apply(n int) int { return n }\n"
 
 // The scope filter runs on the sibling before it is read: a file outside `within`

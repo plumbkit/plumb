@@ -446,8 +446,8 @@ func TestContextForTask_GapCandidatesAreProductionDeclarationsOnly(t *testing.T)
 	s := newModuleWorkspace(t, map[string]string{
 		"go.mod":            chainModule,
 		"lib/lib.go":        "package lib\n\n// T is a thing.\ntype T struct{}\n\n// M does a thing.\nfunc (t *T) M() {}\n",
-		"user/user.go":      "package user\n\nimport \"example.com/x/lib\"\n\n// Use calls M on a local variable, a receiver the call graph does not resolve.\nfunc Use() {\n\tvar t lib.T\n\tt.M()\n}\n",
-		"user/user_test.go": "package user\n\nimport \"testing\"\n\nfunc TestUse(t *testing.T) { Use() }\n\n// helper is a plain function in a test file, which is still a test file's.\nfunc helper() {}\n",
+		"user/user.go":      "package user\n\nimport \"example.com/x/lib\"\n\n// Use calls M on a plain copy of its parameter, a receiver the call graph does not resolve.\nfunc Use(t *lib.T) {\n\tc := t\n\tc.M()\n}\n",
+		"user/user_test.go": "package user\n\nimport \"testing\"\n\nfunc TestUse(t *testing.T) { Use(nil) }\n\n// helper is a plain function in a test file, which is still a test file's.\nfunc helper() {}\n",
 	})
 	pack := s.collect(t, map[string]any{"symbols": []string{"lib/lib.go#T.M"}})
 	var gaps []string

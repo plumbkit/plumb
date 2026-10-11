@@ -33,8 +33,8 @@ func TestContextForTask_ARelatedBodyIsARecordedReadOnlyWhenDelivered(t *testing.
 		t.Fatalf("want the callees' bodies delivered, got %d:\n%s", len(related), out)
 	}
 	// The seed's file, then the callees', each once; after them the files of the
-	// callers, also once: the cart tests that call Total on a local variable (a
-	// same-package name match), and the test and the sibling that call Apply by its bare
+	// callers, also once: the cart tests that call Total on a local they declare twice
+	// (a same-package name match), and the test and the sibling that call Apply by its bare
 	// name (resolved edges, two hops out).
 	callers := []string{
 		lockPathKey(filepath.Join(canon, "cart", "cart_test.go")),

@@ -22,13 +22,16 @@ import (
 //
 // Gate v2 added this pass when the call resolver followed package-qualified calls
 // only (about 3% of recorded call sites). The resolver now also links bare
-// same-package calls and calls on the caller's own receiver or a typed parameter
+// same-package calls and method calls on the caller's own receiver, a typed
+// parameter, or a local variable its function declares once with an evident type
 // (#632), so on an index that publishes that census the pass is skipped for
-// functions (functionsResolved). It still runs for methods, whose callers on a
-// local variable or a field chain stay unresolved, and for any function on an index
-// built before the census. The call sites themselves are recorded verbatim, with the
-// declaration that holds them, so this collector-local pass reads them back and
-// matches them by name:
+// functions (functionsResolved). It still runs for methods: its e1 matches of
+// callers the resolver already links lose to the resolved e2 edge, and what is left
+// is what the resolver leaves (a local declared twice, an index built before the
+// tiers) plus the e0 gap candidates for receivers of no evident type. It runs for
+// functions too on an index built before the census. The call sites themselves are
+// recorded verbatim, with the declaration that holds them, so this collector-local
+// pass reads them back and matches them by name:
 //
 //   - A function: a bare call of its name, in a file of the same directory and
 //     package clause, where no local declaration of the caller shadows the name.
