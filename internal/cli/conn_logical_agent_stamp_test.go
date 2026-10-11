@@ -101,36 +101,6 @@ func TestStampChannelStateReadsTheIdentityFromCtx(t *testing.T) {
 	}
 }
 
-// [collab] allow_unidentified_writes is retired. It lifted the ceiling, and on
-// Claude desktop's connector (whose stamp was dropped in transit) that let an
-// anonymous edit resolve through the connection pin into another agent's
-// checkout (2026-09-30). A user who still has it set is told it is ignored.
-func TestAllowUnidentifiedWritesIsRetired(t *testing.T) {
-	var s connSession
-	s.recordLogicalAgentCall("a")
-	s.recordLogicalAgentCall("b")
-
-	err := s.refuseSharedStateChange(context.Background(), "write_file", "")
-	if err == nil {
-		t.Fatal("an anonymous write on a shared connection must refuse")
-	}
-	if strings.Contains(err.Error(), "allow_unidentified_writes") {
-		t.Errorf("with the key unset the refusal must not mention it: %v", err)
-	}
-
-	s.setCollabAllowUnidentifiedWritesForTest(true)
-	err = s.refuseSharedStateChange(context.Background(), "write_file", "")
-	if err == nil {
-		t.Fatal("the retired opt-out still lifted the ceiling")
-	}
-	if !strings.Contains(err.Error(), "allow_unidentified_writes is set but no longer honoured") {
-		t.Errorf("the refusal must say the opt-out is ignored: %v", err)
-	}
-	if err := s.refuseSharedStateChange(context.Background(), "read_file", ""); err != nil {
-		t.Errorf("a read must never refuse: %v", err)
-	}
-}
-
 // The ceiling arms on two identities, however they were declared. The
 // exemption for "no caller has ever stamped" is gone: it was the path the
 // 2026-09-30 incident took, where two conversations declared through

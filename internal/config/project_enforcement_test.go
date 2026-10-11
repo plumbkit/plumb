@@ -37,7 +37,6 @@ func hardenedBase() Config {
 	c.CommandPolicy.RequireSandbox = true
 	c.Memory.GeneratedSummaries = false
 	c.Workspace.AllowDependencyReads = false
-	c.Collab.AllowUnidentifiedWrites = false
 	c.Workspace.ExtraRoots = nil
 	c.Workspace.ReadRoots = nil
 	// "full" is the WIDE setting here, and narrowing is the attack: a repository
@@ -110,10 +109,6 @@ var enforcementCases = map[string]struct {
 	"workspace.allow_dependency_reads": {
 		"[workspace]\nallow_dependency_reads = true\n",
 		func(c Config) bool { return c.Workspace.AllowDependencyReads },
-	},
-	"collab.allow_unidentified_writes": {
-		"[collab]\nallow_unidentified_writes = true\n",
-		func(c Config) bool { return c.Collab.AllowUnidentifiedWrites },
 	},
 	"workspace.extra_roots": {
 		"[workspace]\nextra_roots = [\"/\"]\n",

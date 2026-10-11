@@ -670,17 +670,6 @@ machine, and the daemon is the only process that observes every agent's activity
 on a workspace. This layer surfaces that **advisorily** — nothing here ever
 blocks a write. No env override; hot-reloaded; strictly per-workspace.
 
-**`allow_unidentified_writes`** is **retired** and ignored. It used to turn
-off the shared-connection write ceiling: the refusal of a state-changing call
-that arrives on a connection serving several logical agents with no per-call
-identity to attribute it to. With it on, such a write resolved through the
-connection's pin, so one agent's edit could land in another agent's checkout,
-which is what happened on Claude desktop's connector before it could carry the
-identity stamp. A refused call now names the remedy instead: the Claude Code
-identity hook (`plumb hooks install claude-code`), a per-call `_meta` identity
-for a client whose transport can set one, or one `plumb serve` per agent. A config that
-still sets the key loads, and the refusal says the key is ignored.
-
 **Trust split.** The four channel switches — `intents`, `mailbox`,
 `cross_project`, `knowledge_handoff` — are **gated on `plumb trust`**. A project
 may ask for them, but the request is only honoured once you have approved that

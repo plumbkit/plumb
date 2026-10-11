@@ -275,10 +275,6 @@ var registryData = []Field{
 		Description: "Agent-to-agent messaging between sessions on THIS workspace: leave_note, check_messages, and delivery on tool results. Default on.",
 	},
 	{
-		Key: "collab.allow_unidentified_writes", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Retired and ignored. It used to admit a state-changing call with no per-call identity on a connection serving several agents; such a write resolved through the connection pin and could land in another agent's checkout. Kept so an existing config still loads.",
-	},
-	{
 		Key: "collab.cross_project", Type: FieldBool, ReloadTier: ReloadLive,
 		Description: "Opt-in: also receive messages from sessions in OTHER workspaces. The recipient's decision — off means a cross-project send to you is refused up front, not silently dropped.",
 	},

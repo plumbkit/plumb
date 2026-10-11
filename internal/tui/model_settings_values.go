@@ -377,8 +377,6 @@ func boolFieldCollab(c *config.Config, key settingKey) *bool {
 		return &c.Collab.Mailbox
 	case skCollabCrossProject:
 		return &c.Collab.CrossProject
-	case skCollabAllowUnidentifiedWrites:
-		return &c.Collab.AllowUnidentifiedWrites
 	case skCollabKnowledgeHandoff:
 		return &c.Collab.KnowledgeHandoff
 	case skCollabKeepDelivered:
@@ -572,8 +570,6 @@ func toggleLabelMore(key settingKey) string {
 // carries no meaning.
 func toggleLabelRest(key settingKey) string {
 	switch key {
-	case skCollabAllowUnidentifiedWrites:
-		return "allow unidentified writes"
 	case skXcodeAutoBuildServer:
 		return "xcode auto build server"
 	default:
