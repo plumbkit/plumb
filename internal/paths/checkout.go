@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -111,7 +112,26 @@ func SameProject(a, b string) bool {
 // common directories are one family when they are the same directory or one lies
 // inside the other.
 func sameFamily(a, b string) bool {
-	return samePath(a, b) || withinDir(a, b) || withinDir(b, a)
+	return samePath(a, b) || nestedGitDir(a, b) || nestedGitDir(b, a)
+}
+
+// nestedGitDir reports whether child is a git directory git itself placed inside
+// parent: a submodule's, which git keeps in <parent>/modules/ (and, for a
+// submodule checked out in a linked worktree, <parent>/worktrees/<id>/modules/),
+// nested submodules following the same shape. Being anywhere inside parent is not
+// enough. A bare repository whose worktrees live INSIDE it (`git clone --bare
+// B.git && git worktree add B.git/main`) holds every file of those worktrees —
+// including an unrelated repository cloned into one, whose .git is then inside
+// B.git without being any of git's own.
+func nestedGitDir(child, parent string) bool {
+	rel, ok := withinDir(child, parent)
+	if !ok || len(rel) == 0 {
+		return false
+	}
+	if rel[0] == "modules" {
+		return true
+	}
+	return len(rel) >= 3 && rel[0] == "worktrees" && rel[2] == "modules"
 }
 
 // SameCommonDir reports whether a workspace root belongs to the same project as a
@@ -287,28 +307,32 @@ func samePath(a, b string) bool {
 // identity: it walks child's real ancestors and compares each with parent using
 // os.SameFile, so a symlink cannot smuggle a path out of the tree it names and a
 // case-insensitive filesystem's two spellings of one directory agree. A path that
-// no longer exists is not inside anything.
-func withinDir(child, parent string) bool {
+// no longer exists is not inside anything. rel is child's path below parent, one
+// element per directory (empty when child IS parent).
+func withinDir(child, parent string) (rel []string, ok bool) {
 	if child == "" || parent == "" {
-		return false
+		return nil, false
 	}
 	c, err := filepath.EvalSymlinks(child)
 	if err != nil {
-		return false
+		return nil, false
 	}
 	//nolint:gosec // G703: parent is a verified common directory (see samePath); only stat-ed.
 	p, err := os.Stat(parent)
 	if err != nil {
-		return false
+		return nil, false
 	}
+	var below []string
 	for dir := c; ; {
 		if info, err := os.Stat(dir); err == nil && os.SameFile(info, p) {
-			return true
+			slices.Reverse(below)
+			return below, true
 		}
 		up := filepath.Dir(dir)
 		if up == dir {
-			return false
+			return nil, false
 		}
+		below = append(below, filepath.Base(dir))
 		dir = up
 	}
 }
