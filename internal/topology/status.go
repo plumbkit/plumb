@@ -231,6 +231,12 @@ func callGraphCensus(db *sql.DB) CallGraphStatus {
 		metaCallUnmatched:       &c.UnmatchedTarget,
 		metaCallRepeatOfEdge:    &c.RepeatOfEdge,
 		metaCallNoCallerNode:    &c.NoCallerNode,
+
+		metaCallResolvedSamePkg:  &c.ResolvedSamePackage,
+		metaCallResolvedRecvSelf: &c.ResolvedReceiverSelf,
+		metaCallResolvedParam:    &c.ResolvedParamTyped,
+		metaCallSameFile:         &c.SameFile,
+		metaCallBareUnmatched:    &c.BareUnmatched,
 	}
 	for key, dst := range into {
 		var v string
@@ -246,26 +252,32 @@ func callGraphCensus(db *sql.DB) CallGraphStatus {
 
 // formatCallGraph is where a user is told what the cross-file call graph does
 // and does not cover. The reach percentage leads because it is the fact most
-// likely to be assumed away: a resolver that follows package-qualified calls
-// only reaches a small minority of a Go project's call sites, and a caller list
-// read as complete is worse than no caller list.
+// likely to be assumed away: method calls on an arbitrary receiver are never
+// resolved, and a caller list read as complete is worse than no caller list.
 func formatCallGraph(c CallGraphStatus) string {
 	if c.CallSites == 0 {
 		return ""
 	}
 	pct := float64(c.Resolved) / float64(c.CallSites) * 100
+	samePct := float64(c.SameFile) / float64(c.CallSites) * 100
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "  call graph:    %d cross-file call edges — %.1f%% of this workspace's %d\n",
+	fmt.Fprintf(&sb, "  call graph:    %d call sites resolved across files — %.1f%% of this workspace's %d\n",
 		c.Resolved, pct, c.CallSites)
 	fmt.Fprintf(&sb, "                 recorded call sites (%d from non-test callers). Go only.\n",
 		c.ResolvedNonTest)
-	fmt.Fprintf(&sb, "                 Of %d qualified sites: %d are method calls on a receiver and\n"+
-		"                  are NOT resolved (syntactic parsing carries no type information),\n"+
+	fmt.Fprintf(&sb, "                 By kind: %d package-qualified, %d same-package bare calls,\n"+
+		"                  %d calls on the method's own receiver, %d on a typed parameter;\n"+
+		"                  %d more (%.1f%%) are same-file calls the extractor links directly.\n",
+		c.Resolved-c.ResolvedSamePackage-c.ResolvedReceiverSelf-c.ResolvedParamTyped, c.ResolvedSamePackage,
+		c.ResolvedReceiverSelf, c.ResolvedParamTyped, c.SameFile, samePct)
+	fmt.Fprintf(&sb, "                 NOT resolved: %d method calls on another receiver (syntactic\n"+
+		"                  parsing carries no type information), %d bare calls naming no\n"+
+		"                  function of the package (builtins, local values, conversions),\n"+
 		"                  %d leave the indexed tree, %d name no top-level function,\n"+
 		"                  %d repeat a call already counted, %d sit outside any function.\n"+
 		"                  Those are absent, not caller-free — do not read this graph as\n"+
 		"                  complete.\n",
-		c.QualifiedSites, c.UnresolvedReceiver, c.ExternalPackage, c.UnmatchedTarget,
+		c.UnresolvedReceiver, c.BareUnmatched, c.ExternalPackage, c.UnmatchedTarget,
 		c.RepeatOfEdge, c.NoCallerNode)
 	return sb.String()
 }

@@ -6,10 +6,11 @@ import (
 	"example.com/shop/store"
 )
 
-// Checkout prices the cart and records the charge. Its calls are receiver
-// method calls, which the syntactic call graph does not resolve.
+// Checkout prices the cart and records the charge. Its calls are method calls on
+// local variables, which the call graph does not resolve.
 func Checkout(c *cart.Cart, l *store.Ledger) int {
-	t := c.Total()
-	l.Record(t)
+	cc, ll := c, l
+	t := cc.Total()
+	ll.Record(t)
 	return t
 }

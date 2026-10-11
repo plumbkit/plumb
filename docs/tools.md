@@ -1066,17 +1066,20 @@ marked "not a resolved caller"; an empty, short or cut caller list is never
 reported as "no callers", and a walk that was cut says so before it says anything
 about the index.
 
-**Same-package callers.** The Go call resolver follows package-qualified calls
-only, so a function's callers in the sibling files of its own package (bare
-calls), and a method's callers (calls on a receiver), are not edges. For each
-callable seed, and each callable one hop out, the pack reads the call sites the
-index recorded in the files of the same directory and package clause, and lists
-the declaration holding a call of the seed's name as a caller at `e1`, labelled
-"same-package name match" (and "test" for a `_test.go` file) and never counted
-among the resolved callers. A function's match is a bare call that no local
-declaration of the caller shadows; a method's needs receiver evidence in the
-caller itself (its receiver, a parameter, `var x T`, `x := T{}`, `&T{}` or
-`new(T)`). A call whose receiver type is not evident, a name declared twice in the
+**Same-package callers.** The Go call resolver links bare same-package calls,
+calls on a method's own receiver and calls on a typed parameter, so those callers
+arrive as resolved `e2` edges. A test caller is one of them, and at most 12 test
+callers are listed per declaration (the pack counts the rest; the affected-tests
+section counts their packages). A method called on a local variable or a field is
+still not an edge, so for each callable method seed, and each one one hop out, the
+pack reads the call sites the index recorded in the files of the same directory
+and package clause, and lists the declaration holding a call of the seed's name as
+a caller at `e1`, labelled "same-package name match" (and "test" for a `_test.go`
+file) and never counted among the resolved callers. A function gets this search
+only on an index built before the resolver linked same-package calls; there its
+match is a bare call that no local declaration of the caller shadows. A method's
+match needs receiver evidence in the caller itself (its receiver, a parameter,
+`var x T`, `x := T{}`, `&T{}` or `new(T)`). A call whose receiver type is not evident, a name declared twice in the
 package, and a file withheld as sensitive are `e0` gap candidates only. A sibling
 file is parsed only if it still hashes to what the index parsed, the scope filter
 runs before it is read, and a sensitive file is never read. At most 12 are listed

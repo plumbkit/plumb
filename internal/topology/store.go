@@ -377,6 +377,16 @@ func (s *Store) DerivedCallsAdmittedFor(ctx context.Context, nodeID int64) bool 
 	return DerivedCallsAdmitted(ctx, s.db, nodeID)
 }
 
+// ResolvesSamePackageCalls reports whether the index's last full call-resolution
+// pass ran the same-package tiers, so a bare call from a sibling file of the same
+// package is a derived edge rather than an absence. An index built before them
+// publishes no tier census, and a consumer that works around the old gap keeps
+// doing so on it. An error reads as false: the workaround stays on.
+func (s *Store) ResolvesSamePackageCalls(ctx context.Context) bool {
+	_, ok, err := readMeta(ctx, s.db, metaCallResolvedSamePkg)
+	return err == nil && ok
+}
+
 // AdmitLanguage applies the admission rule to the workspace's indexed package
 // nodes of one language, in index order, and answers with the first admitted
 // package's decision. ok is false when no package of that language is admitted,

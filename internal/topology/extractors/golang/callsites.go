@@ -27,18 +27,78 @@ import (
 type siteCollector struct {
 	fset  *token.FileSet
 	sites []topology.CallSite
+	// locals are the names the function being walked declares itself; nil
+	// outside a function body.
+	locals map[string]bool
 }
 
-// collectBody walks a function body. It takes the CONCRETE *ast.BlockStmt so a
-// bodyless declaration — an assembly or cgo stub, `func Sqrt(float64) float64`
-// — is caught here: passed as an ast.Node it would be a non-nil interface
-// wrapping a nil pointer, sail past a `root == nil` check, and panic inside
-// ast.Walk on the first field access.
-func (c *siteCollector) collectBody(body *ast.BlockStmt, enclosing int) {
-	if body == nil {
+// collectFunc walks a function declaration's body. It checks the CONCRETE
+// *ast.BlockStmt so a bodyless declaration — an assembly or cgo stub, `func
+// Sqrt(float64) float64` — is caught here: passed as an ast.Node it would be a
+// non-nil interface wrapping a nil pointer, sail past a `root == nil` check, and
+// panic inside ast.Walk on the first field access.
+func (c *siteCollector) collectFunc(d *ast.FuncDecl, enclosing int) {
+	if d.Body == nil {
 		return
 	}
-	c.collect(body, enclosing)
+	c.locals = localNames(d)
+	c.collect(d.Body, enclosing)
+	c.locals = nil
+}
+
+// localNames is every name a function declaration declares for itself: its
+// receiver, parameters and results, and in its body every := and var name, range
+// variable and closure parameter or result. It is function-wide, not block-scoped,
+// so a bare call of such a name anywhere in the function is marked local
+// (topology.QualifierLocal) rather than resolved to a package function: a missed
+// edge is the price, a false one is what it avoids.
+func localNames(d *ast.FuncDecl) map[string]bool {
+	names := map[string]bool{}
+	addFields := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			for _, n := range f.Names {
+				names[n.Name] = true
+			}
+		}
+	}
+	addIdents := func(exprs ...ast.Expr) {
+		for _, e := range exprs {
+			if id, ok := e.(*ast.Ident); ok {
+				names[id.Name] = true
+			}
+		}
+	}
+	addFields(d.Recv)
+	addFields(d.Type.Params)
+	addFields(d.Type.Results)
+	ast.Inspect(d.Body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			if s.Tok == token.DEFINE {
+				addIdents(s.Lhs...)
+			}
+		case *ast.ValueSpec:
+			for _, id := range s.Names {
+				names[id.Name] = true
+			}
+		case *ast.RangeStmt:
+			if s.Tok == token.DEFINE {
+				addIdents(s.Key, s.Value)
+			}
+		case *ast.FuncLit:
+			addFields(s.Type.Params)
+			addFields(s.Type.Results)
+		case *ast.TypeSpec:
+			// A local type: Foo(x) is a conversion to it, not a package call.
+			names[s.Name.Name] = true
+		}
+		return true
+	})
+	delete(names, "_")
+	return names
 }
 
 // collect walks root, recording every call expression and composite-literal
@@ -80,6 +140,9 @@ func (c *siteCollector) collectValueSpec(s *ast.ValueSpec, baseIdx, nameCount in
 
 func (c *siteCollector) addCall(call *ast.CallExpr, enclosing int) {
 	callee, qualifier := calleeParts(call.Fun)
+	if qualifier == "" && c.locals[callee] {
+		qualifier = topology.QualifierLocal
+	}
 	if callee == "" {
 		// A conversion (`[]byte(s)`), a call on a function literal, or a call on
 		// an expression with no nameable callee. Recording it with an empty callee
@@ -157,7 +220,7 @@ func calleeParts(expr ast.Expr) (callee, qualifier string) {
 	case *ast.Ident:
 		return e.Name, ""
 	case *ast.SelectorExpr:
-		return e.Sel.Name, exprText(e.X)
+		return e.Sel.Name, selectorQualifier(e.X)
 	case *ast.ParenExpr:
 		return calleeParts(e.X)
 	case *ast.IndexExpr:
@@ -167,6 +230,42 @@ func calleeParts(expr ast.Expr) (callee, qualifier string) {
 		return calleeParts(e.X)
 	default:
 		return "", ""
+	}
+}
+
+// selectorQualifier is the qualifier of a call `x.M()`: the name chain x, or a
+// marker when x has none. An empty qualifier means a bare call, so a receiver that
+// is a call result, an assertion or a literal (`f().M()`, `x.(T).M()`, `T{}.M()`)
+// is topology.QualifierOpaque, and an indexed one (`r[k].M()`, whose method
+// belongs to the element) is the indexed name followed by
+// topology.QualifierIndexedSuffix.
+func selectorQualifier(x ast.Expr) string {
+	x = unwrapReceiver(x)
+	switch x.(type) {
+	case *ast.IndexExpr, *ast.IndexListExpr:
+		if q := exprText(x); q != "" {
+			return q + topology.QualifierIndexedSuffix
+		}
+		return topology.QualifierOpaque
+	}
+	if q := exprText(x); q != "" {
+		return q
+	}
+	return topology.QualifierOpaque
+}
+
+// unwrapReceiver strips parentheses and dereferences: (*p).M() is p.M(), and
+// (*m[k]).M() is still an indexed receiver.
+func unwrapReceiver(x ast.Expr) ast.Expr {
+	for {
+		switch e := x.(type) {
+		case *ast.ParenExpr:
+			x = e.X
+		case *ast.StarExpr:
+			x = e.X
+		default:
+			return x
+		}
 	}
 }
 

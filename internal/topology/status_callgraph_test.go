@@ -20,6 +20,12 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 		UnmatchedTarget:    5,
 		RepeatOfEdge:       8,
 		NoCallerNode:       2,
+
+		ResolvedSamePackage:  9,
+		ResolvedReceiverSelf: 4,
+		ResolvedParamTyped:   2,
+		SameFile:             300,
+		BareUnmatched:        100,
 	}}
 	out := FormatStatus(s, "/ws")
 
@@ -29,11 +35,16 @@ func TestFormatStatus_DisclosesCallGraphReachWhereTheUserReadsIt(t *testing.T) {
 		t.Errorf("reach share missing or computed against the wrong denominator:\n%s", out)
 	}
 	for _, want := range []string{
-		"25 cross-file call edges", "10 from non-test callers",
+		"25 call sites resolved across files", "10 from non-test callers",
 		"500", "absent, not caller-free", "Go only",
 		// The two buckets a reader would otherwise have to discover by
 		// subtracting and finding the breakdown short.
 		"8 repeat", "2 sit outside any function",
+		// The tier split: 25 resolved = 10 qualified + 9 bare + 4 receiver-self
+		// + 2 typed-parameter, and the same-file share the extractor links.
+		"10 package-qualified", "9 same-package bare calls", "4 calls on the method's own receiver",
+		"2 on a typed parameter",
+		"300 more (30.0%)", "100 bare calls naming no",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status is missing %q:\n%s", want, out)
@@ -65,30 +76,35 @@ func TestFormatStatus_ReachSharePercentageTracksTheCounts(t *testing.T) {
 
 // TestCallGraphCensus_PublishesEveryBucketAndTheyReconcile is the reconciliation
 // a reader of `topology_status` performs by hand: the buckets printed must add up
-// to the qualified-site count printed beside them. It runs the REAL resolver, so
-// it fails both when a bucket stops summing and when a bucket exists but is never
+// to the call-site count printed beside them. It runs the REAL resolver, so it
+// fails both when a bucket stops summing and when a bucket exists but is never
 // published to topology_meta for the census to read.
 func TestCallGraphCensus_PublishesEveryBucketAndTheyReconcile(t *testing.T) {
-	f := newResolverFixture(t)
+	f := newSamePackageFixture(t)
 	f.resolve(t)
 
 	c := callGraphCensus(f.db)
 	sum := c.Resolved + c.UnresolvedReceiver + c.ExternalPackage +
-		c.UnmatchedTarget + c.RepeatOfEdge + c.NoCallerNode
-	if sum != c.QualifiedSites {
-		t.Errorf("published buckets sum to %d against %d qualified sites (%+v); a reader who subtracts "+
-			"gets a number the resolver never produced", sum, c.QualifiedSites, c)
+		c.UnmatchedTarget + c.RepeatOfEdge + c.NoCallerNode + c.SameFile + c.BareUnmatched
+	if sum != c.CallSites {
+		t.Errorf("published buckets sum to %d against %d call sites (%+v); a reader who subtracts "+
+			"gets a number the resolver never produced", sum, c.CallSites, c)
 	}
-	if c.QualifiedSites == 0 {
-		t.Fatal("the census read no qualified sites; the reconciliation above is vacuous")
+	if c.CallSites == 0 {
+		t.Fatal("the census read no call sites; the reconciliation above is vacuous")
+	}
+	// Every new bucket must be read back non-zero, or the sum above holds over a
+	// fixture that cannot exercise it.
+	if c.ResolvedSamePackage == 0 || c.ResolvedReceiverSelf == 0 || c.SameFile == 0 || c.BareUnmatched == 0 {
+		t.Errorf("census did not publish the same-package buckets: %+v", c)
 	}
 	if c.RepeatOfEdge == 0 || c.NoCallerNode == 0 {
 		t.Errorf("census did not publish the non-outcome buckets (repeat=%d, no-caller=%d); "+
 			"the fixture exercises both, so a zero means the meta key is not being read",
 			c.RepeatOfEdge, c.NoCallerNode)
 	}
-	if c.Resolved == 0 || c.Resolved >= c.QualifiedSites {
-		t.Errorf("resolved = %d against %d qualified sites; the reconciliation would hold trivially",
-			c.Resolved, c.QualifiedSites)
+	if c.Resolved == 0 || c.Resolved >= c.CallSites {
+		t.Errorf("resolved = %d against %d call sites; the reconciliation would hold trivially",
+			c.Resolved, c.CallSites)
 	}
 }

@@ -72,9 +72,12 @@ const (
 )
 
 // metaResolverSurface stores the stable identities that can change a derived
-// target without changing any caller file: resolver-eligible package nodes and
-// exported top-level Go functions. Rowids and bodies are deliberately absent, so
-// an ordinary body-only re-index remains scoped and preserves the bounded lifecycle.
+// target without changing any caller file: resolver-eligible package nodes,
+// exported top-level Go functions, and exported Go methods (the targets of a
+// call on another package's typed parameter). Same-package targets need no
+// entry: a scoped pass widens to the changed files' directories instead.
+// Rowids and bodies are deliberately absent, so an ordinary body-only re-index
+// remains scoped and preserves the bounded lifecycle.
 const metaResolverSurface = "topology.resolver_surface"
 
 // planRebuild decides what this cycle's derived-edge passes must do, and returns
@@ -109,8 +112,9 @@ func (idx *Indexer) planRebuild(ctx context.Context, c indexChanges) (rebuildMod
 
 // resolverSurfaceFingerprint hashes stable identities for every resolver target
 // surface. Package nodes affect import resolution for every language; exported
-// top-level Go functions affect the call resolver. File paths plus qualified/name
-// are identity, while rowids, bodies, signatures and other mutable fields are not.
+// top-level Go functions and exported Go methods affect the call resolver. File
+// paths plus qualified/name are identity, while rowids, bodies, signatures and
+// other mutable fields are not.
 //
 // The declared Go MODULE SET is folded in by hand, and has to be. Every other
 // input here is a node, and go.mod produces none — no extractor handles .mod, so
@@ -125,8 +129,8 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace strin
 		`SELECT n.kind, n.language, f.path, n.qualified, n.name
            FROM topology_nodes n
            JOIN topology_files f ON f.id = n.file_id
-          WHERE n.kind = ? OR (n.kind = ? AND n.language = 'go')`,
-		string(KindPackage), string(KindFunction))
+          WHERE n.kind = ? OR (n.kind IN (?, ?) AND n.language = 'go')`,
+		string(KindPackage), string(KindFunction), string(KindMethod))
 	if err != nil {
 		return "", fmt.Errorf("topology: resolver surface fingerprint: %w", err)
 	}
@@ -137,7 +141,7 @@ func resolverSurfaceFingerprint(ctx context.Context, db *sql.DB, workspace strin
 		if err := rows.Scan(&kind, &lang, &p, &qualified, &name); err != nil {
 			return "", fmt.Errorf("topology: resolver surface fingerprint scan: %w", err)
 		}
-		if kind == string(KindFunction) && !isExportedName(name) {
+		if kind != string(KindPackage) && !isExportedName(name) {
 			continue
 		}
 		identity := qualified

@@ -21,9 +21,14 @@ import (
 )
 
 const (
-	lifecycleBenchRevision      = "f97fc017"
-	lifecycleBenchFiles         = 1415
-	lifecycleBenchResolvedCalls = 2531
+	lifecycleBenchRevision = "f97fc017"
+	lifecycleBenchFiles    = 1415
+	// lifecycleBenchResolvedCalls is the call sites the resolver links across
+	// files on the pinned corpus. It was 2531 while only package-qualified calls
+	// resolved; the same-package, receiver-self and typed-parameter tiers (#632)
+	// raised it to 11385. It is pinned exactly so a resolver change cannot move
+	// the corpus the save budgets below are measured on without saying so.
+	lifecycleBenchResolvedCalls = 11385
 
 	// lifecycleSaveBudget is a REGRESSION bound, not a performance target. The
 	// per-save numbers stay logged for PLAN-377; this only has to catch a save

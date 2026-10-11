@@ -73,21 +73,25 @@ func TestContextForTask_Affected_C07_OneRowWithTheCountAndNoTestNames(t *testing
 		t.Fatalf("affected rows = %q, want exactly %q", rows, want)
 	}
 	// The estimate lists no test (the rows above are the whole section). A test that
-	// calls the seed by name in its package is a related declaration of its own: it
-	// says so, is labelled a test, and is bounded by the per-declaration cap rather than
-	// listed row by row.
+	// calls the seed by name in its package is a resolved caller, a related declaration
+	// of its own: it says so, is labelled a test, and is bounded by the per-declaration
+	// cap rather than listed row by row. The tests beyond the cap are counted, not named.
 	listed := 0
 	for _, line := range strings.Split(out, "\n") {
 		if !strings.HasPrefix(line, "  [e") || !strings.Contains(line, "TestSummariseCase") {
 			continue
 		}
 		listed++
-		if !strings.Contains(line, "(same-package name match, test)") {
-			t.Errorf("a test is related to Summarise without the same-package, test label: %q", line)
+		if !strings.Contains(line, " test; caller of Summarise (call-resolver 0.85)") {
+			t.Errorf("a test is related to Summarise without the test label and the resolved-caller provenance: %q", line)
 		}
 	}
-	if listed > contextSamePkgPerSeed {
-		t.Errorf("forbidden: %d individual tests are listed in the compact pack, over the cap of %d:\n%s", listed, contextSamePkgPerSeed, out)
+	if listed != contextSamePkgPerSeed {
+		t.Errorf("forbidden: %d individual tests are listed in the compact pack, want exactly the cap of %d:\n%s", listed, contextSamePkgPerSeed, out)
+	}
+	cut := fmt.Sprintf("%d further test caller(s) beyond the per-declaration cap of %d are not listed", counts["./reports/..."]-contextSamePkgPerSeed, contextSamePkgPerSeed)
+	if !strings.Contains(out, cut) {
+		t.Errorf("the tests beyond the cap are not counted (want %q):\n%s", cut, out)
 	}
 	for _, line := range append([]string{affectedHeading}, rows...) {
 		if m := executionWords.FindString(line); m != "" {

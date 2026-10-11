@@ -176,6 +176,13 @@ var (
 	chiVerbFrameworks   = []frameworkImport{{FrameworkChi, importChi}}
 )
 
+// namedReceiver reports whether a call site's qualifier names a variable or a
+// package: non-empty and not one of the extractor's markers for a receiver with
+// no name (QualifierOpaque, an indexed name) or a local function value.
+func namedReceiver(q string) bool {
+	return q != "" && q != QualifierOpaque && q != QualifierLocal && !strings.HasSuffix(q, QualifierIndexedSuffix)
+}
+
 // classifyHTTP attributes a call site to the first candidate framework the
 // file imports, or reports that it is not a registration.
 func (r *goRouteResolver) classifyHTTP(s goSite) (RouteFramework, bool) {
@@ -189,8 +196,11 @@ func (r *goRouteResolver) classifyHTTP(s goSite) (RouteFramework, bool) {
 		}
 	case upperVerbs[s.callee] || chiVerbs[s.callee]:
 		// Verb names are common method names; only a literal "/..." route on a
-		// receiver makes the call a registration rather than, say, a client request.
-		if s.hasString && strings.HasPrefix(s.str, "/") && s.qualifier != "" {
+		// named receiver makes the call a registration rather than, say, a client
+		// request. A call on an unnamed value (`client().Get("/x")`, recorded with
+		// a qualifier marker) or a local function value is not attributable to a
+		// router variable, so it stays out, as it did when it had no qualifier.
+		if s.hasString && strings.HasPrefix(s.str, "/") && namedReceiver(s.qualifier) {
 			candidates = chiVerbFrameworks
 			if upperVerbs[s.callee] {
 				candidates = upperVerbFrameworks

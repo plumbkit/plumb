@@ -389,3 +389,41 @@ func Register(r chi.Router) {
 	)
 	mustNotContain(t, out, "/client-call", "/also-a-client-call", "/raw", "-> auth", "-> mw")
 }
+
+// A verb call on a receiver with no name — a call result, an indexed value, a
+// local function value — is not attributable to a router variable. The extractor
+// records those receivers with qualifier markers rather than an empty qualifier,
+// and a marker must not read as "on a receiver": a client request such as
+// `client().Get("/x")` in a file that also imports chi is not a route.
+func TestRoutesCallSite_AVerbOnAnUnnamedReceiverIsNotARoute(t *testing.T) {
+	tool := routesFixture(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.22\n",
+		"c/chi.go": `package c
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type rest struct{}
+
+func (rest) Get(path string) {}
+
+func client() rest { return rest{} }
+
+func getUser(w http.ResponseWriter, r *http.Request) {}
+
+func Register(r chi.Router, clients map[string]rest) {
+	r.Get("/users/{id}", getUser)
+	client().Get("/from-a-call")
+	clients["k"].Get("/from-an-index")
+	Get := r.Get
+	Get("/from-a-local", getUser)
+}
+`,
+	})
+	out := runRoutes(t, tool, map[string]any{})
+	mustContain(t, out, "GET /users/{id} [chi] -> getUser (same-package, c/chi.go:", "1 HTTP route(s)")
+	mustNotContain(t, out, "/from-a-call", "/from-an-index", "/from-a-local")
+}

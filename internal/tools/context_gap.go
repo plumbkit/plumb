@@ -13,10 +13,12 @@ import (
 
 // context_gap.go — what the call graph cannot say, said out loud.
 //
-// The call resolver follows package-qualified calls only. A call on a receiver
-// (`c.Total()`) carries no type information in a syntactic parse and is left
-// unresolved, so a method's caller list is short by an unknown amount and an empty
-// one proves nothing. The only route from a method to such a caller is the import
+// The call resolver links package-qualified calls, bare same-package calls, and
+// method calls on the caller's own receiver or on a parameter declared with a named
+// type. Any other call on a receiver (a local variable, a field chain, a returned
+// value) carries no type information in a syntactic parse and is left unresolved,
+// so a method's caller list is short by an unknown amount and an empty one proves
+// nothing. The only route from a method to such a caller is the import
 // graph: a package that imports the method's package may call it. Those
 // importers' declarations are surfaced as gap candidates at evidence 0, labelled
 // as candidates, and never as callers (C06).
@@ -394,6 +396,9 @@ func (s expansionStats) gaps() []string {
 	}
 	if s.GapMore > 0 {
 		add("%d further gap candidate(s) beyond their quota are not listed", s.GapMore)
+	}
+	if s.TestCallersMore > 0 {
+		add("%d further test caller(s) beyond the per-declaration cap of %d are not listed; the affected-tests section counts their packages", s.TestCallersMore, contextTestCallersPerDecl)
 	}
 	if s.ImportersCapped > 0 {
 		add("%d importer list(s) exceeded %d and were cut; gap candidates may be missing", s.ImportersCapped, contextHopNodes)

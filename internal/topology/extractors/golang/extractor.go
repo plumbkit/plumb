@@ -87,7 +87,7 @@ func extractFile(fset *token.FileSet, f *ast.File, relPath string) ([]topology.N
 			funcEntries = append(funcEntries, funcEntry{decl: d, idx: nodeIdx})
 			nodes = append(nodes, ns...)
 			edges = append(edges, es...)
-			sc.collectBody(d.Body, nodeIdx)
+			sc.collectFunc(d, nodeIdx)
 		case *ast.GenDecl:
 			ns, es := extractGenDecl(fset, d, relPath, len(nodes), pkgIdx, sc)
 			nodes = append(nodes, ns...)

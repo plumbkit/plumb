@@ -162,7 +162,12 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	    re-extracted, so without the bump its rows would keep the truncated
 //	    argument list and no decorator sites — indistinguishable from a file
 //	    that has none. Same reasoning as 2.
-const SchemaVersion = 5
+//	6 — Go call-site qualifiers for receivers with no name (topology.QualifierOpaque,
+//	    the indexed suffix) and bare calls of a name the function declares itself
+//	    (topology.QualifierLocal). A site written before it stored those with an
+//	    empty qualifier, which the same-package resolver reads as a bare call, so
+//	    an unchanged file would keep producing false edges. Same reasoning as 2.
+const SchemaVersion = 6
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The

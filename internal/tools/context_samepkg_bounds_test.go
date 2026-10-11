@@ -19,12 +19,17 @@ import (
 // filter before a file is read (Invariant 2), sensitive files named and never read,
 // the per-declaration cap, and a sibling that changed since it was indexed.
 
+// calcFile declares the method the callers in these tests call on a local Calc: a
+// method, because the index resolves a function's bare callers itself, on a local,
+// because the call graph cannot resolve a receiver that is only a local variable.
+const calcFile = "package p\n\ntype Calc struct{}\n\nfunc (c *Calc) Apply(n int) int { return n }\n"
+
 // The scope filter runs on the sibling before it is read: a file outside `within`
 // is neither listed nor opened, and the pack counts it as excluded. Control: the
 // same call without `within` reads it and lists its caller.
 func TestSamePackage_TheScopeFilterRunsBeforeASiblingIsRead(t *testing.T) {
-	s, log := newSamePkgTool(t, samePkgFunctionFiles)
-	seed := []string{"p/a.go#Apply"}
+	s, log := newSamePkgTool(t, samePkgSiblingFiles)
+	seed := []string{"p/a.go#Calc.Apply"}
 
 	open := s.collect(t, map[string]any{"symbols": seed})
 	if callers, _ := nameMatches(open); len(callers) != 2 || !log.saw("/p/b.go") {
@@ -46,15 +51,16 @@ func TestSamePackage_TheScopeFilterRunsBeforeASiblingIsRead(t *testing.T) {
 	}
 }
 
-// The filter runs at the second hop too: the callee Apply is inside `within`, but its
-// callers in the next file over are not, so they are left out, while the callers in
-// the seed's own directory are kept. Control: without within the sibling is found.
+// The filter runs at the second hop too: the callee Apply (reached through the typed
+// parameter d) is inside `within`, but its callers in the next file over are not, so
+// they are left out, while the callers in the seed's own directory are kept. Control:
+// without within the sibling is found.
 func TestSamePackage_TheScopeFilterRunsAtTheSecondHop(t *testing.T) {
 	s, log := newSamePkgTool(t, map[string]string{
 		"go.mod":              chainModule,
-		"cart/cart.go":        "package cart\n\nimport \"example.com/x/pricing\"\n\nfunc Total() int { return pricing.Apply(1) }\n",
-		"pricing/discount.go": "package pricing\n\nfunc Apply(n int) int { return n }\n",
-		"pricing/receipt.go":  "package pricing\n\nfunc Savings(n int) int { return n - Apply(n) }\n",
+		"cart/cart.go":        "package cart\n\nimport \"example.com/x/pricing\"\n\nfunc Total(d *pricing.Discount) int { return d.Apply(1) }\n",
+		"pricing/discount.go": "package pricing\n\ntype Discount struct{}\n\nfunc (d *Discount) Apply(n int) int { return n }\n",
+		"pricing/receipt.go":  "package pricing\n\nfunc Savings(n int) int {\n\tvar d Discount\n\treturn n - d.Apply(n)\n}\n",
 	})
 	seed := []string{"cart/cart.go#Total"}
 	callers, _ := nameMatches(s.collect(t, map[string]any{"symbols": seed}))
@@ -62,7 +68,7 @@ func TestSamePackage_TheScopeFilterRunsAtTheSecondHop(t *testing.T) {
 
 	log.reset()
 	pack := s.collect(t, map[string]any{"symbols": seed, "within": []string{"cart", "pricing/discount.go"}})
-	if _, ok := pack.related(goldID("pricing/discount.go", "Apply")); !ok {
+	if _, ok := pack.related(goldID("pricing/discount.go", "(*Discount).Apply")); !ok {
 		t.Fatalf("control: the callee inside within is missing: %v", relatedIDs(pack))
 	}
 	callers, _ = nameMatches(pack)
@@ -77,11 +83,11 @@ func TestSamePackage_TheScopeFilterRunsAtTheSecondHop(t *testing.T) {
 // and listed as a caller with its signature.
 func TestSamePackage_ASensitiveSiblingIsNamedAndNeverRead(t *testing.T) {
 	files := map[string]string{
-		"p/a.go":      "package p\n\nfunc Apply(n int) int { return n }\n",
-		"p/b.go":      "package p\n\nfunc Savings(n int) int { return n - Apply(n) }\n",
-		"p/secret.go": "package p\n\n// LEAK-MARKER\nfunc Leak(n int) int { return Apply(n) + 1 }\n",
+		"p/a.go":      calcFile,
+		"p/b.go":      "package p\n\nfunc Savings(n int) int {\n\tvar c Calc\n\treturn n - c.Apply(n)\n}\n",
+		"p/secret.go": "package p\n\n// LEAK-MARKER\nfunc Leak(n int) int {\n\tvar c Calc\n\treturn c.Apply(n) + 1\n}\n",
 	}
-	args := map[string]any{"symbols": []string{"p/a.go#Apply"}}
+	args := map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}}
 
 	open, openLog := newSamePkgTool(t, files)
 	pack := open.collect(t, args)
@@ -119,15 +125,15 @@ func TestSamePackage_ASensitiveSiblingIsNamedAndNeverRead(t *testing.T) {
 // declaration under the cap loses none and says nothing.
 func TestSamePackage_ThePerDeclarationCapKeepsTheBestAndSaysSo(t *testing.T) {
 	files := map[string]string{
-		"p/a.go":      "package p\n\nfunc Apply(n int) int { return n }\n",
-		"p/x_test.go": "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) { Apply(1) }\n\nfunc TestTwo(t *testing.T) { Apply(2) }\n",
+		"p/a.go":      calcFile,
+		"p/x_test.go": "package p\n\nimport \"testing\"\n\nfunc TestOne(t *testing.T) { var c Calc; c.Apply(1) }\n\nfunc TestTwo(t *testing.T) { var c Calc; c.Apply(2) }\n",
 	}
 	production := contextSamePkgPerSeed + 3
 	for i := range production {
-		files[fmt.Sprintf("p/c%02d.go", i)] = fmt.Sprintf("package p\n\nfunc Caller%02d() int { return Apply(%d) }\n", i, i)
+		files[fmt.Sprintf("p/c%02d.go", i)] = fmt.Sprintf("package p\n\nfunc Caller%02d() int { var c Calc; return c.Apply(%d) }\n", i, i)
 	}
 	s, _ := newSamePkgTool(t, files)
-	args := map[string]any{"symbols": []string{"p/a.go#Apply"}, "intent": contextIntentChange}
+	args := map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}, "intent": contextIntentChange}
 	pack := s.collect(t, args)
 	callers, _ := nameMatches(pack)
 	if len(callers) != contextSamePkgPerSeed {
@@ -161,13 +167,13 @@ func TestSamePackage_ThePerDeclarationCapKeepsTheBestAndSaysSo(t *testing.T) {
 // The cap is the collector's, so a test (and nothing else) can name its own: with a
 // cap of 2, four callers list two and count two.
 func TestSamePackage_TheCapIsTheCollectorsOwn(t *testing.T) {
-	files := map[string]string{"p/a.go": "package p\n\nfunc Apply(n int) int { return n }\n"}
+	files := map[string]string{"p/a.go": calcFile}
 	for i := range 4 {
-		files[fmt.Sprintf("p/c%d.go", i)] = fmt.Sprintf("package p\n\nfunc Caller%d() int { return Apply(%d) }\n", i, i)
+		files[fmt.Sprintf("p/c%d.go", i)] = fmt.Sprintf("package p\n\nfunc Caller%d() int { var c Calc; return c.Apply(%d) }\n", i, i)
 	}
 	s, _ := newSamePkgTool(t, files)
 	s.collector.samePkgCap = 2
-	pack := s.collect(t, map[string]any{"symbols": []string{"p/a.go#Apply"}})
+	pack := s.collect(t, map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}})
 	callers, _ := nameMatches(pack)
 	requireIDs(t, "callers under a cap of 2", callers, goldID("p/c0.go", "Caller0"), goldID("p/c1.go", "Caller1"))
 	if pack.Expansion.Stats.SamePkgMore != 2 {
@@ -179,11 +185,11 @@ func TestSamePackage_TheCapIsTheCollectorsOwn(t *testing.T) {
 // place under the cap: with a cap of one, the real caller is still the one listed.
 func TestSamePackage_AHeldDeclarationSpendsNoPlaceUnderTheCap(t *testing.T) {
 	s, _ := newSamePkgTool(t, map[string]string{
-		"p/a.go": "package p\n\nfunc Apply(n int) int {\n\tif n < 0 {\n\t\treturn Apply(-n)\n\t}\n\treturn n\n}\n",
-		"p/b.go": "package p\n\nfunc Savings(n int) int { return n - Apply(n) }\n",
+		"p/a.go": "package p\n\ntype Calc struct{}\n\nfunc (c *Calc) Apply(n int) int {\n\tif n < 0 {\n\t\treturn c.Apply(-n)\n\t}\n\treturn n\n}\n",
+		"p/b.go": "package p\n\nfunc Savings(n int) int {\n\tvar c Calc\n\treturn n - c.Apply(n)\n}\n",
 	})
 	s.collector.samePkgCap = 1
-	callers, _ := nameMatches(s.collect(t, map[string]any{"symbols": []string{"p/a.go#Apply"}}))
+	callers, _ := nameMatches(s.collect(t, map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}}))
 	requireIDs(t, "callers under a cap of 1", callers, goldID("p/b.go", "Savings"))
 }
 
@@ -195,15 +201,15 @@ func TestSamePackage_ProductionCodeIsScannedBeforeTestsUnderTheScanBound(t *test
 	tests.WriteString("package p\n\nimport \"testing\"\n\n")
 	const extra = 7
 	for i := range contextSamePkgSiteScan + extra - 1 {
-		fmt.Fprintf(&tests, "func Test%03d(t *testing.T) { Apply(%d) }\n\n", i, i)
+		fmt.Fprintf(&tests, "func Test%03d(t *testing.T) { var c Calc; c.Apply(%d) }\n\n", i, i)
 	}
 	s, _ := newSamePkgTool(t, map[string]string{
-		"p/a.go":      "package p\n\nfunc Apply(n int) int { return n }\n",
+		"p/a.go":      calcFile,
 		"p/x_test.go": tests.String(),
-		"p/z.go":      "package p\n\nfunc Last() int { return Apply(0) }\n",
+		"p/z.go":      "package p\n\nfunc Last() int { var c Calc; return c.Apply(0) }\n",
 	})
 	s.collector.samePkgCap = 1000
-	args := map[string]any{"symbols": []string{"p/a.go#Apply"}}
+	args := map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}}
 	pack := s.collect(t, args)
 	callers, _ := nameMatches(pack)
 	if !slices.Contains(callers, goldID("p/z.go", "Last")) {
@@ -289,7 +295,7 @@ func TestSamePackage_TheSourceReaderStaysUnderTheRootAndThroughTheGuard(t *testi
 // Each name of a directory is read once: a level plans one read per directory for the
 // names not asked before, and nothing when every name was.
 func TestSamePackage_EachNameOfADirectoryIsReadOnce(t *testing.T) {
-	s, _ := newSamePkgTool(t, samePkgFunctionFiles)
+	s, _ := newSamePkgTool(t, samePkgSiblingFiles)
 	e := newExpander(s.store, contextScope{}, ranker{}, nil)
 	e.sp = newSamePackage(nil, nil, 1)
 	first := e.planRead("p", []string{"Apply", "Dup"})
@@ -323,7 +329,7 @@ func TestSamePackage_EachNameOfADirectoryIsReadOnce(t *testing.T) {
 // A read the deadline cut short is not an empty directory: the walk records that it ran
 // out of time, and what it holds stays empty rather than half-filled.
 func TestSamePackage_AReadCutByTheDeadlineIsRecordedNotMistakenForNothing(t *testing.T) {
-	s, _ := newSamePkgTool(t, samePkgFunctionFiles)
+	s, _ := newSamePkgTool(t, samePkgSiblingFiles)
 	e := newExpander(s.store, contextScope{}, ranker{}, nil)
 	e.sp = newSamePackage(nil, nil, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -366,9 +372,9 @@ func TestSamePackage_AFileIsTrustedOnlyWithinTheBudgetAndWhenItsHashMatches(t *t
 // describe other bytes. It is not read for callers, and the pack says so.
 func TestSamePackage_ASiblingChangedSinceIndexingIsNotTrusted(t *testing.T) {
 	s := newShop(t)
-	args := map[string]any{"symbols": []string{"pricing/discount.go#Apply"}}
+	args := map[string]any{"symbols": []string{"pricing/discount.go#Discount.Off"}}
 	callers, _ := nameMatches(s.collect(t, args))
-	if !slices.Contains(callers, goldID("pricing/receipt.go", "Savings")) {
+	if !slices.Contains(callers, goldID("pricing/receipt.go", "Tenth")) {
 		t.Fatalf("control: the unchanged sibling is not listed: %v", callers)
 	}
 
@@ -382,10 +388,10 @@ func TestSamePackage_ASiblingChangedSinceIndexingIsNotTrusted(t *testing.T) {
 	}
 	pack := s.collect(t, args)
 	callers, _ = nameMatches(pack)
-	if slices.Contains(callers, goldID("pricing/receipt.go", "Savings")) {
+	if slices.Contains(callers, goldID("pricing/receipt.go", "Tenth")) {
 		t.Errorf("a caller was taken from a sibling that changed since indexing: %v", callers)
 	}
-	if !slices.Contains(callers, goldID("pricing/discount_test.go", "TestApplyPercent")) {
+	if !slices.Contains(callers, goldID("pricing/discount_test.go", "TestOffPercent")) {
 		t.Errorf("an unchanged sibling stopped being examined: %v", callers)
 	}
 	if pack.Expansion.Stats.SamePkgSkipped != 1 {

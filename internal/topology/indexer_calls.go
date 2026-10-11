@@ -33,27 +33,43 @@ const (
 	metaCallNoCallerNode    = "callgraph.no_caller_node"
 	metaCallSites           = "callgraph.call_sites"
 	metaCallQualifiedSites  = "callgraph.qualified_sites"
+
+	metaCallResolvedSamePkg  = "callgraph.resolved_same_package"
+	metaCallResolvedRecvSelf = "callgraph.resolved_receiver_self"
+	metaCallResolvedParam    = "callgraph.resolved_param_typed"
+	metaCallSameFile         = "callgraph.same_file"
+	metaCallBareUnmatched    = "callgraph.bare_unmatched"
 )
 
-// callResolution is one pass's tally. Every qualified call site lands in exactly
-// one bucket, so the buckets sum to the qualified-site count — which is what
-// makes "how much of the call graph does this reach" answerable rather than
-// inferable from an edge count alone.
+// callResolution is one pass's tally. Every call site lands in exactly one
+// bucket, so the buckets sum to the call-site count — which is what makes "how
+// much of the call graph does this reach" answerable rather than inferable from
+// an edge count alone.
 //
 // The invariant is held by construction rather than by care: collectResolvedEdges
-// calls countBucket exactly once per qualified site, on every path including the
-// resolved one, and there is no `continue` between the two. The two buckets that
+// calls countBucket exactly once per site, on every path including the resolved
+// one, and there is no `continue` between the two. The two buckets that
 // are not resolution outcomes at all — a site whose edge was already emitted, and
 // a site with no caller node to hang an edge on — exist BECAUSE they were the two
 // ways a site used to leave the accounting: the first was skipped silently, the
 // second was folded into unmatchedTarget, whose printed wording ("names no
 // top-level function") is a different and untrue claim about it.
 type callResolution struct {
+	// resolved counts sites that produced at least one edge. A bare call to a
+	// function with build-tag variants (foo_linux.go, foo_darwin.go) produces one
+	// edge per variant, so the edge count can exceed it by those variants.
 	resolved        int
 	resolvedNonTest int
-	unresolvedRecv  int
-	externalPackage int
-	unmatchedTarget int
+	// resolvedSamePackage and resolvedReceiverSelf split resolved by tier: bare
+	// `F()` calls and `r.M()` calls on the enclosing method's own receiver. The
+	// remainder of resolved is the package-qualified tier.
+	resolvedSamePackage  int
+	resolvedReceiverSelf int
+	// resolvedParamTyped counts `p.M()` sites on a parameter with a named type.
+	resolvedParamTyped int
+	unresolvedRecv     int
+	externalPackage    int
+	unmatchedTarget    int
 	// repeatOfEdge counts qualified sites that resolved to a caller→target pair
 	// an earlier site already produced an edge for. The edge is emitted once, so
 	// these sites contribute no edge and must not be counted as if they had.
@@ -63,13 +79,18 @@ type callResolution struct {
 	// target itself). It is a fact about the CALLER, not about the target, which
 	// is why it cannot share unmatchedTarget's sentence.
 	noCallerNode int
-	// callSites is EVERY recorded call site in the language, qualified or not.
-	// It is the denominator the reach percentage is published against: measuring
-	// reach against qualified sites alone flatters the number by excluding the
-	// bare-identifier calls this resolver does not attempt either.
+	// sameFile counts bare and receiver-self sites whose every target lives in
+	// the caller's own file. The extractor's intra-file pass owns those edges;
+	// writing a second, derived copy would double-count one call.
+	sameFile int
+	// bareUnmatched counts bare sites naming no top-level function of the
+	// caller's package: a builtin, a local function value, a conversion, or a
+	// dot-imported name.
+	bareUnmatched int
+	// callSites is EVERY recorded call site in the language, qualified or not,
+	// and equals the sum of the eight outcome buckets.
 	callSites int
-	// qualifiedSites is the subset carrying a qualifier, and equals the sum of
-	// the six buckets above.
+	// qualifiedSites is the subset carrying a qualifier.
 	qualifiedSites int
 }
 
@@ -78,20 +99,24 @@ type callResolution struct {
 //
 // What it resolves and what it deliberately does not:
 //
+//   - A BARE call (`F()`) or a RECEIVER-SELF call (`r.M()` inside a method on
+//     r) is resolved within the caller's own package; see
+//     indexer_calls_samepkg.go for the rules and their residual risk.
 //   - A PACKAGE-QUALIFIED call (`stats.Open(…)`) is resolved by looking the
 //     qualifier up in THAT file's own import set, mapping the import path to an
 //     indexed directory, and finding an exported top-level function of that name
 //     there. Per-file import sets are what keep this from degenerating into
 //     name-only matching: this workspace has 2,588 callables sharing a name with
 //     another callable, so a global by-name resolver would be wrong at scale.
-//   - A METHOD CALL on a receiver (`idx.linkImports()`) is NOT resolved, and is
+//   - Any OTHER METHOD CALL on a receiver (`x.Close()` on a local, a parameter,
+//     a field chain `idx.db.Exec()`, a promoted method) is NOT resolved, and is
 //     counted instead. The Go extractor parses with SkipObjectResolution, so
-//     there is no type information anywhere in the index that could turn a
-//     receiver VARIABLE into the type whose method was called. Textual receiver
-//     matching would manufacture wrong edges across those 2,588 colliding names.
-//     A method call is the single most common Go call there is, so this is not a
-//     rounding error — it is most of the call graph, and it is left absent and
-//     labelled rather than present and wrong.
+//     there is no type information anywhere in the index that could turn an
+//     arbitrary receiver VARIABLE into the type whose method was called. Textual
+//     receiver matching would manufacture wrong edges across those 2,588
+//     colliding names, so those calls are left absent and labelled rather than
+//     present and wrong. The receiver-self case is the exception because the
+//     method's own declaration names the variable's type.
 //
 // Like linkImports, the lifecycle accounts for both endpoint CASCADEs: a callee
 // re-index captures and repoints incoming rows by stable to_identity, while a
@@ -116,7 +141,11 @@ func (idx *Indexer) resolveCallsContext(ctx context.Context, mode rebuildMode, c
 		if err != nil {
 			return err
 		}
-		if err := fillScope(ctx, tx, ids); err != nil {
+		siblings, err := samePackageScope(ctx, tx, changed.sortedPaths())
+		if err != nil {
+			return err
+		}
+		if err := fillScope(ctx, tx, append(ids, siblings...)); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM topology_edges
@@ -158,6 +187,11 @@ func (idx *Indexer) resolveCallsContext(ctx context.Context, mode rebuildMode, c
 func (r *callResolution) add(o callResolution) {
 	r.resolved += o.resolved
 	r.resolvedNonTest += o.resolvedNonTest
+	r.resolvedSamePackage += o.resolvedSamePackage
+	r.resolvedReceiverSelf += o.resolvedReceiverSelf
+	r.resolvedParamTyped += o.resolvedParamTyped
+	r.sameFile += o.sameFile
+	r.bareUnmatched += o.bareUnmatched
 	r.unresolvedRecv += o.unresolvedRecv
 	r.externalPackage += o.externalPackage
 	r.unmatchedTarget += o.unmatchedTarget
@@ -197,9 +231,11 @@ type resolverTables struct {
 	pkgDirs map[string][]int64
 	imports map[int64]map[string]string
 	targets map[string]map[string][]callTarget
+	same    samePackageTables
 }
 
-// resolverTables are the three language-filtered lookups a resolution pass needs.
+// resolverTables are the language-filtered lookups a resolution pass needs: three
+// for the package-qualified tier and one set for the same-package tiers.
 
 func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverTables, error) {
 	var t resolverTables
@@ -210,7 +246,10 @@ func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverT
 	if t.imports, err = importsByFile(ctx, tx, lang); err != nil {
 		return t, err
 	}
-	t.targets, err = targetsByDir(ctx, tx, lang)
+	if t.targets, err = targetsByDir(ctx, tx, lang); err != nil {
+		return t, err
+	}
+	t.same, err = loadSamePackageTables(ctx, tx, lang)
 	return t, err
 }
 
@@ -218,13 +257,14 @@ func loadResolverTables(ctx context.Context, tx *sql.Tx, lang string) (resolverT
 type resolvedEdge struct {
 	from, to   int64
 	toIdentity string
+	confidence float64
 }
 
 func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution, scoped bool) ([]resolvedEdge, error) {
 	query := `SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path
            FROM topology_call_sites cs
            JOIN topology_files f ON f.id = cs.file_id
-          WHERE cs.language = ? AND cs.site_kind = ? AND cs.qualifier IS NOT NULL`
+          WHERE cs.language = ? AND cs.site_kind = ?`
 	if scoped {
 		query += ` AND cs.file_id IN (SELECT file_id FROM rebuild_scope)`
 	}
@@ -237,27 +277,32 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 	var edges []resolvedEdge
 	for rows.Next() {
 		var fileID, enclosing int64
-		var callee, qualifier, callerPath string
+		var callee, callerPath string
+		var qualifier sql.NullString
 		if err := rows.Scan(&fileID, &enclosing, &callee, &qualifier, &callerPath); err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: scan site: %w", err)
 		}
-		r.qualifiedSites++
-		target, bucket := resolveOne(t.imports[fileID], qualifier, callee, t.pkgDirs, t.targets)
-		key := [2]int64{enclosing, target.id}
-		if bucket == bucketResolved {
-			switch {
-			case enclosing == 0 || enclosing == target.id:
-				bucket = bucketNoCaller
-			case seen[key]:
-				bucket = bucketRepeat
+		if qualifier.Valid && qualifier.String != QualifierLocal {
+			r.qualifiedSites++
+		}
+		var bucket resolveBucket
+		var emitted []resolvedEdge
+		if cands, tier, ok := t.receiverCandidates(fileID, enclosing, callerPath, callee, qualifier); ok {
+			bucket, emitted = samePackageOutcome(fileID, enclosing, cands, tier == tierBare, seen)
+			if bucket == bucketResolved {
+				r.countTier(tier)
 			}
+		} else {
+			bucket, emitted = qualifiedOutcome(t, fileID, enclosing, callee, qualifier.String, seen)
 		}
 		r.countBucket(bucket)
 		if bucket != bucketResolved {
 			continue
 		}
-		seen[key] = true
-		edges = append(edges, resolvedEdge{from: enclosing, to: target.id, toIdentity: target.identity})
+		for _, e := range emitted {
+			seen[[2]int64{e.from, e.to}] = true
+		}
+		edges = append(edges, emitted...)
 		if !isGoTestPath(callerPath) {
 			r.resolvedNonTest++
 		}
@@ -266,6 +311,22 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 		return nil, fmt.Errorf("topology: resolve calls: rows: %w", err)
 	}
 	return edges, nil
+}
+
+// qualifiedOutcome resolves one package-qualified site through the caller's
+// import set and decides its bucket.
+func qualifiedOutcome(t resolverTables, fileID, enclosing int64, callee, qualifier string, seen map[[2]int64]bool) (resolveBucket, []resolvedEdge) {
+	target, bucket := resolveOne(t.imports[fileID], qualifier, callee, t.pkgDirs, t.targets)
+	if bucket != bucketResolved {
+		return bucket, nil
+	}
+	switch {
+	case enclosing == 0 || enclosing == target.id:
+		return bucketNoCaller, nil
+	case seen[[2]int64{enclosing, target.id}]:
+		return bucketRepeat, nil
+	}
+	return bucketResolved, []resolvedEdge{{from: enclosing, to: target.id, toIdentity: target.identity, confidence: callEdgeConfidence}}
 }
 
 func (r *callResolution) countBucket(b resolveBucket) {
@@ -282,6 +343,10 @@ func (r *callResolution) countBucket(b resolveBucket) {
 		r.repeatOfEdge++
 	case bucketNoCaller:
 		r.noCallerNode++
+	case bucketSameFile:
+		r.sameFile++
+	case bucketBareUnmatched:
+		r.bareUnmatched++
 	}
 }
 
@@ -297,7 +362,7 @@ func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge) error {
 	}
 	defer stmt.Close()
 	for _, e := range edges {
-		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), callEdgeConfidence, callResolverSource, e.toIdentity); err != nil {
+		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), e.confidence, callResolverSource, e.toIdentity); err != nil {
 			return fmt.Errorf("topology: resolve calls: insert: %w", err)
 		}
 	}
@@ -326,6 +391,12 @@ const (
 	// declaration to be the edge's tail (or the tail would be the target itself).
 	// A fact about the caller, not about the target.
 	bucketNoCaller
+	// bucketSameFile: a bare or receiver-self site whose every target is in the
+	// caller's own file, an edge the extractor's intra-file pass owns.
+	bucketSameFile
+	// bucketBareUnmatched: a bare site naming no top-level function of the
+	// caller's package (builtin, local function value, conversion, dot import).
+	bucketBareUnmatched
 )
 
 // resolveOne maps one qualified call site to a target node id.
@@ -499,6 +570,11 @@ func writeCallMeta(tx *sql.Tx, r callResolution) error {
 		{metaCallNoCallerNode, r.noCallerNode},
 		{metaCallSites, r.callSites},
 		{metaCallQualifiedSites, r.qualifiedSites},
+		{metaCallResolvedSamePkg, r.resolvedSamePackage},
+		{metaCallResolvedRecvSelf, r.resolvedReceiverSelf},
+		{metaCallResolvedParam, r.resolvedParamTyped},
+		{metaCallSameFile, r.sameFile},
+		{metaCallBareUnmatched, r.bareUnmatched},
 	}
 	for _, p := range pairs {
 		if _, err := tx.Exec(

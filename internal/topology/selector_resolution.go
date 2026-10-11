@@ -97,11 +97,17 @@ func classifyResolution(nodes []Node) SelectorResolution {
 // node's own subject. Every error, and an unknown node, answers false — derived
 // edges are opt-in, so failing closed only ever withholds them, never invents
 // them.
+//
+// It applies the rule alone (languageAdmitted), not the whole AdmitCallGraph: the
+// rest of an admission is wording for a user — the scope note, the intra-file
+// count, the empty-result label — and costs whole-index COUNT queries. A context
+// pack asks this once per expanded declaration, and on a resolved Go graph the
+// edge count alone was most of the pack's time.
 func DerivedCallsAdmitted(ctx context.Context, db *sql.DB, nodeID int64) bool {
 	subject, err := CallGraphSubjectForNode(ctx, db, nodeID)
 	if err != nil {
 		return false
 	}
-	admission, err := AdmitCallGraph(ctx, db, subject)
-	return err == nil && admission.Admitted
+	ok, err := languageAdmitted(ctx, db, subject.Language)
+	return err == nil && ok
 }

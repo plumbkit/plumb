@@ -285,7 +285,10 @@ type CallSite struct {
 	Callee string
 	// Qualifier is the text to the left of the final dot — an imported package
 	// name, a receiver variable, or a composite literal's type for a field site.
-	// Empty when the call is a bare identifier.
+	// Empty when the call is a bare identifier. Two markers stand for what has no
+	// name: QualifierOpaque and a name followed by QualifierIndexedSuffix.
+	// QualifierLocal marks a bare call whose name the enclosing function declares
+	// itself.
 	Qualifier string
 	StartByte int
 	StartLine int
@@ -306,13 +309,32 @@ type CallSite struct {
 	ArgSpread bool
 }
 
+// Qualifier markers for call sites whose receiver has no name of its own. None of
+// them can equal an identifier, so the resolver can never read one as an import,
+// a receiver variable or a parameter.
+const (
+	// QualifierOpaque is the receiver of a call on a value with no name chain:
+	// `f().M()`, `x.(T).M()`, `T{}.M()`. Recording it as a bare call (an empty
+	// qualifier) once linked `NewX(s).Execute()` to a package function Execute.
+	QualifierOpaque = "()"
+	// QualifierIndexedSuffix follows the name of an indexed receiver: `r[k].M()`
+	// records "r[]", because the method belongs to the element, not to r.
+	QualifierIndexedSuffix = "[]"
+	// QualifierLocal marks a bare call `f()` whose name the enclosing function
+	// declares itself (a parameter, a result, a := or var, a range variable, a
+	// closure parameter): the call is to that local value, not to the package's
+	// function of the same name.
+	QualifierLocal = "(local)"
+)
+
 // CallGraphStatus is what the cross-file call resolver measured on its last
-// pass. Every qualified call site falls into exactly one of the six buckets —
-// Resolved, RepeatOfEdge, NoCallerNode, UnresolvedReceiver, ExternalPackage and
-// UnmatchedTarget — so they sum to QualifiedSites, which is what makes "how much
-// of the call graph is this" a number rather than an impression.
+// pass. Every call site falls into exactly one of the eight buckets — Resolved,
+// RepeatOfEdge, NoCallerNode, UnresolvedReceiver, ExternalPackage,
+// UnmatchedTarget, SameFile and BareUnmatched — so they sum to CallSites, which
+// is what makes "how much of the call graph is this" a number rather than an
+// impression.
 //
-// Two of the six are not resolution outcomes and exist because they were the two
+// Two of the eight are not resolution outcomes and exist because they were the two
 // ways a site used to leave the count: a repeat of an edge already emitted was
 // skipped in silence, and a site with no caller node was folded into
 // UnmatchedTarget, whose printed wording is a claim about the TARGET and untrue
@@ -321,23 +343,32 @@ type CallSite struct {
 // All zeroes mean the pass has not run, never that the workspace has no calls.
 type CallGraphStatus struct {
 	// CallSites is EVERY recorded call site in an admitted language — the
-	// denominator the reach percentage is published against, so that the bare
-	// calls this resolver does not attempt are not quietly excluded from it.
+	// denominator the reach percentage is published against.
 	CallSites int
-	// QualifiedSites is the subset carrying a qualifier, and equals the sum of
-	// the six buckets below.
+	// QualifiedSites is the subset carrying a qualifier.
 	QualifiedSites int
-	// Resolved is the number of cross-file `call-resolver` edges written, which
-	// is also the number of qualified sites that produced one.
+	// Resolved is the number of sites that produced a cross-file `call-resolver`
+	// edge. It equals the edge count except for bare calls to a function with
+	// build-tag variants, which produce one edge per variant.
 	Resolved int
+	// ResolvedSamePackage, ResolvedReceiverSelf and ResolvedParamTyped split
+	// Resolved by tier: bare `F()` calls into the caller's own package, `r.M()`
+	// calls on the enclosing method's own receiver, and `p.M()` calls on a
+	// parameter declared with a named type. The rest is the package-qualified
+	// tier.
+	ResolvedSamePackage  int
+	ResolvedReceiverSelf int
+	ResolvedParamTyped   int
 	// ResolvedNonTest is the subset of Resolved whose caller is not a Go test
 	// file. Test callers are resolved and counted; this is the split, published
 	// so a consumer that must exclude them can, and so neither number can be
 	// quoted alone.
 	ResolvedNonTest int
 	// UnresolvedReceiver counts sites whose qualifier is not an import of their
-	// own file — method calls on a receiver, which carry no type information
-	// under SkipObjectResolution and are left absent rather than guessed.
+	// own file and not the enclosing method's own receiver resolving to one of
+	// its type's methods — method calls on a local, a parameter, a field chain or
+	// a promoted method, which carry no type information under
+	// SkipObjectResolution and are left absent rather than guessed.
 	UnresolvedReceiver int
 	// ExternalPackage counts sites whose qualifier IS an import, but one that
 	// leaves the indexed tree (standard library, third party).
@@ -355,4 +386,12 @@ type CallGraphStatus struct {
 	// enclosing declaration to be the edge's tail. That is a fact about the
 	// caller; it is not UnmatchedTarget, whose wording is about the target.
 	NoCallerNode int
+	// SameFile counts bare and receiver-self sites whose target is in the
+	// caller's own file. Those calls are edges already, emitted by the
+	// extractor's intra-file pass, and are not counted again as Resolved.
+	SameFile int
+	// BareUnmatched counts bare sites naming no top-level function of the
+	// caller's package: a builtin, a local function value, a conversion or a
+	// dot-imported name.
+	BareUnmatched int
 }
