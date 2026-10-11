@@ -567,6 +567,19 @@ func TestResume_ReplacingTheLinkageRevokesTheCredential(t *testing.T) {
 	if got := second.s.recovery(); got != recoveryEstablished {
 		t.Errorf("recovery = %q, want the name-only outcome (established)", got)
 	}
+	// PLAN-515: the refusal is answered with a fresh credential for THIS connection, in
+	// the same response, so its proxy can file it over the dead entry.
+	fresh := r.credential()
+	if !resumeSecretShape.MatchString(fresh) || fresh == cred {
+		t.Fatalf("a revoked presentation was answered with %q, want a fresh credential", fresh)
+	}
+	lk, err := w.ss.LookupResumeCredential("conv-A", sessionstate.HashResumeSecret(fresh))
+	if err != nil || lk.State != sessionstate.CredentialCurrent || lk.ProxySessionID != "P2" {
+		t.Errorf("the fresh credential resolves to %+v (err %v), want the current credential of P2", lk, err)
+	}
+	if strings.Contains(r.Text, fresh) {
+		t.Error("the fresh credential reached the text a model reads")
+	}
 }
 
 // Failed ownership: junk presented against a conversation that has a credential

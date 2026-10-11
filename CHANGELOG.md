@@ -33,6 +33,21 @@
 
 ### Fixed
 
+- **A revoked resume credential no longer breaks continuity for good.** A
+  `plumb serve` proxy keeps the resume credential it was given and presents it
+  when a replacement serve takes over the conversation. If the daemon refused it
+  as revoked (because the conversation's linkage was replaced, or after three
+  presentations that matched nothing), the proxy was not given a successor, so
+  by design it kept the stored entry. Every later replacement then presented the
+  same dead credential, was refused again, and started under a new session ID,
+  leaving mail bound to the old one stranded, until the stored file was deleted
+  by hand. The daemon now answers a revoked presentation with a fresh credential
+  for the presenting connection, in the same `session_start` response. The proxy
+  files it over the dead entry, so the next replacement resumes the full
+  identity. Proxies already running read it, so a daemon restart is enough. A
+  superseded presentation is unchanged: a successor exists, and overwriting its
+  entry could hand the conversation to the stale copy.
+
 - **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**
   `plumb hooks run-codex` decoded only the session id, cwd and event name, so
   a Codex conversation begun by `/clear` was indistinguishable from any other

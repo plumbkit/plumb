@@ -614,9 +614,10 @@ proof needs the 0600 key, or a (stamp, proof) pair lifted from another conversat
 transcript, which is deliberate reading of same-user data and the accepted residual of
 this section; a host that forwards only declared arguments drops the proof and so gets
 the name-only resume. Residual: the store is a same-user-readable
-file (the standing boundary above), and the daemon does not tell a proxy that it refused a
-credential, so a dead entry stays until the cap evicts it or the conversation's next
-disclosure replaces it. A superseded or revoked presentation is answered and not
+file (the standing boundary above). A revoked presentation is answered with a fresh
+credential for the presenting connection, which the proxy files over the dead entry; a
+superseded entry stays until the cap evicts it or the conversation's next disclosure
+replaces it. A superseded or revoked presentation is answered and not
 punished, but a generation the daemon has since pruned matches nothing and counts toward
 its three-strikes revocation, so a dead entry presented by three successive replacements
 can cost its own conversation the credential, which is the name-only continuity that ships

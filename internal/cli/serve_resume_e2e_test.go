@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/sessionstate"
 )
 
 // e2eServe is a serve proxy with a client attached, and the daemon connections it has
@@ -430,4 +431,64 @@ func TestServeReplacement_AgainstAnOldDaemon(t *testing.T) {
 		t.Errorf("an old daemon: id %q→%q name %q→%q; want today's behaviour, the name back under a new ID", id1, id2, name1, name2)
 	}
 	s2.assertNeverSaw(rcSecret(5))
+}
+
+// A revoked stored credential heals on the next replacement (PLAN-515). Before, the proxy
+// that presented it was refused, given no successor, and so (by design) left the entry
+// alone: every later replacement presented the same dead credential, was refused again
+// and forked a new session ID, until someone deleted the file by hand. Now the daemon
+// answers a revoked presentation by issuing the connection a fresh credential in the same
+// response, the proxy files it over the dead one, and the hop after resumes in full. The
+// proxy here is unchanged code, which is the point: the fix reaches serves already
+// running once the daemon restarts.
+func TestServeReplacement_ARevokedCredentialIsReplacedSoTheNextHopResumes(t *testing.T) {
+	w := newIdentityWorld(t).withState()
+	dir, scope := t.TempDir(), "scope-e2e"
+	first := e2eEstablish(t, w, rcStore(t, dir, scope))
+	dead, ok := rcStore(t, dir, scope).load(e2eConv)
+	if !ok {
+		t.Fatal("precondition: the first serve stored no credential")
+	}
+	// Revoke it the way a griefer can (design §5): three presentations that match nothing.
+	for range sessionstate.ResumeFailureLimit {
+		if _, _, err := w.ss.NoteFailedResumePresentation(e2eConv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if lk, _ := w.ss.LookupResumeCredential(e2eConv, sessionstate.HashResumeSecret(dead.Secret)); lk.State != sessionstate.CredentialRevoked {
+		t.Fatalf("precondition: the stored credential is %q, want revoked", lk.State)
+	}
+
+	s2 := w.startServe(t, rcStore(t, dir, scope), "proxy-2", false)
+	s2.initialize()
+	id2, _, packet := s2.start(e2eConv, first.ws)
+	if id2 == first.id {
+		t.Fatal("a revoked credential restored the predecessor's session ID")
+	}
+	if !strings.Contains(packet, "revoked") {
+		t.Errorf("the replacement is not told its credential was revoked:\n%s", packet)
+	}
+	fresh, ok := rcStore(t, dir, scope).load(e2eConv)
+	if !ok || fresh.Secret == dead.Secret {
+		t.Fatalf("the store still holds the revoked credential (found %v): the next replacement would present it again", ok)
+	}
+	if lk, _ := w.ss.LookupResumeCredential(e2eConv, sessionstate.HashResumeSecret(fresh.Secret)); lk.State != sessionstate.CredentialCurrent {
+		t.Errorf("the credential filed over the revoked one is %q, want current", lk.State)
+	}
+	s2.assertNeverSaw(dead.Secret, fresh.Secret)
+	s2.kill()
+
+	s3 := w.startServe(t, rcStore(t, dir, scope), "proxy-3", false)
+	s3.initialize()
+	id3, _, packet := s3.start(e2eConv, first.ws)
+	if id3 != id2 {
+		t.Fatalf("the hop after the refusal came back as %q, want the healed session %q", id3, id2)
+	}
+	if line := sessionLine(packet); !strings.Contains(line, "identity restored") {
+		t.Errorf("the hop after the refusal does not report a full restore: %q", line)
+	}
+	if strings.Contains(packet, "revoked") {
+		t.Errorf("the refusal is reported again on the next hop:\n%s", packet)
+	}
+	s3.assertNeverSaw(dead.Secret, fresh.Secret)
 }

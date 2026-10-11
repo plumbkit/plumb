@@ -55,9 +55,10 @@ const ResumeSecretPrefix = "rsk1-"
 // `_meta` is client-settable and conversation IDs are client-visible claims, so any
 // connection can present junk against a VICTIM's conversation and revoke its
 // credential. The worst case is the status quo ante (name-only continuity until the
-// victim re-establishes one) and the revocation is logged. Hardening it needs an
-// authority the client cannot forge, which is Design B's problem, not this
-// counter's.
+// victim re-establishes one, which its next presentation of the revoked credential now
+// does: the daemon answers it with a fresh one) and the revocation is logged.
+// Hardening it needs an authority the client cannot forge, which is Design B's
+// problem, not this counter's.
 const ResumeFailureLimit = 3
 
 // ErrNoIdentityRecord is returned when a credential is minted for a proxy session

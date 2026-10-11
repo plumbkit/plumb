@@ -729,12 +729,16 @@ Left explicitly open for the implementation review:
 7. Retention for the proxy-side credential store. No deletion or retention
    controls exist anywhere in plumb yet (threat-model known gap 4). The proxy store
    is capped at 256 entries, evicting the oldest by modification time, and an entry is
-   replaced by the next credential disclosed for its conversation. The daemon does not
-   yet tell a proxy that it refused a credential as superseded or revoked, so a proxy
-   cannot delete a dead entry on that signal, and it keeps an entry whose presentation
-   earned no successor because it cannot tell a refusal from a restore that could not
-   finish (a live session still holding the predecessor's ID), which a later retry can
-   still complete. A refused entry therefore stays until the cap evicts it.
+   replaced by the next credential disclosed for its conversation. A proxy keeps an
+   entry whose presentation earned no successor, because it cannot tell a refusal from
+   a restore that could not finish (a live session still holding the predecessor's
+   ID), which a later retry can still complete. Resolved for REVOKED (PLAN-515): the
+   daemon answers a revoked presentation with a fresh credential for the presenting
+   connection, in the same response, and a disclosed credential is what makes the
+   proxy own the entry again, so it files the fresh one over the dead one with no
+   proxy change. A SUPERSEDED entry still stays until the cap evicts it or a later
+   disclosure replaces it: a successor exists, and overwriting its entry from the
+   stale side could hand the conversation to the stale copy.
 8. Whether `plumb doctor` should surface credential state (per-conversation
    liveness, revocations, theft signals) once the feature ships; diagnostics
    for a security mechanism deserve their own pass.
