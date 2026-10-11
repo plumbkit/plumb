@@ -253,15 +253,18 @@
 ### Security
 
 - **The `git` tool's read tier no longer writes files or reads outside the
-  repository.** The read tier is always on, but it passed every option through
-  to git, and a few options on read verbs do more than read. `--output=<path>`
-  on `diff`, `log`, `show`, `shortlog` and `stash show` created or truncated any
-  file the caller named. `diff --no-index` and `blame --contents` printed files
-  from outside the repository. `blame -S` and `--ignore-revs-file` echoed an
-  outside file's lines in git's error messages. These options are now refused
-  on the read tier, however they are spelled: an abbreviation such as `--outp`,
-  a bundle such as `-wS`, and a value given as the next argument all count, as
-  they do for git. A refusal names the option and what it would have done.
+  repository through the options and paths it knew to leave.** The read tier is
+  always on, but it passed every argument through to git, and some of them do
+  more than read. `--output=<path>` on `diff`, `log`, `show`, `shortlog`,
+  `blame` and `stash show` created or truncated any file the caller named.
+  `diff --no-index`, `blame --contents`, `blame -S`, `--ignore-revs-file` and
+  `grep -f` printed or echoed files from outside the repository. So did a plain
+  `git diff <outside-path> <file>`, which switches to no-index mode by itself.
+  Those options are now refused on the read tier, read the way git parses them:
+  a bundle such as `-wS` or `-CL -S` and a value given as the next argument both
+  count. Separately, any argument that names an existing path outside the
+  repository is refused, whatever option it belongs to. A refusal names the
+  argument and why.
 
 ## 0.24.0 (2026-10-10)
 
