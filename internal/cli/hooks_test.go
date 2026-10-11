@@ -111,7 +111,7 @@ func TestInstallHooksAt_RefusesInvalidConfig(t *testing.T) {
 }
 
 func TestCodexHookResult(t *testing.T) {
-	session := codexHookResult(codexHookInput{Event: "SessionStart", SessionID: "thr_123"}, nil)
+	session := codexHookResult(codexHookInput{Event: "SessionStart", SessionID: "thr_123"}, nil, nil)
 	if session == nil {
 		t.Fatal("SessionStart produced no context")
 	}
@@ -125,14 +125,14 @@ func TestCodexHookResult(t *testing.T) {
 		called = true
 		return mailReport{Count: 2}, true
 	}
-	if out := codexHookResult(codexHookInput{Event: "Stop", StopHookActive: true}, probe); out != nil {
+	if out := codexHookResult(codexHookInput{Event: "Stop", StopHookActive: true}, probe, nil); out != nil {
 		t.Errorf("active Stop output = %v, want nil", out)
 	}
 	if called {
 		t.Error("active Stop invoked the mailbox probe")
 	}
 
-	stop := codexHookResult(codexHookInput{Event: "Stop", SessionID: "thr_123", CWD: "/repo"}, probe)
+	stop := codexHookResult(codexHookInput{Event: "Stop", SessionID: "thr_123", CWD: "/repo"}, probe, nil)
 	if stop == nil || stop["decision"] != "block" {
 		t.Errorf("unread mail Stop output = %v, want block", stop)
 	}
@@ -142,7 +142,7 @@ func TestCodexHookResult(t *testing.T) {
 
 	if out := codexHookResult(codexHookInput{Event: "Stop"}, func(_, _ string) (mailReport, bool) {
 		return mailReport{}, false
-	}); out != nil {
+	}, nil); out != nil {
 		t.Errorf("failed probe output = %v, want nil", out)
 	}
 }

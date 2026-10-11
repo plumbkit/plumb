@@ -300,7 +300,12 @@ still only the linkage sentence. The daemon keeps it as a one-shot marker for
 sent), consumed by that conversation's first call, and only when the linked
 conversation is the only one on the connection. Without it (the hook not
 installed, a daemon restart in between, or other conversations on the
-connection) the new conversation simply gets an identity of its own. Claude Code gets a third hook:
+connection) the new conversation simply gets an identity of its own. Codex's
+`SessionStart` sends the same notification for `source: "clear"` (Codex 0.161.0
+also reports `startup`, `resume`, `compact` and `fork`, none of which announce),
+with the same budget and an unchanged JSON stdout. Codex calls carry no
+identity stamp, so its next `session_start` relinks the connection by itself;
+the marker records that the old conversation ended. Claude Code gets a third hook:
 
 - **`PreToolUse` stamps identity.** Claude Code runs every subagent over the
   parent's one `plumb serve`, and its transport carries no per-agent identity,

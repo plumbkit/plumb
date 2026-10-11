@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.24.1 (unreleased)
+
+### Fixed
+
+- **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**
+  `plumb hooks run-codex` decoded only the session id, cwd and event name, so
+  a Codex conversation begun by `/clear` was indistinguishable from any other
+  start. The Codex hook input now carries `source`. Codex 0.161.0's hook schema
+  lists `startup`, `resume`, `clear`, `compact` and `fork`. On `clear` it sends
+  the same `conversation-cleared <id>` control-socket notification as the
+  Claude Code hook, before printing the linkage document. It is best effort and
+  fails open: the same one-second budget, and stdout byte-identical to before
+  for every source. `fork`, `compact` and `resume` never announce.
+
+  Codex calls carry no identity stamp, so its next `session_start` already
+  relinks the connection on its own. The marker is evidence that the old
+  conversation ended, kept for the follow-up that stops the new id from
+  counting as a second conversation on the connection. Hooks installed by
+  `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
+
 ## 0.24.0 (2026-10-10)
 
 ### Security
