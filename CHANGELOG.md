@@ -13,6 +13,27 @@
 
 ### Added
 
+- **The Go call graph resolves same-package calls, receiver calls and calls on
+  typed parameters (#632).** The topology call resolver used to link only
+  package-qualified calls (`pkg.F()`), about 3% of call sites, so a function's
+  callers in the sibling files of its own package were invisible to
+  `topology_explore`, `topology_impact`, `call_hierarchy`'s topology fallback,
+  `topology_affected`, `minimal_diff_review` and `context_for_task`. It now also
+  links a bare `F()` to a function of the caller's own directory and package
+  clause (every build-tag variant), `r.M()` inside `func (r *T)` to `T`'s method,
+  and `p.M()` on a parameter declared `p *T` or `p *pkg.T` to that type's method
+  (exported only across packages). On plumb's own tree cross-file call edges rose
+  from 3,719 to 18,209 (13.2% of call sites), and the graph holds 64.5% of the
+  cross-file caller→callee pairs the Go type checker finds, against 10% before.
+  Checked against the type checker on every edge, the new edges are 99.92% right;
+  the misses are a local value shadowing a package function's name, which is why
+  they carry confidence 0.85. A method call on a local variable or a field stays
+  unresolved and counted. `topology_status` now accounts for every call site in
+  eight buckets and prints the split by kind. On a large Go index a
+  `context_for_task` pack is also about 5x faster (warm p95 222 ms on plumb's
+  retrospective tasks): admitting derived edges no longer counts every edge in the
+  index once per declaration it expands.
+
 - **Experimental, opt-in context hints for Claude Code and Codex.**
   `plumb hooks install <client> --context` adds two advisory handlers,
   `UserPromptSubmit` and `SubagentStart`; `[context] hints = true` or
@@ -83,13 +104,16 @@
     caller"); an empty, capped or cut caller list is never reported as "no callers".
     A type lists its members and says a struct's fields are not graph members; a file
     seed in a language with no extractor adds the index's count of unparsed files.
-  - **Same-package callers.** The Go call resolver follows package-qualified calls
-    only, so a declaration's callers in its sibling files (bare calls, and calls on a
-    receiver) are never edges. The pack reads the call sites the index recorded in the
-    same directory and package clause and lists a declaration holding a call of the
-    seed's name at `e1`, labelled "same-package name match" ("test" for a test file)
-    and never counted among the resolved callers. A function's match is a bare call no
-    local declaration shadows; a method's needs receiver evidence in the caller itself
+  - **Same-package callers.** Bare same-package calls, receiver calls and calls on
+    typed parameters are resolved edges (see the call-graph entry above), and a
+    declaration lists at most 12 test callers, counting the rest. For a method called
+    on a local variable or a field, which is still not an edge, the pack reads the
+    call sites the index recorded in the same directory and package clause and lists
+    a declaration holding a call of the seed's name at `e1`, labelled "same-package
+    name match" ("test" for a test file) and never counted among the resolved
+    callers. A function gets the search only on an index built before the resolver
+    linked same-package calls; its match is a bare call no local declaration
+    shadows. A method's needs receiver evidence in the caller itself
     (its receiver, a parameter, `var x T`, `x := T{}`, `&T{}`, `new(T)`); a receiver of
     no evident type, a name declared twice in the package and a sensitive file are
     `e0` gap candidates only. The sibling is parsed only if it still hashes to what the

@@ -327,58 +327,78 @@ folded from the same `imports` edges, and function mode runs to full outward clo
 its admitted Go call graph. Neither reuses the depth/byte-capped symbol-neighbourhood BFS
 used elsewhere in this page.
 
-## Cross-file call edges (Go only, and small)
+## Cross-file call edges (Go only)
 
 The index records **call sites** — every call expression, resolved or not — in
-`topology_call_sites`, and a resolver turns the package-qualified ones into cross-file
-`calls` edges tagged `source = "call-resolver"`. Before this, every call edge in the
-index was intra-file: extractors run per file and emit edges as indices into that file's
-own node slice, so nothing they produced could name a symbol in another file, and a
-callee the extractor could not match was dropped without a trace.
+`topology_call_sites`, and a resolver turns four shapes of them into cross-file `calls`
+edges tagged `source = "call-resolver"`. Extractors run per file and emit edges as
+indices into that file's own node slice, so nothing they produce can name a symbol in
+another file; every cross-file call edge comes from this resolver.
 
 **Read the reach number before you read the graph.** Measured on plumb's own tree
-(1,414 indexed files, 1,283 of them Go):
+(1,846 indexed files, Go only):
 
 | | |
 |---|---:|
-| recorded Go call sites | 89,942 |
-| …carrying a qualifier (`x.F()`) | 60,803 |
-| cross-file `call-resolver` edges | **2,531** |
-| …with a non-`_test.go` caller | **882** |
-| distinct targets reached | 378 |
-| **share of all call sites resolved** | **2.8%** |
+| recorded Go call sites | 137,944 |
+| cross-file `call-resolver` edges (sites) | **18,209** |
+| …package-qualified `pkg.F()` | 3,757 |
+| …bare same-package `F()` | 12,950 |
+| …on the method's own receiver `r.M()` | 1,040 |
+| …on a typed parameter `p.M()` | 462 |
+| …with a non-`_test.go` caller | 5,376 |
+| **share of all call sites resolved across files** | **13.2%** |
+| same-file calls the extractor links directly | 13,765 (10.0%) |
 
-Every qualified site lands in exactly one bucket, and the six add up to the 60,803 above —
+Every call site lands in exactly one bucket, and the eight add up to the 137,944 above —
 that is what makes this a measurement rather than an impression:
 
-| qualified-site bucket | |
+| call-site bucket | |
 |---|---:|
-| resolved into an edge | 2,531 |
-| method call on a receiver, left unresolved | 37,635 |
-| qualified call leaving the indexed tree (stdlib, third party) | 20,376 |
-| repeat of a caller→target edge already emitted | 258 |
-| names no exported top-level function in the target package | 3 |
+| resolved into a cross-file edge | 18,209 |
+| method call on another receiver (a local, a field chain, a returned value), left unresolved | 53,729 |
+| qualified call leaving the indexed tree (stdlib, third party) | 30,271 |
+| bare call naming no function of the package (builtin, local value, conversion) | 17,921 |
+| bare or receiver call whose target is in the same file (the extractor's edge) | 13,765 |
+| repeat of a caller→target edge already emitted | 4,043 |
+| names no exported top-level function in the target package | 6 |
 | no enclosing declaration to hang the edge on | 0 |
 
-The last two buckets are small here and are not decoration: the repeat bucket is where 258
-sites used to vanish from the count, and the no-caller bucket is a fact about the *caller*
-that used to be reported under the target's wording.
+**How good the edges are.** Checked against the Go type checker (`go/packages`) on every
+edge, not a sample: the package-qualified tier is exact (3,489 of 3,489 judgeable edges),
+and the three newer tiers are right 99.92% of the time (13,977 of 13,988; the 11 misses
+are all a local value shadowing a package function's name, `walk := …; walk()`). Of the
+cross-file caller→callee pairs the type checker finds, the graph holds **64.5%**: every
+function call, same-package or not, but only 15% of same-package method calls and 7% of
+cross-package ones.
 
-`topology_status` prints these for your own workspace. **2.8% is the headline, not a
-caveat.** A package-qualified-functions-only resolver reaches the calls that cross a
-package boundary and nothing else; the single most common Go call is a method call on a
-receiver variable, and the Go extractor parses with `SkipObjectResolution`, so there is
-no type information anywhere in the index that could turn a receiver *variable* into the
-type whose method was called. Those edges are **absent and counted**, never guessed:
-20.8% of plumb's own callables share a name with another callable, so textual receiver
-matching would manufacture wrong edges at scale.
+`topology_status` prints these for your own workspace. The Go extractor parses with
+`SkipObjectResolution`, so the index carries no type flow: a method call on a *local
+variable* or a *field* cannot be tied to its type, and those edges are **absent and
+counted**, never guessed — 20.8% of plumb's own callables share a name with another
+callable, so textual receiver matching would manufacture wrong edges at scale.
 
-**What resolves.** A call `pkg.Fn()` whose `pkg` is an import of *that same file*, whose
-import path names a directory the index holds, and whose `Fn` is an exported top-level
-function declared there. Per-file import sets are the whole precision story — a global
-by-name resolver is what the name-collision figure above rules out. An unexported callee
-behind a qualifier is treated as a receiver call, because a local variable can shadow an
-import name and that is the only reading which cannot invent an edge.
+**What resolves.**
+- *Package-qualified.* `pkg.Fn()` whose `pkg` is an import of *that same file*, whose
+  import path names a directory the index holds, and whose `Fn` is an exported top-level
+  function declared there. Per-file import sets are the precision story. An unexported
+  callee behind a qualifier is treated as a receiver call, because a local variable can
+  shadow an import name.
+- *Bare same-package.* `Fn()` linked to a top-level function of the caller's own
+  directory **and package clause**, so an external `foo_test` package never reaches
+  `foo`'s functions. A function with build-tag variants (`x_linux.go`, `x_darwin.go`)
+  gets an edge to each. A builtin, a conversion or a local closure is no top-level
+  function and is counted, not linked.
+- *Receiver-self.* Inside `func (r *T) M()`, a call `r.N()` is linked to `T`'s method
+  `N` in the same package: the declaration names `r`'s type.
+- *Typed parameter.* Inside `func f(st *Store, db *db.DB)`, `st.Get()` and `db.Query()`
+  are linked to the parameter type's method — the caller's own package for `Store`, the
+  imported package for `db.DB` (exported methods only). A parameter shadows an import of
+  the same name, as in Go.
+
+The last three carry confidence **0.85** (the qualified tier 0.9): their residual risk is
+a local value re-declaring the name. A target in the caller's own file is left to the
+extractor's intra-file edge rather than written twice.
 
 One shape is invisible to this: Go does not require a package's name to match its
 directory, and for an *unaliased* import the index derives the local name from the import
@@ -400,15 +420,18 @@ and everything else that is indexed contributes call sites.
 
 **The lifecycle is durable, and consumers opt in deliberately.** Derived edges survive
 incremental re-indexes: callee re-indexes repoint incoming rows by stable identity, while
-caller re-indexes replace only outgoing rows. Function reachability is the function-level
-consumer: it opts into admitted Go resolver edges, filters `_test.go` callers, and computes
-full outward closure. The neighbourhood traversal still excludes derived calls by **source**:
-`ExploreOpts.IncludeDerivedCalls` defaults to false. `context_for_task` opts in node by
-node, asking the admission rule on the node it is about to walk around; the remaining
-consumers (`call_hierarchy`'s topology fallback, `topology_impact` package mode,
-`topology_affected`, `minimal_diff_review`) receive extractor intra-file edges only.
-Excluding by edge *kind* would not work: derived edges are `calls` edges, identical in kind
-to the extractor's own.
+caller re-indexes replace only outgoing rows. Because the same-package tiers link only
+within one directory, a scoped pass widens from the changed files to every file in their
+directories, so a function added to one file reaches an unchanged sibling's call. A target
+another package can reach (an exported function or method) is part of the resolver
+surface: adding, removing or renaming one forces a full pass. Function reachability
+opts into admitted Go resolver edges, filters `_test.go` callers, and computes full
+outward closure. The neighbourhood traversal still excludes derived calls by **source**:
+`ExploreOpts.IncludeDerivedCalls` defaults to false. `context_for_task`,
+`call_hierarchy`'s topology fallback, `topology_affected` and `minimal_diff_review` opt in
+node by node, asking the admission rule (supported language, and a package node in the
+index) on the node they walk around. Excluding by edge *kind* would not work: derived
+edges are `calls` edges, identical in kind to the extractor's own.
 
 **Language admission.** A language is served iff it is in the resolver's compile-time
 supported set (today exactly `{go}`) **and** the index holds a `package` node with that
@@ -495,10 +518,11 @@ never committed.
 
 - **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
   dispatch. Treat its graph as a strong hint, then confirm with LSP.
-- **Cross-file call edges cover ~3% of call sites, in Go only.** See the section above:
-  method calls on a receiver are the modal Go call and are left unresolved by design, so
-  a caller list from the topology call graph is a lower bound and never a complete one.
-  Confirm with `find_references`.
+- **Cross-file call edges cover about 13% of call sites, in Go only** (about 65% of the
+  cross-file caller→callee pairs a type checker finds). See the section above: a method
+  call on a local variable or a field carries no type in a syntactic parse and is left
+  unresolved by design, so a caller list from the topology call graph is a lower bound
+  and never a complete one, weakest for methods. Confirm with `find_references`.
 - **`topology_routes` recovers what is written at the registration site, untyped.**
   Handlers are tied by import and package scope, never type-checked; router group and
   mount prefixes are not composed; Swift and frameworks with no recorded site fall back
