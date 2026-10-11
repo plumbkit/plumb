@@ -132,6 +132,11 @@ func classifyGitCall(a gitToolArgs) (gitTier, error) {
 		}
 	}
 	tier := classifyGit(a.Subcommand, a.Args)
+	if tier == tierRead {
+		if err := checkReadArgs(a.Subcommand, a.Args); err != nil {
+			return tierReject, err
+		}
+	}
 	if tier != tierReject {
 		return tier, nil
 	}

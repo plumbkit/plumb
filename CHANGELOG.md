@@ -241,6 +241,19 @@
   counting as a second conversation on the connection. Hooks installed by
   `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
 
+### Security
+
+- **The `git` tool's read tier no longer writes files or reads outside the
+  repository.** The read tier is always on, but it passed every option through
+  to git, and a few options on read verbs do more than read. `--output=<path>`
+  on `diff`, `log`, `show`, `shortlog` and `stash show` created or truncated any
+  file the caller named. `diff --no-index` and `blame --contents` printed files
+  from outside the repository. `blame -S` and `--ignore-revs-file` echoed an
+  outside file's lines in git's error messages. These options are now refused
+  on the read tier, however they are spelled: an abbreviation such as `--outp`,
+  a bundle such as `-wS`, and a value given as the next argument all count, as
+  they do for git. A refusal names the option and what it would have done.
+
 ## 0.24.0 (2026-10-10)
 
 ### Security
