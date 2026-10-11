@@ -217,23 +217,34 @@ func TestResolveCalls_UnexportedCalleeBehindAQualifierIsNotAPackageCall(t *testi
 	}
 }
 
-// TestResolveCalls_BucketsAccountForEveryQualifiedSite is the honesty check. The
-// four outcome buckets must SUM to the qualified-site count: if they do not, a
-// site was dropped somewhere and "how much of the call graph is this" stops
-// being answerable.
-func TestResolveCalls_BucketsAccountForEveryQualifiedSite(t *testing.T) {
+// TestResolveCalls_BucketsAccountForEverySite is the honesty check. The eight
+// outcome buckets must SUM to the call-site count: if they do not, a site was
+// dropped somewhere and "how much of the call graph is this" stops being
+// answerable.
+func TestResolveCalls_BucketsAccountForEverySite(t *testing.T) {
 	f := newResolverFixture(t)
 	f.resolve(t)
 
 	qualified := callMeta(t, f.db, metaCallQualifiedSites)
+	sites := callMeta(t, f.db, metaCallSites)
 	sum := callMeta(t, f.db, metaCallResolved) +
 		callMeta(t, f.db, metaCallUnresolvedRecv) +
 		callMeta(t, f.db, metaCallExternal) +
 		callMeta(t, f.db, metaCallUnmatched) +
 		callMeta(t, f.db, metaCallRepeatOfEdge) +
-		callMeta(t, f.db, metaCallNoCallerNode)
-	if sum != qualified {
-		t.Errorf("buckets sum to %d but %d qualified sites were examined; a site went unaccounted for", sum, qualified)
+		callMeta(t, f.db, metaCallNoCallerNode) +
+		callMeta(t, f.db, metaCallSameFile) +
+		callMeta(t, f.db, metaCallBareUnmatched)
+	if sum != sites {
+		t.Errorf("buckets sum to %d but %d call sites were examined; a site went unaccounted for", sum, sites)
+	}
+	// The bare call to helper names a function in the caller's own file: the
+	// extractor's intra-file edge covers it, and the resolver must not add one.
+	if got := callMeta(t, f.db, metaCallSameFile); got != 1 {
+		t.Errorf("same-file sites = %d, want 1 (the bare helper call)", got)
+	}
+	if got := f.edgeCount(t, f.run, f.helper); got != 0 {
+		t.Errorf("resolver Run→helper edges = %d, want 0; the extractor owns same-file calls", got)
 	}
 	if qualified != 8 {
 		t.Errorf("qualified sites = %d, want 8 — the bare call and the field site must not be counted", qualified)
