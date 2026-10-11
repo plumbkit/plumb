@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
 )
@@ -130,7 +131,7 @@ func (p *contextPack) bodyLine(i int) (packLine, bool) {
 		return packLine{}, false
 	}
 	s, b := p.Seeds[i], p.Bodies[i]
-	call := callText("read_symbol", "path", s.Abs, "name", s.Selector)
+	call := callText("read_symbol", "path", s.Abs, "name", readSymbolName(s.Selector, s.Name))
 	sig := signatureDoc(b.Signature, b.Doc)
 	unit := &bodyUnit{file: b.File}
 	if b.State != bodyReady {
@@ -275,12 +276,54 @@ func (p *contextPack) nextLines() []packLine {
 func nextCall(s contextSeed) string {
 	switch {
 	case s.Kind == seedSymbol:
-		return callText("read_symbol", "path", s.Abs, "name", s.Selector)
+		return callText("read_symbol", "path", s.Abs, "name", readSymbolName(s.Selector, s.Name))
 	case s.Coverage != "":
 		return callText("read_file", "file_path", s.Abs)
 	default:
 		return callText("file_outline", "uri", s.Abs)
 	}
+}
+
+// readSymbolName is the name a follow-up read_symbol call carries for a declaration
+// the index spells selector (its qualified name, or the bare name when it has none)
+// and calls name. The pack must hand over a spelling read_symbol accepts whether or
+// not a language server answers: with one, "Recv.Method" and "(*Recv).Method" both
+// resolve, but the topology fallback (no server, a cold one) matches a dotted name
+// on whole identifier segments and so refuses the Go receiver spelling. "Recv.Method"
+// resolves on both routes, so a Go method is rendered that way (a generic receiver
+// loses its type parameters, as read_symbol's own name paths do). Any other selector
+// that is not one identifier, a dot and the declaration's name has no spelling both
+// routes are known to share, so the bare name stands: it resolves everywhere, and
+// lists every declaration of that name in the file instead of choosing one.
+func readSymbolName(selector, name string) string {
+	if recv, method, ok := goMethodReceiver(selector); ok {
+		if recv = stripTypeParams(recv); isIdentifier(recv) {
+			return recv + "." + method
+		}
+		return method
+	}
+	if parent, child, ok := strings.Cut(selector, "."); ok && child == name && isIdentifier(parent) {
+		return selector
+	}
+	if name != "" {
+		return name
+	}
+	return selector
+}
+
+// isIdentifier reports whether s is a non-empty run of letters, digits and
+// underscores, the characters read_symbol's topology fallback treats as one name
+// segment.
+func isIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // callText renders tool{"k":"v",...} with the pairs in the order given. Values

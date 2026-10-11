@@ -131,7 +131,7 @@ func (p *contextPack) relatedBodyLine(i int) (packLine, bool) {
 	if r.Body.State != bodyReady {
 		return packLine{}, false
 	}
-	call := callText("read_symbol", "path", absUnder(p.Root, r.Node.Path), "name", nodeSelector(r.Node))
+	call := callText("read_symbol", "path", absUnder(p.Root, r.Node.Path), "name", readSymbolName(nodeSelector(r.Node), r.Node.Name))
 	unit := p.readyUnit(r.Body, p.relatedHeading(), len(relatedText(r))+2, call, "")
 	return packLine{prio: prioRelTop, section: secRelated, class: classBody, body: unit}, true
 }
