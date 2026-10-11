@@ -20,12 +20,13 @@
   across packages). A name declared more than once in the function — a loop
   variable re-declaring a parameter, say — is left unresolved by every receiver
   rule, which also closes that false-edge shape for receivers and parameters. On
-  plumb's own tree the graph now holds 85% of the cross-file caller→callee pairs
+  plumb's own tree the graph now holds 85.5% of the cross-file caller→callee pairs
   the Go type checker finds (64.5% before; same-package method calls 15% → 69%),
-  with none of the 19,660 judgeable new edges wrong (none on the Go standard
+  with none of the 19,778 judgeable new edges wrong (none on the Go standard
   library or `golang.org/x/tools` either). A hint whose leading name the function
-  declares itself is dropped, and a site the local reading cannot resolve keeps
-  the package-qualified reading when its qualifier is an import (`rand :=
+  declares itself (other than the variable itself, as in `store := store.Open()`)
+  is dropped, and a site the local reading cannot resolve keeps the
+  package-qualified reading when its qualifier is an import (`rand :=
   rand.New(src)`). The topology index is rebuilt once on upgrade (schema 7).
 
 - **The Go call graph resolves same-package calls, receiver calls and calls on

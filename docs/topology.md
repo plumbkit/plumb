@@ -340,41 +340,41 @@ another file; every cross-file call edge comes from this resolver.
 
 | | |
 |---|---:|
-| recorded Go call sites | 138,343 |
-| call sites resolved into cross-file `call-resolver` edges | **23,948** |
+| recorded Go call sites | 138,355 |
+| call sites resolved into cross-file `call-resolver` edges | **24,072** |
 | …package-qualified `pkg.F()` | 3,761 |
 | …bare same-package `F()` | 12,969 |
 | …on the method's own receiver `r.M()` | 1,038 |
 | …on a typed parameter `p.M()` | 462 |
-| …on a local variable of evident type `x.M()` | 5,718 |
-| …with a non-`_test.go` caller | 5,549 |
-| **share of all call sites resolved across files** | **17.3%** |
-| same-file calls the extractor links directly | 14,506 (10.5%) |
+| …on a local variable of evident type `x.M()` | 5,842 |
+| …with a non-`_test.go` caller | 5,559 |
+| **share of all call sites resolved across files** | **17.4%** |
+| same-file calls the extractor links directly | 14,507 (10.5%) |
 
-Every call site lands in exactly one bucket, and the eight add up to the 138,343 above —
+Every call site lands in exactly one bucket, and the eight add up to the 138,355 above —
 that is what makes this a measurement rather than an impression:
 
 | call-site bucket | |
 |---|---:|
-| resolved into a cross-file edge | 23,948 |
-| method call on another receiver (a field chain, a returned or indexed value, a local of no evident type), left unresolved | 48,766 |
+| resolved into a cross-file edge | 24,072 |
+| method call on another receiver (a field chain, a returned or indexed value, a local of no evident type), left unresolved | 48,616 |
 | qualified call leaving the indexed tree (stdlib, third party) | 30,328 |
-| bare call naming no function of the package (builtin, local value, conversion) | 14,841 |
-| bare or receiver call whose target is in the same file (the extractor's edge) | 14,506 |
-| repeat of a caller→target edge already emitted | 5,948 |
+| bare call naming no function of the package (builtin, local value, conversion) | 14,850 |
+| bare or receiver call whose target is in the same file (the extractor's edge) | 14,507 |
+| repeat of a caller→target edge already emitted | 5,976 |
 | names no exported top-level function in the target package | 6 |
 | no enclosing declaration to hang the edge on | 0 |
 
 **How good the edges are.** Checked against the Go type checker (`go/packages`) on every
 edge, not a sample, none is wrong: 3,531 of 3,531 judgeable package-qualified edges and
-19,660 of 19,660 from the four newer tiers (the rest point at a file the type checker
+19,778 of 19,778 from the four newer tiers (the rest point at a file the type checker
 did not load for this platform). An independent check found none wrong on the Go standard
 library or `golang.org/x/tools` either. Two extractor markers are what keep it there: a
 call on a receiver with no name (`f().M()`, `x.(T).M()`, `r[k].M()`) is never read as a
 bare call, and a bare call of a name the function declares itself (`walk := …; walk()`)
 is counted as a local value, not linked to the package function of the same name. Of the
-cross-file caller→callee pairs the type checker finds, the graph holds **85.0%**: every
-function call, same-package or not, 69% of same-package method calls and 38% of
+cross-file caller→callee pairs the type checker finds, the graph holds **85.5%**: every
+function call, same-package or not, 69% of same-package method calls and 43% of
 cross-package ones.
 
 `topology_status` prints these for your own workspace. The Go extractor parses with
@@ -410,10 +410,14 @@ another callable, so textual receiver matching would manufacture wrong edges at 
 
 The last four carry confidence **0.85** (the qualified tier 0.9). A local's type hint is
 dropped when its leading name is one the function declares itself (a parameter named like
-an import, a local closure, a local type, a type parameter), and a site the local tier
-cannot resolve keeps the package-qualified reading when its qualifier is an import
-(`rand := rand.New(src)`). Their residual false edges are known shapes, none seen on
-plumb's tree, the Go standard library or `golang.org/x/tools`: a package-level variable
+an import, a local closure, a local type, a type parameter) other than the variable itself
+(`store := store.Open()` keeps it), and a site the local tier cannot resolve keeps the
+package-qualified reading when its qualifier is an import and not also the receiver or a
+parameter (`rand := rand.New(src)`). Their residual false edges are known shapes, none
+seen on plumb's tree, the Go standard library or `golang.org/x/tools`: a local named like
+an import whose method is promoted from an embedded type (`store := &store.Wrapper{};
+store.Query()`), which that fallback reads as the package's function, as the qualified
+tier always has; a package-level variable
 used outside the block of a same-named local declared once (declarations are counted
 per function, not per block); a parameter type named like a type parameter
 (`func F[Store any](s Store)`), since type parameters are not in the stored signature;
