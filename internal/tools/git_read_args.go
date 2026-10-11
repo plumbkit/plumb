@@ -12,7 +12,8 @@ import (
 //
 //   - `--output=<file>` (diff, log, show, shortlog, stash show) writes the
 //     command's output to any path the caller names, creating or truncating it;
-//   - `--no-index` (diff) and `blame --contents` read files OUTSIDE the
+//   - `grep -O` / `--open-files-in-pager` runs a program;
+//   - `--no-index` (diff, grep) and `blame --contents` read files OUTSIDE the
 //     repository and print them; `blame -S` and `--ignore-revs-file` read a file
 //     outside it as revisions and echo its lines in git's own error messages.
 //
@@ -29,10 +30,11 @@ type readRefusal struct {
 }
 
 // readArgGrammars give each policed verb the options that take a REQUIRED
-// value, so a value is not mistaken for an option (`blame -L/S/,+2` is a line
-// range; it names no revisions file). A verb not listed reads every token as a
-// possible option, which can only over-refuse.
+// value, so a value is not mistaken for an option (`grep -e -O` searches for
+// "-O"; it opens no pager). A verb not listed reads every token as a possible
+// option, which can only over-refuse.
 var readArgGrammars = map[string]gitOptionGrammar{
+	"grep":  {valueShort: "efABCm", valueLong: []string{"regexp", "file", "after-context", "before-context", "context", "max-count", "max-depth", "threads"}, optionalShort: "O"},
 	"blame": {valueShort: "LS"},
 }
 
@@ -50,6 +52,10 @@ var readRefusals = map[string][]readRefusal{
 	"blame": {
 		{longs: []string{"contents"}, does: "reads a file outside the repository"},
 		{shorts: "S", longs: []string{"ignore-revs-file"}, does: "reads a file outside the repository"},
+	},
+	"grep": {
+		{shorts: "O", longs: []string{"open-files-in-pager"}, does: "runs a program"},
+		{longs: []string{"no-index"}, does: "searches outside the repository"},
 	},
 }
 
