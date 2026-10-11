@@ -55,7 +55,7 @@ var openContextHintLedger = contexthints.Open
 // leaves hints unavailable until the daemon restarts (the hook says nothing):
 // the allowance lives in the ledger, so there is no unmetered fallback.
 //
-// hinter is the Slice A collector; nil until it lands, which answers every
+// hinter is the collector (newDaemonContextHinter); a nil one answers every
 // seeded request with noop(no-collector).
 //
 // configOn reads the live global [context] hints switch; the daemon's own
@@ -103,6 +103,49 @@ func startContextHints(ctx context.Context, registry *connRegistry, hinter tools
 		}
 	}
 	return handler, closeLedger
+}
+
+// newDaemonContextHinter is the daemon's hint collector: Slice A's, over the
+// indexes storeFor already holds open (topologyPool.forRoot never opens one), with
+// the registry's sensitive-path decision.
+func newDaemonContextHinter(storeFor tools.TopologyForRootFn, registry *connRegistry) tools.ContextHinter {
+	return tools.NewContextHinter(storeFor, registry.changeSensitive)
+}
+
+// changeSensitive answers the hint collector's sensitive-path question with the
+// decision of the live connection whose workspace holds path (the deepest one),
+// which is the same decision its write responses and history take. A path no live
+// connection holds is withheld: a hint without that decision names locations only.
+func (r *connRegistry) changeSensitive(ctx context.Context, path, from string) bool {
+	r.mu.Lock()
+	type candidate struct {
+		workspace func() string
+		sensitive tools.SensitivePathFn
+	}
+	var cands []candidate
+	for _, h := range r.conns {
+		if h.workspace != nil && h.sensitive != nil {
+			cands = append(cands, candidate{h.workspace, h.sensitive})
+		}
+	}
+	r.mu.Unlock()
+	target := paths.Canonical(path)
+	var best tools.SensitivePathFn
+	depth := -1
+	for _, c := range cands {
+		w := c.workspace()
+		if !filepath.IsAbs(w) {
+			continue
+		}
+		w = paths.Canonical(w)
+		if rel, err := filepath.Rel(w, target); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && len(w) > depth {
+			best, depth = c.sensitive, len(w)
+		}
+	}
+	if best == nil {
+		return true
+	}
+	return best(ctx, path, from)
 }
 
 // pruneContextHints ages the ledger out on its own tick, best effort.

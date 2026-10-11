@@ -28,6 +28,9 @@ type connHandle struct {
 	// hintRoot resolves an advisory context hint's caller to its root
 	// (hookHintRoot): ok is false when this connection does not know it.
 	hintRoot func(string) (root string, inherited, ok bool)
+	// sensitive is this connection's sensitive-path decision (changeSensitive),
+	// asked by the hint collector about paths under this connection's workspace.
+	sensitive tools.SensitivePathFn
 	// summarise generates this session's episodic summary; invoked by the idle
 	// reaper once per idle spell. nil when episodic summaries are unavailable.
 	summarise func()

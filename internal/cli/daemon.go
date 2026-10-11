@@ -397,8 +397,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			ctrlLn.Close()
 		}()
 		diagsFn := func(workspace string) string { return workspaceDiagnostics(pool, workspace) }
-		// Advisory context hints (PLAN-462): the collector arrives with Slice A.
-		contextHint, closeHints := startContextHints(ctx, registry, nil, func() bool { return store.Current().Context.Hints })
+		// Advisory context hints (PLAN-462): Slice A's collector over the daemon's
+		// already-open indexes, never opening one.
+		contextHint, closeHints := startContextHints(ctx, registry, newDaemonContextHinter(topoPool.forRoot, registry),
+			func() bool { return store.Current().Context.Hints })
 		defer closeHints()
 		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, ctrlHandlers{
 			diags:         diagsFn,
@@ -535,6 +537,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 		summarise:      s.generateEpisodicSummary,
 		mailboxInbox:   s.hookInbox,
 		hintRoot:       s.hookHintRoot,
+		sensitive:      s.changeSensitive,
 	})
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.

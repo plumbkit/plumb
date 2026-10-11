@@ -148,7 +148,13 @@ func (t *ContextForTask) ReadDeps() (tracker, readsFor, writes, client bool) {
 // Without it a body reached by expansion would never be withheld, so the daemon's
 // registration test pins it, as ReadDeps pins the tracker.
 func (t *ContextForTask) SensitiveWired() bool {
-	return t.collector != nil && t.collector.sensitive != nil
+	return t.collector.SensitiveWired()
+}
+
+// SensitiveWired reports whether the collector holds the sensitive-path decision,
+// for the registration tests of the tool and of the daemon's hint collector.
+func (c *ContextCollector) SensitiveWired() bool {
+	return c != nil && c.sensitive != nil
 }
 
 // LSPWired reports whether the collector holds a language server to refine the top

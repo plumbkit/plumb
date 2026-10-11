@@ -300,7 +300,7 @@ func (c *contextHintService) compose(ctx context.Context, req contextHintRequest
 	seeds []tools.ContextSeed, ruleOnly bool, detail string,
 ) hintDecision {
 	switch {
-	case len(seeds) == 0 && ruleOnly, len(seeds) > 0 && c.hinter == nil && ruleOnly:
+	case len(seeds) == 0 && ruleOnly:
 		return hintDecision{text: subagentRule, seeds: seeds}
 	case len(seeds) == 0:
 		return noopHint(detail)
