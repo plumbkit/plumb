@@ -11,8 +11,9 @@
 # is not. Inside, it becomes a fresh one-commit git repository, which the checks
 # that call git need. The container runs with --init (exited processes are
 # reaped, not counted) and --rm: its exit ends every process it started.
-# Afterwards no plumb daemon may be left: it is looked for for 30 s, and the run
-# fails if one is seen or the process table cannot be read.
+# While the suite runs, the plumb daemons are counted every 200 ms: at most one
+# may run at a time. Afterwards none may be left: they are looked for for 30 s.
+# The run fails if either rule breaks, or if the process table cannot be read.
 #
 #   make verify-full-container        (DOCKER_PLATFORM=linux/amd64 for amd64)
 
@@ -34,22 +35,47 @@ mkdir -p /work && tar -C /work -xf - && cd /work || exit 70
 git init -q && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "working tree" || exit 70
 
 # The plumb daemons alive now, by their own argv; "?" when the process table
-# cannot be read (a process that exited mid-scan is skipped).
+# cannot be read. A process that exited mid-scan is skipped, but an empty
+# listing is not "none": this shell is a process, so /proc must list one.
 daemons() {
-  local n=0 dir argv
+  local n=0 dir argv listed=0
   for dir in /proc/[0-9]*; do
+    [ -d "$dir" ] || continue
+    listed=1
     if ! argv=$(tr "\0" " " < "$dir/cmdline" 2> /dev/null); then
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
     [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] && n=$((n + 1))
   done
+  [ "$listed" -eq 1 ] || { echo "?"; return; }
   echo "$n"
 }
+
+# The peak during the suite, written to /tmp/peak ("?" sticks once seen).
+supervise() {
+  local peak=0 n
+  while :; do
+    n=$(daemons)
+    if [ "$n" = "?" ]; then peak="?"; elif [ "$peak" != "?" ] && [ "$n" -gt "$peak" ]; then peak=$n; fi
+    echo "$peak" > /tmp/peak
+    sleep 0.2
+  done
+}
+supervise &
+supervisor=$!
 
 make verify-full
 rc=$?
 echo "verify-full-container: make verify-full exited $rc"
+kill "$supervisor" 2> /dev/null
+peak=$(cat /tmp/peak 2> /dev/null || echo "?")
+case "$peak" in
+  0) echo "verify-full-container: no plumb daemon was seen during the suite" ;;
+  1) echo "verify-full-container: at most 1 plumb daemon ran at a time during the suite" ;;
+  "?") echo "verify-full-container: the process table could not be read during the suite"; [ "$rc" -eq 0 ] && rc=1 ;;
+  *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1 ;;
+esac
 
 seen=0
 for _ in $(seq 1 60); do
@@ -70,7 +96,7 @@ exit "$rc"
 (
   cd "$root" || exit 1
   git ls-files -z --cached --others --exclude-standard |
-    while IFS= read -r -d '' f; do [ -e "$f" ] && printf '%s\0' "$f"; done |
+    while IFS= read -r -d '' f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"; done |
     tar --null -T - -cf -
 ) | docker run -i --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
   -v plumb-verify-gocache:/root/.cache/go-build \
