@@ -425,13 +425,7 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 	// internal/stats/savings.go reported cmd/clientsmoke and internal/cli as
 	// affected — 984 false positives — while pushing the one test that covers the
 	// changed function out of the default result window entirely.
-	includeDerived := false
-	if subject, subjectErr := g.store.CallGraphSubjectForNode(ctx, root.ID); subjectErr == nil {
-		if admission, admissionErr := g.store.AdmitCallGraph(ctx, subject); admissionErr == nil {
-			includeDerived = admission.Admitted
-		}
-	}
-	nb, err := g.store.ImpactFrom(ctx, root, graphTraversalOpts(includeDerived))
+	nb, err := g.store.ImpactFrom(ctx, root, graphTraversalOpts(g.store.DerivedCallsAdmittedFor(ctx, root.ID)))
 	if err != nil {
 		return
 	}

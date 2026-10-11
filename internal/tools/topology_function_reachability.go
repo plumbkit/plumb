@@ -11,26 +11,11 @@ import (
 )
 
 func (t *TopologyImpact) executeFunctionReachability(ctx context.Context, store *topology.Store, a topologyImpactArgs) (string, error) {
-	pkgs, err := store.NodesByKind(ctx, topology.KindPackage)
+	decision, admitted, err := store.AdmitLanguage(ctx, "go")
 	if err != nil {
 		return "", fmt.Errorf("topology_impact: function reachability: admission: %w", err)
 	}
-	admitted := false
-	var scopeNote string
-	for _, p := range pkgs {
-		if p.Language != "go" {
-			continue
-		}
-		decision, decisionErr := store.AdmitCallGraph(ctx, topology.CallGraphSubject{Language: p.Language, Path: p.Path})
-		if decisionErr != nil {
-			return "", fmt.Errorf("topology_impact: function reachability: admission: %w", decisionErr)
-		}
-		if decision.Admitted {
-			admitted = true
-			scopeNote = decision.ScopeNote
-			break
-		}
-	}
+	scopeNote := decision.ScopeNote
 	if !admitted {
 		return "topology_impact: function reachability: cross-file call edges are unavailable for this workspace; the admitted topology call graph is Go-only and requires an indexed Go package node", nil
 	}
