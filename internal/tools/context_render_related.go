@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
@@ -14,6 +15,17 @@ import (
 // followed by the body they may carry; the packer degrades those first. A gap
 // candidate is a different thing and is rendered apart: it is a possibility the
 // call graph cannot confirm, so it never sits in the list of relationships.
+
+// confText prints an edge confidence with the digits it has, one decimal at
+// least: 1.0, 0.9, 0.85. A fixed %.1f printed 0.85 as "0.8", a value no edge
+// carries.
+func confText(c float64) string {
+	s := strconv.FormatFloat(c, 'f', -1, 64)
+	if !strings.Contains(s, ".") {
+		s += ".0"
+	}
+	return s
+}
 
 // evidenceName is the word that goes beside an evidence ordinal.
 func evidenceName(e int) string {
@@ -39,7 +51,7 @@ func relatedText(r contextRelated) string {
 		textfmt.TerminalSafeLine(nodeSelector(n)), textfmt.TerminalSafeLine(n.Path), n.StartLine, n.Kind,
 		textfmt.TerminalSafeLine(r.Via))
 	if r.Source != "" && !r.Root {
-		fmt.Fprintf(&sb, " (%s %.1f)", textfmt.TerminalSafeLine(r.Source), r.Conf)
+		fmt.Fprintf(&sb, " (%s %s)", textfmt.TerminalSafeLine(r.Source), confText(r.Conf))
 	}
 	if r.Stale {
 		sb.WriteString(" — possibly stale: its file changed since indexing")

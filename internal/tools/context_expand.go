@@ -37,6 +37,11 @@ const (
 	// matters is the ranked one above, and this only guards a pathological hub.
 	contextHopNodes = 2000
 
+	// contextTestCallersPerDecl is the most test callers one declaration lists;
+	// the rest are counted (capTestCallers). It is the same-package search's
+	// calibrated per-declaration cap, not a new knob.
+	contextTestCallersPerDecl = contextSamePkgPerSeed
+
 	// contextFileRoots is how many of a file seed's declarations start the walk.
 	contextFileRoots = 8
 	// contextFileMates is how many same-file declarations one reached file adds.
@@ -52,7 +57,7 @@ const (
 	evidenceLSP       = 4 // a call the language server confirmed (call hierarchy)
 	evidenceGap       = 0 // a name or reverse-import candidate, labelled and never presented as resolved
 	evidenceHeuristic = 1 // a heuristic edge (confidence 0.8), such as Python's intra-file calls
-	evidenceDerived   = 2 // a derived edge from the call or import resolver (0.9)
+	evidenceDerived   = 2 // a derived edge from the call or import resolver (0.9; 0.85 for same-package and receiver tiers)
 	evidenceExtractor = 3 // a syntactic edge the extractor emitted (1.0)
 )
 
@@ -140,6 +145,7 @@ type expansionStats struct {
 	MembersCapped   bool // a type has more members than are listed
 	MembersListed   bool // a Go type's members were listed, which leave out its fields
 	GapMore         int  // gap candidates beyond their quota
+	TestCallersMore int  // test callers beyond the per-declaration cap (capTestCallers)
 	ImportersCapped int  // importer lists that hit the per-hop ceiling, so gap candidates may be missing
 	Deadline        bool
 	Failed          string // the first store error, if any
@@ -458,7 +464,7 @@ func (e *expander) hood(h hopNode, nb *topology.Neighbourhood, inward bool) []co
 		e.stats.HopCapped++
 	}
 	best := bestEdges(nb.Edges, h.node.ID, inward)
-	var out []contextRelated
+	var out, tests []contextRelated
 	for _, n := range nb.Nodes {
 		edge, ok := best[n.ID]
 		if !ok || n.ID == h.node.ID || !e.allowed(n) {
@@ -468,10 +474,28 @@ func (e *expander) hood(h hopNode, nb *topology.Neighbourhood, inward bool) []co
 		r.Edge = edge.Kind
 		if inward && edge.Kind == topology.EdgeCalls {
 			r.CallerOf = h.node.ID
+			if n.Kind == topology.KindTest {
+				tests = append(tests, r)
+				continue
+			}
 		}
 		out = append(out, r)
 	}
-	return out
+	return append(out, e.capTestCallers(tests)...)
+}
+
+// capTestCallers keeps the best-ranked test callers of one declaration, up to the
+// per-declaration cap the same-package search uses. A broad test package is one
+// affected-tests row with its count, never its tests one by one; once same-package
+// calls resolve, every test that calls a function by name is a derived caller, and
+// uncapped they would fill the pack before any production caller.
+func (e *expander) capTestCallers(tests []contextRelated) []contextRelated {
+	if len(tests) <= contextTestCallersPerDecl {
+		return tests
+	}
+	slices.SortStableFunc(tests, compareRelated)
+	e.stats.TestCallersMore += len(tests) - contextTestCallersPerDecl
+	return tests[:contextTestCallersPerDecl]
 }
 
 // bestEdges picks, for each neighbour of centre, the strongest edge to it: the

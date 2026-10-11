@@ -232,7 +232,7 @@
       "forbidden": [
         "claiming api.Checkout is unaffected"
       ],
-      "gold_rationale": "Checkout reaches Total only through the receiver call c.Total(), which the syntactic resolver leaves unresolved. The sole route is a reverse import edge (api imports cart), so the pack must surface Checkout as a labelled gap candidate via reverse-import expansion, never as a resolved caller. Slice A must implement reverse-import gap expansion or this case fails by construction."
+      "gold_rationale": "Checkout reaches Total only through a method call on a local variable (cc := c; cc.Total()), which the call resolver leaves unresolved: it links a call on a parameter of a named type or on the method's own receiver, never one on a local. The sole route is a reverse import edge (api imports cart), so the pack must surface Checkout as a labelled gap candidate via reverse-import expansion, never as a resolved caller. Slice A must implement reverse-import gap expansion or this case fails by construction."
     },
     {
       "id": "C07",
@@ -563,7 +563,7 @@
     },
     {
       "id": "C16",
-      "category": "same-package-caller-function",
+      "category": "same-package-caller-sibling",
       "mode": "discovery",
       "split": "dev",
       "added_in": "gate-v2",
@@ -572,20 +572,22 @@
         "symbols": [
           {
             "path": "pricing/discount.go",
-            "name": "Apply"
+            "name": "(*Discount).Off"
           }
         ]
       },
-      "task": "Change Apply so percentage discounts round half up. Which callers are affected?",
+      "task": "Change Off so percentage discounts round half up. Which callers are affected?",
       "gold": {
         "bodies": [
-          "pricing/discount.go::Apply"
+          "pricing/discount.go::(*Discount).Off"
         ],
         "related": [
-          "pricing/receipt.go::Savings"
+          "pricing/receipt.go::Tenth",
+          "pricing/discount_test.go::TestOffPercent"
         ],
         "residual": [
-          "pricing/receipt.go::Savings"
+          "pricing/receipt.go::Tenth",
+          "pricing/discount_test.go::TestOffPercent"
         ]
       },
       "required_labels": [
@@ -593,9 +595,9 @@
       ],
       "forbidden": [
         "presenting the name match as a resolved edge, or counting it among the resolved callers",
-        "stating that Apply has no callers"
+        "stating that Off has no callers"
       ],
-      "gold_rationale": "Savings calls Apply by its bare name from a sibling file of the same package. The syntactic call graph never resolves a bare same-package call, so the only route is the recorded call site: it is a same-package name match at evidence 1, labelled as such, never a resolved caller."
+      "gold_rationale": "Tenth and TestOffPercent call Off on a local declared `var d Discount` from sibling files of the same package. The call graph resolves a bare same-package call (Savings calls Apply), a call on the method's own receiver and a call on a parameter of a named type, but never a method call on a local variable, so the only route is the recorded call site: it is a same-package name match at evidence 1, labelled as such, never a resolved caller. C16 first seeded the function Apply and its bare-call caller Savings; once the index resolved bare same-package calls that caller became a derived edge and the name search skips functions, so the case moved to a method whose callers stay unresolved."
     },
     {
       "id": "C17",
@@ -649,7 +651,7 @@
       "C08"
     ],
     "languages": {
-      "go": "structure + Go-only syntactic cross-file call graph (receiver calls unresolved)",
+      "go": "structure + Go-only syntactic cross-file call graph (package-qualified calls, bare same-package calls, own-receiver calls and calls on a parameter of a named type resolve; calls on a local variable, a field chain or a returned value are unresolved)",
       "python": "structure + intra-file heuristic call edges",
       "markdown": "sections only",
       "svelte": "not covered"

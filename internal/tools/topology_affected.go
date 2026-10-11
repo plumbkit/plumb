@@ -447,7 +447,15 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 			if c == 0 {
 				c = graphEdgeBaseline
 			}
-			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reasonGraph})
+			// A test in the changed package that calls the changed function is
+			// reached by an edge now that same-package calls resolve, but it still
+			// sits where the change happened; labelling it a dependency would hide
+			// the changed package's test names.
+			reason := reasonGraph
+			if g.dirs[filepath.Dir(n.Path)] == reasonChanged {
+				reason = reasonChanged
+			}
+			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reason})
 		} else {
 			g.dependents = append(g.dependents, n)
 			// Do not demote a directory that is already the changed one: a package

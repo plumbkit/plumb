@@ -20,12 +20,15 @@ import (
 // context_samepkg.go — callers the call graph cannot resolve, found by name in the
 // same Go package (PLAN-462 gate v2, item 2).
 //
-// The call resolver follows package-qualified calls only. A bare call of a function
-// of the caller's own package, and a call on a receiver, never become an edge, so a
-// declaration's callers in its sibling files are invisible to the graph (measured:
-// about 3% of recorded call sites resolve). The call sites themselves are recorded
-// verbatim, with the declaration that holds them, so this collector-local pass reads
-// them back and matches them by name:
+// Gate v2 added this pass when the call resolver followed package-qualified calls
+// only (about 3% of recorded call sites). The resolver now also links bare
+// same-package calls and calls on the caller's own receiver or a typed parameter
+// (#632), so on an index that publishes that census the pass is skipped for
+// functions (functionsResolved). It still runs for methods, whose callers on a
+// local variable or a field chain stay unresolved, and for any function on an index
+// built before the census. The call sites themselves are recorded verbatim, with the
+// declaration that holds them, so this collector-local pass reads them back and
+// matches them by name:
 //
 //   - A function: a bare call of its name, in a file of the same directory and
 //     package clause, where no local declaration of the caller shadows the name.
@@ -81,6 +84,12 @@ type samePackage struct {
 	files   map[string]*goFile // nil value: the file's sites cannot be examined
 	budget  int64
 	gaps    map[string]contextRelated // ambiguous candidates, by declaration identity
+	// functionsResolved: the index resolves bare same-package calls itself
+	// (ResolvesSamePackageCalls), so a function's sibling-file callers are already
+	// derived edges and the name search would only find them again. A method still
+	// gets the search: the resolver links only the calls whose receiver type the
+	// declaration states.
+	functionsResolved bool
 }
 
 // dirSites is the call sites read so far of one directory, by callee, and the names
@@ -159,6 +168,9 @@ func (e *expander) samePackageCallers(ctx context.Context, h hopNode) []contextR
 	// Only Go has call sites recorded for this search (CallSitesInDir), and only a
 	// declaration with a package clause of its own has a package to search.
 	if e.sp == nil || !callableKind(h.node.Kind) || ctx.Err() != nil {
+		return nil
+	}
+	if e.sp.functionsResolved && h.node.Kind == topology.KindFunction {
 		return nil
 	}
 	pkg, ok := e.packageOf(ctx, h.node.Path)

@@ -317,6 +317,7 @@ func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack
 		// Only a pack reads source, as a hint never does, so only a pack searches for
 		// same-package callers, which needs the sibling files the index vouches for.
 		ex.sp = newSamePackage(c.sourceReader(graphCtx, pack.Root), ex.indexHash, c.samePackageCap())
+		ex.sp.functionsResolved = index.store.ResolvesSamePackageCalls(graphCtx)
 	}
 	ex.run(graphCtx, ex.addSeeds(graphCtx, pack.Seeds))
 	if forPack {

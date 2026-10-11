@@ -133,7 +133,24 @@ func TestContextForTask_Constraints_C13b_ConfigScopeKeepsAPrivateTreeOutOfTheInd
 // is quoted.
 func TestContextForTask_Constraints_ASensitiveDocumentIsNamedNeverRead(t *testing.T) {
 	s := newShop(t)
-	s.collector.WithSensitive(func(_ context.Context, p, _ string) bool { return strings.Contains(filepath.ToSlash(p), "/private/") })
+	// The decision is made on the workspace-relative path: on macOS every
+	// t.TempDir() lives under /private/var/folders, so matching "/private/" in the
+	// absolute path marked every file sensitive, the public control included.
+	root, err := filepath.EvalSymlinks(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.collector.WithSensitive(func(_ context.Context, p, _ string) bool {
+		if filepath.IsAbs(p) {
+			if resolved, err := filepath.EvalSymlinks(p); err == nil {
+				p = resolved
+			}
+			if rel, err := filepath.Rel(root, p); err == nil {
+				p = rel
+			}
+		}
+		return strings.HasPrefix(filepath.ToSlash(p), "private/")
+	})
 	out, err := s.run(t, oracle(t, "C13").args())
 	if err != nil {
 		t.Fatal(err)

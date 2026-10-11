@@ -19,3 +19,6 @@ func Lookup(code string) Discount { return codes[code] }
 func Apply(subtotal int, d Discount) int {
 	return subtotal - subtotal*d.Percent/100 - d.FixedCents
 }
+
+// Off is what d takes off subtotal.
+func (d *Discount) Off(subtotal int) int { return subtotal*d.Percent/100 + d.FixedCents }
