@@ -731,9 +731,11 @@ non-zero only on error, so "has mail" is never confused with "the check failed"
 — read the count. A workspace that has never used the mailbox has no
 `collab.db`, which is reported as no mail rather than an error.
 
-Scope: the workspace mailbox only. Cross-project messages live in the
-daemon-level store behind the recipient's `[collab] cross_project` opt-in and
-are not reported. Notes addressed to `"next"` — `leave_note`'s default — ARE
+Scope: the workspace mailbox, plus notes from other checkouts of the same
+repository — a worktree or submodule of this project pinned elsewhere — which
+need no opt-in. Messages from other projects live behind the recipient's
+`[collab] cross_project` opt-in and are not reported: the probe never resolves
+the workspace's config, so it counts only what needs no consent. Notes addressed to `"next"` — `leave_note`'s default — ARE
 counted, for every session except the author: the probe claims nothing, so
 there is no race to lose, and a session can never claim its own note, so waking
 it for one would fire on every turn end. (The in-session listing in

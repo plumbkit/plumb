@@ -66,7 +66,7 @@ Note what it does not do: a fresh `conversation_id` starts a fresh budget, so it
 
 ## 7. Cross-project mail is the recipient's decision
 
-Addressing a session pinned to another workspace is refused up front unless THAT project has already set `[collab] cross_project` (default off) — sending is never silently accepted only to sit unclaimed. Once accepted, `leave_note`'s reply confirms delivery and names the workspace the recipient is pinned to; if it was refused, the reply says so and names the reason, so you never wait on a reply that was structurally impossible.
+Addressing a session pinned to another workspace is refused up front unless THAT project has already set `[collab] cross_project` (default off) — except another checkout of the same repository (a worktree or submodule of this project), which is the same project and needs no opt-in — sending is never silently accepted only to sit unclaimed. Once accepted, `leave_note`'s reply confirms delivery and names the workspace the recipient is pinned to; if it was refused, the reply says so and names the reason, so you never wait on a reply that was structurally impossible.
 
 ## 8. Pick the channel that fits
 
