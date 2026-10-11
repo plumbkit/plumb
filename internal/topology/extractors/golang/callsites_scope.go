@@ -65,11 +65,18 @@ func scanLocals(d *ast.FuncDecl) localScope {
 // T. Each of those names something the index would resolve to a package-level
 // declaration instead, so the hint would mislead; with it gone, the call keeps the
 // tiers it had before (a qualifier that is an import still resolves as one).
+//
+// A self-named hint is the exception: in `store := store.Open()` the only
+// declaration of store is the variable itself, so the store on the right is the
+// binding from before it (the import), and the hint is right.
 func (s localScope) dropShadowedHints() {
 	for name, hint := range s.hints {
 		head := strings.TrimPrefix(hint, topology.ReceiverFromCall)
 		if i := strings.IndexAny(head, "./"); i >= 0 {
 			head = head[:i]
+		}
+		if head == name && s.count[head] == 1 {
+			continue
 		}
 		if s.count[head] > 0 {
 			delete(s.hints, name)

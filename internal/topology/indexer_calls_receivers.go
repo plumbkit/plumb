@@ -68,7 +68,10 @@ func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, 
 	_, isImport := t.imports[fileID][q]
 	switch {
 	case receiverType == ReceiverAmbiguous:
-		if isImport {
+		// The import reading is only one of the declarations the name has. When
+		// another is the method's receiver or a parameter, the call may well be
+		// on that, so neither reading is taken.
+		if isImport && !t.declaresVariable(enclosing, q) {
 			return nil, tierQualified, false
 		}
 		return nil, tierLocal, true
@@ -148,7 +151,10 @@ func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiver
 		return nil
 	}
 	typ := results[idx]
-	if strings.Contains(typ, ".") && fn.fileID != fileID {
+	if pkgName, _, qualified := strings.Cut(typ, "."); qualified && fn.fileID != fileID &&
+		(fn.crossPackage || t.imports[fn.fileID][pkgName] != t.imports[fileID][pkgName]) {
+		// F's file reads pkg through its own imports: the caller's file can read
+		// the type only if it imports the same path under the same name.
 		return nil
 	}
 	if fn.crossPackage && !isExportedName(callee) {
@@ -156,6 +162,17 @@ func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiver
 		return nil
 	}
 	return t.methodsOf(fileID, fn.home, typ, callee)
+}
+
+// declaresVariable reports whether name is the enclosing declaration's receiver
+// or one of its named parameters.
+func (t resolverTables) declaresVariable(enclosing int64, name string) bool {
+	info, ok := t.same.enclosing[enclosing]
+	if !ok {
+		return false
+	}
+	_, isParam := info.params[name]
+	return info.recvName == name || isParam
 }
 
 // calledFn is the function a local's initialiser calls: its node, the file it is

@@ -99,10 +99,18 @@ func Control() {
 	y := open()
 	y.Print()
 }
+
+func SelfNamed() {
+	db := db.Open()
+	db.Query()
+}
 `)
 	for call, want := range map[string]string{
 		"s.Query": "", "x.Print": "", "c.Total": "", "g.Total": "",
 		"y.Print": topology.ReceiverFromCall + "open/0", // control: no local open here
+		// db's only declaration is the variable itself, so the db on its right is
+		// the import: the hint stands.
+		"db.Query": topology.ReceiverFromCall + "db.Open/0",
 	} {
 		if got[call] != want {
 			t.Errorf("%s: ReceiverType %q, want %q", call, got[call], want)
