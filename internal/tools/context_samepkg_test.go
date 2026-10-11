@@ -148,7 +148,7 @@ func TestSamePackage_AFunctionIsCalledByNameFromSiblingFiles(t *testing.T) {
 	// Every file the pass read lies under the agent's own root.
 	root := canonicalRoot(s.root) + "/"
 	for _, p := range log.paths {
-		if !strings.HasPrefix(p, root) {
+		if !strings.HasPrefix(canonicalRoot(p), root) {
 			t.Errorf("the collector consulted %s, outside the agent's root %s", p, root)
 		}
 	}
