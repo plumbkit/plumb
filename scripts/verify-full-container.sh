@@ -60,7 +60,9 @@ supervise() {
     n=$(daemons)
     samples=$((samples + 1))
     if [ "$n" = "?" ]; then peak="?"; elif [ "$peak" != "?" ] && [ "$n" -gt "$peak" ]; then peak=$n; fi
-    echo "$peak $samples" > /tmp/peak.new && mv /tmp/peak.new /tmp/peak
+    # A checkpoint that cannot be written ends the watcher (status 3), which the
+    # checks after the suite reject, rather than leave an older record trusted.
+    { echo "$peak $samples" > /tmp/peak.new && mv /tmp/peak.new /tmp/peak; } || exit 3
     sleep 0.2
   done
 }
