@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -47,13 +48,33 @@ func (s localScope) receiverType(name string) string {
 func scanLocals(d *ast.FuncDecl) localScope {
 	s := localScope{count: map[string]int{}, hints: map[string]string{}}
 	s.declareFields(d.Recv)
+	s.declareFields(d.Type.TypeParams)
 	s.declareFields(d.Type.Params)
 	s.declareFields(d.Type.Results)
 	ast.Inspect(d.Body, func(n ast.Node) bool {
 		s.visit(n)
 		return true
 	})
+	s.dropShadowedHints()
 	return s
+}
+
+// dropShadowedHints removes every hint whose leading identifier the function
+// itself declares: `x := open()` with a local closure open, `s := store.Open()`
+// with a parameter named store, `var x T` with a local type or a type parameter
+// T. Each of those names something the index would resolve to a package-level
+// declaration instead, so the hint would mislead; with it gone, the call keeps the
+// tiers it had before (a qualifier that is an import still resolves as one).
+func (s localScope) dropShadowedHints() {
+	for name, hint := range s.hints {
+		head := strings.TrimPrefix(hint, topology.ReceiverFromCall)
+		if i := strings.IndexAny(head, "./"); i >= 0 {
+			head = head[:i]
+		}
+		if s.count[head] > 0 {
+			delete(s.hints, name)
+		}
+	}
 }
 
 func (s localScope) declare(name, hint string) {

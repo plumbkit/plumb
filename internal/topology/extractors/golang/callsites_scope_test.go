@@ -68,6 +68,48 @@ func Use(in any) {
 	}
 }
 
+// A hint whose leading name the function declares itself names something other
+// than the package-level declaration the resolver would read: it is dropped.
+func TestReceiverType_AHintNamingALocalIsDropped(t *testing.T) {
+	got := receiverTypes(t, `package p
+
+func ShadowImport(store *Handle) {
+	s := store.Open()
+	s.Query()
+}
+
+func ShadowFunc() {
+	open := func() Cart { return Cart{} }
+	x := open()
+	x.Print()
+}
+
+func ShadowType() {
+	type Cart struct{}
+	var c Cart
+	c.Total()
+}
+
+func Generic[Cart any]() {
+	var g Cart
+	g.Total()
+}
+
+func Control() {
+	y := open()
+	y.Print()
+}
+`)
+	for call, want := range map[string]string{
+		"s.Query": "", "x.Print": "", "c.Total": "", "g.Total": "",
+		"y.Print": topology.ReceiverFromCall + "open/0", // control: no local open here
+	} {
+		if got[call] != want {
+			t.Errorf("%s: ReceiverType %q, want %q", call, got[call], want)
+		}
+	}
+}
+
 // A name the function declares more than once is ambiguous: no tier may read a
 // type for it, the receiver included. Names it never declares (imports, package
 // variables) and declarations with no evident type carry nothing.

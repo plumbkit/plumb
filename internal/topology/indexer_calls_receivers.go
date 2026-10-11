@@ -60,17 +60,29 @@ func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, 
 	if !havePkg {
 		return nil, tierQualified, false
 	}
+	q := qualifier.String
+	// A qualifier that is also an import of the file keeps the package-qualified
+	// reading whenever the local reading finds nothing: `rand := rand.New(src)`
+	// declares rand once, but the call on its right is the package's, and the old
+	// tier resolved it.
+	_, isImport := t.imports[fileID][q]
 	switch {
 	case receiverType == ReceiverAmbiguous:
+		if isImport {
+			return nil, tierQualified, false
+		}
 		return nil, tierLocal, true
 	case receiverType != "":
-		return t.localTypeCandidates(fileID, here, callee, receiverType), tierLocal, true
+		cands := t.localTypeCandidates(fileID, here, callee, receiverType)
+		if len(cands) == 0 && isImport {
+			return nil, tierQualified, false
+		}
+		return cands, tierLocal, true
 	}
 	info, ok := s.enclosing[enclosing]
 	if !ok {
 		return nil, tierQualified, false
 	}
-	q := qualifier.String
 	if info.recvName == q {
 		return s.methods[here][info.recvBase+"."+callee], tierSelf, true
 	}
@@ -114,8 +126,9 @@ func (t resolverTables) methodsOf(fileID int64, home, typ, callee string) []pkgT
 // read from the called function's declared results: F must be one function of
 // the caller's package, or one exported function of an imported package, and its
 // i-th result a named type. An unqualified result type belongs to F's own
-// package; a qualified one is read through the caller's imports only when F is in
-// the caller's package (another package's file has its own import names).
+// package; a qualified one is read through the caller's imports only when F is
+// declared in the caller's own file (any other file has its own import names, and
+// `pkg` there can be a different package).
 func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiverType string) []pkgTarget {
 	spec, fromCall := strings.CutPrefix(receiverType, ReceiverFromCall)
 	if !fromCall {
@@ -126,53 +139,63 @@ func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiver
 	if !ok || err != nil {
 		return nil
 	}
-	fnID, fnHome, crossPackage, ok := t.calledFunction(fileID, here, name)
+	fn, ok := t.calledFunction(fileID, here, name)
 	if !ok {
 		return nil
 	}
-	results := resultTypes(t.same.sigs[fnID])
+	results := resultTypes(t.same.sigs[fn.id])
 	if idx >= len(results) || !isNamedType(results[idx]) {
 		return nil
 	}
 	typ := results[idx]
-	if crossPackage && (strings.Contains(typ, ".") || !isExportedName(callee)) {
-		// F's file has its own import names, and the caller can reach only the
-		// exported methods of another package's type.
+	if strings.Contains(typ, ".") && fn.fileID != fileID {
 		return nil
 	}
-	return t.methodsOf(fileID, fnHome, typ, callee)
+	if fn.crossPackage && !isExportedName(callee) {
+		// The caller reaches only the exported methods of another package's type.
+		return nil
+	}
+	return t.methodsOf(fileID, fn.home, typ, callee)
+}
+
+// calledFn is the function a local's initialiser calls: its node, the file it is
+// declared in (0 when another package's), and the key of its package.
+type calledFn struct {
+	id, fileID   int64
+	home         string
+	crossPackage bool
 }
 
 // calledFunction finds the single function a call spelling names: "F" in the
-// caller's package, or "pkg.F" (exported) in an imported one. It returns the
-// function's node id and the key of the package it is declared in.
-func (t resolverTables) calledFunction(fileID int64, here, name string) (id int64, home string, crossPackage, ok bool) {
+// caller's package, or "pkg.F" (exported) in an imported one. Two declarations of
+// the name (build-tag variants) are not one function, and nothing is returned.
+func (t resolverTables) calledFunction(fileID int64, here, name string) (calledFn, bool) {
 	s := t.same
 	pkgName, fn, qualified := strings.Cut(name, ".")
 	if !qualified {
 		cands := s.funcs[here][name]
 		if len(cands) != 1 {
-			return 0, "", false, false
+			return calledFn{}, false
 		}
-		return cands[0].id, here, false, true
+		return calledFn{id: cands[0].id, fileID: cands[0].fileID, home: here}, true
 	}
 	if strings.Contains(fn, ".") || !isExportedName(fn) {
-		return 0, "", false, false
+		return calledFn{}, false
 	}
 	importPath, found := t.imports[fileID][pkgName]
 	if !found {
-		return 0, "", false, false
+		return calledFn{}, false
 	}
 	dir, found := matchImportDir(importPath, t.pkgDirs)
 	if !found {
-		return 0, "", false, false
+		return calledFn{}, false
 	}
 	targetPkg, found := s.dirPkg[dir]
 	cands := t.targets[dir][fn]
 	if !found || len(cands) != 1 {
-		return 0, "", false, false
+		return calledFn{}, false
 	}
-	return cands[0].id, dirPkgKey(dir, targetPkg), true, true
+	return calledFn{id: cands[0].id, home: dirPkgKey(dir, targetPkg), crossPackage: true}, true
 }
 
 // namedParams extracts the parameters with a named type from a Go declaration's
