@@ -34,7 +34,8 @@ func Chain(r Reader, x any, m map[string]Item) {
 	x.(*Item).Start()
 	Item{}.Len()
 	m["k"].Begin()
-	r.Read()
+	(*ptrs[0]).Close()
+	(*r).Read()
 	Plain()
 }
 `)
@@ -43,8 +44,9 @@ func Chain(r Reader, x any, m map[string]Item) {
 		"Start":  topology.QualifierOpaque,
 		"Len":    topology.QualifierOpaque,
 		"Begin":  "m" + topology.QualifierIndexedSuffix,
-		"Read":   "r", // control: a named receiver keeps its name
-		"Plain":  "",  // control: a bare call stays bare
+		"Close":  "ptrs" + topology.QualifierIndexedSuffix, // a dereference does not hide the index
+		"Read":   "r",                                      // control: a dereferenced named receiver keeps its name
+		"Plain":  "",                                       // control: a bare call stays bare
 	} {
 		got := sites[callee]
 		if len(got) != 1 || got[0] != want {
@@ -69,11 +71,13 @@ func Walk(visit func()) (done func()) {
 	var each func()
 	each()
 	func(inner func()) { inner() }(nil)
+	type count int
+	_ = count(3)
 	helper()
 	return nil
 }
 `)
-	for _, local := range []string{"walk", "visit", "done", "step", "each", "inner"} {
+	for _, local := range []string{"walk", "visit", "done", "step", "each", "inner", "count"} {
 		if got := sites[local]; len(got) != 1 || got[0] != topology.QualifierLocal {
 			t.Errorf("%s: qualifiers %q, want [%q]", local, got, topology.QualifierLocal)
 		}

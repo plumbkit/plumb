@@ -91,6 +91,9 @@ func localNames(d *ast.FuncDecl) map[string]bool {
 		case *ast.FuncLit:
 			addFields(s.Type.Params)
 			addFields(s.Type.Results)
+		case *ast.TypeSpec:
+			// A local type: Foo(x) is a conversion to it, not a package call.
+			names[s.Name.Name] = true
 		}
 		return true
 	})
@@ -237,13 +240,7 @@ func calleeParts(expr ast.Expr) (callee, qualifier string) {
 // belongs to the element) is the indexed name followed by
 // topology.QualifierIndexedSuffix.
 func selectorQualifier(x ast.Expr) string {
-	for {
-		p, ok := x.(*ast.ParenExpr)
-		if !ok {
-			break
-		}
-		x = p.X
-	}
+	x = unwrapReceiver(x)
 	switch x.(type) {
 	case *ast.IndexExpr, *ast.IndexListExpr:
 		if q := exprText(x); q != "" {
@@ -255,6 +252,21 @@ func selectorQualifier(x ast.Expr) string {
 		return q
 	}
 	return topology.QualifierOpaque
+}
+
+// unwrapReceiver strips parentheses and dereferences: (*p).M() is p.M(), and
+// (*m[k]).M() is still an indexed receiver.
+func unwrapReceiver(x ast.Expr) ast.Expr {
+	for {
+		switch e := x.(type) {
+		case *ast.ParenExpr:
+			x = e.X
+		case *ast.StarExpr:
+			x = e.X
+		default:
+			return x
+		}
+	}
 }
 
 // exprText renders the dotted-name spelling of an expression, or "" when the

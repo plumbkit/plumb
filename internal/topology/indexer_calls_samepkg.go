@@ -224,15 +224,14 @@ func samePackageScope(ctx context.Context, tx *sql.Tx, changed []string) ([]int6
 	for dir := range dirs {
 		var rows *sql.Rows
 		var err error
-		if dir == "." {
-			rows, err = tx.QueryContext(ctx, `SELECT id, path FROM topology_files WHERE instr(path, '/') = 0`)
-		} else {
-			// A range on the path, not substr: SQLite's substr counts characters and
-			// Go's len counts bytes, so a directory with a non-ASCII name matched
-			// nothing. "0" is the byte after "/", so [dir/, dir0) is every path under
-			// dir/; the path.Dir check below keeps only the direct children.
+		// A range on the path, not substr: SQLite's substr counts characters and
+		// Go's len counts bytes, so a directory with a non-ASCII name matched
+		// nothing. The path.Dir check below keeps only the direct children.
+		if lo, hi, bounded := dirPathRange(dir); bounded {
 			rows, err = tx.QueryContext(ctx,
-				`SELECT id, path FROM topology_files WHERE path >= ? AND path < ?`, dir+"/", dir+"0")
+				`SELECT id, path FROM topology_files WHERE path >= ? AND path < ?`, lo, hi)
+		} else {
+			rows, err = tx.QueryContext(ctx, `SELECT id, path FROM topology_files WHERE instr(path, '/') = 0`)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: sibling scope: %w", err)

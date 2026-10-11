@@ -38,7 +38,8 @@
   on plumb's retrospective tasks): admitting derived edges no longer counts every
   edge in the index once per declaration it expands. Its pack also spends less of
   the budget on frame text: a related declaration whose body follows prints its
-  signature once (in the body, or on the omission line if the body is cut), and
+  signature once, in the body (a body cut for budget names it on its fullest
+  omission line, and a pack too tight even for that drops it with the body), and
   documents left unread for one reason share one gap line.
 
 - **Experimental, opt-in context hints for Claude Code and Codex.**
