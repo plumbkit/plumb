@@ -28,7 +28,7 @@ import (
 var (
 	gitArgIndependent = []string{
 		"status", "log", "diff", "show", "blame", "shortlog", "check-ignore",
-		"merge-tree", "check-attr",
+		"merge-tree", "check-attr", "cherry", "ls-files", "grep",
 		"add", "commit", "mv",
 		"reset", "clean", "rebase", "revert", "cherry-pick",
 		"push", "fetch", "pull",
