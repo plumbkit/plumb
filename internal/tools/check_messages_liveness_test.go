@@ -25,9 +25,10 @@ func TestRenderReceipt_SaysWhetherTheRecipientCanStillReadIt(t *testing.T) {
 		return p, ok
 	}
 	cases := []struct {
-		name string
-		row  collab.Row
-		want string
+		name     string
+		row      collab.Row
+		notEnded func(id string) bool
+		want     string
 	}{
 		{
 			name: "bound, recipient live",
@@ -45,6 +46,23 @@ func TestRenderReceipt_SaysWhetherTheRecipientCanStillReadIt(t *testing.T) {
 			want: "has most likely ended and it will expire unread",
 		},
 		{
+			// PLAN-517: no live holder, but the record has not ended, so the note is
+			// bound to a session that is merely detached. Telling the sender to
+			// re-send here is what the live case got wrong.
+			name:     "bound, no live holder, record not ended",
+			row:      collab.Row{Addressee: "detached-peer", AddresseeID: "sess-detached", CreatedAt: sent},
+			notEnded: func(id string) bool { return id == "sess-detached" },
+			want:     "is not attached right now, but its record has not ended",
+		},
+		{
+			// The probe answers for a DIFFERENT id, so this row keeps the ended
+			// wording: the new arm must key on the bound session, not on the name.
+			name:     "bound, no live holder, some other record not ended",
+			row:      collab.Row{Addressee: "gone-peer", AddresseeID: "sess-gone", CreatedAt: sent},
+			notEnded: func(id string) bool { return id == "sess-detached" },
+			want:     "has most likely ended and it will expire unread",
+		},
+		{
 			name: "by name, live holder",
 			row:  collab.Row{Addressee: "named-peer", CreatedAt: sent},
 			want: "a live session answers to that name",
@@ -57,7 +75,7 @@ func TestRenderReceipt_SaysWhetherTheRecipientCanStillReadIt(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := renderReceipt([]collab.Row{tc.row}, now, resolve)
+			got := renderReceipt([]collab.Row{tc.row}, now, resolve, tc.notEnded)
 			if !strings.Contains(got, tc.want) {
 				t.Errorf("receipt lacks %q:\n%s", tc.want, got)
 			}
@@ -71,7 +89,7 @@ func TestRenderReceipt_SaysWhetherTheRecipientCanStillReadIt(t *testing.T) {
 func TestRenderReceipt_WithoutAResolverIsUnchanged(t *testing.T) {
 	now := time.Now()
 	row := collab.Row{Addressee: "busy-peer", AddresseeID: "sess-busy", CreatedAt: now.Add(-time.Minute)}
-	got := renderReceipt([]collab.Row{row}, now, nil)
+	got := renderReceipt([]collab.Row{row}, now, nil, nil)
 	for _, clause := range []string{"is live", "will expire unread —", "answers to that name"} {
 		if strings.Contains(got, clause) {
 			t.Errorf("a receipt with no resolver claims %q:\n%s", clause, got)
@@ -82,7 +100,7 @@ func TestRenderReceipt_WithoutAResolverIsUnchanged(t *testing.T) {
 	got = renderReceipt([]collab.Row{next}, now, func(string) (PeerSession, bool) {
 		called = true
 		return PeerSession{}, false
-	})
+	}, nil)
 	if called {
 		t.Error("a \"next\" note was resolved by name; it has no recipient to check")
 	}

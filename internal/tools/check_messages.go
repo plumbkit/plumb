@@ -236,7 +236,7 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 	// not. Sort so the messages shown are genuinely the oldest — the ones whose
 	// silence has lasted longest and is worth acting on.
 	slices.SortStableFunc(unread, func(a, b collab.Row) int { return a.CreatedAt.Compare(b.CreatedAt) })
-	return renderReceipt(unread, now, t.deps.ResolvePeer)
+	return renderReceipt(unread, now, t.deps.ResolvePeer, t.deps.RecordUnended)
 }
 
 // renderReceipt formats the unread-sent block, or "" when everything the session
@@ -246,7 +246,13 @@ func (t *CheckMessages) outboxReceipt(ctx context.Context) string {
 // recipient can still read it (PLAN-496). "Unread" alone left a sender unable to
 // tell a peer that is merely busy from one whose session has ended — and a note
 // bound to an ended session expires unread whatever the sender waits for.
-func renderReceipt(unread []collab.Row, now time.Time, resolve func(name string) (PeerSession, bool)) string {
+//
+// notEnded (CollabDeps.RecordUnended, may be nil) separates the other two: a
+// session that is merely DISCONNECTED, its record not yet ended, from one that has
+// ended for good (PLAN-517). It is consulted only for a row with a bound
+// AddresseeID and no live holder, and its case is worded as a possibility,
+// because an un-ended record is not a promise of return.
+func renderReceipt(unread []collab.Row, now time.Time, resolve func(name string) (PeerSession, bool), notEnded func(id string) bool) string {
 	if len(unread) == 0 {
 		return ""
 	}
@@ -266,7 +272,7 @@ func renderReceipt(unread []collab.Row, now time.Time, resolve func(name string)
 		if r.TargetWorkspace != "" {
 			fmt.Fprintf(&sb, " (cross-project, to %s)", r.TargetWorkspace)
 		}
-		sb.WriteString(recipientState(r, resolve))
+		sb.WriteString(recipientState(r, resolve, notEnded))
 		sb.WriteString("\n")
 		bound = bound || r.AddresseeID != ""
 	}
@@ -296,9 +302,12 @@ func renderReceipt(unread []collab.Row, now time.Time, resolve func(name string)
 // session a note is waiting for can still take it. resolve reports the ONE live
 // session answering to a name, and found=false when none does or several do, so
 // that case is worded as what it is — no single holder — rather than as an ending
-// the resolver cannot see. A "next" note has no recipient yet, and a nil resolve
-// means liveness is unknown; both add nothing.
-func recipientState(r collab.Row, resolve func(name string) (PeerSession, bool)) string {
+// the resolver cannot see. notEnded then splits that case: a bound session whose
+// record has not ended is disconnected rather than gone, and telling a sender to
+// re-send a note that is about to be delivered would bind a duplicate to a
+// different session (PLAN-517). A "next" note has no recipient yet, and a nil
+// resolve means liveness is unknown; both add nothing.
+func recipientState(r collab.Row, resolve func(name string) (PeerSession, bool), notEnded func(id string) bool) string {
 	if resolve == nil || r.Addressee == collab.AddresseeNext {
 		return ""
 	}
@@ -313,6 +322,13 @@ func recipientState(r collab.Row, resolve func(name string) (PeerSession, bool))
 	case ok:
 		return "; the session it is bound to has ended and the name now belongs to another session, " +
 			"so it will expire unread — re-send to reach the current holder"
+	case notEnded != nil && r.AddresseeID != "" && notEnded(r.AddresseeID):
+		// Not attached, but its record has not ended. Deliberately NOT advice to
+		// re-send: the note is still bound to that session and reaches it if the
+		// session comes back, and a duplicate bound to a different session would
+		// defeat the binding. "Not ended" is not "will return" — see RecordUnended.
+		return "; the session it is bound to is not attached right now, but its record has not ended — " +
+			"the note stays bound and reaches it if that session comes back; re-send only if you know it is gone"
 	default:
 		return "; no single live session answers to that name now, so the session it is bound to " +
 			"has most likely ended and it will expire unread — re-send if it still matters"

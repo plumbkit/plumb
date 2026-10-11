@@ -256,6 +256,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStoreReader:        s.collabPool.getGlobalResult,
 		Notifier:                 s.collabPool.notifier(),
 		ResolvePeer:              s.resolvePeer,
+		RecordUnended:            session.RecordUnended,
 		InheritedSessionIDs:      s.inheritedSessionIDsFor,
 		TargetAllowsCrossProject: s.targetAllowsCrossProject,
 	}

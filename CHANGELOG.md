@@ -47,6 +47,15 @@
   identity. Proxies already running read it, so a daemon restart is enough. A
   superseded presentation is unchanged: a successor exists, and overwriting its
   entry could hand the conversation to the stale copy.
+- **A note to a merely disconnected session no longer reads as "most likely
+  ended — re-send".** The outbox receipt advised a re-send whenever no live
+  session answered to the name, which is wrong for a session that is only
+  detached: the note stays bound to it and is delivered when it comes back.
+  Observed live on 2026-10-11 — a sender was told its note had "most likely
+  ended" while the recipient was merely between reconnects, and the note arrived,
+  unchanged, minutes later. A bound note whose session record has not ended now
+  says exactly that, and the re-send advice is kept for a record that really has
+  ended.
 
 - **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**
   `plumb hooks run-codex` decoded only the session id, cwd and event name, so
