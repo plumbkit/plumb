@@ -29,11 +29,18 @@ func familyWrite(t *testing.T, path, body string) {
 	}
 }
 
-func familyRepo(t *testing.T, root string) string {
+// familyGitDir makes dir a git directory as the probe recognises one.
+func familyGitDir(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+	familyWrite(t, filepath.Join(dir, "HEAD"), "ref: refs/heads/main\n")
+	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func familyRepo(t *testing.T, root string) string {
+	t.Helper()
+	familyGitDir(t, filepath.Join(root, ".git"))
 	return root
 }
 
@@ -51,6 +58,7 @@ func familySubmodule(t *testing.T, super, name string) string {
 	sub := filepath.Join(super, name)
 	familyWrite(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/"+name+"\n")
 	familyWrite(t, filepath.Join(super, ".git", "modules", name, "config"), "[core]\n\tworktree = ../../../"+name+"\n")
+	familyGitDir(t, filepath.Join(super, ".git", "modules", name))
 	return sub
 }
 

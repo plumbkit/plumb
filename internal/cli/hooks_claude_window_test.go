@@ -472,3 +472,40 @@ func TestClaudeHookEntries_TimeoutTracksATunedWindow(t *testing.T) {
 		}
 	})
 }
+
+// TestHookPeerCount_CountsSameProjectCheckouts: since #635 a session in another
+// checkout of this repository — here a linked worktree — mails this workspace
+// without consent, so it extends the watch like a session on the same root. A
+// session in a plain directory nested inside the project cannot, and does not.
+func TestHookPeerCount_CountsSameProjectCheckouts(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	repo := t.TempDir()
+	common := filepath.Join(repo, ".git")
+	wt := filepath.Join(t.TempDir(), "wt")
+	plain := filepath.Join(repo, "tools")
+	for _, dir := range []string{filepath.Join(common, "objects"), filepath.Join(common, "worktrees", "wt"), wt, plain} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		filepath.Join(common, "HEAD"):                         "ref: refs/heads/main\n",
+		filepath.Join(wt, ".git"):                             "gitdir: " + filepath.Join(common, "worktrees", "wt") + "\n",
+		filepath.Join(common, "worktrees", "wt", "commondir"): "../..\n",
+		filepath.Join(common, "worktrees", "wt", "gitdir"):    filepath.Join(wt, ".git") + "\n",
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, folder := range map[string]string{"in-wt": wt, "in-plain": plain} {
+		info, err := session.Register(session.Info{Name: name, Folder: folder})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { session.Unregister(info.ID) })
+	}
+	if got := hookPeerCount(repo, "self"); got != 1 {
+		t.Errorf("hookPeerCount = %d; want 1 — the worktree session, not the plain nested directory", got)
+	}
+}

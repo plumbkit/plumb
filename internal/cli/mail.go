@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -386,13 +387,15 @@ func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)
 		defer store.Close()
 		stores = append(stores, store)
 	}
+	// The daemon-level store is best-effort here: it holds only consent-free
+	// same-project mail for this probe, and a store this binary cannot read — one
+	// an older daemon wrote and has not migrated yet — must not cost the
+	// workspace count, which is what this command answered before #635.
 	global, err := openGlobal()
 	if err != nil {
-		return nil, fmt.Errorf("opening the daemon-level mailbox: %w", err)
-	}
-	if global != nil {
+		slog.Debug("plumb mail: daemon-level mailbox unavailable", "err", err)
+	} else if global != nil {
 		defer global.Close()
-		stores = append(stores, global)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -407,6 +410,13 @@ func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)
 		got, err := store.ClaimableNotes(ctx, who, now, 0)
 		if err != nil {
 			return nil, fmt.Errorf("reading the mailbox: %w", err)
+		}
+		rows = append(rows, got...)
+	}
+	if global != nil {
+		got, err := global.ClaimableNotes(ctx, who, now, 0)
+		if err != nil {
+			slog.Debug("plumb mail: daemon-level mailbox unreadable", "err", err)
 		}
 		rows = append(rows, got...)
 	}

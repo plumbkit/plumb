@@ -25,12 +25,20 @@ func scopeWrite(t *testing.T, path, body string) {
 	}
 }
 
+// scopeGitDir makes dir a git directory as the probe recognises one: a HEAD file
+// and an objects directory.
+func scopeGitDir(t *testing.T, dir string) {
+	t.Helper()
+	scopeWrite(t, filepath.Join(dir, "HEAD"), "ref: refs/heads/main\n")
+	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // scopeRepo makes a main checkout at root: .git is a directory.
 func scopeRepo(t *testing.T, root string) string {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	scopeGitDir(t, filepath.Join(root, ".git"))
 	return root
 }
 
@@ -55,6 +63,7 @@ func scopeSubmodule(t *testing.T, super, name string) string {
 	}
 	scopeWrite(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/"+name+"\n")
 	scopeWrite(t, filepath.Join(super, ".git", "modules", name, "config"), "[core]\n\tworktree = ../../../"+name+"\n")
+	scopeGitDir(t, filepath.Join(super, ".git", "modules", name))
 	return sub
 }
 
@@ -342,4 +351,53 @@ func onlyConversation(t *testing.T, g *Store) string {
 		t.Fatal(err)
 	}
 	return conv
+}
+
+func TestScope_AnEmptyScopeMatchesNothingEvenUnchecked(t *testing.T) {
+	// A future read that forgets to test sc.none must still read nothing: the
+	// empty scope's term is "AND 0", never an empty filter that would match mail
+	// by name across every workspace.
+	repo := scopeRepo(t, t.TempDir())
+	other := scopeRepo(t, t.TempDir())
+	g := openScopeGlobal(t)
+	now := time.Now()
+	sendFrom(t, g, other, repo, "foreign", now)
+	who := Claimant{Name: "alice", ID: "sess-alice", Workspace: repo}
+	sc, err := g.scope(context.Background(), who, now, true)
+	if err != nil || !sc.none {
+		t.Fatalf("scope = %+v, err %v; want an empty scope", sc, err)
+	}
+	where, args := claimable(sc, now)
+	var n int
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM collab_rows WHERE `+where, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("an unchecked empty scope matched %d rows; it must match none", n)
+	}
+	// Positive control: the same predicate under consent matches the row.
+	who.CrossProject = true
+	sc, _ = g.scope(context.Background(), who, now, true)
+	where, args = claimable(sc, now)
+	if err := g.db.QueryRow(`SELECT COUNT(*) FROM collab_rows WHERE `+where, args...).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("control: consenting scope matched %d rows, err %v; want 1", n, err)
+	}
+}
+
+func TestConversationSummariesForWorkspace_CountsADeliveredFamilyThread(t *testing.T) {
+	// The volume view counts delivered rows too, so its stamp lookup must not be
+	// narrowed to unread ones: a same-project thread whose notes were all read is
+	// still a thread.
+	repo := scopeRepo(t, t.TempDir())
+	wt := scopeWorktree(t, filepath.Join(repo, ".git"), "wt", filepath.Join(t.TempDir(), "wt"))
+	g := openScopeGlobal(t)
+	now := time.Now()
+	sendFrom(t, g, wt, repo, "read already", now)
+	if got, err := g.ClaimNotes(context.Background(), Claimant{Name: "alice", ID: "sess-alice", Workspace: repo}, now, 0); err != nil || len(got) != 1 {
+		t.Fatalf("claim = %d, err %v", len(got), err)
+	}
+	sums, err := g.ConversationSummariesForWorkspace(context.Background(), Claimant{Workspace: repo}, now, 0)
+	if err != nil || len(sums) != 1 {
+		t.Fatalf("a delivered same-project thread must still be counted without consent; got %d, err %v", len(sums), err)
+	}
 }

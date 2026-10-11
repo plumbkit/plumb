@@ -24,12 +24,20 @@ func write(t *testing.T, path, body string) {
 	}
 }
 
+// gitDirAt lays down what makes dir a git directory to the probe — a HEAD file
+// and an objects directory — as `git init` and `git submodule add` write them.
+func gitDirAt(t *testing.T, dir string) {
+	t.Helper()
+	write(t, filepath.Join(dir, "HEAD"), "ref: refs/heads/main\n")
+	if err := os.MkdirAll(filepath.Join(dir, "objects"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // mainCheckout builds a repository at root with .git as a directory.
 func mainCheckout(t *testing.T, root string) string {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	gitDirAt(t, filepath.Join(root, ".git"))
 	return root
 }
 
@@ -64,6 +72,7 @@ func submodule(t *testing.T, super, name, sub string, worktreeValue string) stri
 		t.Fatal(err)
 	}
 	gitDir := filepath.Join(super, ".git", "modules", name)
+	gitDirAt(t, gitDir)
 	write(t, filepath.Join(sub, ".git"), "gitdir: "+gitDir+"\n")
 	write(t, filepath.Join(gitDir, "config"), "[core]\n\tbare = false\n\tworktree = "+worktreeValue+"\n")
 	return gitDir
@@ -239,6 +248,7 @@ func TestCheckoutAt_RelativeLinks(t *testing.T) {
 	}
 	write(t, filepath.Join(sub, ".git"), "gitdir: ../.git/modules/sub\n")
 	write(t, filepath.Join(repo, ".git", "modules", "sub", "config"), "[core]\n\tworktree = ../../../sub\n")
+	gitDirAt(t, filepath.Join(repo, ".git", "modules", "sub"))
 
 	c, ok := CheckoutAt(sub)
 	if !ok {
@@ -325,5 +335,80 @@ func TestSameCommonDir_AgreesWithSameProject(t *testing.T) {
 				t.Errorf("SameCommonDir(stamp of %s, %s) = %v, SameProject = %v", a, b, got, want)
 			}
 		}
+	}
+}
+
+func TestSameProject_RefusesAForgedAncestorCommonDir(t *testing.T) {
+	// The forgery the parent test alone cannot see: a checkout that sits at
+	// <A>/worktrees/evil writes its own git directory (`gitdir: .`) whose
+	// commondir "../.." names <A> — any ancestor — and whose back-link names its
+	// own .git. Without proof that <A> is a git directory, every repository under
+	// <A> would contain "its" common directory and become the same project.
+	forge := func(evil string) {
+		t.Helper()
+		write(t, filepath.Join(evil, ".git"), "gitdir: .\n")
+		write(t, filepath.Join(evil, "commondir"), "../..\n")
+		write(t, filepath.Join(evil, "gitdir"), ".git\n")
+	}
+	base := t.TempDir()
+	victim := mainCheckout(t, filepath.Join(base, "src"))
+	evil := filepath.Join(base, "worktrees", "evil")
+	forge(evil)
+	if _, ok := CheckoutAt(evil); ok {
+		t.Error("a forged worktree naming an ancestor that is not a git directory must not verify")
+	}
+	if SameProject(evil, victim) || SameProject(victim, evil) {
+		t.Error("the forgery must not make an unrelated repository under the ancestor the same project")
+	}
+	// The nested variant: the forged checkout inside the victim itself.
+	nested := filepath.Join(victim, "worktrees", "evil")
+	forge(nested)
+	if SameProject(nested, victim) || SameProject(victim, nested) {
+		t.Error("a forged worktree nested in the project must not become part of it")
+	}
+}
+
+func TestCheckoutAt_GitDirMustSitDirectlyInWorktrees(t *testing.T) {
+	// One level deeper than <common>/worktrees/<id>: containment would accept it,
+	// the parent comparison must not.
+	repo := mainCheckout(t, t.TempDir())
+	common := filepath.Join(repo, ".git")
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitDir := filepath.Join(common, "worktrees", "a", "b")
+	write(t, filepath.Join(wt, ".git"), "gitdir: "+gitDir+"\n")
+	write(t, filepath.Join(gitDir, "commondir"), "../../..\n")
+	write(t, filepath.Join(gitDir, "gitdir"), filepath.Join(wt, ".git")+"\n")
+	if _, ok := CheckoutAt(wt); ok {
+		t.Error("a git directory below <common>/worktrees/<id> must not verify")
+	}
+}
+
+func TestSubmodule_WorktreeKeyOutsideCoreIsIgnored(t *testing.T) {
+	// Only [core] worktree is the back-link git writes; the same key in any other
+	// section is somebody else's text.
+	super := mainCheckout(t, t.TempDir())
+	sub := filepath.Join(super, "sub")
+	gitDir := filepath.Join(super, ".git", "modules", "sub")
+	gitDirAt(t, gitDir)
+	write(t, filepath.Join(sub, ".git"), "gitdir: "+gitDir+"\n")
+	write(t, filepath.Join(gitDir, "config"), "[core]\n\tbare = false\n[remote \"x\"]\n\tworktree = ../../../sub\n")
+	if _, ok := CheckoutAt(sub); ok {
+		t.Error("a worktree key outside [core] must not verify a submodule")
+	}
+}
+
+func TestSameProject_CaseInsensitiveSpellings(t *testing.T) {
+	// On a case-insensitive filesystem (the macOS default) two spellings of one
+	// directory are one directory, and containment must agree with equality.
+	base := t.TempDir()
+	super := mainCheckout(t, filepath.Join(base, "Real"))
+	sub := filepath.Join(super, "sub")
+	submodule(t, super, "sub", sub, "../../../sub")
+	upper := filepath.Join(base, "REAL")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("case-sensitive filesystem: the spellings are different directories here")
+	}
+	if !SameProject(upper, sub) || !SameProject(sub, upper) {
+		t.Error("a superproject spelled in another case is still the submodule's superproject")
 	}
 }
