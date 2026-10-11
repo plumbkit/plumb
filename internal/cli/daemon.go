@@ -516,6 +516,21 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 	}
 }
 
+// newConnHandle is what the registry holds for a connection: the hooks the
+// reaper, the control socket and the hook handlers reach it through.
+func newConnHandle(s *connSession) connHandle {
+	return connHandle{
+		cancel:         s.cancel,
+		workspace:      s.workspace,
+		proxySessionID: func() string { return s.view().proxySessionID },
+		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
+		summarise:      s.generateEpisodicSummary,
+		mailboxInbox:   s.hookInbox,
+		hintRoot:       s.hookHintRoot,
+		sensitive:      s.changeSensitive,
+	}
+}
+
 // handleConn runs a complete MCP session over conn. All per-connection state
 // and behaviour live in connSession (see conn.go).
 func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
@@ -529,16 +544,7 @@ func handleConn(ctx context.Context, conn net.Conn, pool *workspacePool, topoPoo
 	// The registry is keyed by session ID, which onSessionID may ADOPT (re-key)
 	// during initialize; give the session the registry so the re-key follows.
 	s.registry = registry
-	registry.add(s.sessionID(), connHandle{
-		cancel:         s.cancel,
-		workspace:      s.workspace,
-		proxySessionID: func() string { return s.view().proxySessionID },
-		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
-		summarise:      s.generateEpisodicSummary,
-		mailboxInbox:   s.hookInbox,
-		hintRoot:       s.hookHintRoot,
-		sensitive:      s.changeSensitive,
-	})
+	registry.add(s.sessionID(), newConnHandle(s))
 	// Read the ID at close time, not here: an adoption re-keys the entry under
 	// the new ID and the deferred remove must delete that key, not the stale one.
 	// The remove is deferred AFTER close so LIFO runs it FIRST: once the entry
