@@ -3,9 +3,11 @@ package tools
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/redact"
@@ -37,11 +39,68 @@ var tempDirEnvKeys = map[string]bool{"GOTMPDIR": true, "TMPDIR": true}
 // taskEnviron is PrepareTaskEnv for a resolved command run in dir; {workspace}
 // is the resolver's root, or dir when it gave none.
 func taskEnviron(cmd TaskCommand, dir string) []string {
+	env, _, _ := taskEnvPlan(cmd, dir, nil, nil)
+	return env
+}
+
+// taskEnvPlan returns the environment one task command runs with: the command's
+// [tasks.<lang>] env with this call's per-call changes (#634) applied on top,
+// expanded at dir. It also returns the names removed for this call, and the notes
+// the report prints for the two changes the resulting list cannot show — a
+// configured entry whose value this call replaced, and a configured entry it
+// removed.
+//
+// set and unset are already validated (config.ValidateTaskEnvOverrides), so this
+// function only applies them. A removal is applied to the MERGED list, which is
+// what makes `unset` beat a configured entry as well as an inherited one: the
+// reported environment never names a variable the call asked to remove. The
+// removal itself reaches the child through RunTaskArgv's unset argument, because
+// only that layer can see what was INHERITED.
+//
+// Concurrency: stateless; safe for concurrent use.
+func taskEnvPlan(cmd TaskCommand, dir string, set map[string]string, unset []string) (env, remove, notes []string) {
 	root := cmd.Root
 	if root == "" {
 		root = dir
 	}
-	return PrepareTaskEnv(cmd.Env, root, dir)
+	merged := make(map[string]string, len(cmd.Env)+len(set))
+	configured := make(map[string]bool, len(cmd.Env))
+	for _, kv := range cmd.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		merged[k] = v
+		configured[k] = true
+	}
+	where := configuredEnvLabel(cmd.Language)
+	for _, k := range slices.Sorted(maps.Keys(set)) {
+		if configured[k] {
+			notes = append(notes, fmt.Sprintf("env %s from this call replaces the %s entry for it", k, where))
+		}
+		merged[k] = set[k]
+	}
+	remove = slices.Clone(unset)
+	slices.Sort(remove)
+	remove = slices.Compact(remove)
+	for _, k := range remove {
+		delete(merged, k)
+		if configured[k] {
+			notes = append(notes, fmt.Sprintf("env %s is removed for this call, so the %s entry for it does not apply", k, where))
+		}
+	}
+	keys := slices.Sorted(maps.Keys(merged))
+	raw := make([]string, 0, len(keys))
+	for _, k := range keys {
+		raw = append(raw, k+"="+merged[k])
+	}
+	return PrepareTaskEnv(raw, root, dir), remove, notes
+}
+
+// configuredEnvLabel names the config a resolved command's env came from, for a
+// note about a per-call change to it.
+func configuredEnvLabel(lang string) string {
+	if lang == "" {
+		return "[tasks.<lang>] env"
+	}
+	return "[tasks." + lang + "] env"
 }
 
 // PrepareTaskEnv expands KEY=VALUE templates for a command run in dir under the

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -132,16 +133,24 @@ func TestValidateTaskEnv(t *testing.T) {
 	}
 }
 
-// TestEnvKeySteersExecution pins the disclosure warning `plumb trust` prints: the
-// keys that change WHICH program or code a command runs are flagged, ordinary
-// ones are not.
+// TestEnvKeySteersExecution pins the taxonomy both consumers share: the
+// disclosure warning `plumb trust` prints, and the per-call run_task gate. A name
+// listed here a project may still set (trust discloses it); a call may not touch
+// it at all.
 func TestEnvKeySteersExecution(t *testing.T) {
-	for _, k := range []string{"PATH", "GOFLAGS", "GIT_SSH_COMMAND", "NODE_OPTIONS", "PYTHONPATH", "RUSTC_WRAPPER", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"} {
+	// The last eight were added for #634's per-call gate: each one decides where a
+	// build's code or its tooling comes from. GOWORK can name a go.work outside the
+	// workspace entirely, GOMODCACHE/GOPATH move the module source, and make reads
+	// its flags and its makefiles out of the environment.
+	for _, k := range []string{
+		"PATH", "GOFLAGS", "GIT_SSH_COMMAND", "NODE_OPTIONS", "PYTHONPATH", "RUSTC_WRAPPER", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH",
+		"GOWORK", "GOMODCACHE", "GOPATH", "MAKEFLAGS", "MAKEFILES", "PYTEST_ADDOPTS", "RUSTUP_TOOLCHAIN", "_JAVA_OPTIONS",
+	} {
 		if !EnvKeySteersExecution(k) {
 			t.Errorf("EnvKeySteersExecution(%q) = false, want the trust disclosure to flag it", k)
 		}
 	}
-	for _, k := range []string{"GOTMPDIR", "GOWORK", "CI", "RUST_BACKTRACE"} {
+	for _, k := range []string{"GOTMPDIR", "TMPDIR", "CI", "RUST_BACKTRACE", "PLUMB_MODE"} {
 		if EnvKeySteersExecution(k) {
 			t.Errorf("EnvKeySteersExecution(%q) = true, want an ordinary variable left unflagged", k)
 		}
@@ -175,5 +184,138 @@ func TestTaskEnvKeyOf(t *testing.T) {
 		if _, ok := TaskEnvKeyOf(slot); ok {
 			t.Errorf("TaskEnvKeyOf(%q) reported an env entry", slot)
 		}
+	}
+}
+
+// TestValidateTaskEnvOverrides pins what ONE run_task call may do to the child's
+// environment (#634). Both rules are guard rails rather than a boundary — the
+// name list cannot be completed, since make reads any variable — so what this
+// pins is the direction of each refusal and the fact that neither list is exempt.
+func TestValidateTaskEnvOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		set   map[string]string
+		unset []string
+	}{
+		{"a mode switch and a corpus path", map[string]string{"MODE": "experiment", "CORPUS": "/tmp/corpus"}, nil},
+		{"punctuation in a value", map[string]string{"FILTER": "a or b; not c", "URL": "https://x.example/y?z=1"}, nil},
+		{"the config placeholders", map[string]string{"GOTMPDIR": "{workspace}/.testcache"}, nil},
+		{"an empty value", map[string]string{"CI": ""}, nil},
+		{"removing inert names", nil, []string{"GOTMPDIR", "TMPDIR", "CI"}},
+		{"nothing at all", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateTaskEnvOverrides(tc.set, tc.unset); err != nil {
+				t.Errorf("refused: %v", err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name    string
+		set     map[string]string
+		unset   []string
+		wantErr string
+	}{
+		{"loader injection", map[string]string{"LD_PRELOAD": "/tmp/x.so"}, nil, "dynamic-loader"},
+		{"the program the command runs", map[string]string{"PATH": "/tmp/bin"}, nil, "changes which program"},
+		{"go's own flags", map[string]string{"GOFLAGS": "-toolexec=/tmp/x"}, nil, "changes which program"},
+		{"a command git runs", map[string]string{"GIT_SSH_COMMAND": "/tmp/x"}, nil, "changes which program"},
+		{"a steering family by prefix", map[string]string{"DYLD_PRINT_LIBRARIES": "1"}, nil, "changes which program"},
+		{"a name that is not portable", map[string]string{"bad name": "x"}, nil, "not a valid environment variable name"},
+		{"a newline in the value", map[string]string{"MODE": "a\nb"}, nil, "control characters"},
+		{"a NUL in the value", map[string]string{"MODE": "a\x00b"}, nil, "NUL"},
+		{"an over-long value", map[string]string{"MODE": strings.Repeat("x", maxTaskEnvOverride+1)}, nil, "longer than"},
+		{"the same name both ways", map[string]string{"GOTMPDIR": "/tmp"}, []string{"GOTMPDIR"}, "both env and unset"},
+		{"an unset name that is not portable", nil, []string{"bad name"}, "not a valid environment variable name"},
+		// The same name rule applies to REMOVAL (#634 review): taking a
+		// configured GOFLAGS=-mod=vendor or GOWORK=off back out changes what the
+		// command builds as surely as putting one in, and the state being removed
+		// is the one `plumb trust` approved.
+		{"removing a configured steering name", nil, []string{"GOFLAGS"}, "changes what the stored command would run"},
+		{"removing a name that decides the module tree", nil, []string{"GOWORK"}, "changes what the stored command would run"},
+		{"removing a loader variable", nil, []string{"LD_PRELOAD"}, "dynamic-loader"},
+		// A value goes through the same placeholder rule as a config entry, so a
+		// typo is refused here rather than reaching the command as literal text.
+		{"an unknown placeholder in a value", map[string]string{"GOTMPDIR": "{workpsace}/x"}, nil, "unknown placeholder"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateTaskEnvOverrides(tc.set, tc.unset)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("= %v, want a refusal containing %q", err, tc.wantErr)
+			}
+		})
+	}
+
+	// The cap counts both directions together.
+	set := make(map[string]string, maxTaskEnvOverrides)
+	for i := range maxTaskEnvOverrides {
+		set[fmt.Sprintf("VAR_%d", i)] = "1"
+	}
+	if err := ValidateTaskEnvOverrides(set, nil); err != nil {
+		t.Errorf("exactly the cap must be accepted: %v", err)
+	}
+	set["ONE_MORE"] = "1"
+	if err := ValidateTaskEnvOverrides(set, nil); err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Errorf("one over the cap = %v, want a refusal naming the limit", err)
+	}
+	if err := ValidateTaskEnvOverrides(nil, make([]string, maxTaskEnvOverrides+1)); err == nil {
+		t.Error("an unset list over the cap must be refused too")
+	}
+}
+
+// TestValidateTaskEnvOverrides_RemovalSharesTheNameRule: `unset` is held to the
+// same name rule as `env`, which was the other way round in the first draft —
+// where it was justified with "a removal can only shrink the environment". That
+// is false for a CONFIGURED entry: removing `GOFLAGS=-mod=vendor` changes what
+// compiles, and removing `GOPROXY=off` turns a hermetic build into a live fetch.
+// The names that matter for the motivating case (GOTMPDIR, TMPDIR) are not
+// steering names, so nothing it was written for is lost.
+func TestValidateTaskEnvOverrides_RemovalSharesTheNameRule(t *testing.T) {
+	if err := ValidateTaskEnvOverrides(nil, []string{"GOTMPDIR", "TMPDIR"}); err != nil {
+		t.Errorf("removing a scratch-directory name must stay allowed: %v", err)
+	}
+	for name, want := range map[string]string{
+		"GOFLAGS":    "changes what the stored command would run",
+		"PATH":       "changes what the stored command would run",
+		"LD_PRELOAD": "dynamic-loader",
+	} {
+		err := ValidateTaskEnvOverrides(nil, []string{name})
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("unset %s = %v, want a refusal containing %q", name, err, want)
+		}
+	}
+}
+
+// TestValidateTaskEnvOverrides_RefusalIsDeterministic: a call that is wrong in
+// several ways is refused for the SAME reason every time. Go's map iteration is
+// randomised, so without the sorted walk a retrying caller reads a different
+// problem on each attempt and cannot tell which one it just fixed.
+func TestValidateTaskEnvOverrides_RefusalIsDeterministic(t *testing.T) {
+	set := map[string]string{"PATH": "/x", "LD_PRELOAD": "/y", "bad name": "z"}
+	first := ""
+	for range 20 {
+		err := ValidateTaskEnvOverrides(set, nil)
+		if err == nil {
+			t.Fatal("must be refused")
+		}
+		if first == "" {
+			first = err.Error()
+			continue
+		}
+		if err.Error() != first {
+			t.Fatalf("the refusal changed between calls:\n%v\nthen\n%v", first, err)
+		}
+	}
+	// Sorted, the loader name comes first, so THAT is the reason reported.
+	if !strings.Contains(first, "LD_PRELOAD") {
+		t.Errorf("= %q, want the alphabetically-first offender", first)
+	}
+
+	// The unset list is walked too, and refusal order across the two lists is
+	// fixed: a bad unset name is reported before a bad set name of the same call.
+	mixed := ValidateTaskEnvOverrides(map[string]string{"PATH": "/x"}, []string{"LD_PRELOAD"})
+	if mixed == nil || !strings.Contains(mixed.Error(), "unset LD_PRELOAD") {
+		t.Errorf("= %v, want the unset refusal to be deterministic and first", mixed)
 	}
 }

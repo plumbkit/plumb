@@ -38,6 +38,10 @@ func (s *connSession) taskResolver(ctx context.Context, req tools.TaskRequest) (
 	if ws == "" {
 		return tools.TaskCommand{}, errors.New("run_task: no workspace is pinned for this session")
 	}
+	// A per-call env change is validated by the TOOL, not here: see
+	// WriteDeps.TaskEnvRefusal and Tasks.Execute. It used to be checked at this
+	// seam, which worked but left the rule to be remembered by every resolver;
+	// the tool now refuses an unvalidated override outright (#634 review).
 	lang, err := taskLanguage(v, req.Language)
 	if err != nil {
 		return tools.TaskCommand{}, err

@@ -41,6 +41,21 @@
   signature once, in the body (a body cut for budget names it on its fullest
   omission line, and a pack too tight even for that drops it with the body), and
   documents left unread for one reason share one gap line.
+- **`run_task` can change the environment for one call: `env` and `unset`
+  (#634).** `run_task({slot: "test", env: {MODE: "experiment"}})` sets variables
+  for that run, and `unset: ["GOTMPDIR"]` removes them — an inherited entry and
+  a `[tasks.<lang>] env` entry alike, so a stored command that mirrors CI's temp
+  directory can be reproduced under the system one without falling back to a
+  native shell. Values take the same `{workspace}`/`{working_dir}` placeholders
+  and a workspace-local `GOTMPDIR`/`TMPDIR` is created for them the same way; the
+  response lists what was applied and notes any value that replaced a configured
+  entry or removed one. A name that decides which program or code the command runs
+  (`PATH`, `GOFLAGS`, `GOWORK`, `GIT_*`, `NODE_OPTIONS`, `MAKEFLAGS`, `LD_PRELOAD`,
+  …) is refused in BOTH directions: setting one replaces what runs, and removing a
+  configured `GOFLAGS=-mod=vendor` changes what it builds just as surely. The
+  refusal points at `[tasks.<lang>] env`, where `plumb trust` lists it and flags
+  it; the per-call list is a guard rail rather than a boundary, since `make` reads
+  any variable, and what `run_task` promises is the argv.
 
 - **Experimental, opt-in context hints for Claude Code and Codex.**
   `plumb hooks install <client> --context` adds two advisory handlers,

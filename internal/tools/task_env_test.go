@@ -30,7 +30,7 @@ func TestRunTaskArgv_TaskEnvWinsAndExplicitGoWorkIsHonoured(t *testing.T) {
 	probe := []string{"sh", "-c", `printf '%s|%s|%s' "${GOWORK-UNSET}" "$PWD" "${PLUMB_RUNARGV_PROBE-UNSET}"`}
 	ctx := context.Background()
 
-	res, err := RunTaskArgv(ctx, wt, probe, []string{"GOWORK=auto", "PLUMB_RUNARGV_PROBE=task"}, time.Minute)
+	res, err := RunTaskArgv(ctx, wt, probe, []string{"GOWORK=auto", "PLUMB_RUNARGV_PROBE=task"}, nil, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestRunTaskArgv_TaskEnvWinsAndExplicitGoWorkIsHonoured(t *testing.T) {
 
 	// Positive control: the same directory without the env gets the automatic
 	// switch, so the assertion above is about the env and not about the layout.
-	res, err = RunTaskArgv(ctx, wt, probe, nil, time.Minute)
+	res, err = RunTaskArgv(ctx, wt, probe, nil, nil, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

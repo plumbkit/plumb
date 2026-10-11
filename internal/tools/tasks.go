@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -101,6 +103,11 @@ type TaskCommand struct {
 	// key. {workspace} and {working_dir} expand where the command runs
 	// (taskEnviron), not at resolution: mutation_test may move the command into
 	// another work-tree first, and the placeholders must follow it there.
+	//
+	// This is the CONFIGURED env only. A run_task call's own env/unset arguments
+	// are applied on top of it at the point of execution (taskEnvPlan), so this
+	// field keeps naming what the project configured, and mutation_test — which
+	// has no per-call overrides — is unaffected by them.
 	Env []string
 	// Root is the workspace root {workspace} expands to; empty falls back to the
 	// directory the command runs in.
@@ -175,6 +182,15 @@ type TaskRequest struct {
 	// the same repository, or a directory inside the workspace (tasks_path.go).
 	// Resolution and trust ignore it deliberately: only the execution moves.
 	Path string
+	// Env and Unset are run_task's per-call environment changes (#634): names to
+	// set for this call only, and names to remove from it. Execute validates them
+	// through WriteDeps.TaskEnvRefusal before anything is resolved — the name
+	// shape and the taxonomy of "a name that steers execution" both live in
+	// config, which this package deliberately does not import — and they are
+	// applied to the child's environment where the command runs (taskEnvPlan).
+	// They never reach Steps, so the stored command is still the command that ran.
+	Env   map[string]string
+	Unset []string
 }
 
 // TaskResolverFn resolves a slot (+ optional target) to a runnable command for
@@ -205,27 +221,37 @@ var runTaskSchema = json.RawMessage(`{
   "properties": {
     "slot": {
       "type": "string",
-      "description": "Which stored task command to run: build, lint, test, e2e, verify, or a project-defined slot under [tasks.<lang>]. session_start lists what's configured; an unconfigured slot is refused with that list."
+      "description": "Stored slot: build, lint, test, e2e, verify, or a project-defined [tasks.<lang>] slot. An unconfigured slot is refused with the list of configured ones."
     },
     "target": {
       "type": "string",
-      "description": "Optional value for the {target} placeholder, e.g. a package. One shell-safe argument ([A-Za-z0-9._/:@-]); refused if the command has none."
+      "description": "Value for the {target} placeholder: one shell-safe argument; refused if the command has no {target}."
     },
     "run": {
       "type": "string",
-      "description": "Optional test-name filter for the {run} placeholder (go -run, pytest -k), e.g. TestA|TestB. Letters, digits, space, ._/:@|^$*+?()[]-; no leading - or space."
+      "description": "Test-name filter for the {run} placeholder (go -run, pytest -k), e.g. TestA|TestB; refused if the command has no {run}."
     },
     "verbose": {
       "type": "boolean",
-      "description": "Fill the {verbose:<flag>} placeholder (go/pytest -v), e.g. to see skipped tests."
+      "description": "Fill the {verbose:<flag>} placeholder (go/pytest -v)."
     },
     "language": {
       "type": "string",
-      "description": "Which [tasks.<language>] block to run, in a polyglot repo. Omit for the primary. A language with no commands is refused, naming those that have them."
+      "description": "Which [tasks.<language>] block to run in a polyglot repo; omit for the primary. A language with no commands is refused, naming those that have them."
     },
     "path": {
       "type": "string",
-      "description": "Run in this directory: absolute, or relative to the workspace; must be inside the workspace."
+      "description": "Run in this directory: absolute or workspace-relative, inside the workspace."
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "Variables for this call only: {NAME: value}; {workspace}/{working_dir} expand. Names that steer execution (PATH, GOFLAGS, …) are refused."
+    },
+    "unset": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Names to remove for this call, inherited or configured (e.g. GOTMPDIR); refused if it steers execution."
     }
   },
   "required": ["slot"],
@@ -235,16 +261,18 @@ var runTaskSchema = json.RawMessage(`{
 func (t *Tasks) Name() string                 { return "run_task" }
 func (t *Tasks) InputSchema() json.RawMessage { return runTaskSchema }
 func (t *Tasks) Description() string {
-	return "Run a stored [tasks.<lang>] command (build, lint, test, e2e, verify, or a project-defined slot): only the command the user saved, with no shell and no agent-supplied command line, for the primary language or the one named in language. Runs from the workspace root or the task's working_dir. A project-config command must be trusted first (plumb trust); shipped and global commands always run. Output and runtime are bounded. topology_affected says which tests to run; this runs them."
+	return "Run a stored [tasks.<lang>] command: only the command the user saved runs, with no shell and no agent-supplied command line. Project-config commands need plumb trust first; defaults and global ones always run. Output and runtime are bounded; topology_affected says which tests, this runs them."
 }
 
 type runTaskArgs struct {
-	Slot     string `json:"slot"`
-	Target   string `json:"target"`
-	Run      string `json:"run"`
-	Verbose  bool   `json:"verbose"`
-	Language string `json:"language"`
-	Path     string `json:"path"`
+	Slot     string            `json:"slot"`
+	Target   string            `json:"target"`
+	Run      string            `json:"run"`
+	Verbose  bool              `json:"verbose"`
+	Language string            `json:"language"`
+	Path     string            `json:"path"`
+	Env      map[string]string `json:"env"`
+	Unset    []string          `json:"unset"`
 }
 
 func (a runTaskArgs) validate() error {
@@ -278,7 +306,13 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	if err := json.Unmarshal(raw, &a); err != nil {
 		return "", fmt.Errorf("run_task: invalid arguments: %w", err)
 	}
+	if err := nullEnvRefusal(raw); err != nil {
+		return "", err
+	}
 	if err := a.validate(); err != nil {
+		return "", err
+	}
+	if err := t.validateCallEnv(a); err != nil {
 		return "", err
 	}
 	if t.deps.Contested != nil && t.deps.Contested() {
@@ -309,7 +343,7 @@ func (t *Tasks) Execute(ctx context.Context, raw json.RawMessage) (string, error
 			return "", err
 		}
 	}
-	return t.run(ctx, cmd)
+	return t.run(ctx, cmd, a.Env, a.Unset)
 }
 
 func (t *Tasks) workspace(ctx context.Context) string {
@@ -319,9 +353,57 @@ func (t *Tasks) workspace(ctx context.Context) string {
 	return t.deps.WorkspaceFn(ctx)
 }
 
+// validateCallEnv applies the wired per-call env rule to a call's env/unset.
+//
+// It runs HERE, before anything is resolved, rather than inside the resolver: it
+// is an argument check like every other one in validate(), so a caller hears about
+// the argument rather than about a slot it will fix anyway. And a session that
+// wired no validator REFUSES the overrides instead of applying them unchecked, so
+// a second NewTasks caller cannot skip the rule by omission — which is the whole
+// reason the rule arrives as a dependency rather than as a call to config from
+// this package (#634 review).
+func (t *Tasks) validateCallEnv(a runTaskArgs) error {
+	if len(a.Env) == 0 && len(a.Unset) == 0 {
+		return nil
+	}
+	if t.deps.TaskEnvRefusal == nil {
+		return errors.New("run_task: this session cannot apply env/unset changes (no env validator is wired), so they were refused rather than applied unchecked")
+	}
+	return t.deps.TaskEnvRefusal(a.Env, a.Unset)
+}
+
+// nullEnvRefusal refuses a null VALUE in the env argument. JSON null decodes into
+// a Go string as "", so without this the call would run the stored command with
+// that variable set to the EMPTY STRING — while a caller writing
+// {"GOTMPDIR": null} means "remove it", which is what `unset` is for. Guessing
+// here would run a command nobody asked for, in the one lane whose promise is
+// that the caller knows what ran.
+//
+// It is a second decode of a small argument object rather than a field on
+// runTaskArgs, because runTaskArgs must stay field-identical to TaskRequest
+// (TaskRequest(a) is the conversion that keeps the two in step, and a
+// map[string]*string on one side only would break it).
+func nullEnvRefusal(raw json.RawMessage) error {
+	var probe struct {
+		Env map[string]json.RawMessage `json:"env"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil // the caller's own decode already refused the malformed object
+	}
+	for _, name := range slices.Sorted(maps.Keys(probe.Env)) {
+		if strings.TrimSpace(string(probe.Env[name])) == "null" {
+			return fmt.Errorf("run_task: env %s is null, which would run the command with %s set to the empty string. "+
+				"To remove a variable, name it in unset instead", name, name)
+		}
+	}
+	return nil
+}
+
 // run executes each step in sequence, stopping at the first non-zero exit, and
-// renders a compact report.
-func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
+// renders a compact report. set and unset are the call's per-call env changes
+// (run_task's env/unset arguments), already validated by Execute through
+// WriteDeps.TaskEnvRefusal.
+func (t *Tasks) run(ctx context.Context, cmd TaskCommand, set map[string]string, unset []string) (string, error) {
 	ws := cmd.WorkingDir
 	if ws == "" {
 		ws = t.workspace(ctx)
@@ -331,12 +413,21 @@ func (t *Tasks) run(ctx context.Context, cmd TaskCommand) (string, error) {
 	for _, note := range cmd.Notes {
 		fmt.Fprintf(&b, "note: %s\n", note)
 	}
-	env := taskEnviron(cmd, ws)
+	env, remove, notes := taskEnvPlan(cmd, ws, set, unset)
 	if len(env) > 0 {
 		fmt.Fprintf(&b, "env: %s\n", describeTaskEnv(env))
 	}
+	if len(remove) > 0 {
+		fmt.Fprintf(&b, "unset: %s\n", strings.Join(remove, " "))
+	}
+	// The env notes come after the lines they explain: a value this call
+	// replaced, and a configured entry it removed, are both invisible in the
+	// effective environment above.
+	for _, note := range notes {
+		fmt.Fprintf(&b, "note: %s\n", note)
+	}
 	for i, argv := range cmd.Steps {
-		res, err := RunTaskArgv(ctx, ws, argv, env, defaultTaskTimeout)
+		res, err := RunTaskArgv(ctx, ws, argv, env, remove, defaultTaskTimeout)
 		if err != nil {
 			return "", fmt.Errorf("run_task %s: %w%s", cmd.Slot, err, workingDirOrigin(err, cmd))
 		}
