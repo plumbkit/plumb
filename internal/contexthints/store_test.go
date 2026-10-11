@@ -3,6 +3,7 @@ package contexthints
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -243,6 +244,43 @@ func TestPrune_AgesOutIdleAllowances(t *testing.T) {
 	}
 	if ok, _ := s.Spend("s1", "", "t2", 10, lim, time.Now()); !ok {
 		t.Fatal("an allowance idle past retention was not aged out")
+	}
+}
+
+// The ledger's columns are pinned: a new column is a new thing the ledger can
+// hold, and must be added here deliberately, with the reason it holds no text.
+func TestLedgerColumnsArePinned(t *testing.T) {
+	s, _ := openTest(t)
+	obsCols := []string{
+		"id", "workspace", "at_ms", "session_id", "agent_id", "host", "host_version", "event",
+		"source", "seeds", "emitted", "emitted_bytes", "duration_ms", "outcome", "detail", "size",
+	}
+	want := map[string][]string{
+		"obs":       obsCols,
+		"evictions": {"workspace", "evicted", "updated_ms"},
+		"allowance": {"session_id", "agent_id", "total_bytes", "turn_key", "turn_bytes", "updated_ms"},
+	}
+	for table, cols := range want {
+		rows, err := s.db.Query("SELECT name FROM pragma_table_info(?)", table)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, name)
+		}
+		_ = rows.Close()
+		if !slices.Equal(got, cols) {
+			t.Errorf("%s columns = %v, want %v", table, got, cols)
+		}
+	}
+	var tables int
+	if err := s.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil || tables != len(want) {
+		t.Errorf("tables = %d (%v), want exactly %d", tables, err, len(want))
 	}
 }
 

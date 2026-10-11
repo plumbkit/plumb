@@ -781,9 +781,10 @@ still require an explicit read.
 
 `PLUMB_CONTEXT_HINTS` overrides `hints` in either direction (`on`/`1`/`true`,
 `off`/`0`/`false`), and the hook reads it from its own environment as well as
-the daemon's. Off costs nothing: an installed hook still starts, but with hints
-off in both its environment and the global config it does not call the daemon,
-and a daemon asked while off answers without touching the ledger. To remove
+the daemon's. Off costs nothing: an installed hook still starts, but with
+`PLUMB_CONTEXT_HINTS=off`, or with it unset and `hints = false`, it does not
+call the daemon, and a daemon asked while off answers without touching the
+ledger. To remove
 the hint-only hooks, run `plumb hooks uninstall <client> --only context`; the
 SessionStart hook stays, because it also links the session. `plumb hooks` says
 whether hints are not installed, installed but off, or on.

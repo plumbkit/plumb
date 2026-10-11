@@ -252,6 +252,38 @@ func TestContextHint_PerTurnBudgetAcrossEvents(t *testing.T) {
 	}
 }
 
+// An emitted hint's text reaches the agent but never the ledger file: a marker in
+// every hint-line field except the selector is in the reply (the positive
+// control) and absent from the database and its WAL (cross-review S4).
+func TestContextHint_LedgerFileHoldsNoHintText(t *testing.T) {
+	const marker = "zzhintmarker"
+	path := filepath.Join(t.TempDir(), "context_hints.db")
+	ledger, err := contexthints.OpenAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hinter := &fakeHinter{lines: func(tools.HintRequest) []tools.HintLine {
+		return []tools.HintLine{{Selector: "Cart.Total", Path: marker + "/cart.go", Kind: marker, Provenance: marker, Line: 7}}
+	}}
+	root := hintRepo(t)
+	svc := newContextHintService(hinter, ledger,
+		func(string) (hintRoot, bool) { return hintRoot{Path: root}, true }, func() bool { return true })
+	r := svc.serve(context.Background(), prompt("conv-1", "Cart.Total"))
+	if r.Outcome != contexthints.OutcomeEmitted || !strings.Contains(r.Text, marker) {
+		t.Fatalf("reply = %+v; the positive control needs the marker in the emitted text", r)
+	}
+	ledger.Close()
+	for _, f := range []string{path, path + "-wal"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(b), marker) {
+			t.Fatalf("%s holds hint text (the marker)", filepath.Base(f))
+		}
+	}
+}
+
 // Codex carries a turn id on prompts but not on SessionStart. Both must land in
 // the same numbered window, or a compaction inside a Codex turn spends a second
 // full allowance (cross-review S1).
