@@ -120,7 +120,7 @@ exit "$rc"
   cd "$root" || exit 1
   git ls-files -z --cached --others --exclude-standard |
     while IFS= read -r -d '' f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"; done |
-    tar --null -T - -cf -
+    COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf - # no macOS ._* AppleDouble entries or xattr headers
 ) | docker run -i --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
   -v plumb-verify-gocache:/root/.cache/go-build \
   -v plumb-verify-gomod:/go/pkg/mod \
