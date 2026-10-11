@@ -173,6 +173,8 @@ func AdmitCallGraph(ctx context.Context, db *sql.DB, subject CallGraphSubject) (
 		return a, err
 	}
 	a.HasPackageSignal = hasPkg
+	// The same two terms languageAdmitted applies; kept inline because the
+	// package signal is reported even for an unsupported language.
 	a.IntraFileCalls, err = intraFileCallEdges(ctx, db, lang, subject.Path)
 	if err != nil {
 		return a, err
@@ -198,6 +200,17 @@ func AdmitCallGraph(ctx context.Context, db *sql.DB, subject CallGraphSubject) (
 		a.EmptyResultNote = CallGraphEmptyResultNote(lang)
 	}
 	return a, nil
+}
+
+// languageAdmitted is the admission rule alone: lang is supported AND the index
+// holds a package node of it. AdmitCallGraph applies the same two terms and adds
+// the wording around them.
+func languageAdmitted(ctx context.Context, db *sql.DB, lang string) (bool, error) {
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	if !callGraphLanguageSupported(lang) {
+		return false, nil
+	}
+	return hasPackageNode(ctx, db, lang)
 }
 
 // resolvedEdgeCount counts the cross-file call edges the resolver produced for
