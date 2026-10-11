@@ -38,14 +38,6 @@ type CollabConfig struct {
 	// Reaching another project is a separate, off-by-default decision (see
 	// CrossProject). Messages are agent-authored and advisory — never blocking.
 	Mailbox bool `toml:"mailbox"`
-	// AllowUnidentifiedWrites is RETIRED and no longer honoured; it is kept so
-	// a config that sets it still loads. It used to lift the shared-connection
-	// write ceiling, and with it on an unattributable write resolved through
-	// the connection pin, so one agent's edit could land in another agent's
-	// checkout (Claude desktop's connector, 2026-09-30). The refusal now names
-	// a reachable remedy instead, and says this key is ignored when it is set.
-	// Global-only, as before.
-	AllowUnidentifiedWrites bool `toml:"allow_unidentified_writes"`
 	// CrossProject lets this session RECEIVE messages from sessions pinned to a
 	// different workspace. Opt-in, default false, and deliberately the recipient's
 	// decision rather than the sender's, so another project can never inject text

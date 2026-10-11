@@ -2,6 +2,15 @@
 
 ## 0.24.1 (unreleased)
 
+### Removed
+
+- **`[collab] allow_unidentified_writes` is gone.** It was retired in 0.21.0
+  and ignored since, but the TUI and web UI settings pages still offered it as
+  a toggle marked retired and ignored. The field, its settings entry and its
+  documentation are removed, and so is the line the shared-connection refusal
+  added when the key was set. A config that still sets it loads as before:
+  plumb ignores keys it does not know.
+
 ### Fixed
 
 - **Codex's `SessionStart` hook now reads `source` and announces a `/clear`.**

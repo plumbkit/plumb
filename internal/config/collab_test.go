@@ -63,6 +63,24 @@ func TestCollab_Defaults(t *testing.T) {
 	}
 }
 
+// [collab] allow_unidentified_writes was removed after several releases of
+// being ignored. A global config that still sets it must keep loading, and
+// the rest of its [collab] table must still apply.
+func TestCollab_RemovedAllowUnidentifiedWritesStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[collab]\nallow_unidentified_writes = true\nmailbox = false\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Defaults()
+	if err := mergeGlobalFile(&cfg, path); err != nil {
+		t.Fatalf("a config setting the removed key must load: %v", err)
+	}
+	if cfg.Collab.Mailbox {
+		t.Error("the rest of [collab] was not applied: mailbox = false was lost")
+	}
+}
+
 // TestValidateCollab_WakeWindowsAreBounded: unlike the other collab budgets a
 // wake window buys a RESIDENT process for its whole duration, so an unbounded
 // value — in a project config a user merely cloned, especially — is a resource

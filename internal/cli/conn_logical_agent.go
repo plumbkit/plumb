@@ -414,15 +414,7 @@ func (s *connSession) refuseSharedStateChange(_ context.Context, name, logicalAg
 	case refusalUndeclared:
 		return undeclaredIdentityErr(name, logicalAgent)
 	}
-	// [collab] allow_unidentified_writes used to lift this refusal. It is no
-	// longer honoured: with it set, an unattributable write resolved through
-	// the connection pin, which is how one agent's edit landed in another
-	// agent's checkout. Say so, so a user who set it is not left guessing.
-	retired := ""
-	if s.collabConfig().AllowUnidentifiedWrites {
-		retired = " ([collab] allow_unidentified_writes is set but no longer honoured.)"
-	}
-	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s. If the Claude Code hook is already installed, one call can still miss its stamp under load: retry once, which usually succeeds.%s", name, sharedIdentityRemedy, retired)
+	return fmt.Errorf("shared connection: %s is a state-changing call with no logical-agent identity, so it cannot be attributed to one of the agents multiplexing this connection, and plumb will not guess whose workspace it belongs to — %s. If the Claude Code hook is already installed, one call can still miss its stamp under load: retry once, which usually succeeds", name, sharedIdentityRemedy)
 }
 
 // undeclaredIdentityErr is the refusal for a per-call identity whose linkage no
@@ -490,11 +482,4 @@ func (s *connSession) persistLogicalAgent(id string) {
 	if err := s.sessionState.RecordLogicalAgent(v.proxySessionID, id); err != nil {
 		s.log().Debug("daemon: recording the logical-agent declaration failed", "agent", id, "err", err)
 	}
-}
-
-// setCollabAllowUnidentifiedWritesForTest sets the opt-out on a bare
-// connSession. Test-only: production reads it from the resolved global config
-// through collabConfig.
-func (s *connSession) setCollabAllowUnidentifiedWritesForTest(v bool) {
-	s.mutate(func(sv *sessionView) { sv.collab.AllowUnidentifiedWrites = v })
 }
