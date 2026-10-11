@@ -30,9 +30,9 @@ func (i Inbox) readStores() ([]*collab.Store, error) {
 		failures = append(failures, err)
 	}
 	read(i.WorkspaceReader, i.Workspace)
-	if i.Policy.CrossProject {
-		read(i.GlobalReader, i.Global)
-	}
+	// Unconditional, as in stores: the store's read scope applies this session's
+	// cross_project consent, and same-project mail lives here too.
+	read(i.GlobalReader, i.Global)
 	return stores, errors.Join(failures...)
 }
 

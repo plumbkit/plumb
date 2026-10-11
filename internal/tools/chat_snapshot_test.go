@@ -36,7 +36,7 @@ func TestInboxSnapshot_CrossProjectConsentAndDeliveryAgree(t *testing.T) {
 		t.Fatalf("delivered mail still pending: %+v err=%v", empty, err)
 	}
 	// The wrong workspace's note stays unread; the probe/claim never spends it.
-	remaining, err := global.ClaimableNotes(ctx, collab.Claimant{Name: "alice", ID: deps.SessionID(), Workspace: "/elsewhere"}, time.Now(), 0)
+	remaining, err := global.ClaimableNotes(ctx, collab.Claimant{Name: "alice", ID: deps.SessionID(), Workspace: "/elsewhere", CrossProject: true}, time.Now(), 0)
 	if err != nil || len(remaining) != 1 {
 		t.Fatalf("foreign mailbox altered: remaining=%d err=%v", len(remaining), err)
 	}

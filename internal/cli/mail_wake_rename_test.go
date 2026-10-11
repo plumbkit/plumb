@@ -22,7 +22,7 @@ func TestMailWaiting_CountsBoundMailAfterARename(t *testing.T) {
 	// icy-beaver after a degraded identity recovery, same internal ID.
 	putBoundTestNote(t, ws, "ancient-stag", "gentle-mink", id, "bound before the rename")
 
-	ages, err := mailWaiting(collab.Claimant{Name: "icy-beaver", ID: id, Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "icy-beaver", ID: id, Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestMailWaiting_CountsBoundMailAfterARename(t *testing.T) {
 	}
 
 	// A stranger answering to the old name is still woken for nothing.
-	ages, err = mailWaiting(collab.Claimant{Name: "gentle-mink", ID: "sess-stranger", Workspace: ws})
+	ages, err = mailWaitingIn(collab.Claimant{Name: "gentle-mink", ID: "sess-stranger", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}

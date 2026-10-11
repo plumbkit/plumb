@@ -127,22 +127,21 @@ func (t *LeaveNote) threadParticipants(ctx context.Context, convID string) (part
 		others = mergeThreadPeer(others, byID, id, name)
 	}
 
-	// A cross-project thread lives in the daemon-level store, a same-project one
-	// in the workspace's own, and the caller does not say which. The global store
-	// is read only if it already exists AND this workspace has opted in to
-	// cross-project mail: without that gate a session here could learn the
-	// participants of a thread between two OTHER projects, which is precisely what
-	// the consent setting exists to prevent.
-	stores := []*collab.Store{t.deps.store(ctx)}
-	if t.deps.policy(ctx).CrossProject {
-		stores = append(stores, t.globalIfExists())
-	}
+	// A thread with a session pinned elsewhere lives in the daemon-level store, a
+	// thread within this workspace in its own, and the caller does not say which.
+	// The global store is read through the reader's scope: without this
+	// workspace's cross_project consent it yields only the rows this repository
+	// family wrote, so a session here cannot learn the participants of a thread
+	// between two OTHER projects — precisely what the consent setting exists to
+	// prevent — while a thread with its own worktree or submodule still resolves.
+	reader := collab.Claimant{Workspace: t.deps.workspace(ctx), CrossProject: t.deps.policy(ctx).CrossProject}
+	stores := []*collab.Store{t.deps.store(ctx), t.globalIfExists()}
 	now := time.Now()
 	for _, store := range stores {
 		if store == nil {
 			continue
 		}
-		rows, err := store.Conversation(ctx, convID, now)
+		rows, err := store.ConversationFor(ctx, convID, reader, now)
 		if err != nil {
 			continue
 		}

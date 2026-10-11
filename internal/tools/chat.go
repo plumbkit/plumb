@@ -53,10 +53,11 @@ const MaxPreviewedPerCall = maxDeliveredPerCall
 
 // Inbox resolves the stores a session may read messages from and claims from
 // them in one place. The two stores are deliberately distinct: the workspace's
-// own collab.db always applies, while the daemon-level cross-project store is
-// read ONLY when this session's project opted in. That is where cross-project
-// consent is enforced — at delivery, by the recipient, rather than at send by
-// the sender.
+// own collab.db, and the daemon-level store that holds every note addressed to a
+// session pinned somewhere else. Cross-project consent is enforced on the second
+// at delivery, by the recipient, rather than at send by the sender — through the
+// claimant's CrossProject flag, which the store's read scope applies: without it
+// the session reads only the daemon-level notes its own repository family wrote.
 //
 // Concurrency: a value type holding accessor funcs; safe to construct per call.
 type Inbox struct {
@@ -121,16 +122,25 @@ func (i Inbox) Keys() []string {
 }
 
 // claimant is what the store matches a row against: this session's name, its
-// stable ID, and its pinned workspace.
+// stable ID, its pinned workspace, and its cross_project consent — which the
+// store's read scope applies to the daemon-level store (collab/scope.go).
 func (i Inbox) claimant() collab.Claimant {
-	return collab.Claimant{Name: i.Self, ID: i.SelfID, InheritedIDs: i.InheritedIDs, Workspace: i.Root}
+	return collab.Claimant{
+		Name: i.Self, ID: i.SelfID, InheritedIDs: i.InheritedIDs, Workspace: i.Root,
+		CrossProject: i.Policy.CrossProject,
+	}
 }
 
-// stores returns the stores to read, workspace first so a same-project message
-// is always delivered ahead of a cross-project one competing for the same call's
-// budget. The cross-project store is omitted entirely unless this session's
-// project set cross_project — an un-opted-in recipient never reads it, and the
-// rows there expire unread.
+// stores returns the stores to read, workspace first so a message in this
+// workspace's own collab.db is always delivered ahead of a daemon-level one
+// competing for the same call's budget.
+//
+// The daemon-level store is read whatever this project's cross_project setting,
+// because it holds two kinds of mail and only one of them needs consent: another
+// project's, and this repository family's own — a note from a worktree or
+// submodule of this project, pinned elsewhere (#635). The store tells them apart
+// from the claimant's consent; this function no longer decides, so no reader can
+// drop same-project mail by gating the store on the flag.
 func (i Inbox) stores() []*collab.Store {
 	var out []*collab.Store
 	if i.Workspace != nil {
@@ -138,7 +148,7 @@ func (i Inbox) stores() []*collab.Store {
 			out = append(out, s)
 		}
 	}
-	if i.Policy.CrossProject && i.Global != nil {
+	if i.Global != nil {
 		if s := i.Global(); s != nil {
 			out = append(out, s)
 		}

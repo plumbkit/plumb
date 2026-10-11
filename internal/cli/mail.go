@@ -99,8 +99,9 @@ Name exactly one selector:
 Exit status is 0 whether or not mail is waiting, and non-zero only on error, so
 "has mail" is never confused with "the check failed". Read the count.
 
-Scope: the workspace mailbox only. Cross-project messages live in a
-daemon-level store behind the recipient's [collab] cross_project opt-in (off by
+Scope: the workspace mailbox, plus notes from other checkouts of the same
+repository (its worktrees and submodules), which need no opt-in. Messages from
+other projects sit behind the recipient's [collab] cross_project opt-in (off by
 default) and are not counted. Notes addressed to "next" — the default — ARE
 counted, for every session except the one that wrote them: the probe claims
 nothing, so there is no race to lose, and a session can never claim its own
@@ -332,12 +333,15 @@ func mailNames(matches []session.Info) []string {
 // shared predicate: a session must not be woken for a note it wrote itself and
 // can never claim.
 //
-// It reads the WORKSPACE mailbox only. A cross-project message lands in the
-// daemon-level store, which a recipient reads only when its own project sets
-// [collab] cross_project, and resolving that opt-in means resolving the
-// workspace's config — work this probe does not do. So a cross-project message
-// is never counted here and will not wake anyone. cross_project is off by
-// default, which is what keeps that a footnote rather than a hole.
+// It reads the workspace mailbox and the daemon-level store, the latter WITHOUT
+// cross_project consent: resolving that opt-in means resolving the workspace's
+// config, work this probe does not do, so who.CrossProject stays false and the
+// store's read scope (collab/scope.go) admits only the notes this repository
+// family wrote — a note from a worktree or submodule of this project, pinned
+// elsewhere (#635). Those need no consent and are exactly what a wake must not
+// miss. Another project's message is never counted here and will not wake
+// anyone; cross_project is off by default, which keeps that a footnote rather
+// than a hole.
 //
 // An absent collab.db is not an error. It is created lazily on first use, so a
 // workspace whose sessions have never exchanged a message simply has no mailbox
@@ -352,25 +356,59 @@ func mailNames(matches []session.Info) []string {
 // reachable from a session file. So a note bound to a session a restart ended is
 // counted by check_messages inside the session, not by this probe.
 func mailWaiting(who collab.Claimant) ([]int, error) {
+	return mailWaitingIn(who, openGlobalMailbox)
+}
+
+// openGlobalMailbox opens the daemon-level store read-only, or returns nil when
+// it does not exist — an absent store is "nothing waiting there", never an error.
+func openGlobalMailbox() (*collab.Store, error) {
+	if !collab.GlobalExists() {
+		return nil, nil
+	}
+	return collab.OpenGlobalReadOnly()
+}
+
+// mailWaitingIn is mailWaiting with the daemon-level store's opener injected, so
+// a test reads a store of its own rather than the host's.
+func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)) ([]int, error) {
 	// Never nil: ages_seconds is a JSON array in the contract, and a nil slice
 	// marshals as null. `jq '.ages_seconds | length'` errors on null, so a
 	// consumer would break on precisely the common case — no mail at all.
-	if who.Workspace == "" || !collab.Exists(who.Workspace) {
+	if who.Workspace == "" {
 		return []int{}, nil
 	}
-	store, err := collab.OpenReadOnly(who.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("opening the mailbox: %w", err)
+	var stores []*collab.Store
+	if collab.Exists(who.Workspace) {
+		store, err := collab.OpenReadOnly(who.Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("opening the mailbox: %w", err)
+		}
+		defer store.Close()
+		stores = append(stores, store)
 	}
-	defer store.Close()
+	global, err := openGlobal()
+	if err != nil {
+		return nil, fmt.Errorf("opening the daemon-level mailbox: %w", err)
+	}
+	if global != nil {
+		defer global.Close()
+		stores = append(stores, global)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	now := time.Now()
-	rows, err := store.ClaimableNotes(ctx, who, now, 0)
-	if err != nil {
-		return nil, fmt.Errorf("reading the mailbox: %w", err)
+	// Consent stays off: see the doc comment. Set explicitly so the narrowing is a
+	// visible decision here rather than an inherited zero value.
+	who.CrossProject = false
+	var rows []collab.Row
+	for _, store := range stores {
+		got, err := store.ClaimableNotes(ctx, who, now, 0)
+		if err != nil {
+			return nil, fmt.Errorf("reading the mailbox: %w", err)
+		}
+		rows = append(rows, got...)
 	}
 	ages := make([]int, 0, len(rows))
 	for _, r := range rows {

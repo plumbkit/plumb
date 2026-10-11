@@ -185,6 +185,7 @@ var CallRules = []CallRule{
 		Allowed: map[string]string{
 			"internal/paths.Canonical":                     "the shared implementation itself",
 			"internal/paths.canonicalMissing":              "Canonical's not-yet-existing-path branch, walking the ancestor chain and retrying at each level",
+			"internal/paths.withinDir":                     "fail-closed containment for the mail boundary's same-project test (#635): a common directory that no longer resolves must be inside NOTHING — Canonical's degrade would mint a spelling for a vanished path and could place it inside a live repository's .git",
 			"internal/tools/txlog.logDirIsTheRealTxLogDir": "fail-closed identity gate of the #248 txlog arbitrary-write fix: an unresolvable workspace or log directory must return false, never compare cleaned spellings — Canonical's degrade-to-Clean is fail-open, the opposite of what this gate owes",
 			"internal/tools/txlog.replayTarget":            "fail-closed resolution of the #248 replay destination: WAL replay must REFUSE an unresolvable target rather than replay to a Cleaned spelling the log never recorded",
 			"internal/topology.symlinkEscapesWorkspace":    "an unresolvable link target must count as ESCAPING (fail closed) — Canonical's degrade would mint an inside-looking spelling for a link whose target cannot be read",

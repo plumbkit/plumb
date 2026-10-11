@@ -95,7 +95,7 @@ func TestConversationSummariesForWorkspace_IsGlobalOnly(t *testing.T) {
 		Body: "hello", Addressee: "bob",
 	}, now)
 
-	sums, err := s.ConversationSummariesForWorkspace(ctx, "/some/ws", now, 0)
+	sums, err := s.ConversationSummariesForWorkspace(ctx, Claimant{Workspace: "/some/ws", CrossProject: true}, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -63,7 +63,7 @@ func TestMailWaiting_NeverClaims(t *testing.T) {
 	putTestNote(t, ws, "peer-two", "peer-one", "the rate limiter is yours")
 
 	for i := 1; i <= 3; i++ {
-		ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
+		ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: ws}, noGlobalMailbox)
 		if err != nil {
 			t.Fatalf("probe %d: %v", i, err)
 		}
@@ -93,7 +93,7 @@ func TestMailWaiting_NeverClaims(t *testing.T) {
 	}
 
 	// And once genuinely delivered, the probe agrees it is gone.
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe after claim: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestMailWaiting_ReadOnlyHandleCannotWrite(t *testing.T) {
 // workspace whose sessions never exchanged a message has none. That is "no
 // mail", not a failure — a hook must not be broken by the common case.
 func TestMailWaiting_NoMailboxIsNotAnError(t *testing.T) {
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: t.TempDir()})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: t.TempDir()}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("workspace with no collab.db: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestMailWaiting_ExcludesOtherAddressees(t *testing.T) {
 	ws := t.TempDir()
 	putTestNote(t, ws, "peer-two", "someone-else", "not for peer-one")
 
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestMailWaiting_CountsNextNotesFromOtherAuthors(t *testing.T) {
 	ws := t.TempDir()
 	putTestNote(t, ws, "peer-two", collab.AddresseeNext, "for whoever arrives")
 
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestMailWaiting_CountsNextNotesFromOtherAuthors(t *testing.T) {
 
 	// And a third session sees it too: nothing has been claimed, so the note is
 	// still every non-author's potential mail.
-	ages, err = mailWaiting(collab.Claimant{Name: "peer-three", ID: "id-peer-three", Workspace: ws})
+	ages, err = mailWaitingIn(collab.Claimant{Name: "peer-three", ID: "id-peer-three", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe as a third session: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestMailWaiting_IgnoresOwnNextNote(t *testing.T) {
 	ws := t.TempDir()
 	putTestNote(t, ws, "peer-one", collab.AddresseeNext, "note to self, effectively")
 
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", ID: "id-peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestMailWaiting_CountsMailBoundToTheSession(t *testing.T) {
 	}
 	store.Close()
 
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", ID: "sess-peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", ID: "sess-peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestMailWaiting_CountsMailBoundToTheSession(t *testing.T) {
 
 	// The other half of the boundary: the binding still excludes a different
 	// session answering to the same name.
-	ages, err = mailWaiting(collab.Claimant{Name: "peer-one", ID: "sess-someone-else", Workspace: ws})
+	ages, err = mailWaitingIn(collab.Claimant{Name: "peer-one", ID: "sess-someone-else", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe as another session: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestMailWaiting_AgesOldestFirst(t *testing.T) {
 		}
 	}
 
-	ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
+	ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: ws}, noGlobalMailbox)
 	if err != nil {
 		t.Fatalf("probe: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestMailWaiting_AgesOldestFirst(t *testing.T) {
 // almost every invocation.
 func TestMailReport_EmptyAgesMarshalAsArray(t *testing.T) {
 	for _, ws := range []string{"", t.TempDir()} {
-		ages, err := mailWaiting(collab.Claimant{Name: "peer-one", Workspace: ws})
+		ages, err := mailWaitingIn(collab.Claimant{Name: "peer-one", Workspace: ws}, noGlobalMailbox)
 		if err != nil {
 			t.Fatalf("mailWaiting(%q): %v", ws, err)
 		}

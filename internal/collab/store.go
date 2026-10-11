@@ -41,6 +41,10 @@ type Store struct {
 	// lifecycle that keeps it from outliving the store.
 	probeMu    sync.Mutex
 	probeStmts map[string]*sql.Stmt
+
+	// owned caches which stamped sender repositories are one project with which
+	// reader workspace — the read-side check scope.go applies to the global store.
+	owned ownership
 }
 
 // DBPath returns the canonical collab.db path for a workspace.
@@ -161,8 +165,8 @@ var ErrNotAParticipant = errors.New("collab: not a participant in that conversat
 // exchange budget can be appended to the SAME statement as a WHERE clause.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
                           addressee, created_at, expires_at, conversation_id, origin_workspace,
-                          target_workspace, addressee_id)
-	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?`
+                          target_workspace, addressee_id, origin_git_common_dir)
+	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?`
 
 // budgetGuard suppresses the insert when the thread has already spent its
 // budget. It counts only UNEXPIRED rows, so the budget reads the same whether or
@@ -214,6 +218,7 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		conv = newConversationID()
 	}
 	expires := now.Add(clampTTL(in.TTL))
+	originCommon := ""
 	if s.IsGlobal() {
 		// The daemon-level store is shared by every project on the machine, so a
 		// row there must name the workspace allowed to claim it. Refusing here
@@ -225,12 +230,17 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 		if addr == AddresseeNext {
 			return "", errors.New(`collab: "next" has no meaning across projects`)
 		}
+		// Stamped HERE, from the sender's checkout as it is on disk now, rather than
+		// taken from the caller: it is what lets a reader without cross_project
+		// consent recognise mail from its own repository family (scope.go), so it
+		// must be the store's verified answer and never a value a caller supplied.
+		originCommon = stampOrigin(in.OriginWorkspace)
 	}
 	stmt := insertNote
 	args := []any{
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace, addrID,
+		in.TargetWorkspace, addrID, originCommon,
 	}
 
 	// Membership is checked only when THREADING onto an exchange the caller named.
@@ -382,8 +392,30 @@ func (s *Store) ConversationCount(ctx context.Context, conversationID string) (i
 	return n, nil
 }
 
+// ConversationFor is Conversation as one reader may see it. On the global store
+// without the reader's cross_project consent it keeps only the rows its own
+// repository family wrote (scope.go): a thread between two checkouts of one
+// project is the reader's business, a thread between two other projects is not.
+func (s *Store) ConversationFor(ctx context.Context, conversationID string, who Claimant, now time.Time) ([]Row, error) {
+	rows, err := s.Conversation(ctx, conversationID, now)
+	if err != nil || !s.IsGlobal() || who.CrossProject {
+		return rows, err
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if s.ownedRow(r, who.Workspace, now) {
+			kept = append(kept, r)
+		}
+	}
+	return kept, nil
+}
+
 // Conversation returns a thread's unexpired notes oldest first, for rendering a
 // transcript. Delivered rows are included — that is the point of a transcript.
+//
+// It applies no reader scope, so on the global store it is for the sender's and
+// the daemon's own questions (routing, exchange counts); a reader deciding what a
+// session may see goes through ConversationFor.
 func (s *Store) Conversation(ctx context.Context, conversationID string, now time.Time) ([]Row, error) {
 	if s == nil || s.db == nil || conversationID == "" {
 		return nil, nil
@@ -437,7 +469,7 @@ func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 // from the scanner.
 const rowColumns = `id, kind, author_session, author_id, body, path_globs, addressee,
 	 created_at, expires_at, conversation_id, delivered_at, delivered_to, origin_workspace,
-	 target_workspace, addressee_id, delivered_to_id`
+	 target_workspace, addressee_id, delivered_to_id, origin_git_common_dir`
 
 func scanRows(rows *sql.Rows) ([]Row, error) {
 	var out []Row
@@ -451,7 +483,7 @@ func scanRows(rows *sql.Rows) ([]Row, error) {
 		if err := rows.Scan(&r.ID, &kind, &r.AuthorSession, &r.AuthorID, &r.Body,
 			&globs, &r.Addressee, &createdNs, &expNs,
 			&r.ConversationID, &deliveredNs, &r.DeliveredTo, &r.OriginWorkspace,
-			&r.TargetWorkspace, &r.AddresseeID, &r.DeliveredToID); err != nil {
+			&r.TargetWorkspace, &r.AddresseeID, &r.DeliveredToID, &r.OriginGitCommonDir); err != nil {
 			return nil, fmt.Errorf("collab: scan: %w", err)
 		}
 		r.Kind = Kind(kind)
