@@ -406,13 +406,18 @@ another callable, so textual receiver matching would manufacture wrong edges at 
   variable re-declaring a parameter, `:=` in two blocks) is ambiguous: no tier reads a
   type for it, the receiver-self and parameter tiers included.
 
-The last four carry confidence **0.85** (the qualified tier 0.9). Their residual false
-edges are known shapes, none seen on plumb's tree: a closure parameter shadowing the
-name inside one declaration that is still counted once; a type parameter named like a
-package type (`func F[Store any](s Store)`), since type parameters are not in the stored
-signature; several `//go:build ignore` `package main` programs in one directory, which
-share one package key; and a directory with more than one non-test package clause, where
-an import resolves to the last one seen. A target in the caller's own file is left to the
+The last four carry confidence **0.85** (the qualified tier 0.9). A local's type hint is
+dropped when its leading name is one the function declares itself (a parameter named like
+an import, a local closure, a local type, a type parameter), and a site the local tier
+cannot resolve keeps the package-qualified reading when its qualifier is an import
+(`rand := rand.New(src)`). Their residual false edges are known shapes, none seen on
+plumb's tree, the Go standard library or `golang.org/x/tools`: a package-level variable
+used outside the block of a same-named local declared once (declarations are counted
+per function, not per block); a parameter type named like a type parameter
+(`func F[Store any](s Store)`), since type parameters are not in the stored signature;
+several `//go:build ignore` `package main` programs in one directory, which share one
+package key; and a directory with more than one non-test package clause, where an
+import resolves to the last one seen. A target in the caller's own file is left to the
 extractor's intra-file edge rather than written twice.
 
 One shape is invisible to this: Go does not require a package's name to match its

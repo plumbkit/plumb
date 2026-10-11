@@ -111,15 +111,15 @@ type callResolution struct {
 //     there. Per-file import sets are what keep this from degenerating into
 //     name-only matching: this workspace has 2,588 callables sharing a name with
 //     another callable, so a global by-name resolver would be wrong at scale.
-//   - Any OTHER METHOD CALL on a receiver (`x.Close()` on a local, a parameter,
-//     a field chain `idx.db.Exec()`, a promoted method) is NOT resolved, and is
-//     counted instead. The Go extractor parses with SkipObjectResolution, so
-//     there is no type information anywhere in the index that could turn an
-//     arbitrary receiver VARIABLE into the type whose method was called. Textual
+//   - A METHOD CALL on a variable whose type a declaration states — the method's
+//     own receiver, a typed parameter, a local declared once with an evident type
+//     (indexer_calls_receivers.go) — is resolved to that type's method. Any other
+//     receiver (a field chain `idx.db.Exec()`, a returned value, a local declared
+//     twice or with no evident type, a promoted method) is NOT resolved, and is
+//     counted instead: the Go extractor parses with SkipObjectResolution, so the
+//     index has no type flow beyond what one declaration states, and textual
 //     receiver matching would manufacture wrong edges across those 2,588
-//     colliding names, so those calls are left absent and labelled rather than
-//     present and wrong. The receiver-self case is the exception because the
-//     method's own declaration names the variable's type.
+//     colliding names.
 //
 // Like linkImports, the lifecycle accounts for both endpoint CASCADEs: a callee
 // re-index captures and repoints incoming rows by stable to_identity, while a
