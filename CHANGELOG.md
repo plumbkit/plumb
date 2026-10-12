@@ -31,7 +31,6 @@
   and lines, so an agent checks those instead of searching the tree. Checked
   against the Go type checker's static callers on this repository and on
   golang.org/x/tools: no "complete" claim missed a caller.
-
 - **The Go call graph resolves method calls on local variables of evident type.**
   `x.M()` now links to the method of `x`'s type when the enclosing function
   declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or
