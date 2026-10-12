@@ -109,6 +109,9 @@ type affectedTest struct {
 	Node       topology.Node
 	Confidence float64
 	Reason     string // "dependency edge", "changed package", "imports the changed package"
+	// Hops is the fewest edges from any root to this test in the dependent walk,
+	// or 0 for a test found only by co-location.
+	Hops int
 }
 
 // Reasons a directory is worth scanning for tests. They are ordered by how
@@ -349,7 +352,7 @@ func declarationRoots(nodes []topology.Node) []topology.Node {
 }
 
 func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, seedDirs []string, maxResults int) (*affectedResult, error) {
-	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]string{}}
+	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]string{}, testAt: map[int64]int{}}
 	for _, d := range seedDirs {
 		g.dirs[d] = reasonChanged
 	}
@@ -381,6 +384,7 @@ type affectedGather struct {
 	store      *topology.Store
 	maxResults int
 	seen       map[int64]bool
+	testAt     map[int64]int     // test node ID -> its index in tests, to keep the fewest hops
 	dirs       map[string]string // directory -> why it is implicated
 	dependents []topology.Node
 	tests      []affectedTest
@@ -437,8 +441,13 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 		g.graphTruncated = true
 	}
 	conf := incidentConfidence(nb.DependedOnBy.Edges)
+	hops := inwardHops(root.ID, nb.DependedOnBy.Edges)
 	for _, n := range nb.DependedOnBy.Nodes {
 		if g.seen[n.ID] {
+			// Another root reached this test first; keep whichever path is shorter.
+			if i, ok := g.testAt[n.ID]; ok && hops[n.ID] > 0 && (g.tests[i].Hops == 0 || hops[n.ID] < g.tests[i].Hops) {
+				g.tests[i].Hops = hops[n.ID]
+			}
 			continue
 		}
 		g.seen[n.ID] = true
@@ -455,7 +464,8 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 			if g.dirs[filepath.Dir(n.Path)] == reasonChanged {
 				reason = reasonChanged
 			}
-			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reason})
+			g.testAt[n.ID] = len(g.tests)
+			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reason, Hops: hops[n.ID]})
 		} else {
 			g.dependents = append(g.dependents, n)
 			// Do not demote a directory that is already the changed one: a package
@@ -520,6 +530,33 @@ func (g *affectedGather) sortTests() {
 	sort.SliceStable(g.tests, func(i, j int) bool {
 		return g.tests[i].Confidence > g.tests[j].Confidence
 	})
+}
+
+// inwardHops is the fewest inward edges from root to each node of an inward
+// neighbourhood. An edge FromID -> ToID means FromID depends on ToID, so the walk
+// steps from a node to everything that depends on it. A node the edges do not
+// connect to root is absent (0).
+func inwardHops(root int64, edges []topology.Edge) map[int64]int {
+	dependents := map[int64][]int64{}
+	for _, e := range edges {
+		dependents[e.ToID] = append(dependents[e.ToID], e.FromID)
+	}
+	hops := map[int64]int{root: 0}
+	frontier := []int64{root}
+	for len(frontier) > 0 {
+		var next []int64
+		for _, id := range frontier {
+			for _, d := range dependents[id] {
+				if _, ok := hops[d]; !ok {
+					hops[d] = hops[id] + 1
+					next = append(next, d)
+				}
+			}
+		}
+		frontier = next
+	}
+	delete(hops, root)
+	return hops
 }
 
 // incidentConfidence maps each node ID to the highest confidence of any edge

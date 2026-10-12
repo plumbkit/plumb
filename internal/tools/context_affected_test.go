@@ -14,9 +14,16 @@ import (
 // measured against the gold's test_packages and test_package_counts.
 
 // sectionRows are the two-space rows under heading in a rendered pack, up to the
-// next line that is not one.
+// next line that is neither a row nor a deeper-indented sub-row of one (the
+// affected section's named tests sit under their package row).
 func sectionRows(out, heading string) []string {
-	var rows []string
+	rows, _ := sectionRowsAndSubRows(out, heading)
+	return rows
+}
+
+// sectionRowsAndSubRows also returns each row's sub-rows, keyed by the row.
+func sectionRowsAndSubRows(out, heading string) (rows []string, sub map[string][]string) {
+	sub = map[string][]string{}
 	in := false
 	for _, l := range strings.Split(out, "\n") {
 		switch {
@@ -24,11 +31,13 @@ func sectionRows(out, heading string) []string {
 			in = true
 		case in && strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   "):
 			rows = append(rows, l)
+		case in && len(rows) > 0 && strings.HasPrefix(l, "    "):
+			sub[rows[len(rows)-1]] = append(sub[rows[len(rows)-1]], l)
 		case in:
-			return rows
+			return rows, sub
 		}
 	}
-	return rows
+	return rows, sub
 }
 
 // goldCounts reads a gold key that maps names to counts.
@@ -59,14 +68,16 @@ func affectedTargets(rows []string) []string {
 // executionWords would claim a test was run. Nothing in the estimate may say one.
 var executionWords = regexp.MustCompile(`(?i)\b(passed|passes|failed|fails|green|ran|results?|succeeded)\b`)
 
-// C07: a broad test package is one row with its count, never its individual tests,
-// and nothing in the estimate says a test was run (Invariant 10).
+// C07: a broad test package is one row with its count, never a list of its tests,
+// and nothing in the estimate says a test was run (Invariant 10). Under the row,
+// one line names the closest of the tests a call edge reaches, as a ready run_task
+// filter, and counts the rest (PLAN-543): 60 tests call Summarise, so 8 are named.
 func TestContextForTask_Affected_C07_OneRowWithTheCountAndNoTestNames(t *testing.T) {
 	s := newShop(t)
 	c := oracle(t, "C07")
 	_, out := runCase(t, s, c)
 
-	rows := sectionRows(out, affectedHeading)
+	rows, sub := sectionRowsAndSubRows(out, affectedHeading)
 	counts := c.goldCounts(t, "test_package_counts")
 	want := []string{fmt.Sprintf("  ./reports/... — %d test(s); holds a seed", counts["./reports/..."])}
 	if !slices.Equal(rows, want) {
@@ -93,7 +104,16 @@ func TestContextForTask_Affected_C07_OneRowWithTheCountAndNoTestNames(t *testing
 	if !strings.Contains(out, cut) {
 		t.Errorf("the tests beyond the cap are not counted (want %q):\n%s", cut, out)
 	}
-	for _, line := range append([]string{affectedHeading}, rows...) {
+	names := make([]string, 0, contextNamedPerPackage)
+	for i := range contextNamedPerPackage {
+		names = append(names, fmt.Sprintf("TestSummariseCase%02d", i))
+	}
+	wantSub := []string{fmt.Sprintf(`    run first: run_task(slot:"test", target:"./reports/...", run:%q) — %d of %d test(s) that %s; %d more are not named`,
+		runFilterFor(names), contextNamedPerPackage, counts["./reports/..."], namedTestsReach, counts["./reports/..."]-contextNamedPerPackage)}
+	if !slices.Equal(sub[want[0]], wantSub) {
+		t.Errorf("named tests under the row = %q,\nwant %q", sub[want[0]], wantSub)
+	}
+	for _, line := range append(append([]string{affectedHeading}, rows...), sub[want[0]]...) {
 		if m := executionWords.FindString(line); m != "" {
 			t.Errorf("the estimate implies a test was run (%q): %q", m, line)
 		}
