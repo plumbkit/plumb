@@ -232,9 +232,6 @@
   `workspace_sessions`, and `plumb mail`. A live session in another checkout of
   the project also counts as a peer for the wake watcher's longer window. No
   read path runs git.
-
-### Changed
-
 - **The daemon-starting test suites no longer run on a developer machine.**
   `cmd/smoke` (the `integration` tag) and `cmd/clientsmoke` (the `clients`,
   `clients_e2e` and `clients_conformance` tags) start plumb daemons of their
@@ -245,10 +242,11 @@
   (`internal/separateenv`). This guards against running them by accident; it is
   not a security boundary. CI is unaffected. The new
   `make verify-full-container` runs `make verify-full` in a Linux container
-  with pinned Go, golangci-lint and language servers. It streams in the working
-  tree and fails if a plumb daemon is still running after the suite. It replaces
-  a host `make verify-full` as the pre-submit gate. `make docker-integration`
-  now runs with `--init`.
+  with pinned Go, git, golangci-lint and language servers, as a non-root user,
+  on the repository's history with the working tree laid over it. It fails if
+  two plumb daemons run at once during the suite or one is still running after
+  it. It replaces a host `make verify-full` as the pre-submit gate.
+  `make docker-integration` now runs with `--init`.
 
 ### Fixed
 
