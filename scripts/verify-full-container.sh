@@ -152,7 +152,10 @@ exit "$rc"
 
 in=$(mktemp -d "${TMPDIR:-/tmp}/plumb-verify-in.XXXXXX") || exit 1
 trap 'rm -rf "$in"' EXIT
-trap 'docker kill "$name" > /dev/null 2>&1; exit 130' INT TERM HUP
+# A signal kills the container but does not exit: the run still ends with the
+# engine's answer on whether the container is gone, and then fails.
+interrupted=0
+trap 'interrupted=1; docker kill "$name" > /dev/null 2>&1' INT TERM HUP
 (
   cd "$root" || exit 1
   git bundle create "$in/repo.bundle" --all 2> /dev/null &&
@@ -174,6 +177,7 @@ child=$! # in the background and waited for, so the trap can run meanwhile
 wait "$child"
 rc=$?
 kill -0 "$child" 2> /dev/null && { wait "$child"; rc=$?; }
+[ "$interrupted" -eq 1 ] && { echo "verify-full-container: interrupted" >&2; rc=130; }
 
 # Container exit is what ends a SIGKILL'd run's processes, so "gone" must be
 # an answer from the engine, never the failure to get one.
