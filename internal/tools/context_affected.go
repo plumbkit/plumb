@@ -25,7 +25,7 @@ import (
 //
 // Under a package row it may name a few tests, but only the ones a call edge
 // reaches: a test that calls a seed, or a declaration next to one, directly or
-// through one caller. Co-location says only that a test sits in the package, so a
+// through callers. Co-location says only that a test sits in the package, so a
 // co-located test is counted, never named. With a Go test target the names come as
 // a ready run_task filter, which is the step agents otherwise spell by hand before
 // their first test run (PLAN-543: every arm D agent built its own -run filter).
@@ -315,7 +315,7 @@ func (p *contextPack) affectedLines() []packLine {
 
 // namedTestsReach is how a named test is connected to the seeds. It is the walk's
 // own claim and no more: the edges are the index's, and nothing was run.
-const namedTestsReach = "call a seed or a declaration next to one, directly or through one caller (index call edges)"
+const namedTestsReach = "call a seed or a declaration next to one, directly or through callers (index call edges)"
 
 // namedTestsLine renders one package's edge-reached tests. With a Go package
 // target it is a run_task call ready to paste, its filter cut to the names that
