@@ -98,7 +98,9 @@ rm -f /tmp/peak /tmp/peak.new /tmp/overlaps
 supervise &
 supervisor=$!
 
-make verify-full
+# Every test runs: the build cache volume is reused between runs, and a test
+# result replayed from it would prove nothing, least of all about daemons.
+GOFLAGS=-count=1 make verify-full
 rc=$?
 echo "verify-full-container: make verify-full exited $rc"
 
