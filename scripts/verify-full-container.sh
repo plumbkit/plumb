@@ -6,10 +6,11 @@
 # plumb daemon: those suites refuse to run outside CI, a container or a declared
 # VM (internal/separateenv). This is the local way to run the whole gate.
 #
-# The working tree is streamed in as git sees it (tracked and untracked files,
-# not ignored ones), so uncommitted changes are verified and host build output
-# is not. Inside, it becomes a fresh one-commit git repository, which the checks
-# that call git need. The container runs with --init (exited processes are
+# The container gets the repository's history (a git bundle of every ref, tags
+# included, which the version and history-reading tests need) checked out at
+# HEAD, and over it the working tree as git sees it (tracked and untracked
+# files, not ignored ones, minus deleted ones), so uncommitted changes are
+# verified and host build output is not. It runs as a non-root user. The container runs with --init (exited processes are
 # reaped, not counted) and --rm: its exit ends every process it started.
 # While the suite runs, the plumb daemons are counted every 200 ms: at most one
 # may run at a time. Afterwards none may be left: they are looked for for 30 s.
@@ -27,12 +28,13 @@ image=plumb-verify
 docker build ${platform[@]+"${platform[@]}"} -q -f "$root/build/docker/verify.Dockerfile" -t "$image" "$root/build/docker" > /dev/null || exit 1
 
 name=plumb-verify-$(date +%s)-$$
-trap 'docker kill "$name" > /dev/null 2>&1' INT TERM HUP
 
 inside='
 set -uo pipefail
-mkdir -p /work && tar -C /work -xf - && cd /work || exit 70
-git init -q && git add -A && git -c user.name=verify -c user.email=verify@localhost commit -qm "working tree" || exit 70
+cd /work || exit 70
+git -c init.defaultBranch=main clone -q --no-checkout /in/repo.bundle . && git checkout -q --detach "$(cat /in/head)" || exit 70
+tar -xf /in/tree.tar || exit 70
+while IFS= read -r -d "" f; do rm -f -- "$f"; done < /in/deleted || exit 70
 
 # The plumb daemons alive now, by their own argv; "?" when the process table
 # cannot be read. A process that exited mid-scan is skipped, but an empty
@@ -129,17 +131,27 @@ fi
 exit "$rc"
 '
 
+in=$(mktemp -d "${TMPDIR:-/tmp}/plumb-verify-in.XXXXXX") || exit 1
+trap 'docker kill "$name" > /dev/null 2>&1; rm -rf "$in"' INT TERM HUP
 (
   cd "$root" || exit 1
-  git ls-files -z --cached --others --exclude-standard |
+  git bundle create "$in/repo.bundle" --all 2> /dev/null &&
+    git rev-parse HEAD > "$in/head" &&
+    git ls-files -z --deleted > "$in/deleted" &&
+    git ls-files -z --cached --others --exclude-standard |
     while IFS= read -r -d '' f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"; done |
-    COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf - # no macOS ._* AppleDouble entries or xattr headers
-) | docker run -i --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
-  -v plumb-verify-gocache:/root/.cache/go-build \
-  -v plumb-verify-gomod:/go/pkg/mod \
-  -v plumb-verify-lintcache:/root/.cache/golangci-lint \
+    COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf "$in/tree.tar" # no macOS ._* AppleDouble entries or xattr headers
+) || { echo "verify-full-container: could not package the repository" >&2; rm -rf "$in"; exit 1; }
+chmod -R a+rX "$in"
+
+docker run --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
+  -v "$in:/in:ro" \
+  -v plumb-verify-v2-gocache:/home/verify/.cache/go-build \
+  -v plumb-verify-v2-gomod:/home/verify/go/pkg/mod \
+  -v plumb-verify-v2-lintcache:/home/verify/.cache/golangci-lint \
   "$image" bash -c "$inside"
 rc=$?
+rm -rf "$in"
 
 # Container exit is what ends a SIGKILL'd run's processes, so "gone" must be
 # an answer from the engine, never the failure to get one.
