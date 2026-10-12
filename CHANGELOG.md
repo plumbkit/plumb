@@ -260,6 +260,21 @@
 
 ### Fixed
 
+- **A slow daemon start can no longer produce a second daemon, and waits
+  30 s, not 10.** When `plumb serve` started the daemon and it took longer than
+  the 10 s wait (a loaded machine, a cold start), serve gave up and released
+  its spawn lock while the new daemon was still starting. The next serve then
+  started another, which found the first holding the lifetime lock and exited:
+  two `plumb daemon` processes at once and a failed connection. Now the
+  daemon's lifetime lock is also the right to launch one. `plumb serve` and
+  `plumb restart` take it before starting the daemon and hand it over as the
+  daemon's own, so it is held from the moment the daemon exists. A launcher
+  that finds it held never starts another daemon; it keeps connecting until
+  its deadline, and if the holder never answers it fails saying so. A daemon
+  that inherits a lock that is not its lock file, or not held, refuses to
+  start. The wait is 30 s by default; `PLUMB_DAEMON_START_TIMEOUT` (a Go
+  duration, at most 5 minutes) changes it.
+
 - **The Go call graph no longer guesses between two same-named declarations in
   a file, and links generic calls.** The extractor's same-file call edges matched
   by name alone, so with two methods called `Close` in one file, a call of either

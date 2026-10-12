@@ -20,11 +20,14 @@ import (
 //                        so the second one re-dials after the first has spawned
 //                        and finds the daemon already running.
 //
-//   plumb.daemon.lock  — held by `plumb daemon` for the lifetime of the process.
-//                        Acquired non-blocking; if a second daemon tries to
-//                        start (manual invocation, missed serve-side flock,
-//                        whatever) it exits immediately rather than stealing
-//                        the socket path from the existing daemon.
+//   plumb.daemon.lock  — held by `plumb daemon` for the lifetime of the process,
+//                        and also the right to launch one: `plumb serve` and
+//                        `plumb restart` take it BEFORE starting a daemon and
+//                        hand it over on fd 3 (daemon_launch.go), so it is held
+//                        from the moment the daemon exists, and a launcher that
+//                        finds it held never starts another. A daemon started
+//                        any other way acquires it non-blocking and exits at
+//                        once if another daemon holds it.
 //
 // Both locks are released automatically when the holding fd closes — including
 // on process crash — so there is no stale-lock cleanup problem.

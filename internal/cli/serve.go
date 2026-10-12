@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -198,13 +199,13 @@ func proxyHeartbeatInterval() time.Duration {
 	return d
 }
 
-// connectOrStartDaemon dials the daemon socket. If it is not yet running,
-// the daemon subprocess is started and we wait up to 10 seconds for its socket
-// to appear before retrying the dial.
+// connectOrStartDaemon dials the daemon socket. If no daemon accepts, it starts
+// one, but only while holding the launch authority (daemon_launch.go): while
+// another daemon holds it, running or still starting, it only keeps dialling.
+// It waits up to daemonStartWait (30 s by default) in all.
 //
-// Concurrent serves are serialised through plumb.spawn.lock so that only one
-// of them ever calls startDaemonProcess. Without that lock, two serves racing
-// from a cold start each observe "no daemon" and each spawn one.
+// Concurrent serves are also serialised through plumb.spawn.lock, so only one
+// of them at a time makes the dial-or-launch decision.
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
 		slog.Info("serve: connected to existing daemon")
@@ -218,34 +219,25 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 	}
 	defer spawn.Close()
 
-	// Re-check now that we hold the lock — another serve may have spawned
-	// the daemon while we were waiting.
-	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
-		slog.Info("serve: daemon was started by another serve while we waited for the spawn lock")
-		warnIfDaemonStale()
-		return conn, nil
-	}
-
 	warnIfDaemonAtLegacyPath()
 
-	slog.Info("serve: daemon not running — starting", "socket", socketPath)
-	if err := startDaemonProcess(); err != nil {
-		return nil, fmt.Errorf("starting daemon: %w", err)
+	l := newDaemonLauncher(socketPath)
+	start := l.start
+	l.start = func(lock *os.File) error {
+		slog.Info("serve: daemon not running — starting", "socket", socketPath)
+		return start(lock)
 	}
-
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-		if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
-			slog.Info("serve: connected to daemon")
-			return conn, nil
-		}
+	conn, launched, err := l.dialOrLaunch(ctx)
+	switch {
+	case err == nil && launched:
+		slog.Info("serve: connected to daemon")
+	case err == nil:
+		slog.Info("serve: connected to a daemon another process started")
+		warnIfDaemonStale()
+	case errors.Is(err, errDaemonStartTimeout):
+		return nil, daemonStartTimeoutError("start", socketPath, l.wait)
 	}
-	return nil, daemonStartTimeoutError("start", socketPath)
+	return conn, err
 }
 
 // warnIfDaemonStale compares the running daemon's published version against

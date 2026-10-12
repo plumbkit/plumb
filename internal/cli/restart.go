@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"slices"
@@ -79,7 +80,8 @@ func respawnDaemon(stopped []int) error {
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	l := newDaemonLauncher(socketPath)
+	ctx, cancel := context.WithTimeout(context.Background(), l.wait+2*time.Second)
 	defer cancel()
 	spawn, err := acquireSpawnLock(ctx)
 	if err != nil {
@@ -87,24 +89,18 @@ func respawnDaemon(stopped []int) error {
 	}
 	defer spawn.Close()
 
-	// Re-check under the lock — a concurrent serve may have spawned it.
-	if dialDaemonOnce(socketPath) {
-		printDaemonRestarted(stopped)
-		return nil
+	// The launcher also waits out a stopped daemon still releasing its lock,
+	// and never starts one beside a daemon that holds it.
+	conn, _, err := l.dialOrLaunch(ctx)
+	if errors.Is(err, errDaemonStartTimeout) {
+		return daemonStartTimeoutError("come back up", socketPath, l.wait)
 	}
-	if err := startDaemonProcess(); err != nil {
-		return fmt.Errorf("starting daemon: %w", err)
+	if err != nil {
+		return err
 	}
-
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if dialDaemonOnce(socketPath) {
-			printDaemonRestarted(stopped)
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return daemonStartTimeoutError("come back up", socketPath)
+	_ = conn.Close()
+	printDaemonRestarted(stopped)
+	return nil
 }
 
 // printDaemonRestarted reports the daemon is back up, including the PID of the

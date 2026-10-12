@@ -333,14 +333,14 @@ func TestDaemonPaths_AllShareOneRuntimeDir(t *testing.T) {
 // is why both callers go through daemonStartTimeoutError.
 func TestDaemonStartTimeoutError_CarriesTheLengthHint(t *testing.T) {
 	short := "/home/u/.cache/plumb/plumb.sock"
-	if got := daemonStartTimeoutError("start", short).Error(); strings.Contains(got, "sun_path") {
+	if got := daemonStartTimeoutError("start", short, 30*time.Second).Error(); strings.Contains(got, "sun_path") {
 		t.Errorf("a short path must not be blamed on length: %q", got)
 	}
 
 	long := "/" + strings.Repeat("a", maxUnixSocketPath) + "/plumb.sock"
 	for _, action := range []string{"start", "come back up"} {
-		got := daemonStartTimeoutError(action, long).Error()
-		if !strings.Contains(got, action) {
+		got := daemonStartTimeoutError(action, long, 30*time.Second).Error()
+		if !strings.Contains(got, action) || !strings.Contains(got, "30s") {
 			t.Errorf("%q: the message must name what did not happen, got %q", action, got)
 		}
 		if !strings.Contains(got, "sun_path") || !strings.Contains(got, socketPathShortenLever()) {

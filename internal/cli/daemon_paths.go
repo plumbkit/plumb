@@ -136,14 +136,16 @@ func socketPathLengthHint(path string) string {
 // hint went on the daemon's own listen error, which goes to daemon.log before
 // the daemon exits, so the user, who runs `plumb serve` through an MCP client,
 // only ever saw the bare timeout.
-func daemonStartTimeoutError(action, socketPath string) error {
-	return fmt.Errorf("daemon did not %s within 10 seconds (socket: %s)%s", action, socketPath, socketPathLengthHint(socketPath))
+func daemonStartTimeoutError(action, socketPath string, wait time.Duration) error {
+	return fmt.Errorf("daemon did not %s within %s (socket: %s)%s", action, wait, socketPath, socketPathLengthHint(socketPath))
 }
 
-// startDaemonProcess launches a detached plumb daemon subprocess.
-// Logs are written to daemonLogPath(); the process is detached with Setsid so
-// it outlives the calling plumb serve process.
-func startDaemonProcess() error {
+// startDaemonProcess launches a detached plumb daemon subprocess that inherits
+// lock, the held lifetime lock, as fd 3 (see daemon_launch.go): the caller must
+// hold it, and closes its own copy afterwards. Logs are written to
+// daemonLogPath(); the process is detached with Setsid so it outlives the
+// calling plumb serve process.
+func startDaemonProcess(lock *os.File) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolving executable path: %w", err)
@@ -159,6 +161,8 @@ func startDaemonProcess() error {
 	cmd := exec.Command(exe, "daemon")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.ExtraFiles = []*os.File{lock} // fd 3 in the child
+	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD))
 	// Never let the daemon inherit this serve proxy's working directory. The daemon
 	// is a singleton shared across every connection, so an inherited cwd belongs to
 	// one arbitrary client's project — and any stray relative path would resolve

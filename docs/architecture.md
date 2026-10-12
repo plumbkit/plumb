@@ -216,8 +216,14 @@ Key design properties:
   most one daemon process ever binds the socket. Without them, two `plumb
   serve` processes racing from a cold start could each spawn a daemon and the
   second would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the
-  path from the first. Lock release is automatic via fd close on process
-  exit (clean or crash) — see `internal/cli/lock.go`.
+  path from the first. The lifetime lock is also the right to launch: `plumb
+  serve` and `plumb restart` take it before starting a daemon and hand it to
+  the child on fd 3, so it is held from the moment the daemon exists, and a
+  launcher that finds it held (a daemon running or still starting) never
+  starts another; it keeps dialling for up to 30 s
+  (`PLUMB_DAEMON_START_TIMEOUT`) and then fails. Lock release is automatic via
+  fd close on process exit (clean or crash) — see `internal/cli/lock.go` and
+  `internal/cli/daemon_launch.go`.
 - **One language server per (root, language)** — multiple MCP connections to
   the same project share each server, its cache, and its diagnostic stream. A
   root may bind several servers at once (e.g. Go + HTML for a web app): each
@@ -346,7 +352,7 @@ Rung 1 outranks client roots because it is the workspace the caller chose, not w
 | `~/.local/state/plumb/serve/resume-credentials/<hash>.json` | serve | The resume credential the daemon disclosed, one file per conversation (0600, written atomically, bound to the daemon whose `session_state.db` issued it, capped at 256 with the oldest evicted); presented by a replacement serve, never in a workspace (OS state dir; `~/Library/Application Support/plumb/` on macOS) |
 | `~/.local/state/plumb/serve/hook-proof.key` | hook, serve | The per-user 32-byte key the identity hook proves a `session_start`'s conversation with and `plumb serve` verifies it against (0600; made by `plumb hooks install` or the hook's first run; never in a workspace) |
 | `<runtime>/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
-| `<runtime>/plumb.daemon.lock` | daemon | Advisory `flock` held for the daemon's lifetime; rejects duplicate daemons |
+| `<runtime>/plumb.daemon.lock` | serve, restart, daemon | Advisory `flock` held for the daemon's lifetime and taken by the launcher before it starts one (handed to the daemon on fd 3); rejects duplicate daemons and launches beside a starting one |
 | `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |

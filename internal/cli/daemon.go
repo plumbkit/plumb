@@ -220,7 +220,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// daemon already holds it, exit immediately rather than stealing the socket
 	// path from it (which is what `os.Remove(socketPath); net.Listen(...)`
 	// below would otherwise do, leaving two daemons running on the same path).
-	lock, err := acquireDaemonLock()
+	lock, err := daemonLifetimeLock()
 	if err != nil {
 		if errors.Is(err, errDaemonAlreadyRunning) {
 			slog.Info("daemon: another plumb daemon is already running — exiting")
