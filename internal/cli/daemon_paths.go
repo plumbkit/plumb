@@ -115,8 +115,8 @@ func socketAlive(path string) bool {
 // A Unix socket path lives in sun_path, a fixed-size array, so bind() answers
 // an over-long path with EINVAL — "invalid argument", which says nothing about
 // length. Every layer above then hides it: the daemon writes that error to
-// daemon.log and exits, and `plumb serve` reports only "daemon did not start
-// within 10 seconds". Reproduced on Linux with a long XDG_CACHE_HOME (the
+// daemon.log and exits, and `plumb serve` reported only that the daemon "did
+// not start" in time. Reproduced on Linux with a long XDG_CACHE_HOME (the
 // runtime dir follows os.UserCacheDir), where the daemon appeared to start and
 // silently never came up.
 func socketPathLengthHint(path string) string {

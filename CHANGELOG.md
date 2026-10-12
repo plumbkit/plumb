@@ -266,14 +266,18 @@
   its spawn lock while the new daemon was still starting. The next serve then
   started another, which found the first holding the lifetime lock and exited:
   two `plumb daemon` processes at once and a failed connection. Now the
-  daemon's lifetime lock is also the right to launch one. `plumb serve` and
-  `plumb restart` take it before starting the daemon and hand it over as the
-  daemon's own, so it is held from the moment the daemon exists. A launcher
-  that finds it held never starts another daemon; it keeps connecting until
-  its deadline, and if the holder never answers it fails saying so. A daemon
-  that inherits a lock that is not its lock file, or not held, refuses to
-  start. The wait is 30 s by default; `PLUMB_DAEMON_START_TIMEOUT` (a Go
-  duration, at most 5 minutes) changes it.
+  daemon's lifetime lock is also the right to launch one. `plumb serve`,
+  `plumb web` and `plumb restart` take it before starting the daemon and hand
+  it over as the daemon's own, so it is held from the moment the daemon exists.
+  A launcher that finds it held never starts another daemon: it keeps
+  connecting until its deadline and then says a daemon holds the lock but is
+  not answering, with the log to read and `plumb stop` as the remedy. A daemon
+  that exits before accepting (a bad config, say) is reported at once, not
+  after the wait. A daemon that inherits a lock that is not its lock file, or
+  one another daemon holds, refuses to start. The wait is 30 s by default;
+  `PLUMB_DAEMON_START_TIMEOUT` (a Go duration or whole seconds, at most 5
+  minutes) changes it. Each reconnect attempt of a `plumb serve` whose daemon
+  died can now take up to that long too.
 
 - **The Go call graph no longer guesses between two same-named declarations in
   a file, and links generic calls.** The extractor's same-file call edges matched

@@ -14,7 +14,9 @@ import (
 )
 
 // testLauncher is a launcher on the real lifetime lock (in a temp runtime dir)
-// whose dial succeeds once ready reports true, and whose start only counts.
+// whose dial succeeds once ready reports true. Its start counts, and keeps a
+// duplicate of the lock open until the test ends: a stand-in for a live child
+// that inherited it.
 func testLauncher(t *testing.T, ready *atomic.Bool, starts *atomic.Int32, wait time.Duration) daemonLauncher {
 	t.Helper()
 	return daemonLauncher{
@@ -27,8 +29,13 @@ func testLauncher(t *testing.T, ready *atomic.Bool, starts *atomic.Int32, wait t
 			return nil, errors.New("connection refused")
 		},
 		acquire: acquireDaemonLock,
-		start: func(*os.File) error {
+		start: func(lock *os.File) error {
 			starts.Add(1)
+			child, err := syscall.Dup(int(lock.Fd()))
+			if err != nil {
+				return err
+			}
+			t.Cleanup(func() { _ = syscall.Close(child) })
 			return nil
 		},
 		wait: wait,
@@ -132,6 +139,154 @@ func TestDialOrLaunch_LaunchesAtMostOnce(t *testing.T) {
 	_, launched, err := l.dialOrLaunch(context.Background())
 	if !errors.Is(err, errDaemonStartTimeout) || !launched || starts.Load() != 1 {
 		t.Fatalf("got launched=%v err=%v starts=%d, want one launch then a timeout", launched, err, starts.Load())
+	}
+}
+
+// A daemon this call started that exits before accepting (a bad config, an
+// over-long socket path) is reported at once, not after the whole wait.
+func TestDialOrLaunch_ReportsADaemonThatExitedEarly(t *testing.T) {
+	withTempRuntime(t)
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 5*time.Second)
+	l.start = func(*os.File) error { starts.Add(1); return nil } // no child keeps the lock
+	began := time.Now()
+	_, launched, err := l.dialOrLaunch(context.Background())
+	if !errors.Is(err, errDaemonExitedEarly) || !launched || starts.Load() != 1 {
+		t.Fatalf("got launched=%v err=%v starts=%d, want errDaemonExitedEarly after one launch", launched, err, starts.Load())
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("took %s: an early exit must not wait out the deadline", took)
+	}
+}
+
+// Held, then released, then launched, then silent: a timeout of the daemon this
+// call started, not the held-by-another error.
+func TestDialOrLaunch_HeldThenLaunchedThenSilentIsAStartTimeout(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 500*time.Millisecond)
+	time.AfterFunc(100*time.Millisecond, func() { _ = holder.Close() })
+	_, launched, err := l.dialOrLaunch(context.Background())
+	if !errors.Is(err, errDaemonStartTimeout) || !launched || starts.Load() != 1 {
+		t.Fatalf("got launched=%v err=%v starts=%d, want errDaemonStartTimeout after one launch", launched, err, starts.Load())
+	}
+}
+
+func TestDialOrLaunch_HonoursCancellation(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	began := time.Now()
+	if _, _, err := l.dialOrLaunch(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("took %s after cancellation", took)
+	}
+}
+
+func TestDialOrLaunch_ACancelledCallStartsNothing(t *testing.T) {
+	withTempRuntime(t)
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := l.dialOrLaunch(ctx); !errors.Is(err, context.Canceled) || starts.Load() != 0 {
+		t.Fatalf("got err=%v starts=%d, want a cancelled call to start nothing", err, starts.Load())
+	}
+	f, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatalf("a cancelled call kept the lock: %v", err)
+	}
+	_ = f.Close()
+}
+
+func TestDialOrLaunch_ReturnsALockError(t *testing.T) {
+	withTempRuntime(t)
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, time.Second)
+	boom := errors.New("opening daemon lock: permission denied")
+	l.acquire = func() (*os.File, error) { return nil, boom }
+	if _, _, err := l.dialOrLaunch(context.Background()); !errors.Is(err, boom) || starts.Load() != 0 {
+		t.Fatalf("got err=%v starts=%d, want the lock error and no start", err, starts.Load())
+	}
+}
+
+// The launcher must not keep its copy of the lock: a long-lived serve would
+// otherwise hold the authority itself and block its own later reconnect.
+func TestDialOrLaunch_ClosesItsCopyOfTheLock(t *testing.T) {
+	withTempRuntime(t)
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, time.Second)
+	var passed *os.File
+	inner := l.start
+	l.start = func(lock *os.File) error { passed = lock; ready.Store(true); return inner(lock) }
+	if _, _, err := l.dialOrLaunch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := passed.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("the launcher's copy of the lock is still open (Stat: %v)", err)
+	}
+}
+
+func TestDialOrLaunch_DecidesOnce(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 300*time.Millisecond)
+	var decided, held int
+	l.decided = func() { decided++ }
+	l.onHeld = func() { held++ }
+	_, _, _ = l.dialOrLaunch(context.Background())
+	if decided != 1 || held != 1 {
+		t.Fatalf("decided=%d onHeld=%d over many polls, want each exactly once", decided, held)
+	}
+}
+
+func TestLaunchError(t *testing.T) {
+	withTempRuntime(t)
+	sock := "/tmp/plumb/plumb.sock"
+	for _, c := range []struct {
+		err  error
+		want []string
+	}{
+		{errDaemonStartTimeout, []string{"did not start within 30s", sock}},
+		{context.DeadlineExceeded, []string{"did not start within 30s"}},
+		{errDaemonHeldButSilent, []string{"holds", daemonLockPath(), "within 30s", daemonLogPath(), "plumb stop"}},
+		{errDaemonExitedEarly, []string{"exited before accepting", daemonLogPath()}},
+	} {
+		got := launchError("start", sock, 30*time.Second, c.err).Error()
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%v: %q lacks %q", c.err, got, w)
+			}
+		}
+	}
+	other := errors.New("other")
+	if got := launchError("start", sock, time.Second, other); !errors.Is(got, other) || got.Error() != other.Error() {
+		t.Errorf("an unrelated error must pass through, got %v", got)
 	}
 }
 
@@ -243,6 +398,28 @@ func TestDaemonLifetimeLock_RefusesABadInheritedFD(t *testing.T) {
 			_ = f.Close()
 			t.Fatalf("%s=%q: started without the launch lock", daemonLockFDEnv, v)
 		}
+		if _, ok := os.LookupEnv(daemonLockFDEnv); ok {
+			t.Fatalf("%s must be unset before the daemon starts children", daemonLockFDEnv)
+		}
+	}
+}
+
+// A `plumb daemon` started directly (a service manager, a container CMD) has
+// no inherited lock and acquires its own, as before.
+func TestDaemonLifetimeLock_WithoutALauncherAcquiresItsOwn(t *testing.T) {
+	withTempRuntime(t)
+	t.Setenv(daemonLockFDEnv, "")
+	os.Unsetenv(daemonLockFDEnv) //nolint:usetesting // must be absent, not empty; t.Setenv above restores it
+	lock, err := daemonLifetimeLock()
+	if err != nil {
+		t.Fatalf("a directly started daemon could not take its lock: %v", err)
+	}
+	defer lock.Close()
+	if f, err := acquireDaemonLock(); !errors.Is(err, errDaemonAlreadyRunning) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("the lock is not held: %v", err)
 	}
 }
 
@@ -258,6 +435,7 @@ func TestDaemonStartWait(t *testing.T) {
 		{"-5s", 30 * time.Second},
 		{"soon", 30 * time.Second},
 		{"1h", 5 * time.Minute},
+		{"45", 45 * time.Second},
 	} {
 		t.Setenv("PLUMB_DAEMON_START_TIMEOUT", c.env)
 		if got := daemonStartWait(); got != c.want {

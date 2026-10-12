@@ -2,10 +2,10 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -81,22 +81,24 @@ func respawnDaemon(stopped []int) error {
 	}
 
 	l := newDaemonLauncher(socketPath)
-	ctx, cancel := context.WithTimeout(context.Background(), l.wait+2*time.Second)
-	defer cancel()
-	spawn, err := acquireSpawnLock(ctx)
+	lockCtx, cancelLock := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancelLock()
+	spawn, err := acquireSpawnLock(lockCtx)
 	if err != nil {
 		return fmt.Errorf("waiting to spawn daemon: %w", err)
 	}
-	defer spawn.Close()
+	release := sync.OnceFunc(func() { _ = spawn.Close() })
+	defer release()
+	l.decided = release
 
 	// The launcher also waits out a stopped daemon still releasing its lock,
-	// and never starts one beside a daemon that holds it.
+	// and never starts one beside a daemon that holds it. Its own context, so
+	// time spent on the spawn lock does not eat into the start-up wait.
+	ctx, cancel := context.WithTimeout(context.Background(), l.wait+2*time.Second)
+	defer cancel()
 	conn, _, err := l.dialOrLaunch(ctx)
-	if errors.Is(err, errDaemonStartTimeout) {
-		return daemonStartTimeoutError("come back up", socketPath, l.wait)
-	}
 	if err != nil {
-		return err
+		return launchError("come back up", socketPath, l.wait, err)
 	}
 	_ = conn.Close()
 	printDaemonRestarted(stopped)

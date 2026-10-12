@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -217,27 +217,34 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 	if err != nil {
 		return nil, fmt.Errorf("waiting to spawn daemon: %w", err)
 	}
-	defer spawn.Close()
-
-	warnIfDaemonAtLegacyPath()
+	// Released as soon as the launch decision is made: the daemon lock, not
+	// this one, keeps a second daemon out, so others need not queue behind
+	// this serve's wait.
+	release := sync.OnceFunc(func() { _ = spawn.Close() })
+	defer release()
 
 	l := newDaemonLauncher(socketPath)
 	start := l.start
 	l.start = func(lock *os.File) error {
+		warnIfDaemonAtLegacyPath()
 		slog.Info("serve: daemon not running — starting", "socket", socketPath)
 		return start(lock)
 	}
+	l.decided = release
+	l.onHeld = func() {
+		slog.Info("serve: a plumb daemon holds the launch lock but is not accepting yet; waiting", "wait", l.wait)
+	}
 	conn, launched, err := l.dialOrLaunch(ctx)
-	switch {
-	case err == nil && launched:
+	if err != nil {
+		return nil, launchError("start", socketPath, l.wait, err)
+	}
+	if launched {
 		slog.Info("serve: connected to daemon")
-	case err == nil:
+	} else {
 		slog.Info("serve: connected to a daemon another process started")
 		warnIfDaemonStale()
-	case errors.Is(err, errDaemonStartTimeout):
-		return nil, daemonStartTimeoutError("start", socketPath, l.wait)
 	}
-	return conn, err
+	return conn, nil
 }
 
 // warnIfDaemonStale compares the running daemon's published version against

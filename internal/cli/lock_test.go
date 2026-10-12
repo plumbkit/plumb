@@ -202,7 +202,7 @@ func TestLockPaths_RespectUserCacheDir(t *testing.T) {
 
 // An over-long socket path is rejected by bind() as EINVAL — "invalid
 // argument" — which says nothing about length, and the daemon's only report of
-// it goes to daemon.log while `plumb serve` shows a generic 10-second timeout.
+// it goes to daemon.log while `plumb serve` shows a generic start timeout.
 // Reproduced on Linux with a long XDG_CACHE_HOME.
 func TestSocketPathLengthHint(t *testing.T) {
 	if got := socketPathLengthHint("/home/u/.cache/plumb/plumb.sock"); got != "" {
