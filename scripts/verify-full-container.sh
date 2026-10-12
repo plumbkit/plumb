@@ -49,7 +49,7 @@ daemons() {
   for dir in /proc/[0-9]*; do
     [ -d "$dir" ] || continue
     listed=1
-    if ! stat=$(< "$dir/stat") 2> /dev/null; then
+    if ! stat=$({ cat "$dir/stat"; } 2> /dev/null); then
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
@@ -57,7 +57,7 @@ daemons() {
     read -r _ _ _ _ _ _ flags _ <<< "$rest"
     [[ "$flags" =~ ^[0-9]+$ ]] || { echo "?"; return; }
     (( flags & 0x40 )) && continue                   # forked, not yet exec-ed
-    if ! argv=$(tr "\0" " " < "$dir/cmdline" 2> /dev/null); then
+    if ! argv=$({ tr "\0" " " < "$dir/cmdline"; } 2> /dev/null); then
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
