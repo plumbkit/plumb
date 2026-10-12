@@ -241,14 +241,15 @@ func TestAffectedNeighbours_WalkCallersFirstThenByName(t *testing.T) {
 	far := rel(8, "Far", 1)
 	far.Dist = 2
 	p := &contextPack{Intent: contextIntentChange, Related: []contextRelated{
-		rel(2, "helperB", 0), rel(3, "X", 1), test, rel(4, "helperA", 0), far, rel(5, "B", 1),
+		rel(2, "Beta", 0), rel(3, "Gamma", 1), test, rel(4, "Alpha", 0), far, rel(5, "Delta", 1),
 	}}
 	near, aside := affectedNeighbours(p)
 	names := make([]string, 0, len(near))
 	for _, n := range near {
 		names = append(names, n.Name)
 	}
-	if want := []string{"B", "X", "helperA", "helperB"}; !slices.Equal(names, want) {
+	// Name order alone would walk the callees Alpha and Beta first.
+	if want := []string{"Delta", "Gamma", "Alpha", "Beta"}; !slices.Equal(names, want) {
 		t.Errorf("walk order = %q, want %q", names, want)
 	}
 	if want := map[int64]bool{2: true, 4: true}; !maps.Equal(aside, want) {
