@@ -228,3 +228,33 @@ func TestInwardHops(t *testing.T) {
 		t.Errorf("inwardHops = %v, want %v", got, want)
 	}
 }
+
+// The neighbours walk callers of a seed first, then by name, whatever order the
+// ranking put them in: that is what keeps a path that runs the seed ahead of an
+// aside one. Only resolved, non-test, one-hop neighbours are walked at all.
+func TestAffectedNeighbours_WalkCallersFirstThenByName(t *testing.T) {
+	rel := func(id int64, name string, callerOf int64) contextRelated {
+		return contextRelated{Node: topology.Node{ID: id, Name: name, Path: "p/p.go"}, Dist: 1, Evidence: evidenceDerived, CallerOf: callerOf}
+	}
+	test := rel(9, "TestSeed", 1)
+	test.Node.Kind = topology.KindTest
+	far := rel(8, "Far", 1)
+	far.Dist = 2
+	p := &contextPack{Intent: contextIntentChange, Related: []contextRelated{
+		rel(2, "helperB", 0), rel(3, "X", 1), test, rel(4, "helperA", 0), far, rel(5, "B", 1),
+	}}
+	near, aside := affectedNeighbours(p)
+	names := make([]string, 0, len(near))
+	for _, n := range near {
+		names = append(names, n.Name)
+	}
+	if want := []string{"B", "X", "helperA", "helperB"}; !slices.Equal(names, want) {
+		t.Errorf("walk order = %q, want %q", names, want)
+	}
+	if want := map[int64]bool{2: true, 4: true}; !maps.Equal(aside, want) {
+		t.Errorf("aside = %v, want the two callees %v", aside, want)
+	}
+	if n, a := affectedNeighbours(&contextPack{Intent: contextIntentUnderstand, Related: p.Related}); n != nil || a != nil {
+		t.Errorf("understanding code changes nothing, yet neighbours were walked: %v %v", n, a)
+	}
+}
