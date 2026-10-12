@@ -95,6 +95,7 @@ type callResolution struct {
 	callSites int
 	// qualifiedSites is the subset carrying a qualifier.
 	qualifiedSites int
+	outcomes       []siteOutcome // each site's bucket, held until the pass writes them
 }
 
 // resolveCalls turns recorded call sites into cross-file `calls` edges, for
@@ -223,6 +224,10 @@ func resolveLanguageCallsScoped(ctx context.Context, tx *sql.Tx, lang string, sc
 	if err := insertResolvedEdges(tx, edges); err != nil {
 		return r, err
 	}
+	if err := writeSiteOutcomes(ctx, tx, r.outcomes); err != nil {
+		return r, err
+	}
+	r.outcomes = nil
 	return r, nil
 }
 
@@ -265,7 +270,7 @@ type resolvedEdge struct {
 }
 
 func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolverTables, r *callResolution, scoped bool) ([]resolvedEdge, error) {
-	query := `SELECT cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path, cs.receiver_type
+	query := `SELECT cs.id, cs.file_id, IFNULL(cs.enclosing_id, 0), cs.callee, cs.qualifier, f.path, cs.receiver_type
            FROM topology_call_sites cs
            JOIN topology_files f ON f.id = cs.file_id
           WHERE cs.language = ? AND cs.site_kind = ?`
@@ -280,10 +285,10 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 	seen := map[[2]int64]bool{}
 	var edges []resolvedEdge
 	for rows.Next() {
-		var fileID, enclosing int64
+		var siteID, fileID, enclosing int64
 		var callee, callerPath, receiverType string
 		var qualifier sql.NullString
-		if err := rows.Scan(&fileID, &enclosing, &callee, &qualifier, &callerPath, &receiverType); err != nil {
+		if err := rows.Scan(&siteID, &fileID, &enclosing, &callee, &qualifier, &callerPath, &receiverType); err != nil {
 			return nil, fmt.Errorf("topology: resolve calls: scan site: %w", err)
 		}
 		if qualifier.Valid && qualifier.String != QualifierLocal {
@@ -300,6 +305,7 @@ func collectResolvedEdges(ctx context.Context, tx *sql.Tx, lang string, t resolv
 			bucket, emitted = qualifiedOutcome(t, fileID, enclosing, callee, qualifier.String, seen)
 		}
 		r.countBucket(bucket)
+		r.outcomes = append(r.outcomes, siteOutcome{id: siteID, bucket: bucket})
 		if bucket != bucketResolved {
 			continue
 		}
@@ -373,6 +379,7 @@ func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge) error {
 	return nil
 }
 
+// resolveBucket is a site's outcome, persisted in topology_call_sites.outcome: append, never renumber.
 type resolveBucket int
 
 const (

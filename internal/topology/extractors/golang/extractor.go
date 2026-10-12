@@ -113,13 +113,25 @@ func fileCallEdges(funcEntries []funcEntry, nodes []topology.Node) []topology.Ed
 	return edges
 }
 
+// buildNameIndex maps each callable name the file declares once to its node. A
+// name declared twice (two receivers' methods, a function and a method) is left
+// out: the pass matches by name alone, so it cannot tell which one a call means,
+// and an edge to either would be a guess stated at confidence 1.0. Such calls
+// stay open for the census (topology.OpenCallSites) instead.
 func buildNameIndex(nodes []topology.Node) map[string]int64 {
 	m := make(map[string]int64, len(nodes))
+	dup := map[string]bool{}
 	for i, n := range nodes {
 		switch n.Kind {
 		case topology.KindFunction, topology.KindMethod, topology.KindTest:
+			if _, seen := m[n.Name]; seen {
+				dup[n.Name] = true
+			}
 			m[n.Name] = int64(i)
 		}
+	}
+	for name := range dup {
+		delete(m, name)
 	}
 	return m
 }
@@ -153,12 +165,21 @@ func callEdgesFor(fn *ast.FuncDecl, fromIdx int64, nameToIdx map[string]int64) [
 	return edges
 }
 
+// calleeIdent is the called name, seen through parentheses and explicit type
+// arguments: `F[T](x)` calls F. The resolver files a same-file generic call as the
+// extractor's (bucketSameFile), so a call this missed had no edge at all.
 func calleeIdent(expr ast.Expr) string {
 	switch e := expr.(type) {
 	case *ast.Ident:
 		return e.Name
 	case *ast.SelectorExpr:
 		return e.Sel.Name
+	case *ast.ParenExpr:
+		return calleeIdent(e.X)
+	case *ast.IndexExpr:
+		return calleeIdent(e.X)
+	case *ast.IndexListExpr:
+		return calleeIdent(e.X)
 	default:
 		return ""
 	}

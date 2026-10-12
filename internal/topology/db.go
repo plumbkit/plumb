@@ -113,10 +113,15 @@ CREATE TABLE IF NOT EXISTS topology_call_sites (
     -- Go only: what the enclosing function's own declarations say about the
     -- qualifier when it is a local variable (CallSite.ReceiverType). '' when
     -- nothing is evident.
-    receiver_type TEXT   NOT NULL DEFAULT ''
+    receiver_type TEXT   NOT NULL DEFAULT '',
+    -- The call resolver's outcome for the site (resolveBucket), written by every
+    -- pass that reads it; -1 until a pass has. It is what lets a reader say that
+    -- every call of a name resolved, rather than only list the ones that did.
+    outcome      INTEGER NOT NULL DEFAULT -1
 );
 CREATE INDEX IF NOT EXISTS idx_tcs_file ON topology_call_sites(file_id);
 CREATE INDEX IF NOT EXISTS idx_tcs_lookup ON topology_call_sites(language, site_kind, qualifier);
+CREATE INDEX IF NOT EXISTS idx_tcs_callee ON topology_call_sites(language, callee);
 
 -- Opt-in semantic-search cache: one row per (embedding model, content hash).
 -- Keyed by content hash (not node id) so it survives re-indexing and shares a
@@ -174,7 +179,10 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	7 — topology_call_sites.receiver_type: the type a Go call's local receiver was
 //	    declared with, or that its qualifier is declared more than once. A site
 //	    written before it has none, and an unchanged file is never re-extracted.
-const SchemaVersion = 7
+//	8 — topology_call_sites.outcome, the resolver's per-site outcome, and an index
+//	    on (language, callee). CREATE IF NOT EXISTS cannot add a column to an
+//	    existing table, so the table is recreated.
+const SchemaVersion = 8
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The

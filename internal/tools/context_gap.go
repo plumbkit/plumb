@@ -208,6 +208,15 @@ type callerNote struct {
 	Selector    string
 	Resolved    int
 	NameMatched int // same-package name-match callers listed (heuristic, never counted as resolved)
+
+	// Census is set when the index's per-call outcomes were read for the seed's name
+	// (Go only): Open is how many recorded calls of the name the resolver left open
+	// that could be this declaration, and OpenAt where the first of them are.
+	Census bool
+	Method bool
+	Name   string
+	Open   int
+	OpenAt []string
 }
 
 // languageNote is what the call graph covers for one language in the pack.
@@ -257,7 +266,9 @@ func (e *expander) summarise(ctx context.Context, related []contextRelated) cont
 	for _, s := range e.seeds {
 		note(s.node)
 		if callableKind(s.node.Kind) {
-			x.Callers = append(x.Callers, e.callerNote(s, related))
+			c := e.callerNote(s, related)
+			e.census(ctx, s.node, &c)
+			x.Callers = append(x.Callers, c)
 		}
 	}
 	for _, r := range related {
@@ -335,6 +346,9 @@ func languageGap(l languageNote) string {
 // the index holds: an empty list from a walk that stopped early reports where the
 // walk got to, not what the index knows.
 func (c callerNote) text(capped bool) string {
+	if c.Census {
+		return c.censusText(capped)
+	}
 	switch {
 	case capped && c.Resolved == 0:
 		return fmt.Sprintf("callers of %s: none reached before the walk was cut (a cap, the deadline or an index error stopped it), so the index was not fully asked; this is not proof of no callers", c.Selector)

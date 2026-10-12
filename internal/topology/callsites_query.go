@@ -184,6 +184,86 @@ func fillPackages(ctx context.Context, db *sql.DB, sites []CallSiteRef) error {
 	return nil
 }
 
+// OpenCall is a recorded call of a name that no edge accounts for exactly: the
+// resolver tied it to nothing, tied it to a declaration with no caller to hang an
+// edge on, or left it to an intra-file pass that cannot tell two declarations of
+// the name apart. These are the calls of the name a reader still has to look at.
+type OpenCall struct {
+	Path      string
+	Line      int
+	Qualifier string // "" for a bare call
+	// Kind says why the call is open: "receiver" (a method call on a value whose
+	// type no declaration states), "unmatched" (a package-qualified name that
+	// declares no such function), "bare" (a bare name with no function of that
+	// name in its package), "local" (a bare name the calling function also
+	// declares, which may or may not shadow it where the call is), "same-file"
+	// (its file declares the name more than once), "top-level" (resolved, but
+	// outside any declaration) or "unresolved" (no resolution pass has read it).
+	Kind string
+	// DotImport is set when the call's file dot-imports a package, so a bare name
+	// may be another package's exported function.
+	DotImport bool
+}
+
+// OpenCallSites returns the recorded calls named name, in the language's files,
+// that no edge accounts for exactly, ordered by path then position, at most limit
+// of them; total counts them all. A resolved, repeated or external call is not
+// open, and neither is a same-file call whose file declares the name once: the
+// extractor's intra-file edge accounts for it.
+func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit int) (open []OpenCall, total int, err error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.path, cs.start_line, IFNULL(cs.qualifier, ''), cs.outcome,
+		       EXISTS (SELECT 1 FROM topology_nodes i WHERE i.file_id = cs.file_id AND i.kind = ? AND i.name = '.')
+		  FROM topology_call_sites cs
+		  JOIN topology_files f ON f.id = cs.file_id
+		 WHERE cs.language = ? AND cs.callee = ? AND cs.site_kind = ?
+		   AND (cs.outcome IN (?, ?, ?, ?, -1)
+		        OR (cs.outcome = ? AND (SELECT COUNT(*) FROM topology_nodes d
+		                                 WHERE d.file_id = cs.file_id AND d.name = cs.callee AND d.kind IN (?, ?, ?)) > 1))
+		 ORDER BY f.path, cs.start_byte`,
+		string(KindImport), language, name, string(CallSiteCall),
+		int(bucketReceiver), int(bucketUnmatched), int(bucketBareUnmatched), int(bucketNoCaller),
+		int(bucketSameFile), string(KindFunction), string(KindMethod), string(KindTest))
+	if err != nil {
+		return nil, 0, fmt.Errorf("topology: open call sites: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c OpenCall
+		var outcome int
+		if err := rows.Scan(&c.Path, &c.Line, &c.Qualifier, &outcome, &c.DotImport); err != nil {
+			return nil, 0, fmt.Errorf("topology: open call sites: %w", err)
+		}
+		c.Kind = openKind(resolveBucket(outcome))
+		if c.Qualifier == QualifierLocal {
+			// The extractor marks a name local for the whole function, not the block
+			// that declares it, so the call may still be the package's function.
+			c.Kind, c.Qualifier = "local", ""
+		}
+		total++
+		if limit <= 0 || len(open) < limit {
+			open = append(open, c)
+		}
+	}
+	return open, total, rows.Err()
+}
+
+func openKind(b resolveBucket) string {
+	switch b {
+	case bucketReceiver:
+		return "receiver"
+	case bucketUnmatched:
+		return "unmatched"
+	case bucketBareUnmatched:
+		return "bare"
+	case bucketSameFile:
+		return "same-file"
+	case bucketNoCaller:
+		return "top-level"
+	}
+	return "unresolved"
+}
+
 // marks is n comma-separated placeholders.
 func marks(n int) string { return strings.TrimSuffix(strings.Repeat("?,", n), ",") }
 
