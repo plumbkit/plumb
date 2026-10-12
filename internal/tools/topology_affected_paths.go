@@ -5,14 +5,13 @@ import "github.com/plumbkit/plumb/internal/topology"
 // How far a test is from the change in the dependent walk, and which of two
 // paths to the same test to keep. context_for_task's named tests rank by these.
 
-// betterPath reports whether reaching t again in hops, aside or not, beats the
-// path it was recorded with: exercising the change beats not, then fewer hops
-// beat more, and any count beats none (0).
+// betterPath reports whether reaching t again in hops beats the path it was
+// recorded with. Only a path of the same kind can: the walk visits roots, then
+// callers of a seed, then the aside neighbours, so a path that runs the change
+// is always recorded first, and an aside path never replaces one. Among paths of
+// one kind, fewer hops beat more, and any count beats none (0).
 func betterPath(t affectedTest, hops int, aside bool) bool {
-	if t.Aside != aside {
-		return !aside
-	}
-	return t.Hops == 0 || hops < t.Hops
+	return t.Aside == aside && (t.Hops == 0 || hops < t.Hops)
 }
 
 // inwardHops is the fewest inward edges from root to each node of an inward

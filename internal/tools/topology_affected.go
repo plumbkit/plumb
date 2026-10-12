@@ -468,10 +468,10 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node, away
 	}
 	for _, n := range nb.DependedOnBy.Nodes {
 		if g.seen[n.ID] {
-			// Another root reached this test first; keep the better path: one that
-			// exercises the change over one that does not, then the shorter.
+			// Another root reached this test first; keep the shorter path of the same
+			// kind (betterPath).
 			if i, ok := g.testAt[n.ID]; ok && hops[n.ID] > 0 && betterPath(g.tests[i], hops[n.ID], aside) {
-				g.tests[i].Hops, g.tests[i].Aside = hops[n.ID], aside
+				g.tests[i].Hops = hops[n.ID]
 			}
 			continue
 		}

@@ -200,6 +200,10 @@ func affectedRoots(ctx context.Context, store *topology.Store, seeds []contextSe
 // aside holds the neighbours that are not callers of a seed (its callees and
 // siblings): a test of one of those does not run the seed, so it ranks after
 // every test that does. A caller's tests do run the seed, one hop further out.
+//
+// near is in walk order, callers first and then by name, whatever the ranking
+// chose them in: a path that does not run the seed is then never recorded
+// before one that does, and the same pack walks in the same order every time.
 func affectedNeighbours(p *contextPack) (near []topology.Node, aside map[int64]bool) {
 	if p.Intent != contextIntentChange {
 		return nil, nil
@@ -216,6 +220,12 @@ func affectedNeighbours(p *contextPack) (near []topology.Node, aside map[int64]b
 			}
 		}
 	}
+	slices.SortStableFunc(near, func(a, b topology.Node) int {
+		if c := cmp.Compare(boolInt(aside[a.ID]), boolInt(aside[b.ID])); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
 	return near, aside
 }
 

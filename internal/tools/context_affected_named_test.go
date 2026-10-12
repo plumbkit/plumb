@@ -185,11 +185,11 @@ func TestRunFilterFor(t *testing.T) {
 	}
 }
 
-// A test reached twice keeps the better path: one that runs the change over one
-// that does not, then fewer hops, and any count over none.
+// A test reached twice keeps the shorter path of the same kind. The walk records
+// paths that run the change before aside ones, so neither kind replaces the other.
 func TestBetterPath(t *testing.T) {
 	seed2 := affectedTest{Hops: 2}
-	aside1 := affectedTest{Hops: 1, Aside: true}
+	aside3 := affectedTest{Hops: 3, Aside: true}
 	for _, tc := range []struct {
 		name  string
 		have  affectedTest
@@ -197,9 +197,10 @@ func TestBetterPath(t *testing.T) {
 		aside bool
 		want  bool
 	}{
-		{"a path that runs the change beats an aside one, even longer", aside1, 3, false, true},
-		{"an aside path never beats one that runs the change", seed2, 1, true, false},
+		{"an aside path never replaces one that runs the change", seed2, 1, true, false},
+		{"nor the other way: the walk never records the aside one first", aside3, 1, false, false},
 		{"fewer hops win", seed2, 1, false, true},
+		{"fewer hops win among aside paths too", aside3, 2, true, true},
 		{"equal hops do not", seed2, 2, false, false},
 		{"more hops do not", seed2, 3, false, false},
 		{"any count beats an unknown one", affectedTest{}, 4, false, true},
