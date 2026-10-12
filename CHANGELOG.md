@@ -174,6 +174,15 @@
     for advisory hooks: selectors, locations and evidence classes from the index only,
     with no bodies, reads, memories, documents or language server, an ambiguous
     selector as a gap and never as candidate lines, bounded by bytes and a deadline.
+- **The `git` tool's read tier gains `cherry`, `ls-files` and `grep` (#636).**
+  Review and rebase work needs all three, and each was refused, which sent
+  agents to a shell. `cherry -v <upstream>` shows which branch commits are
+  already upstream, for example after a squash merge. `ls-files` says whether a
+  path is tracked. `grep <pattern> <rev>` searches a past revision, which
+  `search_in_files` cannot do. All three accept the read tier's output window
+  (`start_line`, `end_line`, `pattern`). `grep -O`/`--open-files-in-pager`,
+  which runs a program, and `grep --no-index`, which searches outside the
+  repository, are refused.
 
 ### Changed
 
@@ -198,15 +207,6 @@
   `workspace_sessions`, and `plumb mail`. A live session in another checkout of
   the project also counts as a peer for the wake watcher's longer window. No
   read path runs git.
-- **The `git` tool's read tier gains `cherry`, `ls-files` and `grep` (#636).**
-  Review and rebase work needs all three, and each was refused, which sent
-  agents to a shell. `cherry -v <upstream>` shows which branch commits are
-  already upstream, for example after a squash merge. `ls-files` says whether a
-  path is tracked. `grep <pattern> <rev>` searches a past revision, which
-  `search_in_files` cannot do. All three accept the read tier's output window
-  (`start_line`, `end_line`, `pattern`). `grep -O`/`--open-files-in-pager`,
-  which runs a program, and `grep --no-index`, which searches outside the
-  repository, are refused.
 
 ### Fixed
 
