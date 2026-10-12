@@ -242,7 +242,8 @@
   (`internal/separateenv`). This guards against running them by accident; it is
   not a security boundary. CI is unaffected. The new
   `make verify-full-container` runs `make verify-full` in a Linux container
-  with pinned Go, git, golangci-lint and language servers, as a non-root user,
+  with pinned Go, golangci-lint and language servers (and Debian trixie's git),
+  as a non-root user,
   on the repository's history with the working tree laid over it. It fails if
   two plumb daemons run at once during the suite or one is still running after
   it. It replaces a host `make verify-full` as the pre-submit gate.

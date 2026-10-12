@@ -108,8 +108,9 @@ make install-clients      # or: ./scripts/install-clients.sh
 ```
 
 These tiers start plumb daemons of their own, so like `cmd/smoke` they refuse on a
-developer machine: run them in CI (the client-conformance workflow), a container, or a
-disposable VM with `PLUMB_SEPARATE_ENV=vm`.
+developer machine: run them in CI (the client-conformance workflow), in a container you
+have installed the client CLIs into (the `make verify-full-container` image has none), or
+in a disposable VM with `PLUMB_SEPARATE_ENV=vm`.
 
 Prerequisites: Node 20+ (npm clients), Python 3.8+ (hermes), `curl` (script-installed
 clients). Some installers drop binaries in `~/.local/bin` or `~/.npm-global/bin` — add

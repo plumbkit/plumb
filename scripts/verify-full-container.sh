@@ -12,8 +12,10 @@
 # files, not ignored ones, minus deleted ones), so uncommitted changes are
 # verified and host build output is not. It runs as a non-root user. The container runs with --init (exited processes are
 # reaped, not counted) and --rm: its exit ends every process it started.
-# While the suite runs, the plumb daemons are counted every 200 ms: at most one
-# may run at a time. Afterwards none may be left: they are looked for for 30 s.
+# While the suite runs, the plumb daemons are counted about every 200 ms (plus
+# the time a scan takes): at most one may run at a time, and at least one must
+# be seen, since cmd/smoke always starts one. Afterwards none may be left: they
+# are looked for for 30 s or more.
 # The run fails if either rule breaks, or if the process table cannot be read.
 #
 #   make verify-full-container        (DOCKER_PLATFORM=linux/amd64 for amd64)
@@ -79,6 +81,7 @@ supervise() {
   local peak=0 samples=0 n
   while :; do
     n=$(daemons)
+    [[ "$n" =~ ^[0-9]+$ ]] || n="?" # anything but a count is an unread table
     samples=$((samples + 1))
     if [ "$n" = "?" ]; then peak="?"; elif [ "$peak" != "?" ] && [ "$n" -gt "$peak" ]; then peak=$n; fi
     # Diagnostics only (never the verdict): who the daemons were when more than
@@ -123,7 +126,7 @@ if [ "$watched" = no ]; then
   [ "$rc" -eq 0 ] && rc=1
 else
   case "$peak" in
-    0) echo "verify-full-container: no plumb daemon was seen during the suite ($samples samples)" ;;
+    0) echo "verify-full-container: no plumb daemon was seen during the suite ($samples samples), though cmd/smoke starts one: the watcher saw nothing"; [ "$rc" -eq 0 ] && rc=1 ;;
     1) echo "verify-full-container: at most 1 plumb daemon ran at a time during the suite ($samples samples)" ;;
     "?") echo "verify-full-container: the process table could not be read during the suite"; [ "$rc" -eq 0 ] && rc=1 ;;
     *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1
@@ -134,7 +137,7 @@ fi
 seen=0
 for _ in $(seq 1 60); do
   n=$(daemons)
-  if [ "$n" = "?" ]; then echo "verify-full-container: cannot read the process table"; exit 1; fi
+  [[ "$n" =~ ^[0-9]+$ ]] || { echo "verify-full-container: cannot read the process table"; exit 1; }
   [ "$n" -gt "$seen" ] && seen=$n
   sleep 0.5
 done
@@ -148,16 +151,17 @@ exit "$rc"
 '
 
 in=$(mktemp -d "${TMPDIR:-/tmp}/plumb-verify-in.XXXXXX") || exit 1
-trap 'docker kill "$name" > /dev/null 2>&1; rm -rf "$in"' INT TERM HUP
+trap 'rm -rf "$in"' EXIT
+trap 'docker kill "$name" > /dev/null 2>&1; exit 130' INT TERM HUP
 (
   cd "$root" || exit 1
   git bundle create "$in/repo.bundle" --all 2> /dev/null &&
     git rev-parse HEAD > "$in/head" &&
     git ls-files -z --deleted > "$in/deleted" &&
     git ls-files -z --cached --others --exclude-standard |
-    while IFS= read -r -d '' f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"; done |
+    while IFS= read -r -d '' f; do { [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"; :; done |
     COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf "$in/tree.tar" # no macOS ._* AppleDouble entries or xattr headers
-) || { echo "verify-full-container: could not package the repository" >&2; rm -rf "$in"; exit 1; }
+) || { echo "verify-full-container: could not package the repository (git bundle, ls-files or tar failed; see above)" >&2; exit 1; }
 chmod -R a+rX "$in"
 
 docker run --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
@@ -165,9 +169,11 @@ docker run --rm --init --name "$name" ${platform[@]+"${platform[@]}"} \
   -v plumb-verify-v2-gocache:/home/verify/.cache/go-build \
   -v plumb-verify-v2-gomod:/home/verify/go/pkg/mod \
   -v plumb-verify-v2-lintcache:/home/verify/.cache/golangci-lint \
-  "$image" bash -c "$inside"
+  "$image" bash -c "$inside" &
+child=$! # in the background and waited for, so the trap can run meanwhile
+wait "$child"
 rc=$?
-rm -rf "$in"
+kill -0 "$child" 2> /dev/null && { wait "$child"; rc=$?; }
 
 # Container exit is what ends a SIGKILL'd run's processes, so "gone" must be
 # an answer from the engine, never the failure to get one.

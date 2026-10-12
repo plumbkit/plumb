@@ -443,7 +443,7 @@ verify: build test $(VERIFY_CHECKS)
 	@printf '\n%s\n%s\n%s\n%s\n%s\n\n' \
 		'verify: PASSED — but the //go:build integration suite was COMPILED, not RUN.' \
 		'        A failing integration test does not fail this target.' \
-		'        It (make integration-test) starts plumb daemons of its own, so it runs' \
+		'        Its cmd/smoke suite (make integration-test) starts plumb daemons, so it runs' \
 		'        in CI or a container, never beside the plumb daemon you are using.' \
 		'        Whole gate, in Docker:  make verify-full-container'
 
