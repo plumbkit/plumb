@@ -224,7 +224,7 @@ func TestContextForTask_LSP_AnAnsweringServerAddsAndConfirmsEdgesAtEvidence4(t *
 		"related (", "e4 language-server edge, e3 extractor edge",
 		"  [e4 lsp] Checkout — api/checkout.go:11 function; caller of (*Cart).Total (lsp 1.0)",
 		"  [e4 lsp] Apply — pricing/discount.go:19 function; callee of (*Cart).Total (lsp 1.0)",
-		"callers of (*Cart).Total: 1 resolved and listed",
+		"callers of (*Cart).Total: 0 in the index, 1 listed here",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)

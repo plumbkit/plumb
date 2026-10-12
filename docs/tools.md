@@ -1072,6 +1072,22 @@ marked "not a resolved caller"; an empty, short or cut caller list is never
 reported as "no callers", and a walk that was cut says so before it says anything
 about the index.
 
+**Caller completeness (Go).** The index keeps the call resolver's outcome for
+every recorded call, so for each Go function or method seed, and each top
+declaration of a file seed, the pack states its callers against the index rather
+than the walk: `callers of X: complete (every recorded call of X resolves): N in
+the index, M listed here` when no call of the name is left open, or `N in the
+index, M listed here; K unresolved call(s) of X may also be it: a.go:12
+(receiver), …` naming the open calls that could be this declaration (a receiver
+whose type no declaration states, a bare name in the same package or in a file
+that dot-imports one, a name the calling function also declares in some block, a
+same-file call where the file declares the name twice, a call outside any
+function), so the caller checks those sites rather than the whole tree. Calls
+only: a function used as a value, or a method called through an interface, is
+not a call of it, and the pack says so once. Checked against the Go type
+checker's static callers on this repository and on golang.org/x/tools, no
+"complete" claim missed a caller.
+
 **Same-package callers.** The Go call resolver links bare same-package calls,
 calls on a method's own receiver and calls on a typed parameter, so those callers
 arrive as resolved `e2` edges. A test caller is one of them, and at most 12 test

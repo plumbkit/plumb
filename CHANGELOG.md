@@ -22,6 +22,15 @@
   With a Go test target the line is a `run_task(slot:"test", target:…, run:…)`
   call whose filter `run_task` accepts, with the rest counted. Tests that only
   sit in the package are never named, and a stale index names none.
+- **`context_for_task` says when a seed's callers are complete.** The index now
+  keeps the call resolver's outcome for every recorded Go call (topology schema
+  8, so the index rebuilds once), and each Go function or method seed, and each
+  top declaration of a file seed, gets a caller line counted from the index, not
+  from the walk: either "complete (every recorded call of X resolves)", or the
+  exact unresolved calls of the name that may still be callers, with their files
+  and lines, so an agent checks those instead of searching the tree. Checked
+  against the Go type checker's static callers on this repository and on
+  golang.org/x/tools: no "complete" claim missed a caller.
 - **The Go call graph resolves method calls on local variables of evident type.**
   `x.M()` now links to the method of `x`'s type when the enclosing function
   declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or
@@ -250,6 +259,13 @@
   `make docker-integration` now runs with `--init`.
 
 ### Fixed
+
+- **The Go call graph no longer guesses between two same-named declarations in
+  a file, and links generic calls.** The extractor's same-file call edges matched
+  by name alone, so with two methods called `Close` in one file, a call of either
+  became an edge to whichever was declared last, at full confidence; such calls
+  now get no edge and are reported as open. A call with explicit type arguments,
+  `F[T](x)`, had no same-file edge at all.
 
 - **A revoked resume credential no longer breaks continuity for good.** A
   `plumb serve` proxy keeps the resume credential it was given and presents it

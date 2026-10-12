@@ -153,7 +153,7 @@ func TestSamePackage_AMethodIsCalledByNameFromSiblingFiles(t *testing.T) {
 	for _, want := range []string{
 		"[e1 heuristic] Savings — p/b.go:4 function; caller of (*Calc).Apply (same-package name match) — ",
 		"TestApply — p/c_test.go:5 test; caller of (*Calc).Apply (same-package name match, test)",
-		"callers of (*Calc).Apply: none resolved in the index, plus 2 same-package name match(es) (e1); this is not proof of no callers",
+		"callers of (*Calc).Apply: 0 in the index, 0 listed here, plus 2 same-package name match(es) (e1); 3 unresolved call(s) of Apply may also be it: p/b.go:6 (receiver), p/c_test.go:5 (receiver), p/external_test.go:11 (receiver)",
 		labelSamePackage,
 	} {
 		if !strings.Contains(out, want) {
@@ -313,7 +313,7 @@ func TestSamePackage_AMethodNeedsReceiverEvidenceInTheCaller(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The count beside the resolved callers is of callers, not of candidates.
-	if want := "callers of (*A).Run: 2 resolved and listed, plus 5 same-package name match(es) (e1)"; !strings.Contains(out, want) {
+	if want := "callers of (*A).Run: 2 in the index, 2 listed here, plus 5 same-package name match(es) (e1); 11 unresolved call(s) of Run"; !strings.Contains(out, want) {
 		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 	requireNeverNoCallers(t, out)
@@ -453,6 +453,12 @@ func makeIndexPredateLocalTier(t *testing.T, root string) int {
 		t.Fatal(err)
 	}
 	removed, _ := res.RowsAffected()
+	// That build left those calls open, so their recorded outcome is the receiver
+	// bucket, not resolved: 0 and 1 are topology's persisted resolveBucket values
+	// (pinned by topology's TestOpenCallSites).
+	if _, err := db.Exec(`UPDATE topology_call_sites SET outcome = 1 WHERE outcome = 0 AND receiver_type NOT IN ('', ?)`, topology.ReceiverAmbiguous); err != nil {
+		t.Fatal(err)
+	}
 	var left, census int
 	if err := db.QueryRow(`SELECT count(*) `+localEdges, sourceCallResolver, topology.ReceiverAmbiguous).Scan(&left); err != nil {
 		t.Fatal(err)
@@ -513,7 +519,7 @@ func TestSamePackage_AMethodOnAnEvidentLocalIsResolvedOnlyOnAnIndexThatRanTheLoc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "callers of (*Calc).Apply: 4 resolved and listed, plus 1 same-package name match(es) (e1)"; !strings.Contains(out, want) {
+	if want := "callers of (*Calc).Apply: 4 in the index, 4 listed here, plus 1 same-package name match(es) (e1); 2 unresolved call(s) of Apply may also be it: p/twice.go:7 (receiver), p/twice.go:9 (receiver)"; !strings.Contains(out, want) {
 		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 
@@ -531,7 +537,7 @@ func TestSamePackage_AMethodOnAnEvidentLocalIsResolvedOnlyOnAnIndexThatRanTheLoc
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "callers of (*Calc).Apply: 2 resolved and listed, plus 3 same-package name match(es) (e1)"; !strings.Contains(out, want) {
+	if want := "callers of (*Calc).Apply: 2 in the index, 2 listed here, plus 3 same-package name match(es) (e1); 4 unresolved call(s) of Apply"; !strings.Contains(out, want) {
 		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 }

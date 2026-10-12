@@ -39,6 +39,7 @@ const (
 	labelIndexFailing = "index unavailable or failing: no relationship or test-impact claims; body from a disk snapshot"
 	labelStructural   = "structural only: relationships come from the topology index; no language server was consulted"
 	labelStale        = "file changed since indexing: relationships may be stale"
+	labelCensus       = "caller completeness counts calls in the files the index holds only: a function used as a value, or a method called through an interface, is not a call of it"
 )
 
 func callableKind(k topology.NodeKind) bool {
@@ -208,6 +209,26 @@ type callerNote struct {
 	Selector    string
 	Resolved    int
 	NameMatched int // same-package name-match callers listed (heuristic, never counted as resolved)
+
+	// Census is set when the index's per-call outcomes were read for the seed's name
+	// (Go only): Indexed is its resolved callers in the index, Open how many recorded
+	// calls of the name the resolver left open that could be it, and OpenAt where
+	// the first of them are.
+	Census  bool
+	Method  bool
+	Name    string
+	Indexed int // resolved callers the index holds in the scope, however many the walk listed
+	// IndexedOutside and OpenOutside are the resolved callers and open calls the
+	// scope leaves out: counted, never named.
+	IndexedOutside int
+	OpenOutside    int
+	// Unclaimable says why the list may not be called complete whatever the count
+	// (censusDoubt), "" when nothing stands in the way.
+	Unclaimable string
+	Open        int
+	OpenAt      []string // distinct places, at most contextCensusSites
+	// OpenShown is how many of the Open calls the places in OpenAt hold.
+	OpenShown int
 }
 
 // languageNote is what the call graph covers for one language in the pack.
@@ -257,7 +278,19 @@ func (e *expander) summarise(ctx context.Context, related []contextRelated) cont
 	for _, s := range e.seeds {
 		note(s.node)
 		if callableKind(s.node.Kind) {
-			x.Callers = append(x.Callers, e.callerNote(s, related))
+			c := e.callerNote(s, related)
+			e.census(ctx, s.node, &c)
+			x.Callers = append(x.Callers, c)
+		}
+	}
+	// A file seed's top declarations are what the caller will edit, so their caller
+	// lists get the census too; the file seed itself has no caller list to word.
+	for _, r := range e.kept {
+		if r.Root && !r.Withheld && callableKind(r.Node.Kind) {
+			c := e.callerNote(hopNode{node: r.Node, sel: nodeSelector(r.Node)}, related)
+			if e.census(ctx, r.Node, &c); c.Census {
+				x.Callers = append(x.Callers, c)
+			}
 		}
 	}
 	for _, r := range related {
@@ -312,8 +345,13 @@ func (p *contextPack) relationGaps() []string {
 	if x.NameMatches > 0 {
 		gaps = append(gaps, labelSamePackage)
 	}
+	census := false
 	for _, c := range x.Callers {
 		gaps = append(gaps, c.text(x.Stats.capped()))
+		census = census || c.Census
+	}
+	if census {
+		gaps = append(gaps, labelCensus)
 	}
 	if x.Stats.MembersListed {
 		gaps = append(gaps, labelMembers)
@@ -335,6 +373,9 @@ func languageGap(l languageNote) string {
 // the index holds: an empty list from a walk that stopped early reports where the
 // walk got to, not what the index knows.
 func (c callerNote) text(capped bool) string {
+	if c.Census {
+		return c.censusText()
+	}
 	switch {
 	case capped && c.Resolved == 0:
 		return fmt.Sprintf("callers of %s: none reached before the walk was cut (a cap, the deadline or an index error stopped it), so the index was not fully asked; this is not proof of no callers", c.Selector)
