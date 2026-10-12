@@ -45,7 +45,7 @@ while IFS= read -r -d "" f; do rm -f -- "$f"; done < /in/deleted || exit 70
 # and a flagged process is skipped; only then is cmdline read, which after exec
 # is the process own. A real plumb daemon counts, whatever its parent.
 daemons() {
-  local n=0 dir stat argv listed=0 rest
+  local n=0 dir stat argv listed=0 rest matched=""
   for dir in /proc/[0-9]*; do
     [ -d "$dir" ] || continue
     listed=1
@@ -61,9 +61,10 @@ daemons() {
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
-    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] && n=$((n + 1))
+    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] && { n=$((n + 1)); matched="$matched ${dir#/proc/}"; }
   done
   [ "$listed" -eq 1 ] || { echo "?"; return; }
+  echo "$matched" > /tmp/daemons.now 2> /dev/null # diagnostics only
   echo "$n"
 }
 
@@ -75,13 +76,20 @@ supervise() {
     n=$(daemons)
     samples=$((samples + 1))
     if [ "$n" = "?" ]; then peak="?"; elif [ "$peak" != "?" ] && [ "$n" -gt "$peak" ]; then peak=$n; fi
+    # Diagnostics only (never the verdict): who the daemons were when more than
+    # one ran, so an overlap can be traced to the tests that caused it.
+    if [ "$n" != "?" ] && [ "$n" -gt 1 ] && [ "$({ wc -l < /tmp/overlaps; } 2> /dev/null || echo 0)" -lt 40 ]; then
+      for pid in $(cat /tmp/daemons.now 2> /dev/null); do
+        echo "$(date +%T.%N) pid=$pid ppid=$(awk "{print \$4}" /proc/$pid/stat 2> /dev/null) home=$(tr "\0" "\n" < /proc/$pid/environ 2> /dev/null | sed -n "s/^HOME=//p") started=$(ps -o lstart= -p $pid 2> /dev/null)" >> /tmp/overlaps
+      done
+    fi
     # A checkpoint that cannot be written ends the watcher (status 3), which the
     # checks after the suite reject, rather than leave an older record trusted.
     { echo "$peak $samples" > /tmp/peak.new && mv /tmp/peak.new /tmp/peak; } || exit 3
     sleep 0.2
   done
 }
-rm -f /tmp/peak /tmp/peak.new
+rm -f /tmp/peak /tmp/peak.new /tmp/overlaps
 supervise &
 supervisor=$!
 
@@ -111,7 +119,8 @@ else
     0) echo "verify-full-container: no plumb daemon was seen during the suite ($samples samples)" ;;
     1) echo "verify-full-container: at most 1 plumb daemon ran at a time during the suite ($samples samples)" ;;
     "?") echo "verify-full-container: the process table could not be read during the suite"; [ "$rc" -eq 0 ] && rc=1 ;;
-    *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1 ;;
+    *) echo "verify-full-container: $peak plumb daemons ran at once during the suite (at most 1)"; [ "$rc" -eq 0 ] && rc=1
+       sed "s/^/verify-full-container: overlap: /" /tmp/overlaps 2> /dev/null ;;
   esac
 fi
 
