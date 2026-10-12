@@ -39,7 +39,7 @@ const (
 	labelIndexFailing = "index unavailable or failing: no relationship or test-impact claims; body from a disk snapshot"
 	labelStructural   = "structural only: relationships come from the topology index; no language server was consulted"
 	labelStale        = "file changed since indexing: relationships may be stale"
-	labelCensus       = "caller completeness counts calls only: a function used as a value, or a method called through an interface, is not a call of it"
+	labelCensus       = "caller completeness counts calls in the files the index holds only: a function used as a value, or a method called through an interface, is not a call of it"
 )
 
 func callableKind(k topology.NodeKind) bool {
@@ -217,9 +217,16 @@ type callerNote struct {
 	Census  bool
 	Method  bool
 	Name    string
-	Indexed int // resolved callers the index holds, however many the walk listed
-	Open    int
-	OpenAt  []string // distinct places, at most contextCensusSites
+	Indexed int // resolved callers the index holds in the scope, however many the walk listed
+	// IndexedOutside and OpenOutside are the resolved callers and open calls the
+	// scope leaves out: counted, never named.
+	IndexedOutside int
+	OpenOutside    int
+	// Unclaimable says why the list may not be called complete whatever the count
+	// (censusDoubt), "" when nothing stands in the way.
+	Unclaimable string
+	Open        int
+	OpenAt      []string // distinct places, at most contextCensusSites
 	// OpenShown is how many of the Open calls the places in OpenAt hold.
 	OpenShown int
 }

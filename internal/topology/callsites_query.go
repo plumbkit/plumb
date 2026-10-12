@@ -198,7 +198,10 @@ type OpenCall struct {
 	// name in its package), "local" (a bare name the calling function also
 	// declares, which may or may not shadow it where the call is), "same-file"
 	// (its file declares the name more than once), "top-level" (resolved, but
-	// outside any declaration) or "unresolved" (no resolution pass has read it).
+	// outside any declaration), "external" (a package-qualified call whose import
+	// names no indexed directory: usually another module, but a package the index
+	// failed to map would land here too), "stale" (resolved by an earlier pass,
+	// but the edge it produced is gone) or "unresolved" (no pass has read it).
 	Kind string
 	// DotImport is set when the call's file dot-imports a package, so a bare name
 	// may be another package's exported function.
@@ -207,23 +210,45 @@ type OpenCall struct {
 
 // OpenCallSites returns the recorded calls named name, in the language's files,
 // that no edge accounts for exactly, ordered by path then position, at most limit
-// of them; total counts them all. A resolved, repeated or external call is not
-// open, and neither is a same-file call whose file declares the name once: the
-// extractor's intra-file edge accounts for it.
+// of them; total counts them all. A resolved, repeated or same-file call is not
+// open while the edge it stands for exists (a same-file call needs its file to
+// declare the name once). An external call is returned for the caller to judge
+// by its qualifier.
 func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit int) (open []OpenCall, total int, err error) {
+	// A call counts as accounted for only while the edge it produced still stands:
+	// a scoped pass re-reads only the changed files' sites, so a caller elsewhere
+	// keeps "resolved" after its target is deleted or renamed, with no edge left. A
+	// same-file call of the enclosing declaration's own name is recursion, which no
+	// pass draws an edge for and no census counts as a caller.
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT f.path, cs.start_line, IFNULL(cs.qualifier, ''), cs.outcome,
-		       EXISTS (SELECT 1 FROM topology_nodes i WHERE i.file_id = cs.file_id AND i.kind = ? AND i.name = '.')
+		       EXISTS (SELECT 1 FROM topology_nodes i WHERE i.file_id = cs.file_id AND i.kind = ? AND i.name = '.'),
+		       cs.outcome IN (?, ?, ?) AND (cs.enclosing_id IS NULL OR NOT EXISTS (
+		           SELECT 1 FROM topology_edges e JOIN topology_nodes t ON t.id = e.to_id
+		            WHERE e.from_id = cs.enclosing_id AND e.kind = ? AND t.name = cs.callee))
+		       AND NOT (cs.outcome = ? AND EXISTS (
+		           SELECT 1 FROM topology_nodes en WHERE en.id = cs.enclosing_id AND en.name = cs.callee)),
+		       cs.outcome = ? AND (SELECT COUNT(*) FROM topology_nodes d
+		                            WHERE d.file_id = cs.file_id AND d.name = cs.callee AND d.kind IN (?, ?, ?)) > 1
 		  FROM topology_call_sites cs
 		  JOIN topology_files f ON f.id = cs.file_id
 		 WHERE cs.language = ? AND cs.callee = ? AND cs.site_kind = ?
-		   AND (cs.outcome IN (?, ?, ?, ?, -1)
+		   AND (cs.outcome IN (?, ?, ?, ?, ?, -1)
 		        OR (cs.outcome = ? AND (SELECT COUNT(*) FROM topology_nodes d
-		                                 WHERE d.file_id = cs.file_id AND d.name = cs.callee AND d.kind IN (?, ?, ?)) > 1))
+		                                 WHERE d.file_id = cs.file_id AND d.name = cs.callee AND d.kind IN (?, ?, ?)) > 1)
+		        OR (cs.outcome IN (?, ?, ?) AND (cs.enclosing_id IS NULL OR NOT EXISTS (
+		           SELECT 1 FROM topology_edges e JOIN topology_nodes t ON t.id = e.to_id
+		            WHERE e.from_id = cs.enclosing_id AND e.kind = ? AND t.name = cs.callee))
+		       AND NOT (cs.outcome = ? AND EXISTS (
+		           SELECT 1 FROM topology_nodes en WHERE en.id = cs.enclosing_id AND en.name = cs.callee))))
 		 ORDER BY f.path, cs.start_byte`,
-		string(KindImport), language, name, string(CallSiteCall),
-		int(bucketReceiver), int(bucketUnmatched), int(bucketBareUnmatched), int(bucketNoCaller),
-		int(bucketSameFile), string(KindFunction), string(KindMethod), string(KindTest))
+		string(KindImport),
+		int(bucketResolved), int(bucketRepeat), int(bucketSameFile), string(EdgeCalls), int(bucketSameFile),
+		int(bucketSameFile), string(KindFunction), string(KindMethod), string(KindTest),
+		language, name, string(CallSiteCall),
+		int(bucketReceiver), int(bucketUnmatched), int(bucketBareUnmatched), int(bucketNoCaller), int(bucketExternal),
+		int(bucketSameFile), string(KindFunction), string(KindMethod), string(KindTest),
+		int(bucketResolved), int(bucketRepeat), int(bucketSameFile), string(EdgeCalls), int(bucketSameFile))
 	if err != nil {
 		return nil, 0, fmt.Errorf("topology: open call sites: %w", err)
 	}
@@ -231,10 +256,14 @@ func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit 
 	for rows.Next() {
 		var c OpenCall
 		var outcome int
-		if err := rows.Scan(&c.Path, &c.Line, &c.Qualifier, &outcome, &c.DotImport); err != nil {
+		var dangling, ambiguous bool
+		if err := rows.Scan(&c.Path, &c.Line, &c.Qualifier, &outcome, &c.DotImport, &dangling, &ambiguous); err != nil {
 			return nil, 0, fmt.Errorf("topology: open call sites: %w", err)
 		}
 		c.Kind = openKind(resolveBucket(outcome))
+		if dangling && !ambiguous {
+			c.Kind = "stale"
+		}
 		if c.Qualifier == QualifierLocal {
 			// The extractor marks a name local for the whole function, not the block
 			// that declares it, so the call may still be the package's function.
@@ -258,6 +287,8 @@ func openKind(b resolveBucket) string {
 		return "bare"
 	case bucketSameFile:
 		return "same-file"
+	case bucketExternal:
+		return "external"
 	case bucketNoCaller:
 		return "top-level"
 	}
@@ -293,4 +324,16 @@ func declsNamedInDir(ctx context.Context, db *sql.DB, dir, language, name string
 		}
 	}
 	return out, rows.Err()
+}
+
+// UnreadFiles counts the indexed files with the extension whose last extraction
+// failed (a parse error, a file over the size cap): their calls are not recorded,
+// so no census can speak for them.
+func (s *Store) UnreadFiles(ctx context.Context, ext string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM topology_files WHERE error_msg != '' AND path LIKE ?`, "%"+ext).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("topology: unread files: %w", err)
+	}
+	return n, nil
 }

@@ -36,9 +36,14 @@ func TestOpenCallSites(t *testing.T) {
 	libFile := goFile(lib, "lib")
 	node(libFile, lib, Node{Kind: KindFunction, Name: "Do", Signature: "func Do()"})
 	node(libFile, lib, Node{Kind: KindMethod, Name: "Run", Qualified: "(*T).Run", Signature: "func (t *T) Run()"})
-	node(libFile, lib, Node{Kind: KindFunction, Name: "unique", Signature: "func unique()"})
+	unique := node(libFile, lib, Node{Kind: KindFunction, Name: "unique", Signature: "func unique()"})
 	libCaller := node(libFile, lib, Node{Kind: KindFunction, Name: "caller", Signature: "func caller()"})
-	site(libFile, libCaller, nil, "unique") // control: same file, declared once
+	site(libFile, libCaller, nil, "unique") // control: same file, declared once, with the extractor's edge
+	if _, err := db.Exec(`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source) VALUES (?,?,?,?,?)`,
+		libCaller, unique, string(EdgeCalls), 1.0, "extractor"); err != nil {
+		t.Fatal(err)
+	}
+	node(libFile, lib, Node{Kind: KindFunction, Name: "Gone", Signature: "func Gone()"})
 
 	twinFile := goFile(twin, "lib")
 	node(twinFile, twin, Node{Kind: KindFunction, Name: "Close", Signature: "func Close()"})
@@ -48,11 +53,14 @@ func TestOpenCallSites(t *testing.T) {
 
 	appFile := goFile(app, "app")
 	node(appFile, app, Node{Kind: KindImport, Name: "lib", Qualified: "example.com/m/internal/lib"})
+	node(appFile, app, Node{Kind: KindImport, Name: "fmt", Qualified: "fmt"})
 	appCaller := node(appFile, app, Node{Kind: KindFunction, Name: "main", Signature: "func main()"})
 	site(appFile, appCaller, "lib", "Do")          // control: resolves through the import
 	site(appFile, appCaller, "x", "Run")           // a receiver no declaration types
 	site(appFile, appCaller, nil, "Do")            // bare, and app declares no Do
 	site(appFile, appCaller, QualifierLocal, "Do") // bare, and main also declares a Do
+	site(appFile, appCaller, "lib", "Gone")        // resolves now; its edge is deleted below, as a later scoped pass leaves it
+	site(appFile, appCaller, "fmt", "Println")     // external: fmt names no indexed directory
 
 	dotFile := goFile(dot, "app")
 	node(dotFile, dot, Node{Kind: KindImport, Name: ".", Qualified: "example.com/m/internal/lib"})
@@ -61,6 +69,13 @@ func TestOpenCallSites(t *testing.T) {
 
 	if err := (&Indexer{db: db}).resolveCalls(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	// A later pass re-indexes lib.go and Gone goes; app.go is unchanged, so its
+	// site keeps "resolved" and only the edge is gone.
+	if res, err := db.Exec(`DELETE FROM topology_edges WHERE to_id IN (SELECT id FROM topology_nodes WHERE name = 'Gone')`); err != nil {
+		t.Fatal(err)
+	} else if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("control: lib.Gone had %d edges to remove, want 1", n)
 	}
 	s := &Store{db: db}
 	ctx := context.Background()
@@ -85,10 +100,12 @@ func TestOpenCallSites(t *testing.T) {
 		return out
 	}
 	for name, want := range map[string][]string{
-		"Do":     {app + " bare", app + " local", dot + " bare dot"},
-		"Run":    {app + " receiver"},
-		"Close":  {twin + " same-file"},
-		"unique": nil,
+		"Do":      {app + " bare", app + " local", dot + " bare dot"},
+		"Run":     {app + " receiver"},
+		"Close":   {twin + " same-file"},
+		"unique":  nil,
+		"Gone":    {app + " stale"},
+		"Println": {app + " external"},
 	} {
 		if got := kinds(name); !slices.Equal(got, want) {
 			t.Errorf("open calls of %s = %q, want %q", name, got, want)
