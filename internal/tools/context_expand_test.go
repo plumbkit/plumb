@@ -201,8 +201,12 @@ func TestContextForTask_C01_CalleesAreDerivedEvidenceAndTheGraphIsDisclosed(t *t
 		t.Errorf("the Go-only, syntactic call graph is not disclosed:\n%s", out)
 	}
 	requireNeverNoCallers(t, out)
-	if !strings.Contains(out, "callers of (*Cart).Total: none resolved in the index") {
-		t.Errorf("an empty caller list is not worded as an absence of resolution:\n%s", out)
+	// An empty resolved list with open calls of the name is never "complete": it
+	// names the calls that may be callers, so the reader checks those and no more.
+	if !strings.Contains(out, "callers of (*Cart).Total: 0 in the index, 0 listed here") ||
+		!strings.Contains(out, "5 unresolved call(s) of Total may also be it: api/checkout.go:13 (receiver)") ||
+		strings.Contains(out, "callers of (*Cart).Total: complete") {
+		t.Errorf("an empty caller list with open calls must name them and not claim completeness:\n%s", out)
 	}
 	for _, r := range pack.Related {
 		if r.Node.Path == "store/ledger.go" {

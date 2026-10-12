@@ -30,7 +30,9 @@ const contextCensusSites = 6
 // seed. It leaves c alone for anything else, or when the index cannot answer, and
 // the older wording stands.
 func (e *expander) census(ctx context.Context, n topology.Node, c *callerNote) {
-	if n.Language != "go" || !e.derivedAdmitted(ctx, n.ID) {
+	// Asked afresh rather than through the walk's cache: a walk cut by its deadline
+	// caches "not admitted" for the nodes it never reached.
+	if n.Language != "go" || !e.store.DerivedCallsAdmittedFor(ctx, n.ID) {
 		return
 	}
 	method := n.Kind == topology.KindMethod
@@ -39,18 +41,53 @@ func (e *expander) census(ctx context.Context, n topology.Node, c *callerNote) {
 		e.fail(ctx, err)
 		return
 	}
+	indexed, ok := e.indexedCallers(ctx, n)
+	if !ok {
+		return
+	}
+	c.Indexed = indexed
 	dir := path.Dir(n.Path)
 	exported := isExportedName(n.Name)
 	c.Census, c.Method, c.Name = true, method, n.Name
+	listed := map[string]bool{}
 	for _, o := range open {
 		if !couldCall(o, method, exported, dir) || !e.allowedPath(o.Path) {
 			continue
 		}
 		c.Open++
-		if len(c.OpenAt) < contextCensusSites {
-			c.OpenAt = append(c.OpenAt, fmt.Sprintf("%s:%d (%s)", o.Path, o.Line, o.Kind))
+		// Two calls on one line are one place to look.
+		at := fmt.Sprintf("%s:%d (%s)", o.Path, o.Line, o.Kind)
+		if !listed[at] && len(c.OpenAt) < contextCensusSites {
+			listed[at] = true
+			c.OpenAt = append(c.OpenAt, at)
+		}
+		if listed[at] {
+			c.OpenShown++
 		}
 	}
+}
+
+// indexedCallers counts n's resolved callers the index holds, inside the scope,
+// whatever the walk listed. ok is false when the index cannot give a count: an
+// error, or a hub whose callers passed the per-hop ceiling.
+func (e *expander) indexedCallers(ctx context.Context, n topology.Node) (count int, ok bool) {
+	res, err := e.store.ImpactFrom(ctx, n, contextTraversalOpts(true, []string{string(topology.EdgeCalls)}))
+	if err != nil {
+		e.fail(ctx, err)
+		return 0, false
+	}
+	if res.DependedOnBy == nil {
+		return 0, true
+	}
+	if res.DependedOnBy.Truncated {
+		return 0, false
+	}
+	for _, m := range res.DependedOnBy.Nodes {
+		if m.ID != n.ID && e.allowedPath(m.Path) {
+			count++
+		}
+	}
+	return count, true
 }
 
 // couldCall reports whether an open call of the seed's name could be a call of
@@ -81,23 +118,22 @@ func isExportedName(name string) bool {
 	return false
 }
 
-// censusText words a seed's caller list with what the census found.
-func (c callerNote) censusText(capped bool) string {
-	unseen := "a use as a function value is not a call of it"
-	if c.Method {
-		unseen = "a call through an interface, or a use as a method value, is not a call of it"
-	}
-	listed := fmt.Sprintf("%d resolved and listed%s", c.Resolved, c.matched())
+// censusText words a seed's caller list with what the census found. Its counts
+// are the index's, not the walk's, so a cut walk cannot shrink them; the caveat
+// every census line shares (labelCensus) is said once, after them.
+func (c callerNote) censusText() string {
+	here := fmt.Sprintf("%d in the index, %d listed here%s", c.Indexed, c.Resolved, c.matched())
 	if c.Open == 0 {
-		if capped {
-			return fmt.Sprintf("callers of %s: every recorded call of %s in the index resolves, but the walk was cut, so the pack lists only some (%s); call_hierarchy lists them all (%s)", c.Selector, c.Name, listed, unseen)
+		rest := ""
+		if c.Indexed > c.Resolved {
+			rest = "; call_hierarchy lists the rest"
 		}
-		return fmt.Sprintf("callers of %s: %s; complete: every recorded call of %s in the index resolves (%s)", c.Selector, listed, c.Name, unseen)
+		return fmt.Sprintf("callers of %s: complete (every recorded call of %s resolves): %s%s", c.Selector, c.Name, here, rest)
 	}
 	more := ""
-	if c.Open > len(c.OpenAt) {
-		more = fmt.Sprintf(" and %d more", c.Open-len(c.OpenAt))
+	if c.Open > c.OpenShown {
+		more = fmt.Sprintf(" and %d more", c.Open-c.OpenShown)
 	}
-	return fmt.Sprintf("callers of %s: %s; %d recorded call(s) of %s are unresolved and may be calls of it: %s%s. Those sites, not a search of the tree, are what is left to check (%s)",
-		c.Selector, listed, c.Open, c.Name, strings.Join(c.OpenAt, ", "), more, unseen)
+	return fmt.Sprintf("callers of %s: %s; %d unresolved call(s) of %s may also be it: %s%s. Check these, not the whole tree",
+		c.Selector, here, c.Open, c.Name, strings.Join(c.OpenAt, ", "), more)
 }

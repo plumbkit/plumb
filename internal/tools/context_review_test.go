@@ -297,9 +297,9 @@ func TestContextForTask_ASensitiveCallerIsNotAGapSubject(t *testing.T) {
 	}
 }
 
-// NIT 1: an empty caller list from a walk that was cut reports the cut, not what the
-// index holds. Positive control: the same seed, uncut, says none were resolved in the
-// index.
+// NIT 1, under the census: a walk that was cut still states the index's own caller
+// counts, which the cut cannot shrink, and the cut itself is disclosed beside them.
+// Control: the same seed uncut gives the same caller line.
 func TestContextForTask_ACutWalkDoesNotClaimTheIndexHasNoCallers(t *testing.T) {
 	s := newShop(t)
 	args := map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}}
@@ -307,16 +307,20 @@ func TestContextForTask_ACutWalkDoesNotClaimTheIndexHasNoCallers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(whole, "callers of (*Cart).Total: none resolved in the index") {
-		t.Fatalf("control: the uncut walk should speak of the index:\n%s", whole)
+	const line = "callers of (*Cart).Total: 0 in the index, 0 listed here"
+	if !strings.Contains(whole, line) {
+		t.Fatalf("control: the uncut walk should state the census:\n%s", whole)
 	}
 	s.collector.deadline = time.Nanosecond
 	cut, err := s.run(t, args)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(cut, "callers of (*Cart).Total: none reached before the walk was cut") || strings.Contains(cut, "none resolved in the index") {
-		t.Errorf("a cut walk must say it was cut, and not describe the index:\n%s", cut)
+	if !strings.Contains(cut, line) || !strings.Contains(cut, "unresolved call(s) of Total may also be it") {
+		t.Errorf("a cut walk must still state the index's census and the open calls:\n%s", cut)
+	}
+	if strings.Contains(cut, "callers of (*Cart).Total: complete") {
+		t.Errorf("a cut walk must not turn open calls into a complete list:\n%s", cut)
 	}
 }
 
