@@ -46,14 +46,15 @@ both behaviours against a stub linter.
 | `make lint` | `golangci-lint run` via `scripts/lint-with-retry.sh` — retries with bounded backoff on the shared-cache lock ("parallel golangci-lint is running"), so a peer agent's lint does not read as a failure of this one. |
 | `make lint-tags` | Lint and format-check the files behind custom build tags (`integration`, `clients*`, `parity`, `race`), which `make lint` never analyses. `scripts/build-tags.sh` reads the tags from the `//go:build` lines of every Go file that is not ignored, so a new tag is covered without a config change. Part of `make verify`. It lints this OS's files only; `make lint-cross` covers the other's. |
 | `make verify` | Build, test, lint (including `make lint-tags`), compile integration/client binaries, check file/brief/changelog limits, and verify `go.mod` tidiness — the fast gate CI runs on every pull request. It does not RUN the integration suite, and prints that on success. |
-| `make verify-full` | The same checks as `make verify` plus `make integration-test` — the full **"ready to commit"** gate, with the unit tests run once. `integration-test` SKIPS tests whose language server is absent, so install gopls and pyright to run all of it. |
+| `make verify-full` | The same checks as `make verify` plus `make integration-test` — the full **"ready to commit"** gate, with the unit tests run once. Its `cmd/smoke` suite starts plumb daemons of its own and refuses on a developer machine (`internal/separateenv`), so run it in CI or through `make verify-full-container`. `integration-test` SKIPS tests whose language server is absent. |
+| `make verify-full-container` | `make verify-full` in a Linux container with pinned Go, golangci-lint and language servers: streams in the working tree as git sees it, runs with `--init` and `--rm`, and fails if a plumb daemon is left after the suite. The local way to run the full gate. |
 | `make lint-cross` | Statically lint and vet the other supported OS, its tagged files included; required after platform-constrained or linter-config changes. |
 | `make cover` | Enforce the whole-tree statement floor from `scripts/check-coverage.sh`. |
 | `make vuln` | Run `govulncheck`; requires network access. |
 | `make tidy` | `go mod tidy` |
 | `make clean` | Remove build artefacts. |
 | `make install-clients` | Install every supported client CLI, for local client-integration testing. |
-| `make clients-test` / `make clients-test-auth` | On-demand connection/auth tiers that drive each installed client CLI headless (own build tags, never part of `make verify`) — see the comments above these targets in the `Makefile`. |
+| `make clients-test` / `make clients-test-auth` | On-demand connection/auth tiers that drive each installed client CLI headless (own build tags, never part of `make verify`) — see the comments above these targets in the `Makefile`. Like `cmd/smoke` they start plumb daemons, so they refuse outside CI, a container or a declared VM. |
 
 > **Formatting:** always format via `golangci-lint run --fix ./...` (the fix the
 > hook names when it fails), not a standalone `gofumpt` binary — the two can pin

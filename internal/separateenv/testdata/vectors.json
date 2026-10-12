@@ -1,0 +1,23 @@
+{
+  "comment": "Shared vectors for the separate-environment rule (PLAN-526). Byte-identical copies live in dsh-plumb-identity test/fixtures/separate-env-vectors.json and plumb internal/separateenv/testdata/vectors.json; every implementation must give `expect` for each case. `readable` lists the container markers that are readable regular files; whether a path qualifies is tested separately against the real filesystem.",
+  "cases": [
+    { "name": "darwin, no evidence", "platform": "darwin", "env": {}, "readable": [], "expect": null },
+    { "name": "darwin, GitHub Actions", "platform": "darwin", "env": { "GITHUB_ACTIONS": "true" }, "readable": [], "expect": "github-actions" },
+    { "name": "linux, GitHub Actions", "platform": "linux", "env": { "GITHUB_ACTIONS": "true" }, "readable": [], "expect": "github-actions" },
+    { "name": "GITHUB_ACTIONS=1 is not exact", "platform": "linux", "env": { "GITHUB_ACTIONS": "1" }, "readable": [], "expect": null },
+    { "name": "GITHUB_ACTIONS=TRUE is not exact", "platform": "darwin", "env": { "GITHUB_ACTIONS": "TRUE" }, "readable": [], "expect": null },
+    { "name": "CI=true alone is not evidence", "platform": "linux", "env": { "CI": "true" }, "readable": [], "expect": null },
+    { "name": "linux, no evidence", "platform": "linux", "env": {}, "readable": [], "expect": null },
+    { "name": "linux, /.dockerenv", "platform": "linux", "env": {}, "readable": ["/.dockerenv"], "expect": "container" },
+    { "name": "linux, /run/.containerenv", "platform": "linux", "env": {}, "readable": ["/run/.containerenv"], "expect": "container" },
+    { "name": "darwin ignores container markers", "platform": "darwin", "env": {}, "readable": ["/.dockerenv"], "expect": null },
+    { "name": "linux, declared VM", "platform": "linux", "env": { "PLUMB_SEPARATE_ENV": "vm" }, "readable": [], "expect": "vm" },
+    { "name": "VM declaration is case-sensitive", "platform": "linux", "env": { "PLUMB_SEPARATE_ENV": "VM" }, "readable": [], "expect": null },
+    { "name": "VM declaration is not trimmed", "platform": "linux", "env": { "PLUMB_SEPARATE_ENV": "vm " }, "readable": [], "expect": null },
+    { "name": "PLUMB_SEPARATE_ENV=1 is not a declaration", "platform": "linux", "env": { "PLUMB_SEPARATE_ENV": "1" }, "readable": [], "expect": null },
+    { "name": "darwin cannot declare a VM", "platform": "darwin", "env": { "PLUMB_SEPARATE_ENV": "vm" }, "readable": [], "expect": null },
+    { "name": "windows, no evidence", "platform": "win32", "env": {}, "readable": [], "expect": null },
+    { "name": "GitHub Actions wins over a VM declaration", "platform": "linux", "env": { "GITHUB_ACTIONS": "true", "PLUMB_SEPARATE_ENV": "vm" }, "readable": [], "expect": "github-actions" },
+    { "name": "container marker wins over a VM declaration", "platform": "linux", "env": { "PLUMB_SEPARATE_ENV": "vm" }, "readable": ["/.dockerenv"], "expect": "container" }
+  ]
+}

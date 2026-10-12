@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom site blog demo-gif
+.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom verify-full-container site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -190,11 +190,20 @@ DOCKER_PLATFORM_FLAG := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 # working tree; named volumes cache the Go build + module caches across reruns.
 docker-integration:
 	docker build $(DOCKER_PLATFORM_FLAG) -f build/docker/integration.Dockerfile -t plumb-integration build/docker
-	docker run --rm $(DOCKER_PLATFORM_FLAG) \
+	docker run --rm --init $(DOCKER_PLATFORM_FLAG) \
 		-v "$(CURDIR)":/src \
 		-v plumb-gocache:/root/.cache/go-build \
 		-v plumb-gomod:/go/pkg/mod \
 		plumb-integration
+
+# verify-full-container runs `make verify-full` in a Linux container, the local
+# way to run the whole gate. The gate's daemon-starting suites (cmd/smoke,
+# cmd/clientsmoke) refuse on a developer machine, which must run exactly one
+# plumb daemon; they run only in CI, a container or a declared VM
+# (internal/separateenv). The working tree streams in as git sees it; no plumb
+# daemon may outlive the suite. See scripts/verify-full-container.sh.
+verify-full-container:
+	DOCKER_PLATFORM=$(DOCKER_PLATFORM) ./scripts/verify-full-container.sh
 
 # docker-cleanroom proves a fresh Debian with NO toolchain can install and run
 # plumb end-to-end: a multi-stage build compiles the binary, then a slim runtime
@@ -434,9 +443,9 @@ verify: build test $(VERIFY_CHECKS)
 	@printf '\n%s\n%s\n%s\n%s\n%s\n\n' \
 		'verify: PASSED — but the //go:build integration suite was COMPILED, not RUN.' \
 		'        A failing integration test does not fail this target.' \
-		'        Run it before submitting:  make integration-test' \
-		'        (skips tests whose language server is absent; install gopls and pyright)' \
-		'        Whole gate in one command:  make verify-full'
+		'        Its cmd/smoke suite (make integration-test) starts plumb daemons, so it runs' \
+		'        in CI or a container, never beside the plumb daemon you are using.' \
+		'        Whole gate, in Docker:  make verify-full-container'
 
 # verify-full is verify's gates plus the integration suite that verify only
 # compiles. It runs the suite once, without verify's separate `test` step, because
@@ -454,4 +463,4 @@ install-hooks:
 	mkdir -p "$$hooks"; \
 	cp scripts/pre-commit "$$hooks/pre-commit"; \
 	chmod +x "$$hooks/pre-commit"; \
-	echo "Pre-commit hook installed at $$hooks/pre-commit. Run 'make verify' before every push — and 'make verify-full' when the change touches integration-tagged code."
+	echo "Pre-commit hook installed at $$hooks/pre-commit. Run 'make verify' before every push — and 'make verify-full-container' when the change touches integration-tagged code."
