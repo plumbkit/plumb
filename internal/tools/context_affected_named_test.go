@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -102,11 +103,14 @@ func TestEdgeReachedTests_Rules(t *testing.T) {
 		t.Errorf("total = %d, want 11 (9 one-hop runnable, TestFar, TestUnknownHops)", got.Total)
 	}
 
+	asideOne := reachedTest("TestAsideOne", 0.85, 1)
+	asideOne.Aside = true // reaches only a callee of the seed: it does not run the seed
 	far := edgeReachedTests([]affectedPackage{{Dir: "q", Tests: []affectedTest{
-		reachedTest("TestUnknown", graphEdgeBaseline, 0), reachedTest("TestTwo", 0.85, 2), reachedTest("TestOne", 0.85, 1),
+		asideOne, reachedTest("TestUnknown", graphEdgeBaseline, 0), reachedTest("TestThree", 0.85, 3), reachedTest("TestOne", 0.85, 1),
 	}}}, "building")["q"]
-	if want := []string{"TestOne", "TestTwo", "TestUnknown"}; !slices.Equal(far.Names, want) {
-		t.Errorf("hop order = %q, want %q (an index mid-build still names: its edges are real)", far.Names, want)
+	if want := []string{"TestOne", "TestThree", "TestUnknown", "TestAsideOne"}; !slices.Equal(far.Names, want) {
+		t.Errorf("order = %q, want %q: tests that run a seed first, by hops, an aside test last however close "+
+			"(and an index mid-build still names: its edges are real)", far.Names, want)
 	}
 
 	var many []affectedPackage
@@ -128,7 +132,8 @@ func TestEdgeReachedTests_Rules(t *testing.T) {
 func TestNamedTestsLine_FilterFitsWhatRunTaskAccepts(t *testing.T) {
 	names := make([]string, 0, contextNamedPerPackage)
 	for i := range contextNamedPerPackage {
-		names = append(names, fmt.Sprintf("TestAVeryLongNameThatDescribesBehaviourInDetail%02d", i))
+		// Distinct after "Test0", so the shared prefix saves almost nothing.
+		names = append(names, fmt.Sprintf("Test%02dAVeryLongNameThatDescribesBehaviourInDetail", i))
 	}
 	line := namedTestsLine(TestScope{Language: "go", Style: TargetGoPackage}, "pkg", namedTests{Names: names, Total: 20})
 	_, rest, ok := strings.Cut(line, `run:"`)
@@ -145,6 +150,63 @@ func TestNamedTestsLine_FilterFitsWhatRunTaskAccepts(t *testing.T) {
 	}
 	if want := fmt.Sprintf("%d of 20 test(s) that %s; %d more are not named", kept, namedTestsReach, 20-kept); !strings.HasSuffix(line, want) {
 		t.Errorf("line = %q,\nwant the suffix %q", line, want)
+	}
+}
+
+// The filter writes the common prefix once and selects exactly the names: go
+// test's own matcher (one part, since the alternation sits in a group) accepts
+// each name and rejects a near miss.
+func TestRunFilterFor(t *testing.T) {
+	for _, tc := range []struct {
+		names []string
+		want  string
+		miss  string
+	}{
+		{[]string{"TestMoveSymbol_Refusals", "TestMoveSymbol_CreateDestination"}, "^TestMoveSymbol_(Refusals|CreateDestination)$", "TestMoveSymbol_Refusals2"},
+		{[]string{"TestOne"}, "^(TestOne)$", "TestOneMore"},
+		{[]string{"TestA", "TestAB"}, "^TestA(|B)$", "TestABC"},
+		{[]string{"ExampleX", "TestX"}, "^(ExampleX|TestX)$", "TestXY"},
+		{[]string{"TestÉa", "TestÈb"}, "^Test(Éa|Èb)$", "TestÉb"}, // É and È share their first byte
+	} {
+		got := runFilterFor(tc.names)
+		if got != tc.want {
+			t.Errorf("runFilterFor(%q) = %q, want %q", tc.names, got, tc.want)
+			continue
+		}
+		re := regexp.MustCompile(got)
+		for _, n := range tc.names {
+			if !re.MatchString(n) {
+				t.Errorf("%q does not select %q", got, n)
+			}
+		}
+		if re.MatchString(tc.miss) {
+			t.Errorf("%q also selects %q", got, tc.miss)
+		}
+	}
+}
+
+// A test reached twice keeps the better path: one that runs the change over one
+// that does not, then fewer hops, and any count over none.
+func TestBetterPath(t *testing.T) {
+	seed2 := affectedTest{Hops: 2}
+	aside1 := affectedTest{Hops: 1, Aside: true}
+	for _, tc := range []struct {
+		name  string
+		have  affectedTest
+		hops  int
+		aside bool
+		want  bool
+	}{
+		{"a path that runs the change beats an aside one, even longer", aside1, 3, false, true},
+		{"an aside path never beats one that runs the change", seed2, 1, true, false},
+		{"fewer hops win", seed2, 1, false, true},
+		{"equal hops do not", seed2, 2, false, false},
+		{"more hops do not", seed2, 3, false, false},
+		{"any count beats an unknown one", affectedTest{}, 4, false, true},
+	} {
+		if got := betterPath(tc.have, tc.hops, tc.aside); got != tc.want {
+			t.Errorf("%s: betterPath = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

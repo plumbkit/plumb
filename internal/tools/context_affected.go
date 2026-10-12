@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
@@ -68,8 +69,8 @@ func (c *ContextCollector) affectedTests(ctx context.Context, pack *contextPack,
 	if len(roots)+len(dirs) == 0 {
 		return // no code seed: nothing to estimate from, and nothing to disclaim
 	}
-	near := affectedNeighbours(pack)
-	res, err := collectAffected(ctx, index.store, append(roots, near...), dirs, contextAffectedPackages)
+	near, aside := affectedNeighbours(pack)
+	res, err := collectAffectedNear(ctx, index.store, roots, near, aside, dirs, contextAffectedPackages)
 	if err != nil || res == nil {
 		return
 	}
@@ -88,8 +89,9 @@ func (c *ContextCollector) affectedTests(ctx context.Context, pack *contextPack,
 	}
 }
 
-// namedTests are the tests of one package that a call edge reaches, closest
-// first (fewest hops, then name), and how many there were.
+// namedTests are the tests of one package that a call edge reaches, those that
+// exercise a seed first and the closest first among them (fewest hops, then
+// name), and how many there were.
 type namedTests struct {
 	Names []string
 	Total int
@@ -124,10 +126,14 @@ func edgeReachedTests(pkgs []affectedPackage, freshness string) map[string]named
 		if len(reached) == 0 {
 			continue
 		}
-		// Fewest hops first; a test whose connecting edge was filtered out of the
-		// subgraph has no hop count (0) and goes last. Name breaks ties, so the line
-		// is the same on every call.
+		// A test that exercises a seed comes before one that only reaches a callee or
+		// sibling of it; then fewest hops, where a test whose connecting edge was
+		// filtered out of the subgraph has no hop count (0) and goes last. Name breaks
+		// ties, so the line is the same on every call.
 		slices.SortFunc(reached, func(a, b affectedTest) int {
+			if c := cmp.Compare(boolInt(a.Aside), boolInt(b.Aside)); c != 0 {
+				return c
+			}
 			if c := cmp.Compare(hopRank(a.Hops), hopRank(b.Hops)); c != 0 {
 				return c
 			}
@@ -190,20 +196,27 @@ func affectedRoots(ctx context.Context, store *topology.Store, seeds []contextSe
 // away) that a change to the seeds may extend into, so their tests are implicated
 // too. They matter only for intent=change: understanding code changes nothing.
 // Each already passed the scope filter in the walk.
-func affectedNeighbours(p *contextPack) []topology.Node {
+//
+// aside holds the neighbours that are not callers of a seed (its callees and
+// siblings): a test of one of those does not run the seed, so it ranks after
+// every test that does. A caller's tests do run the seed, one hop further out.
+func affectedNeighbours(p *contextPack) (near []topology.Node, aside map[int64]bool) {
 	if p.Intent != contextIntentChange {
-		return nil
+		return nil, nil
 	}
-	var out []topology.Node
+	aside = map[int64]bool{}
 	for _, r := range p.Related {
-		if len(out) == contextAffectedNeighbours {
+		if len(near) == contextAffectedNeighbours {
 			break
 		}
 		if r.Dist == 1 && !r.Gap && !r.Withheld && r.Evidence >= evidenceDerived && !isTestNode(r.Node) {
-			out = append(out, r.Node)
+			near = append(near, r.Node)
+			if r.CallerOf == 0 {
+				aside[r.Node.ID] = true
+			}
 		}
 	}
-	return out
+	return near, aside
 }
 
 // neighbourDirs are the directories only a neighbour of a seed puts in play: not
@@ -315,9 +328,28 @@ func namedTestsLine(scope TestScope, dir string, n namedTests) string {
 }
 
 // runFilterFor anchors the names as one group: go test -run splits a pattern only
-// at a top-level |, so the alternation inside the parentheses stays whole.
+// at a top-level |, so the alternation inside the parentheses stays whole. The
+// names' common prefix is written once (^TestMoveSymbol_(Refusals|CreateDestination)$),
+// which fits more of them in run_task's filter limit. Test names are identifiers,
+// so nothing in them needs escaping.
 func runFilterFor(names []string) string {
-	return "^(" + strings.Join(names, "|") + ")$"
+	if len(names) == 1 {
+		return "^(" + names[0] + ")$"
+	}
+	prefix := names[0]
+	for _, n := range names[1:] {
+		for !strings.HasPrefix(n, prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	for !utf8.ValidString(prefix) { // never split a rune between prefix and rest
+		prefix = prefix[:len(prefix)-1]
+	}
+	rests := make([]string, len(names))
+	for i, n := range names {
+		rests[i] = n[len(prefix):]
+	}
+	return "^" + prefix + "(" + strings.Join(rests, "|") + ")$"
 }
 
 func namedCount(shown, total int) string {

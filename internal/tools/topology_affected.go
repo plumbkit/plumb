@@ -109,9 +109,13 @@ type affectedTest struct {
 	Node       topology.Node
 	Confidence float64
 	Reason     string // "dependency edge", "changed package", "imports the changed package"
-	// Hops is the fewest edges from any root to this test in the dependent walk,
+	// Hops is the fewest edges from the change to this test in the dependent walk,
 	// or 0 for a test found only by co-location.
 	Hops int
+	// Aside marks a test reached only through a neighbour the change does not run
+	// (a callee or sibling of a root): it is implicated, but it does not exercise
+	// the change itself.
+	Aside bool
 }
 
 // Reasons a directory is worth scanning for tests. They are ordered by how
@@ -352,6 +356,15 @@ func declarationRoots(nodes []topology.Node) []topology.Node {
 }
 
 func collectAffected(ctx context.Context, store *topology.Store, roots []topology.Node, seedDirs []string, maxResults int) (*affectedResult, error) {
+	return collectAffectedNear(ctx, store, roots, nil, nil, seedDirs, maxResults)
+}
+
+// collectAffectedNear is collectAffected that also walks near: declarations one
+// edge from a root, which a change to the roots may extend into. They are walked
+// exactly as roots are, except that a test reached through one is a hop further
+// from the change than the walk from that neighbour says, and a test reached only
+// through a neighbour in aside is marked Aside.
+func collectAffectedNear(ctx context.Context, store *topology.Store, roots, near []topology.Node, aside map[int64]bool, seedDirs []string, maxResults int) (*affectedResult, error) {
 	g := &affectedGather{store: store, maxResults: maxResults, seen: map[int64]bool{}, dirs: map[string]string{}, testAt: map[int64]int{}}
 	for _, d := range seedDirs {
 		g.dirs[d] = reasonChanged
@@ -366,7 +379,11 @@ func collectAffected(ctx context.Context, store *topology.Store, roots []topolog
 	// bounded on packages in fromColocation.
 	for _, root := range roots {
 		g.dirs[filepath.Dir(root.Path)] = reasonChanged
-		g.fromGraph(ctx, root)
+		g.fromGraph(ctx, root, 0, false)
+	}
+	for _, n := range near {
+		g.dirs[filepath.Dir(n.Path)] = reasonChanged
+		g.fromGraph(ctx, n, 1, aside[n.ID])
 	}
 	g.fromColocation(ctx)
 	g.sortTests()
@@ -420,7 +437,11 @@ func graphTraversalOpts(includeDerived bool) topology.ImpactOpts {
 // fromGraph adds inward (dependedOnBy) neighbours of root: tests are flagged
 // with their incident-edge confidence, other nodes become affected files and
 // seed more directories for the co-location pass.
-func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
+//
+// away is how many hops root itself is from the change: 0 for a root, 1 for a
+// neighbour of one; it is added to each test's hop count. aside marks the tests
+// root reaches as not exercising the change (root is a callee or sibling of it).
+func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node, away int, aside bool) {
 	// ImpactFrom, not Impact: root is ALREADY resolved, and Impact would throw it
 	// away and re-resolve the bare name against the whole index. That lookup has no
 	// tie-break, so a common name lands on an arbitrary row in an unrelated package
@@ -442,11 +463,15 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 	}
 	conf := incidentConfidence(nb.DependedOnBy.Edges)
 	hops := inwardHops(root.ID, nb.DependedOnBy.Edges)
+	for id, h := range hops {
+		hops[id] = h + away
+	}
 	for _, n := range nb.DependedOnBy.Nodes {
 		if g.seen[n.ID] {
-			// Another root reached this test first; keep whichever path is shorter.
-			if i, ok := g.testAt[n.ID]; ok && hops[n.ID] > 0 && (g.tests[i].Hops == 0 || hops[n.ID] < g.tests[i].Hops) {
-				g.tests[i].Hops = hops[n.ID]
+			// Another root reached this test first; keep the better path: one that
+			// exercises the change over one that does not, then the shorter.
+			if i, ok := g.testAt[n.ID]; ok && hops[n.ID] > 0 && betterPath(g.tests[i], hops[n.ID], aside) {
+				g.tests[i].Hops, g.tests[i].Aside = hops[n.ID], aside
 			}
 			continue
 		}
@@ -465,7 +490,7 @@ func (g *affectedGather) fromGraph(ctx context.Context, root topology.Node) {
 				reason = reasonChanged
 			}
 			g.testAt[n.ID] = len(g.tests)
-			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reason, Hops: hops[n.ID]})
+			g.tests = append(g.tests, affectedTest{Node: n, Confidence: c, Reason: reason, Hops: hops[n.ID], Aside: aside})
 		} else {
 			g.dependents = append(g.dependents, n)
 			// Do not demote a directory that is already the changed one: a package
@@ -530,33 +555,6 @@ func (g *affectedGather) sortTests() {
 	sort.SliceStable(g.tests, func(i, j int) bool {
 		return g.tests[i].Confidence > g.tests[j].Confidence
 	})
-}
-
-// inwardHops is the fewest inward edges from root to each node of an inward
-// neighbourhood. An edge FromID -> ToID means FromID depends on ToID, so the walk
-// steps from a node to everything that depends on it. A node the edges do not
-// connect to root is absent (0).
-func inwardHops(root int64, edges []topology.Edge) map[int64]int {
-	dependents := map[int64][]int64{}
-	for _, e := range edges {
-		dependents[e.ToID] = append(dependents[e.ToID], e.FromID)
-	}
-	hops := map[int64]int{root: 0}
-	frontier := []int64{root}
-	for len(frontier) > 0 {
-		var next []int64
-		for _, id := range frontier {
-			for _, d := range dependents[id] {
-				if _, ok := hops[d]; !ok {
-					hops[d] = hops[id] + 1
-					next = append(next, d)
-				}
-			}
-		}
-		frontier = next
-	}
-	delete(hops, root)
-	return hops
 }
 
 // incidentConfidence maps each node ID to the highest confidence of any edge
