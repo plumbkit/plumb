@@ -232,7 +232,7 @@
       "forbidden": [
         "claiming api.Checkout is unaffected"
       ],
-      "gold_rationale": "Checkout reaches Total only through a method call on a local variable (cc := c; cc.Total()), which the call resolver leaves unresolved: it links a call on a parameter of a named type or on the method's own receiver, never one on a local. The sole route is a reverse import edge (api imports cart), so the pack must surface Checkout as a labelled gap candidate via reverse-import expansion, never as a resolved caller. Slice A must implement reverse-import gap expansion or this case fails by construction."
+      "gold_rationale": "Checkout reaches Total only through a method call on a plain copy of a parameter (cc := c; cc.Total()), which the call resolver leaves unresolved: it links a call on the method's own receiver, on a parameter of a named type, or on a local variable the function declares once with an evident type (T{}, &T{}, new(T), var x T, a function's declared result), but a plain copy gives the variable no evident type. The sole route is a reverse import edge (api imports cart), so the pack must surface Checkout as a labelled gap candidate via reverse-import expansion, never as a resolved caller. Slice A must implement reverse-import gap expansion or this case fails by construction."
     },
     {
       "id": "C07",
@@ -597,7 +597,7 @@
         "presenting the name match as a resolved edge, or counting it among the resolved callers",
         "stating that Off has no callers"
       ],
-      "gold_rationale": "Tenth and TestOffPercent call Off on a local declared `var d Discount` from sibling files of the same package. The call graph resolves a bare same-package call (Savings calls Apply), a call on the method's own receiver and a call on a parameter of a named type, but never a method call on a local variable, so the only route is the recorded call site: it is a same-package name match at evidence 1, labelled as such, never a resolved caller. C16 first seeded the function Apply and its bare-call caller Savings; once the index resolved bare same-package calls that caller became a derived edge and the name search skips functions, so the case moved to a method whose callers stay unresolved."
+      "gold_rationale": "Tenth and TestOffPercent call Off on a local Discount from sibling files of the same package; each function declares that local twice (`var d Discount` and a `d := Discount{}` in an inner scope). The call graph resolves a bare same-package call (Savings calls Apply), a call on the method's own receiver, a call on a parameter of a named type and a call on a local variable the function declares once with an evident type, but a name declared twice is ambiguous (the index holds no scopes), so the only route is the recorded call site: it is a same-package name match at evidence 1, labelled as such, never a resolved caller. C16 first seeded the function Apply and its bare-call caller Savings; once the index resolved bare same-package calls that caller became a derived edge and the name search skips functions, so the case moved to a method whose callers stay unresolved; once the index also resolved a local declared once, the callers moved to a local declared twice, which both declarations still show to be a Discount."
     },
     {
       "id": "C17",
@@ -633,7 +633,7 @@
       "forbidden": [
         "admitting a call on a receiver nothing identifies as a Cart at evidence 1"
       ],
-      "gold_rationale": "Both tests call c.Total() on a local declared `var c Cart`: the caller's own declaration is the receiver evidence a method needs. A method call whose receiver has no evident type is only an evidence-0 gap candidate."
+      "gold_rationale": "Both tests call c.Total() on a local Cart that the test declares twice (`var c Cart` and a re-declaration of c in a subtest): the call graph cannot tell which declaration a call sees, so it leaves the call unresolved, but the caller's own declarations are the receiver evidence a method needs, as every one of them gives c the type Cart. A method call whose receiver has no evident type is only an evidence-0 gap candidate."
     }
   ],
   "coverage": {
@@ -651,7 +651,7 @@
       "C08"
     ],
     "languages": {
-      "go": "structure + Go-only syntactic cross-file call graph (package-qualified calls, bare same-package calls, own-receiver calls and calls on a parameter of a named type resolve; calls on a local variable, a field chain or a returned value are unresolved)",
+      "go": "structure + Go-only syntactic cross-file call graph (package-qualified calls, bare same-package calls, own-receiver calls, calls on a parameter of a named type and calls on a local variable declared once with an evident type resolve; calls on a name declared more than once, a plain copy, a field chain or a returned value are unresolved)",
       "python": "structure + intra-file heuristic call edges",
       "markdown": "sections only",
       "svelte": "not covered"

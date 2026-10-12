@@ -66,6 +66,7 @@ type samePackageTables struct {
 	funcs     map[string]map[string][]pkgTarget // top-level functions by name
 	methods   map[string]map[string][]pkgTarget // methods by "Base.Name"
 	enclosing map[int64]enclosingInfo           // function/method node id → its variables
+	sigs      map[int64]string                  // function/method node id → its stored signature
 }
 
 func dirPkgKey(dir, pkg string) string { return dir + "\x00" + pkg }
@@ -77,6 +78,7 @@ func loadSamePackageTables(ctx context.Context, tx *sql.Tx, lang string) (samePa
 		funcs:     map[string]map[string][]pkgTarget{},
 		methods:   map[string]map[string][]pkgTarget{},
 		enclosing: map[int64]enclosingInfo{},
+		sigs:      map[int64]string{},
 	}
 	if lang != "go" {
 		return t, nil
@@ -106,6 +108,7 @@ func loadSamePackageTables(ctx context.Context, tx *sql.Tx, lang string) (samePa
 		}
 		key := dirPkgKey(path.Dir(p), pkg)
 		target := pkgTarget{callTarget: callTarget{id: id, identity: nodeIdentity(p, qualified, name)}, fileID: fileID}
+		t.sigs[id] = signature
 		base, isMethod := receiverBase(qualified)
 		info := enclosingInfo{params: namedParams(signature)}
 		if isMethod {

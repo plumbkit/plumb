@@ -278,10 +278,10 @@ func TestContextForTask_C05_TypeMembersAreListedAndNoCallEdgeIsFabricated(t *tes
 	}
 }
 
-// C06: a function seed whose only route to Checkout is a method call on a local variable. The
-// resolved caller is an edge (evidence 2); Checkout is reached through the import
-// graph, surfaced as an evidence-0 gap candidate that says it is not a resolved
-// caller, and the pack never concludes there are no callers.
+// C06: a function seed whose only route to Checkout is a method call on a plain copy
+// of a parameter. The resolved caller is an edge (evidence 2); Checkout is reached
+// through the import graph, surfaced as an evidence-0 gap candidate that says it is
+// not a resolved caller, and the pack never concludes there are no callers.
 func TestContextForTask_C06_ReverseImportGapCandidatesAreLabelledNotCallers(t *testing.T) {
 	s := newShop(t)
 	c := oracle(t, "C06")

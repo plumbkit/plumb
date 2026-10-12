@@ -235,6 +235,7 @@ func callGraphCensus(db *sql.DB) CallGraphStatus {
 		metaCallResolvedSamePkg:  &c.ResolvedSamePackage,
 		metaCallResolvedRecvSelf: &c.ResolvedReceiverSelf,
 		metaCallResolvedParam:    &c.ResolvedParamTyped,
+		metaCallResolvedLocal:    &c.ResolvedLocalTyped,
 		metaCallSameFile:         &c.SameFile,
 		metaCallBareUnmatched:    &c.BareUnmatched,
 	}
@@ -266,10 +267,12 @@ func formatCallGraph(c CallGraphStatus) string {
 	fmt.Fprintf(&sb, "                 recorded call sites (%d from non-test callers). Go only.\n",
 		c.ResolvedNonTest)
 	fmt.Fprintf(&sb, "                 By kind: %d package-qualified, %d same-package bare calls,\n"+
-		"                  %d calls on the method's own receiver, %d on a typed parameter;\n"+
-		"                  %d more (%.1f%%) are same-file calls the extractor links directly.\n",
-		c.Resolved-c.ResolvedSamePackage-c.ResolvedReceiverSelf-c.ResolvedParamTyped, c.ResolvedSamePackage,
-		c.ResolvedReceiverSelf, c.ResolvedParamTyped, c.SameFile, samePct)
+		"                  %d calls on the method's own receiver, %d on a typed parameter,\n"+
+		"                  %d on a local variable of evident type; %d more (%.1f%%) are\n"+
+		"                  same-file calls the extractor links directly.\n",
+		c.Resolved-c.ResolvedSamePackage-c.ResolvedReceiverSelf-c.ResolvedParamTyped-c.ResolvedLocalTyped,
+		c.ResolvedSamePackage, c.ResolvedReceiverSelf, c.ResolvedParamTyped, c.ResolvedLocalTyped,
+		c.SameFile, samePct)
 	fmt.Fprintf(&sb, "                 NOT resolved: %d method calls on another receiver (syntactic\n"+
 		"                  parsing carries no type information), %d bare calls naming no\n"+
 		"                  function of the package (builtins, local values, conversions),\n"+

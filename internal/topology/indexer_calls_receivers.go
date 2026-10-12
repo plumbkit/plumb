@@ -3,6 +3,7 @@ package topology
 import (
 	"database/sql"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -20,25 +21,28 @@ const (
 	// tierParam: `p.M()` where p is a parameter of the enclosing declaration
 	// with a named type, `p *T` or `p *pkg.T` — a method of that type.
 	tierParam
+	// tierLocal: `x.M()` where x is a variable the enclosing function declares
+	// once with an evident type (CallSite.ReceiverType) — a method of that type.
+	tierLocal
 )
 
 // receiverCandidates returns the targets a site may resolve to under the bare,
-// receiver-self or typed-parameter tier, and whether one of them owns the site
-// at all. A qualifier that is neither the enclosing receiver nor a typed
-// parameter is left to the package-qualified tier (ok == false).
+// receiver-self, typed-parameter or local-variable tier, and whether one of them
+// owns the site at all. A qualifier that is none of those is left to the
+// package-qualified tier (ok == false).
 //
-// The receiver and the parameters are checked BEFORE the import set because
-// they shadow it: inside `func f(stats *Stats)` the call `stats.Open()` is a
-// method call, whatever package called stats the file imports.
+// The receiver, the parameters and the locals are checked BEFORE the import set
+// because they shadow it: inside `func f(stats *Stats)` the call `stats.Open()`
+// is a method call, whatever package called stats the file imports.
 //
-// A typed parameter is as strong as a receiver: the declaration states the
-// variable's type, so the call's method set is known without type checking. The
-// residual risk is the same shadowing one (a closure parameter or a local
-// re-declaring the name), and these edges carry the same lower confidence. A
-// parameter whose type is an interface resolves to the interface's method when
-// the index holds one, which is the declared callee; the dynamic implementations
-// stay unresolved.
-func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, callee string, qualifier sql.NullString) ([]pkgTarget, callTier, bool) {
+// A declared type is as strong as a receiver: the declaration states the
+// variable's type, so the call's method set is known without type checking. A
+// name the function declares more than once (receiverType ReceiverAmbiguous) is
+// resolved by none of them, since which declaration a call sees depends on scopes
+// the index does not hold. A type that is an interface resolves to the
+// interface's method when the index holds one, which is the declared callee; the
+// dynamic implementations stay unresolved.
+func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, callee string, qualifier sql.NullString, receiverType string) ([]pkgTarget, callTier, bool) {
 	s := t.same
 	pkg, havePkg := s.filePkg[fileID]
 	here := dirPkgKey(path.Dir(callerPath), pkg)
@@ -53,11 +57,35 @@ func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, 
 		}
 		return s.funcs[here][callee], tierBare, true
 	}
-	info, ok := s.enclosing[enclosing]
-	if !ok || !havePkg {
+	if !havePkg {
 		return nil, tierQualified, false
 	}
 	q := qualifier.String
+	// A qualifier that is also an import of the file keeps the package-qualified
+	// reading whenever the local reading finds nothing: `rand := rand.New(src)`
+	// declares rand once, but the call on its right is the package's, and the old
+	// tier resolved it.
+	_, isImport := t.imports[fileID][q]
+	switch {
+	case receiverType == ReceiverAmbiguous:
+		// The import reading is only one of the declarations the name has. When
+		// another is the method's receiver or a parameter, the call may well be
+		// on that, so neither reading is taken.
+		if isImport && !t.declaresVariable(enclosing, q) {
+			return nil, tierQualified, false
+		}
+		return nil, tierLocal, true
+	case receiverType != "":
+		cands := t.localTypeCandidates(fileID, here, callee, receiverType)
+		if len(cands) == 0 && isImport {
+			return nil, tierQualified, false
+		}
+		return cands, tierLocal, true
+	}
+	info, ok := s.enclosing[enclosing]
+	if !ok {
+		return nil, tierQualified, false
+	}
 	if info.recvName == q {
 		return s.methods[here][info.recvBase+"."+callee], tierSelf, true
 	}
@@ -65,28 +93,126 @@ func (t resolverTables) receiverCandidates(fileID, enclosing int64, callerPath, 
 	if !ok {
 		return nil, tierQualified, false
 	}
+	return t.methodsOf(fileID, here, typ, callee), tierParam, true
+}
+
+// methodsOf returns the methods named callee of the named type typ: "T", declared
+// in the package keyed home, or "pkg.T", found through fileID's imports the way a
+// package-qualified call's package is. Another package's method is callable only
+// when exported.
+func (t resolverTables) methodsOf(fileID int64, home, typ, callee string) []pkgTarget {
+	s := t.same
 	pkgName, typeName, crossPackage := strings.Cut(typ, ".")
 	if !crossPackage {
-		return s.methods[here][typ+"."+callee], tierParam, true
+		return s.methods[home][typ+"."+callee]
 	}
-	// A method of another package's type is callable only when exported, and
-	// the type's package is found the way a package-qualified call's is.
 	if !isExportedName(callee) {
-		return nil, tierParam, true
+		return nil
 	}
 	importPath, ok := t.imports[fileID][pkgName]
 	if !ok {
-		return nil, tierParam, true
+		return nil
 	}
 	dir, ok := matchImportDir(importPath, t.pkgDirs)
 	if !ok {
-		return nil, tierParam, true
+		return nil
 	}
 	targetPkg, ok := s.dirPkg[dir]
 	if !ok {
-		return nil, tierParam, true
+		return nil
 	}
-	return s.methods[dirPkgKey(dir, targetPkg)][typeName+"."+callee], tierParam, true
+	return s.methods[dirPkgKey(dir, targetPkg)][typeName+"."+callee]
+}
+
+// localTypeCandidates resolves a local variable's receiver type. A named type
+// goes straight to methodsOf. A call's result ("call:F/i" or "call:pkg.F/i") is
+// read from the called function's declared results: F must be one function of
+// the caller's package, or one exported function of an imported package, and its
+// i-th result a named type. An unqualified result type belongs to F's own
+// package; a qualified one is read through the caller's imports only when F is
+// declared in the caller's own file (any other file has its own import names, and
+// `pkg` there can be a different package).
+func (t resolverTables) localTypeCandidates(fileID int64, here, callee, receiverType string) []pkgTarget {
+	spec, fromCall := strings.CutPrefix(receiverType, ReceiverFromCall)
+	if !fromCall {
+		return t.methodsOf(fileID, here, receiverType, callee)
+	}
+	name, idxText, ok := strings.Cut(spec, "/")
+	idx, err := strconv.Atoi(idxText)
+	if !ok || err != nil {
+		return nil
+	}
+	fn, ok := t.calledFunction(fileID, here, name)
+	if !ok {
+		return nil
+	}
+	results := resultTypes(t.same.sigs[fn.id])
+	if idx >= len(results) || !isNamedType(results[idx]) {
+		return nil
+	}
+	typ := results[idx]
+	if pkgName, _, qualified := strings.Cut(typ, "."); qualified && fn.fileID != fileID &&
+		(fn.crossPackage || t.imports[fn.fileID][pkgName] != t.imports[fileID][pkgName]) {
+		// F's file reads pkg through its own imports: the caller's file can read
+		// the type only if it imports the same path under the same name.
+		return nil
+	}
+	if fn.crossPackage && !isExportedName(callee) {
+		// The caller reaches only the exported methods of another package's type.
+		return nil
+	}
+	return t.methodsOf(fileID, fn.home, typ, callee)
+}
+
+// declaresVariable reports whether name is the enclosing declaration's receiver
+// or one of its named parameters.
+func (t resolverTables) declaresVariable(enclosing int64, name string) bool {
+	info, ok := t.same.enclosing[enclosing]
+	if !ok {
+		return false
+	}
+	_, isParam := info.params[name]
+	return info.recvName == name || isParam
+}
+
+// calledFn is the function a local's initialiser calls: its node, the file it is
+// declared in (0 when another package's), and the key of its package.
+type calledFn struct {
+	id, fileID   int64
+	home         string
+	crossPackage bool
+}
+
+// calledFunction finds the single function a call spelling names: "F" in the
+// caller's package, or "pkg.F" (exported) in an imported one. Two declarations of
+// the name (build-tag variants) are not one function, and nothing is returned.
+func (t resolverTables) calledFunction(fileID int64, here, name string) (calledFn, bool) {
+	s := t.same
+	pkgName, fn, qualified := strings.Cut(name, ".")
+	if !qualified {
+		cands := s.funcs[here][name]
+		if len(cands) != 1 {
+			return calledFn{}, false
+		}
+		return calledFn{id: cands[0].id, fileID: cands[0].fileID, home: here}, true
+	}
+	if strings.Contains(fn, ".") || !isExportedName(fn) {
+		return calledFn{}, false
+	}
+	importPath, found := t.imports[fileID][pkgName]
+	if !found {
+		return calledFn{}, false
+	}
+	dir, found := matchImportDir(importPath, t.pkgDirs)
+	if !found {
+		return calledFn{}, false
+	}
+	targetPkg, found := s.dirPkg[dir]
+	cands := t.targets[dir][fn]
+	if !found || len(cands) != 1 {
+		return calledFn{}, false
+	}
+	return calledFn{id: cands[0].id, home: dirPkgKey(dir, targetPkg), crossPackage: true}, true
 }
 
 // namedParams extracts the parameters with a named type from a Go declaration's
@@ -185,5 +311,61 @@ func (r *callResolution) countTier(tier callTier) {
 		r.resolvedReceiverSelf++
 	case tierParam:
 		r.resolvedParamTyped++
+	case tierLocal:
+		r.resolvedLocalTyped++
 	}
+}
+
+// resultTypes lists a Go declaration's result types, in order, from its stored
+// signature: "func F() (*T, error)" → [T error]; "func F() (t *T, err error)" →
+// [T error]. A pointer is dropped. Names in a group ("a, b T") each take the
+// group's type. It relies on funcSignature's spelling, which always parenthesises
+// the results.
+func resultTypes(signature string) []string {
+	rest, ok := strings.CutPrefix(signature, "func ")
+	if !ok {
+		return nil
+	}
+	if strings.HasPrefix(rest, "(") {
+		end := strings.IndexByte(rest, ')')
+		if end < 0 {
+			return nil
+		}
+		rest = rest[end+1:]
+	}
+	open := strings.IndexByte(rest, '(')
+	if open < 0 {
+		return nil
+	}
+	closing := strings.IndexByte(rest[open:], ')')
+	if closing < 0 {
+		return nil
+	}
+	after := strings.TrimSpace(rest[open+closing+1:])
+	if !strings.HasPrefix(after, "(") || !strings.HasSuffix(after, ")") {
+		return nil
+	}
+	segs := strings.Split(after[1:len(after)-1], ", ")
+	named := false
+	for _, seg := range segs {
+		named = named || strings.Contains(seg, " ")
+	}
+	var out []string
+	pending := 0
+	for _, seg := range segs {
+		if !named {
+			out = append(out, strings.TrimPrefix(seg, "*"))
+			continue
+		}
+		_, typ, ok := strings.Cut(seg, " ")
+		if !ok {
+			pending++
+			continue
+		}
+		for range pending + 1 {
+			out = append(out, strings.TrimPrefix(typ, "*"))
+		}
+		pending = 0
+	}
+	return out
 }

@@ -109,7 +109,11 @@ CREATE TABLE IF NOT EXISTS topology_call_sites (
     first_string_arg TEXT,
     arg_idents   TEXT    NOT NULL DEFAULT '',
     arg_count    INTEGER NOT NULL DEFAULT 0,
-    arg_spread   INTEGER NOT NULL DEFAULT 0
+    arg_spread   INTEGER NOT NULL DEFAULT 0,
+    -- Go only: what the enclosing function's own declarations say about the
+    -- qualifier when it is a local variable (CallSite.ReceiverType). '' when
+    -- nothing is evident.
+    receiver_type TEXT   NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tcs_file ON topology_call_sites(file_id);
 CREATE INDEX IF NOT EXISTS idx_tcs_lookup ON topology_call_sites(language, site_kind, qualifier);
@@ -167,7 +171,10 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	    (topology.QualifierLocal). A site written before it stored those with an
 //	    empty qualifier, which the same-package resolver reads as a bare call, so
 //	    an unchanged file would keep producing false edges. Same reasoning as 2.
-const SchemaVersion = 6
+//	7 — topology_call_sites.receiver_type: the type a Go call's local receiver was
+//	    declared with, or that its qualifier is declared more than once. A site
+//	    written before it has none, and an unchanged file is never re-extracted.
+const SchemaVersion = 7
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The

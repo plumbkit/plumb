@@ -307,7 +307,26 @@ type CallSite struct {
 	// spread's element identifiers do not exist syntactically, so ArgIdents holds
 	// the slice's name and would otherwise read as a single ordinary argument.
 	ArgSpread bool
+	// ReceiverType is, for a Go call `x.M()` whose qualifier x the enclosing
+	// function declares, what that declaration says x is: a named type ("T",
+	// "pkg.T") from `x := T{}`, `&T{}`, `new(T)`, `var x T` or `x := y.(T)`; a
+	// call's result (ReceiverFromCall + "F/0" or "pkg.F/1") from `x := F()` or
+	// `_, x := pkg.F()`; or ReceiverAmbiguous when the function declares x more
+	// than once (a parameter re-declared by a loop variable, say), so no tier may
+	// read a type for it. Empty when nothing is evident.
+	ReceiverType string
 }
+
+// ReceiverType values with a meaning of their own.
+const (
+	// ReceiverAmbiguous: the qualifier names more than one declaration in the
+	// enclosing function, so which one a call uses depends on scope the index
+	// does not hold.
+	ReceiverAmbiguous = "?"
+	// ReceiverFromCall prefixes a hint the resolver completes from the called
+	// function's declared results: "call:" + callee spelling + "/" + result index.
+	ReceiverFromCall = "call:"
+)
 
 // Qualifier markers for call sites whose receiver has no name of its own. None of
 // them can equal an identifier, so the resolver can never read one as an import,
@@ -359,6 +378,9 @@ type CallGraphStatus struct {
 	ResolvedSamePackage  int
 	ResolvedReceiverSelf int
 	ResolvedParamTyped   int
+	// ResolvedLocalTyped is the subset of Resolved on a local variable the
+	// enclosing function declares once with an evident type.
+	ResolvedLocalTyped int
 	// ResolvedNonTest is the subset of Resolved whose caller is not a Go test
 	// file. Test callers are resolved and counted; this is the split, published
 	// so a consumer that must exclude them can, and so neither number can be

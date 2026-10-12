@@ -41,10 +41,16 @@ func (g *guardLog) saw(suffix string) bool {
 	return slices.ContainsFunc(g.paths, func(p string) bool { return strings.HasSuffix(p, suffix) })
 }
 
-// newSamePkgTool indexes files (Go sources only) and logs the guard's calls.
+// newSamePkgTool indexes files (Go sources only), turns the index into the one the
+// build before the local-variable tier left (makeIndexPredateLocalTier), and logs the
+// guard's calls. The name search is for the calls the call graph does not resolve; that
+// graph now resolves a call on a local variable of evident type, so the mechanics of
+// the search (caps, scan bound, scope, sensitive and stale siblings, ambiguity) are
+// exercised on an index that still leaves such a call to it.
 func newSamePkgTool(t *testing.T, files map[string]string) (shopTool, *guardLog) {
 	t.Helper()
 	s := newModuleWorkspace(t, files)
+	makeIndexPredateLocalTier(t, s.root)
 	log := &guardLog{}
 	inner := testBoundaryGuard(s.root)
 	s.collector.WithBoundary(func(ctx context.Context, p string) error {
@@ -81,8 +87,8 @@ func requireIDs(t *testing.T, what string, got []string, want ...string) {
 // samePkgSiblingFiles is one package of sibling files that mention the method
 // (*Calc).Apply in every way a name can be mentioned. The subject is a method because
 // the index resolves a function's bare same-package callers itself, and the callers
-// hold their receiver in a local variable, which the call graph cannot resolve: only
-// the name search finds them.
+// hold their receiver in a local variable, which an index from before the local tier
+// (newSamePkgTool) cannot resolve: only the name search finds them.
 var samePkgSiblingFiles = map[string]string{
 	"p/a.go": `package p
 
@@ -332,8 +338,10 @@ func TestSamePackage_ADuplicatedMethodIsOnlyAGapCandidate(t *testing.T) {
 }
 
 // The shop fixture: Tenth and TestOffPercent call Off on a local Discount from sibling
-// files, and the tests of cart call Total on a local `var c Cart`. The call graph
-// resolves neither, so only the name search finds them.
+// files, and the tests of cart call Total on a local Cart. Each declares that local
+// twice, which the call graph cannot resolve (it holds no scopes), while each
+// declaration shows the receiver's type, so only the name search finds them: on the
+// current index, which resolves a local declared once.
 func TestSamePackage_TheShopFixtureCases(t *testing.T) {
 	for _, id := range []string{"C16", "C17"} {
 		t.Run(id, func(t *testing.T) {
@@ -420,9 +428,118 @@ func makeIndexPredateSamePackageCalls(t *testing.T, root string) {
 	}
 }
 
+// makeIndexPredateLocalTier turns a freshly indexed workspace into the index the build
+// before the local-variable tier left (the 0.24.1 daemon's): the census of the
+// same-package tiers is there and so are the edges of the bare, receiver and parameter
+// tiers, but a call `x.M()` on a local variable drew no edge. It removes the
+// call-resolver edges whose call site carries a local receiver type (a type the
+// enclosing function states once for x; the site's callee is the edge's target), checks
+// that none is left and that the census stayed, and returns how many it removed. A
+// name the function declares twice carries the ambiguity marker, which no tier
+// resolved, so it has no edge to remove.
+func makeIndexPredateLocalTier(t *testing.T, root string) int {
+	t.Helper()
+	db, err := sqlitex.Open(topology.DBPath(root), sqlitex.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	const localEdges = `FROM topology_edges e JOIN topology_nodes n ON n.id = e.to_id
+		WHERE e.kind = 'calls' AND e.source = ?1 AND EXISTS (
+			SELECT 1 FROM topology_call_sites cs
+			WHERE cs.enclosing_id = e.from_id AND cs.callee = n.name AND cs.receiver_type NOT IN ('', ?2))`
+	res, err := db.Exec(`DELETE FROM topology_edges WHERE id IN (SELECT e.id `+localEdges+`)`, sourceCallResolver, topology.ReceiverAmbiguous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, _ := res.RowsAffected()
+	var left, census int
+	if err := db.QueryRow(`SELECT count(*) `+localEdges, sourceCallResolver, topology.ReceiverAmbiguous).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	// "callgraph.resolved_same_package" is the key the indexer writes the census under.
+	if err := db.QueryRow(`SELECT count(*) FROM topology_meta WHERE key = 'callgraph.resolved_same_package'`).Scan(&census); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 || census != 1 {
+		t.Fatalf("control: %d local-tier edges left and %d census row(s); want none and the census kept", left, census)
+	}
+	return int(removed)
+}
+
+// A method called on a local variable whose type its declaration states once is a
+// derived edge on an index that ran the local tier: a resolved caller (e2,
+// call-resolver), never a name match. On the index of the build before the tier it is
+// the name search's, an e1 name match; the callers through the method's own receiver
+// and through a typed parameter stay resolved on both. A name the caller declares
+// twice is beyond the tier on either index, and the name search still finds it.
+func TestSamePackage_AMethodOnAnEvidentLocalIsResolvedOnlyOnAnIndexThatRanTheLocalTier(t *testing.T) {
+	files := map[string]string{
+		"p/a.go":            calcFile,
+		"p/evident.go":      "package p\n\nfunc Savings(n int) int {\n\tvar c Calc\n\treturn n - c.Apply(n)\n}\n",
+		"p/literal_test.go": "package p\n\nimport \"testing\"\n\nfunc TestApply(t *testing.T) {\n\tc := &Calc{}\n\tc.Apply(5)\n}\n",
+		"p/twice.go":        "package p\n\nfunc Twice(n int) int {\n\tvar c Calc\n\tif n > 0 {\n\t\tc := Calc{}\n\t\treturn c.Apply(n)\n\t}\n\treturn c.Apply(0)\n}\n",
+		"p/self.go":         "package p\n\nfunc (c *Calc) Double(n int) int { return c.Apply(n) * 2 }\n",
+		"p/param.go":        "package p\n\nfunc viaParam(c *Calc) int { return c.Apply(1) }\n",
+	}
+	args := map[string]any{"symbols": []string{"p/a.go#Calc.Apply"}, "intent": contextIntentChange}
+	evident, literal, twice := goldID("p/evident.go", "Savings"), goldID("p/literal_test.go", "TestApply"), goldID("p/twice.go", "Twice")
+	self, param := goldID("p/self.go", "(*Calc).Double"), goldID("p/param.go", "viaParam")
+	resolved := func(pack contextPack, ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			if r, ok := pack.related(id); !ok || r.NameMatch || r.Evidence != evidenceDerived || r.Source != sourceCallResolver || r.CallerOf == 0 {
+				t.Errorf("%s: %+v (found=%v), want a resolved caller (e2, call-resolver), not a name match", id, r, ok)
+			}
+		}
+	}
+	nameMatched := func(pack contextPack, ids ...string) {
+		t.Helper()
+		for _, id := range ids {
+			if r, ok := pack.related(id); !ok || !r.NameMatch || r.Gap || r.Evidence != evidenceHeuristic || r.CallerOf != 0 {
+				t.Errorf("%s: %+v (found=%v), want a name-match caller at evidence 1, not a resolved one", id, r, ok)
+			}
+		}
+	}
+
+	current := newModuleWorkspace(t, files)
+	pack := current.collect(t, args)
+	resolved(pack, evident, literal, self, param)
+	nameMatched(pack, twice)
+	callers, cands := nameMatches(pack)
+	requireIDs(t, "name-match callers on an index with the local tier", callers, twice)
+	requireIDs(t, "candidates on an index with the local tier", cands)
+	out, err := current.run(t, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "callers of (*Calc).Apply: 4 resolved and listed, plus 1 same-package name match(es) (e1)"; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+
+	old := newModuleWorkspace(t, files)
+	if n := makeIndexPredateLocalTier(t, old.root); n != 2 {
+		t.Fatalf("control: the old index lost %d edges, want the two the local tier drew (Savings, TestApply)", n)
+	}
+	pack = old.collect(t, args)
+	resolved(pack, self, param)
+	nameMatched(pack, evident, literal, twice)
+	callers, cands = nameMatches(pack)
+	requireIDs(t, "name-match callers on an index before the local tier", callers, evident, literal, twice)
+	requireIDs(t, "candidates on an index before the local tier", cands)
+	out, err = old.run(t, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "callers of (*Calc).Apply: 2 resolved and listed, plus 3 same-package name match(es) (e1)"; !strings.Contains(out, want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
+	}
+}
+
 // A caller of a resolved neighbour is found one hop further out, and the walk goes no
 // further than its depth cap. Total calls price on its own receiver, an edge the index
-// resolves; Report calls price on a local Cart, which only the name search can see.
+// resolves; Report calls price on a local Cart, which only the name search can see on
+// an index from before the local tier.
 func TestSamePackage_ACallerOfAResolvedNeighbourIsFoundAtTheNextHop(t *testing.T) {
 	s := newModuleWorkspace(t, map[string]string{
 		"go.mod":         chainModule,
@@ -430,6 +547,9 @@ func TestSamePackage_ACallerOfAResolvedNeighbourIsFoundAtTheNextHop(t *testing.T
 		"cart/price.go":  "package cart\n\nfunc (c *Cart) price() int { return 1 }\n",
 		"cart/report.go": "package cart\n\n// Report prices a local Cart.\nfunc Report() int {\n\tvar c Cart\n\treturn c.price()\n}\n",
 	})
+	if n := makeIndexPredateLocalTier(t, s.root); n != 1 {
+		t.Fatalf("control: the old index lost %d edges, want the one the local tier drew (Report to price)", n)
+	}
 	pack := s.collect(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}, "intent": contextIntentChange})
 	if price, ok := pack.related(goldID("cart/price.go", "(*Cart).price")); !ok || price.Dist != 1 || price.NameMatch || price.Evidence != evidenceDerived {
 		t.Fatalf("control: price: %+v (found=%v), want a resolved callee one hop from the seed", price, ok)
