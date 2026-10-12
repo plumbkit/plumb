@@ -37,34 +37,31 @@ git init -q && git add -A && git -c user.name=verify -c user.email=verify@localh
 # The plumb daemons alive now, by their own argv; "?" when the process table
 # cannot be read. A process that exited mid-scan is skipped, but an empty
 # listing is not "none": this shell is a process, so /proc must list one.
-# A child of a daemon, in the instant between fork and exec, still shows the
-# argv of the daemon, so a match whose parent is itself a match is not counted:
-# plumb never starts a daemon from a daemon (serve and `plumb restart` do).
+# Until exec, a forked child still shows its parent argv, so a daemon starting
+# gopls or git briefly looks like a second daemon. The kernel marks that state
+# with PF_FORKNOEXEC (0x40) in the stat flags (field 9), so stat is read FIRST
+# and a flagged process is skipped; only then is cmdline read, which after exec
+# is the process own. A real plumb daemon counts, whatever its parent.
 daemons() {
-  local dir argv stat listed=0 pid
-  local -A ppid_of=()
+  local n=0 dir stat argv listed=0 rest
   for dir in /proc/[0-9]*; do
     [ -d "$dir" ] || continue
     listed=1
-    if ! argv=$(tr "\0" " " < "$dir/cmdline" 2> /dev/null); then
-      [ -d "$dir" ] && { echo "?"; return; }
-      continue
-    fi
-    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] || continue
     if ! stat=$(< "$dir/stat") 2> /dev/null; then
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
-    stat=${stat##*) }   # after the last ")": "state ppid ..."
-    stat=${stat#* }
-    [[ "${stat%% *}" =~ ^[0-9]+$ ]] || { echo "?"; return; }
-    ppid_of[${dir#/proc/}]=${stat%% *}
+    rest=${stat##*) }                                # "state ppid pgrp session tty tpgid flags ..."
+    read -r _ _ _ _ _ _ flags _ <<< "$rest"
+    [[ "$flags" =~ ^[0-9]+$ ]] || { echo "?"; return; }
+    (( flags & 0x40 )) && continue                   # forked, not yet exec-ed
+    if ! argv=$(tr "\0" " " < "$dir/cmdline" 2> /dev/null); then
+      [ -d "$dir" ] && { echo "?"; return; }
+      continue
+    fi
+    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] && n=$((n + 1))
   done
   [ "$listed" -eq 1 ] || { echo "?"; return; }
-  local n=0
-  for pid in "${!ppid_of[@]}"; do
-    [ -n "${ppid_of[${ppid_of[$pid]}]+x}" ] || n=$((n + 1))
-  done
   echo "$n"
 }
 
