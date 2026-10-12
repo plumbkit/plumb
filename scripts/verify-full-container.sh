@@ -37,8 +37,12 @@ git init -q && git add -A && git -c user.name=verify -c user.email=verify@localh
 # The plumb daemons alive now, by their own argv; "?" when the process table
 # cannot be read. A process that exited mid-scan is skipped, but an empty
 # listing is not "none": this shell is a process, so /proc must list one.
+# A child of a daemon, in the instant between fork and exec, still shows the
+# argv of the daemon, so a match whose parent is itself a match is not counted:
+# plumb never starts a daemon from a daemon (serve and `plumb restart` do).
 daemons() {
-  local n=0 dir argv listed=0
+  local dir argv stat listed=0 pid
+  local -A ppid_of=()
   for dir in /proc/[0-9]*; do
     [ -d "$dir" ] || continue
     listed=1
@@ -46,9 +50,21 @@ daemons() {
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
-    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] && n=$((n + 1))
+    [[ "$argv" =~ ^([^\ ]*/)?plumb\ daemon(\ |$) ]] || continue
+    if ! stat=$(< "$dir/stat") 2> /dev/null; then
+      [ -d "$dir" ] && { echo "?"; return; }
+      continue
+    fi
+    stat=${stat##*) }   # after the last ")": "state ppid ..."
+    stat=${stat#* }
+    [[ "${stat%% *}" =~ ^[0-9]+$ ]] || { echo "?"; return; }
+    ppid_of[${dir#/proc/}]=${stat%% *}
   done
   [ "$listed" -eq 1 ] || { echo "?"; return; }
+  local n=0
+  for pid in "${!ppid_of[@]}"; do
+    [ -n "${ppid_of[${ppid_of[$pid]}]+x}" ] || n=$((n + 1))
+  done
   echo "$n"
 }
 
