@@ -53,7 +53,12 @@ daemons() {
       [ -d "$dir" ] && { echo "?"; return; }
       continue
     fi
-    rest=${stat##*) }                                # "state ppid pgrp session tty tpgid flags ..."
+    # "pid (comm) state ppid pgrp session tty tpgid flags ...": comm may hold
+    # spaces or ")", so the greedy match ends at the last ") ". A line without
+    # that header, or naming another pid, is not trusted.
+    [[ "$stat" =~ ^([0-9]+)\ [\(](.*)[\)]\ (.*)$ ]] && [ "${BASH_REMATCH[1]}" = "${dir#/proc/}" ] || { echo "?"; return; }
+    rest=${BASH_REMATCH[3]}
+    flags=""
     read -r _ _ _ _ _ _ flags _ <<< "$rest"
     [[ "$flags" =~ ^[0-9]+$ ]] || { echo "?"; return; }
     (( flags & 0x40 )) && continue                   # forked, not yet exec-ed
