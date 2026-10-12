@@ -13,6 +13,15 @@
 
 ### Added
 
+- **`context_for_task` names the tests that run your seed, as a ready
+  `run_task` call.** The affected-tests estimate named only packages
+  (`./internal/tools/... — 1808 test(s)`), so agents built their own `-run`
+  filter or ran the whole package. Under a package row, one line now names up to
+  eight tests a call edge reaches: tests that call a seed, directly or through a
+  caller, come first and closest first, then tests of the declarations it calls.
+  With a Go test target the line is a `run_task(slot:"test", target:…, run:…)`
+  call whose filter `run_task` accepts, with the rest counted. Tests that only
+  sit in the package are never named, and a stale index names none.
 - **The Go call graph resolves method calls on local variables of evident type.**
   `x.M()` now links to the method of `x`'s type when the enclosing function
   declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or

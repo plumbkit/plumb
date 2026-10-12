@@ -4,8 +4,12 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"path"
 	"slices"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/textfmt"
 	"github.com/plumbkit/plumb/internal/topology"
@@ -16,8 +20,15 @@ import (
 // This is topology_affected's own gather (collectAffected) run over the pack's
 // seeds, kept to one row per test package: the directory (or the run_task target
 // the calling agent's test command accepts), how many tests live there and why the
-// package is implicated. It names no individual test, and it runs none (Invariant
-// 10): every word here says "estimate" and "implicated", never "passed" or "ran".
+// package is implicated. It runs none (Invariant 10): every word here says
+// "estimate" and "implicated", never "passed" or "ran".
+//
+// Under a package row it may name a few tests, but only the ones a call edge
+// reaches: a test that calls a seed, or a declaration next to one, directly or
+// through callers. Co-location says only that a test sits in the package, so a
+// co-located test is counted, never named. With a Go test target the names come as
+// a ready run_task filter, which is the step agents otherwise spell by hand before
+// their first test run (PLAN-543: every arm D agent built its own -run filter).
 //
 // The estimate rests on the index, so a missing, failing or foreign index gives
 // none at all (the index gap already says so), and the scope filter applies to
@@ -30,6 +41,10 @@ const (
 	// contextAffectedNeighbours bounds the neighbouring declarations a change may
 	// extend into that the estimate also starts from.
 	contextAffectedNeighbours = 8
+	// contextNamedPerPackage and contextNamedPackages bound the named tests: past a
+	// handful the line stops being a first run and becomes the package again.
+	contextNamedPerPackage = 8
+	contextNamedPackages   = 3
 )
 
 // contextAffected is the estimate and what bounded it.
@@ -37,11 +52,12 @@ type contextAffected struct {
 	Ran       bool
 	Packages  []affectedPackage
 	Scope     TestScope
-	Neighbour map[string]bool // directories implicated only through a neighbour of a seed
-	Excluded  int             // tests left out by within, corpora or plumb's own state
-	Cut       bool            // more packages than the cap
-	GraphCut  bool            // the dependent walk hit its traversal budget
-	Deadline  bool            // the graph deadline passed, so the estimate is partial
+	Neighbour map[string]bool       // directories implicated only through a neighbour of a seed
+	Named     map[string]namedTests // per package directory: the tests a call edge reaches
+	Excluded  int                   // tests left out by within, corpora or plumb's own state
+	Cut       bool                  // more packages than the cap
+	GraphCut  bool                  // the dependent walk hit its traversal budget
+	Deadline  bool                  // the graph deadline passed, so the estimate is partial
 }
 
 // affectedTests gathers the estimate. ctx carries the call's graph deadline.
@@ -53,8 +69,8 @@ func (c *ContextCollector) affectedTests(ctx context.Context, pack *contextPack,
 	if len(roots)+len(dirs) == 0 {
 		return // no code seed: nothing to estimate from, and nothing to disclaim
 	}
-	near := affectedNeighbours(pack)
-	res, err := collectAffected(ctx, index.store, append(roots, near...), dirs, contextAffectedPackages)
+	near, aside := affectedNeighbours(pack)
+	res, err := collectAffectedNear(ctx, index.store, roots, near, aside, dirs, contextAffectedPackages)
 	if err != nil || res == nil {
 		return
 	}
@@ -64,12 +80,92 @@ func (c *ContextCollector) affectedTests(ctx context.Context, pack *contextPack,
 		Ran: true, Packages: seedPackagesFirst(aggregateTestsByPackage(kept), nearDirs), Excluded: excluded, Neighbour: nearDirs,
 		Cut: res.Truncated, GraphCut: res.GraphTruncated, Deadline: ctx.Err() != nil,
 	}
+	pack.Affected.Named = edgeReachedTests(pack.Affected.Packages, indexFreshness(index.store.Health()))
 	for i := range pack.Affected.Packages {
-		pack.Affected.Packages[i].Tests = nil // the estimate names packages, never tests
+		pack.Affected.Packages[i].Tests = nil // only edgeReachedTests' names survive
 	}
 	if c.testScope != nil {
 		pack.Affected.Scope = c.testScope(ctx)
 	}
+}
+
+// namedTests are the tests of one package that a call edge reaches, those that
+// exercise a seed first and the closest first among them (fewest hops, then
+// name), and how many there were.
+type namedTests struct {
+	Names []string
+	Total int
+}
+
+// edgeReachedTests names, per package, the tests the dependent walk reached by
+// an edge rather than by sitting in an implicated directory. Only test functions
+// go test -run can select are named; the first contextNamedPackages packages that
+// have any are kept, in the rows' order.
+//
+// freshness is the index's (indexFreshness). A stale graph may name a test that
+// no longer reaches the seed, and a wrong name costs the agent a run, so a stale
+// index names none; its gap already says it is stale, and the package rows stay.
+func edgeReachedTests(pkgs []affectedPackage, freshness string) map[string]namedTests {
+	out := map[string]namedTests{}
+	if freshness == "stale" {
+		return out
+	}
+	for _, pk := range pkgs {
+		if len(out) == contextNamedPackages {
+			break
+		}
+		var reached []affectedTest
+		seen := map[string]bool{}
+		for _, t := range pk.Tests {
+			if t.Confidence <= colocatedConfidence || !runnableTestName(t.Node.Name) || seen[t.Node.Name] {
+				continue
+			}
+			seen[t.Node.Name] = true
+			reached = append(reached, t)
+		}
+		if len(reached) == 0 {
+			continue
+		}
+		// A test that exercises a seed comes before one that only reaches a callee or
+		// sibling of it; then fewest hops, where a test whose connecting edge was
+		// filtered out of the subgraph has no hop count (0) and goes last. Name breaks
+		// ties, so the line is the same on every call.
+		slices.SortFunc(reached, func(a, b affectedTest) int {
+			if c := cmp.Compare(boolInt(a.Aside), boolInt(b.Aside)); c != 0 {
+				return c
+			}
+			if c := cmp.Compare(hopRank(a.Hops), hopRank(b.Hops)); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Node.Name, b.Node.Name)
+		})
+		n := namedTests{Total: len(reached)}
+		for _, t := range reached[:min(len(reached), contextNamedPerPackage)] {
+			n.Names = append(n.Names, t.Node.Name)
+		}
+		out[pk.Dir] = n
+	}
+	return out
+}
+
+// hopRank orders a known hop count before an unknown one (0).
+func hopRank(h int) int {
+	if h == 0 {
+		return math.MaxInt
+	}
+	return h
+}
+
+// runnableTestName is a top-level function go test -run selects: Test, Example or
+// Fuzz followed by nothing or a non-lowercase rune, as the testing package
+// requires. A benchmark needs -bench, and a helper is not a test at all.
+func runnableTestName(name string) bool {
+	for _, p := range []string{"Test", "Example", "Fuzz"} {
+		if rest, ok := strings.CutPrefix(name, p); ok {
+			return rest == "" || !unicode.IsLower([]rune(rest)[0])
+		}
+	}
+	return false
 }
 
 // affectedRoots lists the code symbols the estimate starts from, and the
@@ -100,20 +196,37 @@ func affectedRoots(ctx context.Context, store *topology.Store, seeds []contextSe
 // away) that a change to the seeds may extend into, so their tests are implicated
 // too. They matter only for intent=change: understanding code changes nothing.
 // Each already passed the scope filter in the walk.
-func affectedNeighbours(p *contextPack) []topology.Node {
+//
+// aside holds the neighbours that are not callers of a seed (its callees and
+// siblings): a test of one of those does not run the seed, so it ranks after
+// every test that does. A caller's tests do run the seed, one hop further out.
+//
+// near is in walk order, callers first and then by name, whatever the ranking
+// chose them in: a path that does not run the seed is then never recorded
+// before one that does, and the same pack walks in the same order every time.
+func affectedNeighbours(p *contextPack) (near []topology.Node, aside map[int64]bool) {
 	if p.Intent != contextIntentChange {
-		return nil
+		return nil, nil
 	}
-	var out []topology.Node
+	aside = map[int64]bool{}
 	for _, r := range p.Related {
-		if len(out) == contextAffectedNeighbours {
+		if len(near) == contextAffectedNeighbours {
 			break
 		}
 		if r.Dist == 1 && !r.Gap && !r.Withheld && r.Evidence >= evidenceDerived && !isTestNode(r.Node) {
-			out = append(out, r.Node)
+			near = append(near, r.Node)
+			if r.CallerOf == 0 {
+				aside[r.Node.ID] = true
+			}
 		}
 	}
-	return out
+	slices.SortStableFunc(near, func(a, b topology.Node) int {
+		if c := cmp.Compare(boolInt(aside[a.ID]), boolInt(aside[b.ID])); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
+	return near, aside
 }
 
 // neighbourDirs are the directories only a neighbour of a seed puts in play: not
@@ -193,8 +306,74 @@ func (p *contextPack) affectedLines() []packLine {
 		text := fmt.Sprintf("  %s — %d test(s); %s", textfmt.TerminalSafeLine(packageRunLabel(p.Affected.Scope, pk.Dir)),
 			pk.Count, affectedReasonWords(pk.Reason, pk.Dir, p.Affected))
 		ls = append(ls, packLine{text: text, prio: prioAffected, section: secAffected, class: classAffected})
+		if named, ok := p.Affected.Named[pk.Dir]; ok {
+			ls = append(ls, packLine{text: namedTestsLine(p.Affected.Scope, pk.Dir, named), prio: prioAffected, section: secAffected, class: classAffected})
+		}
 	}
 	return ls
+}
+
+// namedTestsReach is how a named test is connected to the seeds. It is the walk's
+// own claim and no more: the edges are the index's, and nothing was run.
+const namedTestsReach = "call a seed or a declaration next to one, directly or through callers (index call edges)"
+
+// namedTestsLine renders one package's edge-reached tests. With a Go package
+// target it is a run_task call ready to paste, its filter cut to the names that
+// fit the filter's length limit; otherwise it is the names. The line never says
+// the tests ran or passed.
+func namedTestsLine(scope TestScope, dir string, n namedTests) string {
+	names := n.Names
+	if target, ok := testTarget(scope, dir); ok && scope.Style == TargetGoPackage {
+		for len(names) > 0 && validateRunFilter("run", runFilterFor(names)) != nil {
+			names = names[:len(names)-1]
+		}
+		if len(names) > 0 {
+			return fmt.Sprintf("    run first: run_task(slot:\"test\", target:%q, run:%q) — %s %s%s",
+				target, runFilterFor(names), namedCount(len(names), n.Total), namedTestsReach, namedMore(len(names), n.Total))
+		}
+		names = n.Names
+	}
+	return fmt.Sprintf("    %s %s: %s%s", namedCount(len(names), n.Total), namedTestsReach,
+		textfmt.TerminalSafeLine(strings.Join(names, ", ")), namedMore(len(names), n.Total))
+}
+
+// runFilterFor anchors the names as one group: go test -run splits a pattern only
+// at a top-level |, so the alternation inside the parentheses stays whole. The
+// names' common prefix is written once (^TestMoveSymbol_(Refusals|CreateDestination)$),
+// which fits more of them in run_task's filter limit. Test names are identifiers,
+// so nothing in them needs escaping.
+func runFilterFor(names []string) string {
+	if len(names) == 1 {
+		return "^(" + names[0] + ")$"
+	}
+	prefix := names[0]
+	for _, n := range names[1:] {
+		for !strings.HasPrefix(n, prefix) {
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	for !utf8.ValidString(prefix) { // never split a rune between prefix and rest
+		prefix = prefix[:len(prefix)-1]
+	}
+	rests := make([]string, len(names))
+	for i, n := range names {
+		rests[i] = n[len(prefix):]
+	}
+	return "^" + prefix + "(" + strings.Join(rests, "|") + ")$"
+}
+
+func namedCount(shown, total int) string {
+	if shown == total {
+		return fmt.Sprintf("%d test(s)", total)
+	}
+	return fmt.Sprintf("%d of %d test(s) that", shown, total)
+}
+
+func namedMore(shown, total int) string {
+	if shown == total {
+		return ""
+	}
+	return fmt.Sprintf("; %d more are not named", total-shown)
 }
 
 // affectedGaps words what bounded the estimate. An estimate with no test in it is
