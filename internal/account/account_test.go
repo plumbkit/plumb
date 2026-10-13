@@ -1,12 +1,14 @@
 package account
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCurrent_RefusesWithoutASeamRootInATestBinary(t *testing.T) {
@@ -233,5 +235,123 @@ func TestUserPaths_SeparateTheAuthorityFromTheRuntimeDirectory(t *testing.T) {
 	}
 	if got := u.CacheDir(); got != wantCache {
 		t.Errorf("CacheDir() = %q, want %q", got, wantCache)
+	}
+}
+
+// The rule a CGO_ENABLED=0 Linux release binary depends on: an account served by
+// NSS (LDAP, SSSD, Active Directory, systemd-homed, NIS) has no /etc/passwd
+// entry, and authorityPath() is consulted unconditionally on the way to starting
+// a daemon — so before this fallback existed, such a host could not run one at
+// all. The runner is injected because the production caller is Linux-only.
+func TestLookupHome_FallsBackToGetentForAnAccountAbsentFromPasswd(t *testing.T) {
+	passwd := "root:x:0:0:root:/root:/bin/sh\nalice:x:501:20:Alice:/home/alice:/bin/zsh\n"
+	var asked int
+	getent := func(_ context.Context, uid int) (string, bool) {
+		asked = uid
+		return "bob:x:502:20:Bob:/home/bob:/bin/bash\n", true
+	}
+
+	home, ok := lookupHome(context.Background(), passwd, 502, getent)
+	if !ok {
+		t.Fatal("an account absent from /etc/passwd but present in getent must resolve")
+	}
+	if home != "/home/bob" {
+		t.Errorf("home = %q, want /home/bob from the getent entry", home)
+	}
+	if asked != 502 {
+		t.Errorf("getent was asked for uid %d, want the uid passed to lookupHome (502)", asked)
+	}
+
+	// What the resolved home is FOR: every directory the daemon's locks, sockets
+	// and metadata live in is built from it, so this is the difference between a
+	// daemon on an NSS host and none at all.
+	u := User{UID: 502, Home: home}
+	wantData := filepath.Join(home, ".local", "share", "plumb")
+	wantCache := filepath.Join(home, ".cache", "plumb")
+	if runtime.GOOS == "darwin" {
+		wantData = filepath.Join(home, "Library", "Application Support", "plumb")
+		wantCache = filepath.Join(home, "Library", "Caches", "plumb")
+	}
+	if got := u.DataDir(); got != wantData {
+		t.Errorf("DataDir() = %q, want %q", got, wantData)
+	}
+	if got := u.CacheDir(); got != wantCache {
+		t.Errorf("CacheDir() = %q, want %q", got, wantCache)
+	}
+	if got := u.AuthorityLockPath(); got != filepath.Join(wantData, "daemon.authority.lock") {
+		t.Errorf("AuthorityLockPath() = %q, want it under %q", got, wantData)
+	}
+}
+
+// getent is the FALLBACK, not a second opinion: a uid the passwd file holds must
+// be answered from the file, without an NSS round trip that could be slow or, on
+// a misconfigured host, answer differently.
+func TestLookupHome_DoesNotAskGetentWhenPasswdAnswers(t *testing.T) {
+	called := false
+	getent := func(context.Context, int) (string, bool) {
+		called = true
+		return "bob:x:502:20:Bob:/home/elsewhere:/bin/bash\n", true
+	}
+
+	home, ok := lookupHome(context.Background(), "bob:x:502:20:Bob:/home/bob:/bin/bash\n", 502, getent)
+	if !ok || home != "/home/bob" {
+		t.Fatalf("lookupHome = %q, %v; want /home/bob from the passwd file", home, ok)
+	}
+	if called {
+		t.Error("getent was consulted for a uid the passwd file already answered")
+	}
+}
+
+// A uid field that is not the one asked for is a refusal, not a fallback: getent
+// was asked about exactly one account, so a line naming a different uid is an
+// answer to a different question, and reading a home out of it would be the
+// guess this package exists to refuse.
+func TestLookupHome_RefusesAGetentAnswerNamingAnotherUID(t *testing.T) {
+	getent := func(context.Context, int) (string, bool) {
+		return "bob:x:999:20:Bob:/home/bob:/bin/bash\n", true
+	}
+
+	home, ok := lookupHome(context.Background(), "root:x:0:0:root:/root:/bin/sh\n", 502, getent)
+	if ok {
+		t.Fatalf("lookupHome resolved %q from a getent answer naming uid 999", home)
+	}
+}
+
+// Only BOTH sources failing is a refusal, and that refusal names the remedy. The
+// uid is one no account database can hold: the assertion is about lookup's own
+// wiring, so it must not depend on which source answered — or on which platform
+// this test runs on.
+func TestLookup_RefusesWhenNeitherPasswdNorGetentAnswers(t *testing.T) {
+	const nowhere = 1 << 30
+	_, err := lookup(nowhere)
+	if !errors.Is(err, ErrNoAccount) {
+		t.Fatalf("lookup(%d) = %v, want it to wrap ErrNoAccount", nowhere, err)
+	}
+	if !strings.Contains(err.Error(), "getent") {
+		t.Errorf("the refusal must name the remedy for the build that ships, got: %v", err)
+	}
+}
+
+// NSS can block on an unreachable directory server rather than fail, and this
+// lookup runs on the way to starting a daemon, so the fallback carries a
+// deadline: a source that misses it is a source that did not answer.
+func TestLookupHome_BoundsTheGetentLookup(t *testing.T) {
+	var (
+		deadline time.Time
+		hasLimit bool
+	)
+	getent := func(ctx context.Context, _ int) (string, bool) {
+		deadline, hasLimit = ctx.Deadline()
+		return "", false
+	}
+
+	if home, ok := lookupHome(context.Background(), "", 501, getent); ok {
+		t.Fatalf("lookupHome resolved %q from a source that answered nothing", home)
+	}
+	if !hasLimit {
+		t.Fatal("the getent lookup ran with no deadline; NSS can block indefinitely")
+	}
+	if left := time.Until(deadline); left <= 0 || left > getentTimeout {
+		t.Errorf("the getent deadline is %s away, want more than 0 and at most %s", left, getentTimeout)
 	}
 }

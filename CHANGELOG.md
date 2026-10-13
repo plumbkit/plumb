@@ -24,7 +24,10 @@
   to the daemon holding it, through the socket that daemon recorded, rather than
   dialling its own `$HOME`-derived path. The account comes from the operating
   system's account database, and a uid it cannot resolve is refused rather than
-  guessed: `plumb debug daemons` reports that state instead of a count.
+  guessed — on the Linux release build (`CGO_ENABLED=0`) that means `/etc/passwd`
+  and then `getent`, so an account served only by NSS (LDAP, SSSD,
+  systemd-homed) still resolves, and only both sources failing is a refusal;
+  `plumb debug daemons` reports a uid neither source holds instead of a count.
 
 
 - **`context_for_task` names the tests that run your seed, as a ready

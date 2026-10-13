@@ -13,8 +13,10 @@
 // Pure-Go Linux is the trap: os/user's lookupStubs "looks up" the current user
 // from $USER and $HOME when the passwd lookup is unavailable, which is exactly
 // the fallback this package exists to refuse. On a CGO_ENABLED=0 linux build the
-// passwd file is parsed directly instead, and a uid that is not in it is a
-// refusal.
+// passwd file is parsed directly instead, and a uid it does not hold is put to
+// getent — NSS-authoritative, and no more environment-derived than the file — so
+// an account served only by LDAP, SSSD or systemd-homed still resolves. Only
+// both sources failing is a refusal.
 //
 // Concurrency: safe for concurrent use; every value is resolved once per call
 // from immutable inputs.
@@ -59,7 +61,14 @@ func Current() (User, error) {
 func lookup(uid int) (User, error) {
 	home, ok := platformHome(uid)
 	if !ok {
-		return User{}, fmt.Errorf("%w: uid %d", ErrNoAccount, uid)
+		// The remedy, not only the fact. This refusal is a host whose account
+		// database cannot answer for its own process, and on the build every Linux
+		// release binary uses that means neither /etc/passwd nor getent holds the
+		// uid — so the message says what to change rather than only what failed.
+		return User{}, fmt.Errorf("%w: uid %d — refusing to guess a home directory from the environment; "+
+			"run plumb as an account the OS account database can resolve. A CGO_ENABLED=0 Linux build "+
+			"reads /etc/passwd and then getent(1), so the uid needs an entry in one of them "+
+			"(getent ships in libc-bin)", ErrNoAccount, uid)
 	}
 	if !filepath.IsAbs(home) || home == "/" {
 		// A relative or root home is not a place to keep a daemon's lock file.
