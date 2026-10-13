@@ -215,14 +215,17 @@ type OpenCall struct {
 // declare the name once). An external call is returned for the caller to judge
 // by its qualifier.
 func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit int) (open []OpenCall, total int, err error) {
+	dots, err := s.dotImportFiles(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
 	// A call counts as accounted for only while the edge it produced still stands:
 	// a scoped pass re-reads only the changed files' sites, so a caller elsewhere
 	// keeps "resolved" after its target is deleted or renamed, with no edge left. A
 	// same-file call of the enclosing declaration's own name is recursion, which no
 	// pass draws an edge for and no census counts as a caller.
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT f.path, cs.start_line, IFNULL(cs.qualifier, ''), cs.outcome,
-		       EXISTS (SELECT 1 FROM topology_nodes i WHERE i.file_id = cs.file_id AND i.kind = ? AND i.name = '.'),
+		SELECT f.path, cs.file_id, cs.start_line, IFNULL(cs.qualifier, ''), cs.outcome,
 		       cs.outcome IN (?, ?, ?) AND (cs.enclosing_id IS NULL OR NOT EXISTS (
 		           SELECT 1 FROM topology_edges e JOIN topology_nodes t ON t.id = e.to_id
 		            WHERE e.from_id = cs.enclosing_id AND e.kind = ? AND t.name = cs.callee))
@@ -242,7 +245,6 @@ func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit 
 		       AND NOT (cs.outcome = ? AND EXISTS (
 		           SELECT 1 FROM topology_nodes en WHERE en.id = cs.enclosing_id AND en.name = cs.callee))))
 		 ORDER BY f.path, cs.start_byte`,
-		string(KindImport),
 		int(bucketResolved), int(bucketRepeat), int(bucketSameFile), string(EdgeCalls), int(bucketSameFile),
 		int(bucketSameFile), string(KindFunction), string(KindMethod), string(KindTest),
 		language, name, string(CallSiteCall),
@@ -257,9 +259,11 @@ func (s *Store) OpenCallSites(ctx context.Context, name, language string, limit 
 		var c OpenCall
 		var outcome int
 		var dangling, ambiguous bool
-		if err := rows.Scan(&c.Path, &c.Line, &c.Qualifier, &outcome, &c.DotImport, &dangling, &ambiguous); err != nil {
+		var fileID int64
+		if err := rows.Scan(&c.Path, &fileID, &c.Line, &c.Qualifier, &outcome, &dangling, &ambiguous); err != nil {
 			return nil, 0, fmt.Errorf("topology: open call sites: %w", err)
 		}
+		c.DotImport = dots[fileID]
 		c.Kind = openKind(resolveBucket(outcome))
 		if dangling && !ambiguous {
 			c.Kind = "stale"
@@ -336,4 +340,25 @@ func (s *Store) UnreadFiles(ctx context.Context, ext string) (int, error) {
 		return 0, fmt.Errorf("topology: unread files: %w", err)
 	}
 	return n, nil
+}
+
+// dotImportFiles is the set of files that dot-import a package, read once per
+// census. Asked per call site instead, the planner reaches for the import-kind
+// index and scans every import node of the workspace for each site: on this
+// repository a common method name's census took seconds (PLAN-544).
+func (s *Store) dotImportFiles(ctx context.Context) (map[int64]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT file_id FROM topology_nodes WHERE name = '.' AND kind = ?`, string(KindImport))
+	if err != nil {
+		return nil, fmt.Errorf("topology: dot imports: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("topology: dot imports: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
