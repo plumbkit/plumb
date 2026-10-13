@@ -263,10 +263,13 @@ func (l daemonLauncher) claimOrWait(ctx context.Context, st *launchState) (net.C
 // the caller redialling its own sockets until its deadline.
 //
 // It runs whenever a launch lock was found held, the lifetime lock included. A
-// record that passes attachSocket's checks names a live socket of ours under a
-// runtime root plumb owns, so the worst case is attaching to a daemon that is
-// not the one holding this runtime directory's lock — still the account's one
-// daemon, which is the daemon this client wants.
+// record that passes attachSocket's checks names a live socket of ours: the
+// recorded pid is alive, the recorded path is absolute, that path IS a unix
+// socket, and this user owns it. There is no directory gate on the socket — the
+// held account lock is the trust anchor, not the root the path sits under — so
+// the worst case is attaching to a daemon that is not the one holding this
+// runtime directory's lock: still the account's one daemon, which is the daemon
+// this client wants.
 func (l daemonLauncher) attachToHolder() net.Conn {
 	if l.dialHeld == nil {
 		return nil

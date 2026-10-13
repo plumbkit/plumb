@@ -41,7 +41,10 @@ import (
 // `plumb restart` take them BEFORE starting a daemon and hand them over on fds 3
 // (authority) and 4 (lifetime) — see daemon_launch.go — so they are held from
 // the moment the daemon exists, and a launcher that finds either held never
-// starts another. A daemon started any other way acquires them non-blocking, in
+// starts another. Those are the numbers THIS binary's launcher writes; the
+// daemon adopts the fd each env var NAMES instead, because the launcher that
+// started it may be an older binary whose handover was not this pair — see
+// holdDaemonLock. A daemon started any other way acquires them non-blocking, in
 // the same order, and exits at once if another daemon holds either.
 //
 // ONE ORDER: the account authority first, then the runtime lifetime lock, in
@@ -55,15 +58,26 @@ import (
 // The fds a launcher hands its daemon, and the env vars that name them. The
 // numbers are the child's own fd numbers, so they are positional in the
 // ExtraFiles that startDaemonProcess builds: authority 3, lifetime 4.
+//
+// They are what this binary's launcher writes, not a requirement on the daemon
+// that reads them: the fd itself is taken from the env var, and may be any
+// handover fd — see holdDaemonLock for why #649's single-lock handover must
+// still start a daemon.
 const (
 	// authorityLockFDEnv tells `plumb daemon` that the account authority is
-	// already held, on fd inheritedAuthorityLockFD (exec.Cmd.ExtraFiles[0]).
+	// already held, on the fd the variable names (this launcher writes
+	// inheritedAuthorityLockFD, exec.Cmd.ExtraFiles[0]).
 	authorityLockFDEnv       = "PLUMB_DAEMON_AUTHORITY_FD"
 	inheritedAuthorityLockFD = 3
 	// daemonLockFDEnv tells `plumb daemon` that its runtime lifetime lock is
-	// already held, on fd inheritedDaemonLockFD (exec.Cmd.ExtraFiles[1]).
+	// already held, on the fd the variable names (this launcher writes
+	// inheritedDaemonLockFD, exec.Cmd.ExtraFiles[1]).
 	daemonLockFDEnv       = "PLUMB_DAEMON_LOCK_FD"
 	inheritedDaemonLockFD = 4
+	// minHandoverFD is the lowest fd a handover can name: 0, 1 and 2 are the
+	// child's own stdio, and exec.Cmd.ExtraFiles starts at 3, so a value below
+	// this names no lock at all and must not be adopted.
+	minHandoverFD = 3
 )
 
 // spawnLockPath returns the path of the lock used to serialise daemon spawns.
@@ -156,12 +170,12 @@ func (l daemonLocks) closeAll() {
 }
 
 // lockHandover describes one of those locks and how this process comes to hold
-// it: the env var a launcher writes when it hands the held fd over, the fd
-// number that handover uses, the file the lock must be, and how to take it when
-// nothing was handed over.
+// it: the env var a launcher writes when it hands the held fd over, the file the
+// lock must be, and how to take it when nothing was handed over. The fd number
+// is the one the variable carries, deliberately not a field here: no handover
+// this binary did not make may be refused for using a different number.
 type lockHandover struct {
 	env  string
-	fd   int
 	path string
 	// other is the path of the daemon's OTHER lock. It is used only to make a
 	// mismatch error name the file an inherited fd actually is when a launcher
@@ -171,8 +185,22 @@ type lockHandover struct {
 	acquire func() (*os.File, error)
 }
 
-// holdDaemonLock returns the lock h describes: the file inherited on h.fd when a
-// launcher named one, else a fresh non-blocking acquisition.
+// holdDaemonLock returns the lock h describes: the file inherited on the fd
+// h.env names when a launcher named one, else a fresh non-blocking acquisition.
+//
+// The fd NUMBER comes from the environment rather than being required to match
+// the one this binary's launcher writes. #649's `plumb serve` had a single lock
+// to hand over — the runtime lifetime lock — and wrote PLUMB_DAEMON_LOCK_FD=3
+// for it. That binary is still the serve a client proxies through on an upgraded
+// host: the client keeps it until it restarts, and when the daemon is replaced it
+// respawns os.Executable() — the NEW binary — with the same environment, naming
+// no authority at all. A daemon that required the 3/4 pair would refuse to start
+// there, and every pre-upgrade client would lose its daemon for good.
+//
+// Accepting the named fd costs nothing: the fd is evidence only once
+// adoptDaemonLock has confirmed it, with os.SameFile against the expected path,
+// and then the flock. A number that names some other file — the other lock of the
+// pair included, which otherLockNote reports by name — still refuses.
 //
 // A named-but-unusable fd FAILS CLOSED. It never falls back to acquiring: a
 // substituted fd must not become a second lock at the expected path, and a
@@ -185,10 +213,11 @@ func holdDaemonLock(h lockHandover) (*os.File, error) {
 	// Children of the daemon (language servers, git) must not see it.
 	_ = os.Unsetenv(h.env)
 	fd, err := strconv.Atoi(v)
-	if err != nil || fd != h.fd {
-		return nil, fmt.Errorf("%s=%q: refusing to start without the lock it names on fd %d (%s)", h.env, v, h.fd, h.path)
+	if err != nil || fd < minHandoverFD {
+		return nil, fmt.Errorf("%s=%q: refusing to start: it names no fd for the inherited lock %s "+
+			"(a handover is fd %d or above)", h.env, v, h.path, minHandoverFD)
 	}
-	return adoptDaemonLock(os.NewFile(uintptr(fd), h.path), h.path, h.fd, h.other)
+	return adoptDaemonLock(os.NewFile(uintptr(fd), h.path), h.path, fd, h.other)
 }
 
 // daemonLaunchLocks is how a daemon comes to hold both locks: each inherited
@@ -206,7 +235,6 @@ func daemonLaunchLocks() (daemonLocks, error) {
 	}
 	authority, err := holdDaemonLock(lockHandover{
 		env:     authorityLockFDEnv,
-		fd:      inheritedAuthorityLockFD,
 		path:    authorityPath,
 		other:   daemonLockPath(),
 		acquire: acquireAuthority,
@@ -216,7 +244,6 @@ func daemonLaunchLocks() (daemonLocks, error) {
 	}
 	lifetime, err := holdDaemonLock(lockHandover{
 		env:     daemonLockFDEnv,
-		fd:      inheritedDaemonLockFD,
 		path:    daemonLockPath(),
 		other:   authorityPath,
 		acquire: acquireDaemonLock,

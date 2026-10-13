@@ -3,7 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -478,7 +480,7 @@ func TestHoldDaemonLock_RefusesAnInheritedFdThatIsNotTheLock(t *testing.T) {
 		t.Setenv("PLUMB_TEST_LOCK_FD", strconv.Itoa(fd))
 
 		_, err = holdDaemonLock(lockHandover{
-			env: "PLUMB_TEST_LOCK_FD", fd: fd, path: authority, acquire: acquireAuthority,
+			env: "PLUMB_TEST_LOCK_FD", path: authority, acquire: acquireAuthority,
 		})
 		if err == nil {
 			t.Fatal("adopted a file that is not the account authority lock")
@@ -500,6 +502,11 @@ func TestHoldDaemonLock_RefusesAnInheritedFdThatIsNotTheLock(t *testing.T) {
 	// the two fds over in the wrong order. A file from anywhere else can only be
 	// reported by the expected path and the fd, because a descriptor carries no
 	// portable path of its own.
+	//
+	// Both directions of the swap are pinned. The fd NUMBER is no longer refused
+	// on its own — the daemon adopts the fd the env names, whatever it is — so the
+	// identity check is now the only thing standing between a swapped pair and a
+	// daemon holding the wrong lock.
 	t.Run("the other lock of the pair, named", func(t *testing.T) {
 		lifetime, err := acquireDaemonLock()
 		if err != nil {
@@ -513,7 +520,7 @@ func TestHoldDaemonLock_RefusesAnInheritedFdThatIsNotTheLock(t *testing.T) {
 		t.Setenv("PLUMB_TEST_LOCK_FD", strconv.Itoa(fd))
 
 		_, err = holdDaemonLock(lockHandover{
-			env: "PLUMB_TEST_LOCK_FD", fd: fd, path: authority, other: daemonLockPath(), acquire: acquireAuthority,
+			env: "PLUMB_TEST_LOCK_FD", path: authority, other: daemonLockPath(), acquire: acquireAuthority,
 		})
 		if err == nil {
 			t.Fatal("adopted the runtime lifetime lock as the account authority")
@@ -524,11 +531,43 @@ func TestHoldDaemonLock_RefusesAnInheritedFdThatIsNotTheLock(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("the pair swapped the other way round", func(t *testing.T) {
+		held, err := acquireAuthority()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer held.Close()
+		fd, err := syscall.Dup(int(held.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PLUMB_TEST_LOCK_FD", strconv.Itoa(fd))
+
+		_, err = holdDaemonLock(lockHandover{
+			env: "PLUMB_TEST_LOCK_FD", path: daemonLockPath(), other: authority, acquire: acquireDaemonLock,
+		})
+		if err == nil {
+			t.Fatal("adopted the account authority as the runtime lifetime lock")
+		}
+		for _, want := range []string{daemonLockPath(), authority} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal must name both paths; %q lacks %q", err, want)
+			}
+		}
+	})
 }
 
-// A launcher that says it handed a lock over must have handed THAT lock over, on
-// the fd it names. Anything else — an empty value, the other lock's fd, rubbish —
-// refuses to start, and the variable is unset before the daemon starts children.
+// A launcher that says it handed a lock over must have handed THAT lock over.
+// Anything else — an empty value, rubbish, an fd below the handover floor, an fd
+// this process does not have open — refuses to start, and the variable is unset
+// before the daemon starts children.
+//
+// The fd NUMBER is deliberately not one of the refusals: the daemon adopts the
+// fd the environment names, because a serve from before the account authority
+// hands the lifetime lock over on 3 rather than on the 4 this binary writes (see
+// TestDaemonLaunchLocks_AdoptsTheFDOldServesName). What must hold is the FILE
+// that fd refers to, which adoptDaemonLock proves and the test above pins.
 func TestHoldDaemonLock_RefusesABadInheritedFD(t *testing.T) {
 	withTempRuntime(t)
 	authority, err := authorityPath()
@@ -537,19 +576,20 @@ func TestHoldDaemonLock_RefusesABadInheritedFD(t *testing.T) {
 	}
 	for _, c := range []struct {
 		env   string
-		fd    int
 		path  string
 		value string
 	}{
-		{authorityLockFDEnv, inheritedAuthorityLockFD, authority, ""},
-		{authorityLockFDEnv, inheritedAuthorityLockFD, authority, strconv.Itoa(inheritedDaemonLockFD)},
-		{authorityLockFDEnv, inheritedAuthorityLockFD, authority, "x"},
-		{daemonLockFDEnv, inheritedDaemonLockFD, daemonLockPath(), ""},
-		{daemonLockFDEnv, inheritedDaemonLockFD, daemonLockPath(), strconv.Itoa(inheritedAuthorityLockFD)},
-		{daemonLockFDEnv, inheritedDaemonLockFD, daemonLockPath(), "x"},
+		{authorityLockFDEnv, authority, ""},
+		{authorityLockFDEnv, authority, "x"},
+		{authorityLockFDEnv, authority, strconv.Itoa(minHandoverFD - 1)},
+		{authorityLockFDEnv, authority, "969"},
+		{daemonLockFDEnv, daemonLockPath(), ""},
+		{daemonLockFDEnv, daemonLockPath(), "x"},
+		{daemonLockFDEnv, daemonLockPath(), strconv.Itoa(minHandoverFD - 1)},
+		{daemonLockFDEnv, daemonLockPath(), "969"},
 	} {
 		t.Setenv(c.env, c.value)
-		if f, err := holdDaemonLock(lockHandover{env: c.env, fd: c.fd, path: c.path, acquire: acquireDaemonLock}); err == nil {
+		if f, err := holdDaemonLock(lockHandover{env: c.env, path: c.path, acquire: acquireDaemonLock}); err == nil {
 			_ = f.Close()
 			t.Fatalf("%s=%q: started without the lock it names", c.env, c.value)
 		}
@@ -622,6 +662,78 @@ func TestDaemonLaunchLocks_TakesTheAuthorityBeforeTheLifetimeLock(t *testing.T) 
 
 	if _, err := daemonLaunchLocks(); err == nil || !strings.Contains(err.Error(), authorityLockFDEnv) {
 		t.Fatalf("daemonLaunchLocks = %v, want the %s refusal", err, authorityLockFDEnv)
+	}
+}
+
+// launchLocksHelperEnv marks the child process that adopts the handover. It is
+// not an environment variable production code reads: the helper below skips in
+// every run that does not set it.
+const launchLocksHelperEnv = "PLUMB_TEST_LAUNCH_LOCKS_FD3"
+
+// oldServeLifetimeFD is the fd #649's `plumb serve` hands its one lock over on —
+// the number an upgraded daemon must accept, and not the 4 this binary writes.
+const oldServeLifetimeFD = 3
+
+// TestHelperLaunchLocksFromTheNamedFD is not a test: run as a child process with
+// launchLocksHelperEnv set, it holds the runtime lifetime lock on fd 3 — the
+// shape a `plumb serve` from before the account authority hands over, with no
+// authority named — and reports what daemonLaunchLocks() makes of it.
+//
+// It is a child process because the fd number is the whole point, and only exec
+// can put a named file on fd 3: a test binary's own fds are not ours to move.
+func TestHelperLaunchLocksFromTheNamedFD(t *testing.T) {
+	if os.Getenv(launchLocksHelperEnv) == "" {
+		t.Skip("helper process for the #649 handover shape")
+	}
+	locks, err := daemonLaunchLocks()
+	if err != nil {
+		fmt.Println("launchlocks:error:", err)
+		return
+	}
+	defer locks.closeAll()
+	if got := locks.Lifetime.Fd(); got != oldServeLifetimeFD {
+		fmt.Printf("launchlocks:error: the lifetime lock was adopted on fd %d, want the named fd %d\n",
+			got, oldServeLifetimeFD)
+		return
+	}
+	// The authority is not part of the #649 handover, so the daemon takes it
+	// fresh — and holds it, or the process this stands in for is not the
+	// account's one daemon.
+	if f, err := acquireAuthority(); !errors.Is(err, errDaemonAlreadyRunning) {
+		if f != nil {
+			_ = f.Close()
+		}
+		fmt.Println("launchlocks:error: the authority is not held after the handover:", err)
+		return
+	}
+	fmt.Printf("launchlocks:ok lifetime_fd=%d\n", oldServeLifetimeFD)
+}
+
+// The #649 handover shape, which is what the owner's host runs. #649's
+// `plumb serve` had one lock to hand over — the runtime lifetime lock — and wrote
+// PLUMB_DAEMON_LOCK_FD=3 for it (oldServeLifetimeFD), naming no authority. A client keeps proxying
+// through that older binary until it restarts, and when the daemon is replaced the
+// old serve respawns os.Executable() — the NEW binary — with that same
+// environment. A daemon that requires the 3/4 pair refuses to start there, and
+// every pre-upgrade client loses its daemon.
+func TestDaemonLaunchLocks_AdoptsTheFDOldServesName(t *testing.T) {
+	withTempRuntime(t)
+	unsetInheritedLockEnv(t)
+	lifetime, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lifetime.Close()
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperLaunchLocksFromTheNamedFD$", "-test.count=1")
+	cmd.ExtraFiles = []*os.File{lifetime} // fd 3 in the child, exactly as #649 hands it over
+	cmd.Env = append(os.Environ(),
+		launchLocksHelperEnv+"=1",
+		fmt.Sprintf("%s=%d", daemonLockFDEnv, oldServeLifetimeFD),
+	)
+	out, err := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "launchlocks:ok") {
+		t.Fatalf("the daemon refused the handover an older serve makes (err %v): %s", err, out)
 	}
 }
 
