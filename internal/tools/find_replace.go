@@ -366,6 +366,9 @@ func (t *findReplaceTool) findReplaceWorkerStep(wctx context.Context, path strin
 			return fileChange{path: path, count: count, err: err}, true
 		}
 		if n == 0 {
+			// The file stopped matching before the lock; give the slot back so a
+			// later matching file is not reported as truncated.
+			claimed.Add(-1)
 			return fileChange{}, false
 		}
 		// Report what was written, not what the unlocked scan predicted.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -805,5 +806,65 @@ func TestFindReplace_ShowWriteDiff_TruncationSummary(t *testing.T) {
 	// Each rendered diff carries exactly one "--- a/" file header.
 	if n := strings.Count(out, "--- a/"); n != maxFindReplaceDiffFiles {
 		t.Errorf("expected exactly %d rendered diffs, got %d; out:\n%s", maxFindReplaceDiffFiles, n, out)
+	}
+}
+
+// A file whose locked re-scan finds nothing left writes nothing, so it must not
+// keep its max_files slot: a later matching file would otherwise be truncated.
+func TestFindReplace_SkippedFileRefundsMaxFilesClaim(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "stale.txt")
+	if err := os.WriteFile(stale, []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &findReplaceTool{}
+	a := findReplaceArgs{Pattern: "TODO", Replacement: "DONE", MaxFiles: 1, DirtyOk: true, DryRun: boolPtr(false)}
+	applyFindReplaceDefaults(&a)
+	re, err := compileFindReplaceRegex(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the path lock so the step's unlocked scan sees the match but its
+	// locked re-scan runs only after the file has been changed.
+	unlock := lockPath(stale)
+	var claimed atomic.Int64
+	var truncated atomic.Bool
+	done := make(chan bool)
+	go func() {
+		fc, send := tool.findReplaceWorkerStep(context.Background(), stale, a, re, false, &claimed, 1, &truncated, func() {})
+		if fc.err != nil {
+			t.Error(fc.err)
+		}
+		done <- send
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for claimed.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if claimed.Load() == 0 {
+		unlock()
+		t.Fatal("step never claimed a slot")
+	}
+	if err := os.WriteFile(stale, []byte("nothing\n"), 0o644); err != nil {
+		unlock()
+		t.Fatal(err)
+	}
+	unlock()
+	if send := <-done; send {
+		t.Fatal("a file with no match left must be skipped")
+	}
+	if got := claimed.Load(); got != 0 {
+		t.Errorf("claimed = %d after a skipped file, want 0", got)
+	}
+
+	// The refunded slot is usable by the next matching file.
+	next := filepath.Join(dir, "next.txt")
+	if err := os.WriteFile(next, []byte("TODO\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc, send := tool.findReplaceWorkerStep(context.Background(), next, a, re, false, &claimed, 1, &truncated, func() {})
+	if !send || fc.err != nil || truncated.Load() {
+		t.Errorf("later matching file: send=%v err=%v truncated=%v, want written and not truncated", send, fc.err, truncated.Load())
 	}
 }

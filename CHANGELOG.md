@@ -283,6 +283,13 @@
   an absent side. It now holds the lock across the create and its history row,
   and creates the file with `O_EXCL`, so an existing file is never truncated
   (#600).
+- **Write-diff history follow-ups (#601).** `find_replace` gives back a
+  `max_files` slot when a file stops matching between the scan and its lock, so
+  a later matching file is no longer reported as truncated. Gap detection no
+  longer treats two unknown hashes as continuous: a side that exists but was
+  never hashed is reported as a possible gap, while two absent sides still
+  read as continuous. `write_file` keeps one copy of the content for the write
+  and the history side.
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released

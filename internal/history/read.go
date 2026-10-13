@@ -272,10 +272,22 @@ func populateEntry(e *Entry, tsMs int64, kindStr, opStr, contentStr string, bSiz
 // that left path ?1 in a known state. That is a row ON the path (its after
 // side), or a rename AWAY from it, which left the path absent (NULL). A
 // copy from the path does not change it, so only renames count.
-const prevStateSQL = `SELECT CASE WHEN path_id = ?1 THEN after_sha ELSE NULL END, ts_ms
+const prevStateSQL = `SELECT CASE WHEN path_id = ?1 THEN after_sha ELSE NULL END,
+		CASE WHEN path_id = ?1 THEN after_size ELSE NULL END, ts_ms
 	FROM changes
 	WHERE seq < ?2 AND (path_id = ?1 OR (from_path_id = ?1 AND op = 'rename'))
 	ORDER BY seq DESC LIMIT 1`
+
+// hashesDiffer reports whether two adjacent sides fail to continue each other.
+// A nil hash on a side that exists means its bytes were never read (a source a
+// rename could not snapshot), so the match is unknown and counts as a possible
+// gap; a nil hash on an absent side is a known absence and matches another.
+func hashesDiffer(prev []byte, prevExists bool, before []byte, beforeExists bool) bool {
+	if (len(prev) == 0 && prevExists) || (len(before) == 0 && beforeExists) {
+		return true
+	}
+	return !bytes.Equal(prev, before)
+}
 
 // chainFor is the path whose chain e's before side continues: its own, or for
 // a rename its source's.
@@ -324,10 +336,11 @@ func (r *Reader) detectGaps(scanned []scanResult) ([]Entry, error) {
 			return nil, err
 		}
 		var prevAfter []byte
+		var prevSize sql.NullInt64
 		var prevTsMs int64
-		err = gapStmt.QueryRow(chain, e.Seq).Scan(&prevAfter, &prevTsMs)
+		err = gapStmt.QueryRow(chain, e.Seq).Scan(&prevAfter, &prevSize, &prevTsMs)
 		if err == nil {
-			if !bytes.Equal(prevAfter, e.BeforeSHA) {
+			if hashesDiffer(prevAfter, prevSize.Valid, e.BeforeSHA, e.BeforeExists) {
 				e.GapBefore = true
 				if lastDropMs > 0 && lastDropMs >= prevTsMs && lastDropMs <= e.At.UnixMilli() {
 					e.GapDropped = true

@@ -357,3 +357,55 @@ func TestAnOverflowMarkerKeepsTheRightHash(t *testing.T) {
 		t.Fatalf("%d rows, want 3", i)
 	}
 }
+
+// A nil hash on a side that exists is an unread side, not an empty one: two of
+// them must not read as a match. A rename whose source could not be read has
+// such a before side, and the chain it continues may hide an outside edit.
+func TestUnknownHashesReportAPossibleGap(t *testing.T) {
+	ws := t.TempDir()
+	p := filepath.Join(t.TempDir(), "h.db")
+	s, err := Open(p, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := filepath.Join(ws, "a.txt"), filepath.Join(ws, "b.txt")
+	at := int64(1000)
+	add := func(it Item) {
+		at++
+		it.Workspace, it.At = ws, time.UnixMilli(at)
+		s.Enqueue(it)
+	}
+	// a.txt's last known state is itself unhashed; the rename's source is too.
+	first := item(OpCreate, a, nil, nil)
+	first.After = SideStat(3)
+	add(first)
+	ren := item(OpRename, b, nil, nil)
+	ren.From = a
+	ren.Before, ren.After = SideStat(3), SideStat(3)
+	add(ren)
+	// Known absences match: delete then recreate is no gap.
+	add(item(OpCreate, filepath.Join(ws, "c.txt"), nil, []byte("C\n")))
+	add(item(OpDelete, filepath.Join(ws, "c.txt"), []byte("C\n"), nil))
+	add(item(OpCreate, filepath.Join(ws, "c.txt"), nil, []byte("D\n")))
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenReadOnlyAt(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	es, err := r.List(Filter{Workspace: ws, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(es) != 5 {
+		t.Fatalf("%d entries, want 5", len(es))
+	}
+	for _, e := range es {
+		want := e.Op == OpRename
+		if e.GapBefore != want {
+			t.Errorf("seq %d (%s %s): GapBefore = %v, want %v", e.Seq, e.Op, e.Path, e.GapBefore, want)
+		}
+	}
+}

@@ -154,7 +154,9 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	// can tell errors this write introduced from ones already present.
 	baseline := t.deps.capturePreWriteBaseline(ctx, uri)
 
-	res, err := safeWrite(path, []byte(a.Content), 0o644)
+	// One copy serves the write and the history side; neither mutates it.
+	data := []byte(a.Content)
+	res, err := safeWrite(path, data, 0o644)
 	if err != nil {
 		return "", fmt.Errorf("write_file: %w", err)
 	}
@@ -163,7 +165,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	if undoOK {
 		t.deps.recordUndo(ctx, path, undoBefore, a.Content, !isNew, "write_file")
 	}
-	t.recordHistory(ctx, path, histBefore, a.Content, isNew)
+	t.recordHistory(ctx, path, histBefore, data, isNew)
 	// Prefer the untruncated pre-write content for the differential: oldContent
 	// is capped for diff rendering, and an unknown "before" costs the
 	// re-index-lag suppression that keeps phantom errors out of the delta — which
@@ -186,7 +188,7 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 	return result + t.deps.reportQuality(ctx, path), nil
 }
 
-func (t *WriteFile) recordHistory(ctx context.Context, path string, before history.Side, content string, isNew bool) {
+func (t *WriteFile) recordHistory(ctx context.Context, path string, before history.Side, content []byte, isNew bool) {
 	op := history.OpUpdate
 	if isNew {
 		op = history.OpCreate
@@ -196,7 +198,7 @@ func (t *WriteFile) recordHistory(ctx context.Context, path string, before histo
 		Tool:   "write_file",
 		Path:   path,
 		Before: before,
-		After:  history.SideFromBytes([]byte(content)),
+		After:  history.SideFromBytes(content),
 	})
 }
 
