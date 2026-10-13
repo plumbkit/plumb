@@ -85,6 +85,7 @@ func (l Layer) String() string {
 var Layers = map[string]Layer{
 	// ── Foundation ──
 	"internal/arch":                 LayerFoundation, // this package: the rules themselves
+	"internal/account":              LayerFoundation, // who this process runs as, from the account database
 	"internal/paths":                LayerFoundation,
 	"internal/ignore":               LayerFoundation, // gitignore matching, shared by every walk
 	"internal/fsync":                LayerFoundation,
