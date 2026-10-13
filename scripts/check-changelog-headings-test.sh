@@ -72,6 +72,19 @@ run duplicate-entry 1 '# Changelog
 
 - one'
 
+# The subsections are distinct here, so only the entry check can reject it.
+run duplicate-entry-only 1 '# Changelog
+
+## 0.2.0 (unreleased)
+
+### Added
+
+- one
+
+### Fixed
+
+- one'
+
 run released-legacy-repeat-allowed 0 '# Changelog
 
 ## 0.2.0 (unreleased)

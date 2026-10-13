@@ -106,6 +106,12 @@ jobs:
       - name: CHANGELOG placement guard — self-test
         run: make check-changelog-placement-test
 
+      # check-changelog itself runs in `make verify`; its self-test (a replayed '### '
+      # subsection, a repeated entry, legacy repeats in released versions) runs here
+      # beside the placement guard's, on both legs, for the same GNU/BSD awk reason.
+      - name: CHANGELOG headings guard — self-test
+        run: make check-changelog-headings-test
+
       # base.sha comes straight from the event payload, so there is no guessing at
       # whether origin/main is fetched; the object is present because this job checks
       # out with fetch-depth: 0 above. The push case is handled by the step below.
