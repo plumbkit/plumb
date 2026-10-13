@@ -125,6 +125,56 @@ func TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold(t *testing.T) {
 	}
 }
 
+// TestPlatformHome_ResolvesThisAccount is the guard on the body that SHIPS.
+//
+// runGetent's tests prove the exec works; this proves the release build's own
+// entry point reaches the account database and returns what account.go's
+// contract needs. Which body answers depends on how the test binary was built —
+// home_linux_pure.go under CGO_ENABLED=0, home_linux_cgo.go under cgo — and that
+// is exactly the point: `make test-pure` runs this same test in the release's
+// mode, so the body that Linux releases actually execute is EXECUTED by a gate
+// rather than only compiled by one. Before that target existed, neither happened.
+//
+// It calls platformHome directly rather than account.Current() because Current
+// requires a seam root in a test binary by design (seam_off.go); the account
+// lookup is what is under test here, not the seam.
+func TestPlatformHome_ResolvesThisAccount(t *testing.T) {
+	uid := os.Getuid()
+	home, ok := platformHome(uid)
+	if !ok {
+		// A refusal is a real failure for the account this test is already
+		// running as: the file source holds it, or getent asks the same name
+		// service that authenticated this very process.
+		t.Fatalf("platformHome(%d) refused: this account cannot resolve its own home, so no "+
+			"daemon could start for it", uid)
+	}
+	if home == "" || !filepath.IsAbs(home) {
+		t.Fatalf("platformHome(%d) = %q: want a non-empty absolute path", uid, home)
+	}
+	// Whichever source answered must agree with /etc/passwd when the file holds
+	// this uid: a disagreement means the body read the wrong field, or asked
+	// about an account other than the one it was given.
+	if fileHome, inFile := passwdFileHome(t, uid); inFile && fileHome != home {
+		t.Errorf("platformHome(%d) = %q, but /etc/passwd holds %q for it", uid, home, fileHome)
+	}
+}
+
+// TestPlatformHome_RefusesAKeyNoSourceHolds pins the fail-closed half for the
+// shipped body: an account no database holds has no home, and the lookup must
+// refuse rather than fall back to the environment. The uid is the one
+// TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold already establishes that no
+// source on this host serves.
+func TestPlatformHome_RefusesAKeyNoSourceHolds(t *testing.T) {
+	const unassigned = 1<<31 - 1
+	if uid := os.Getuid(); uid == unassigned {
+		t.Fatalf("this test is running as uid %d, the one it assumes is unassigned", unassigned)
+	}
+	if home, ok := platformHome(unassigned); ok {
+		t.Errorf("platformHome(%d) = %q, true; want a refusal: no account database holds this uid",
+			unassigned, home)
+	}
+}
+
 // getentOnDisk returns the first of getentPaths that exists, and fails when none
 // does: a host without getent(1) is one where the CGO_ENABLED=0 build cannot
 // resolve an NSS account at all — the refusal in account.go names libc-bin for
