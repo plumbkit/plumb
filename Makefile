@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom verify-full-container site blog demo-gif
+.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-changelog-headings-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom verify-full-container site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -272,10 +272,16 @@ check-brief:
 	./scripts/check-agents-brief.sh
 
 # check-changelog fails if CHANGELOG.md has the same version number in more
-# than one '## <version>' heading — a rebase can replay an addition as a
+# than one '## <version>' heading, or the topmost version repeats a '### '
+# subsection or an entry — a rebase can replay an addition as a
 # second heading without ever conflicting. See scripts/check-changelog-headings.sh.
 check-changelog:
 	./scripts/check-changelog-headings.sh
+
+# check-changelog-headings-test proves check-changelog rejects a replayed '### '
+# subsection and a repeated entry in the topmost version.
+check-changelog-headings-test:
+	./scripts/check-changelog-headings-test.sh
 
 # check-site-claims fails when site copy's claims drift from the code they
 # describe — footer stamp vs VERSION, hero counts vs the extractor table,
