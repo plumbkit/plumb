@@ -51,11 +51,14 @@ type daemonLaunchSpec struct {
 // which follows the upgrade to the next Cellar — so resolving it here would pin
 // the service to a versioned directory that the next upgrade deletes.
 func resolveLaunchSpec() (daemonLaunchSpec, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return daemonLaunchSpec{}, fmt.Errorf("resolving executable path: %w", err)
-	}
 	if !paths.AuthorityEnabled() {
+		// Legacy: this binary, this environment. os.Executable is consulted
+		// ONLY here — a canonical launch must not depend on the calling binary at
+		// all, not even on being able to name it.
+		exe, err := os.Executable()
+		if err != nil {
+			return daemonLaunchSpec{}, fmt.Errorf("resolving executable path: %w", err)
+		}
 		return daemonLaunchSpec{Executable: exe, Env: os.Environ()}, nil
 	}
 	p, err := service.Load()
