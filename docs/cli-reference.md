@@ -36,7 +36,7 @@ language `none`.
 | [`plumb diagnostics`](#plumb-diagnostics) | Print LSP diagnostics (alias: `diag`, `diags`) |
 | [`plumb log-level`](#plumb-log-level) | Change the running daemon's log level |
 | [`plumb enable-lsp`](#plumb-enable-lsp) | Enable a language server in the running daemon without a restart |
-| [`plumb debug`](#plumb-debug) | Daemon introspection: memory, heap/stack dumps, LSP state |
+| [`plumb debug`](#plumb-debug) | Daemon introspection: memory, heap/stack dumps, LSP state, daemon census |
 | [`plumb version`](#plumb-version) | Print version information |
 
 ---
@@ -603,7 +603,7 @@ plumb doctor [--workspace <dir>] [--json]
 Run health checks grouped by topic and report what needs attention. Exits
 non-zero if any check fails. Sections:
 
-- **Daemon** — socket reachable; running version matches this binary.
+- **Daemon** — socket reachable; running version matches this binary; exactly one `plumb daemon` for this user and it holds the launch authority (the row fails on a violation and on a census that could not read the process table, because "cannot tell" is not "fine").
 - **Language Servers** — each configured LSP binary is on `PATH` (enabled
   servers that are missing fail; disabled ones are informational), plus a
   Java 21+ runtime check when `java` is configured.
@@ -947,7 +947,8 @@ daemon is not running.
 plumb debug <subcommand>
 ```
 
-Daemon introspection over the control socket. Requires a running daemon.
+Daemon introspection. Every subcommand but `daemons` reads the running daemon over
+the control socket and requires it to be up.
 
 | Subcommand | Description |
 |---|---|
@@ -955,6 +956,16 @@ Daemon introspection over the control socket. Requires a running daemon.
 | `plumb debug heap` | Force a GC and write a `runtime/pprof` heap profile to the cache dir. |
 | `plumb debug stacks` | Write a full goroutine stack dump (the `SIGQUIT`-equivalent) for diagnosing a hang. |
 | `plumb debug lsp` | List each language server's state, PID, RSS, and idle time. |
+| `plumb debug daemons` | List every `plumb daemon` of this user and flag any that is not the launch-authority holder. |
+
+`plumb debug daemons` is deliberately local: it dials no socket, because the state
+it exists to find is a daemon whose socket has been unlinked and which therefore
+answers nothing. It reports each daemon's pid, parent, start time, executable,
+whether it holds the authority and which plumb socket it owns, and exits non-zero
+when the account does not have exactly one daemon holding the authority — or when
+the census could not read the process table, since "cannot tell" is not "fine".
+It never signals a process, never removes a stale pid file, and never takes a
+lock.
 
 ---
 

@@ -115,7 +115,7 @@ type doctorSection struct {
 // disagrees with the terminal.
 func doctorSections(ws string) []doctorSection {
 	return []doctorSection{
-		{"Daemon", checkDaemon, false},
+		{"Daemon", func() []checkResult { return append(checkDaemon(), checkDaemonCensus()...) }, false},
 		{"Language Servers", func() []checkResult { return checkLSPs(ws) }, false},
 		{"LSP Live", checkActiveLSPProcesses, true},
 		{"MCP Clients", checkMCPClients, false},

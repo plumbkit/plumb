@@ -16,7 +16,7 @@ import (
 )
 
 func init() {
-	debugCmd.AddCommand(debugMemCmd, debugHeapCmd, debugStacksCmd, debugLSPCmd)
+	debugCmd.AddCommand(debugMemCmd, debugHeapCmd, debugStacksCmd, debugLSPCmd, debugDaemonsCmd)
 }
 
 var debugCmd = &cobra.Command{
@@ -24,13 +24,16 @@ var debugCmd = &cobra.Command{
 	Short: "Inspect the running daemon's internals (memory, heap profiles, goroutine stacks)",
 	Long: `Low-level daemon introspection for diagnosing resource use.
 
-  plumb debug mem    — print a live runtime memory snapshot
-  plumb debug heap   — write a heap pprof profile and print its path
-  plumb debug stacks — dump every goroutine's stack and print the file path
-  plumb debug lsp    — list active language servers with PID, RSS, and idle time
+  plumb debug mem     — print a live runtime memory snapshot
+  plumb debug heap    — write a heap pprof profile and print its path
+  plumb debug stacks  — dump every goroutine's stack and print the file path
+  plumb debug lsp     — list active language servers with PID, RSS, and idle time
+  plumb debug daemons — list this account's daemons and flag a non-authority one
 
-These talk to the running daemon over its control socket; start it with
-"plumb serve" if it is not already up.`,
+Everything but "daemons" talks to the running daemon over its control socket;
+start it with "plumb serve" if it is not already up. "daemons" is local on
+purpose: it has to work when the socket is gone, which is exactly the state it
+exists to detect.`,
 }
 
 var debugMemCmd = &cobra.Command{
