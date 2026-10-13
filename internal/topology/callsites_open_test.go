@@ -2,9 +2,11 @@ package topology
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 // TestOpenCallSites pins which calls of a name stay open after a resolution pass:
@@ -121,5 +123,59 @@ func TestOpenCallSites(t *testing.T) {
 	open, total, err := s.OpenCallSites(ctx, "Do", "go", 1)
 	if err != nil || total != 3 || len(open) != 1 {
 		t.Errorf("limit 1: listed %d of total %d (err %v), want 1 of 3", len(open), total, err)
+	}
+}
+
+// TestOpenCallSites_CostDoesNotScaleWithImportsPerSite pins the shape of the
+// census query: whether a call's file dot-imports a package is read once, not
+// asked per site. Asked per site, the planner scans every import node for each
+// call (PLAN-544: 6–10 s per pack on this repository); here that would be 2,000
+// sites times 20,000 imports. The bound is two orders of magnitude above the
+// fixed query's time, so it measures the shape, not the machine.
+func TestOpenCallSites_CostDoesNotScaleWithImportsPerSite(t *testing.T) {
+	db, err := openDB(filepath.Join(t.TempDir(), "cost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for f := range 400 {
+		p := fmt.Sprintf("p%d/f.go", f)
+		res, err := tx.Exec(`INSERT INTO topology_files(path, language, mtime_ns, content_hash, indexed_at, error_msg) VALUES (?,?,?,?,?,?)`, p, "go", 0, "h", 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, _ := res.LastInsertId()
+		for i := range 50 {
+			if _, err := tx.Exec(`INSERT INTO topology_nodes(file_id, kind, name, qualified, signature, start_line, end_line, docstring, language) VALUES (?,?,?,?,?,?,?,?,?)`,
+				file, string(KindImport), fmt.Sprintf("imp%d", i), fmt.Sprintf("example.com/imp%d", i), "", 1, 1, "", "go"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for range 5 {
+			if _, err := tx.Exec(`INSERT INTO topology_call_sites(file_id, language, site_kind, callee, qualifier, outcome) VALUES (?,?,?,?,?,?)`,
+				file, "go", string(CallSiteCall), "Execute", "x", int(bucketReceiver)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{db: db}
+	start := time.Now()
+	_, total, err := s.OpenCallSites(context.Background(), "Execute", "go", 0)
+	took := time.Since(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2000 {
+		t.Fatalf("control: %d open calls, want 2000", total)
+	}
+	if took > 1500*time.Millisecond {
+		t.Errorf("the census of 2,000 calls over 20,000 imports took %v: its cost scales with imports per site", took)
 	}
 }

@@ -260,6 +260,15 @@
 
 ### Fixed
 
+- **`context_for_task` no longer spends seconds on its caller census, which
+  starved the affected-tests estimate.** The census (#648) checked, for every
+  recorded call of a seed's name, whether its file dot-imports a package, and the
+  database answered that by scanning every import of the workspace each time. For
+  a common method name (`Execute`, `Close`) a pack took 6–10 s, ran past the 2 s
+  graph deadline, and lost its affected-tests section, run-first line included.
+  The dot-importing files are now read once per census: on the real tasks that
+  starved, a pack takes 0.23–0.36 s and carries its test estimate again.
+
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released
