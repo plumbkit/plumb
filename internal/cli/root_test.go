@@ -76,6 +76,42 @@ func TestDiagnosticSuggestionsForRecoverableErrors(t *testing.T) {
 	}
 }
 
+// TestPersistentPreRun_SkipsTheThemeForTheDaemon pins the ordering the daemon's
+// launch locks depend on: it adopts them before anything else it does, so config
+// resolution must not run first. A config being rewritten, or a project config
+// on a slow mount, would otherwise sit between the lock handover and the daemon
+// taking it — and every other command must keep applying the theme.
+func TestPersistentPreRun_SkipsTheThemeForTheDaemon(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	origTheme, origName := tui.ActiveTheme, tui.ActiveThemeName
+	t.Cleanup(func() {
+		tui.ActiveTheme, tui.ActiveThemeName = origTheme, origName
+		tui.RebuildStyles()
+	})
+
+	if err := config.SaveTheme("nordico"); err != nil {
+		t.Fatal(err)
+	}
+
+	daemonCmd, _, err := rootCmd.Find([]string{"daemon"})
+	if err != nil {
+		t.Fatalf("finding the daemon command: %v", err)
+	}
+	rootCmd.PersistentPreRun(daemonCmd, nil)
+	if tui.ActiveThemeName == "nordico" {
+		t.Error("the daemon subcommand applied the configured theme, so config resolution runs before its bootstrap")
+	}
+
+	other, _, err := rootCmd.Find([]string{"version"})
+	if err != nil {
+		t.Fatalf("finding the version command: %v", err)
+	}
+	rootCmd.PersistentPreRun(other, nil)
+	if tui.ActiveThemeName != "nordico" {
+		t.Errorf("a non-daemon command must still apply the theme, got %q", tui.ActiveThemeName)
+	}
+}
+
 // TestApplyConfiguredTheme pins the CLI-side theme application: the theme the
 // TUI picker saved in [ui] reaches the shared styles every command renders
 // through, and an unknown theme name keeps the active one rather than
