@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,46 @@ func TestDaemonCensusResult(t *testing.T) {
 				t.Error("a failed census row must carry a fix")
 			}
 		})
+	}
+}
+
+func TestCensusMemo_ReusesWithinTheTTLAndRecomputesAfter(t *testing.T) {
+	memo := censusMemo{ttl: 10 * time.Second}
+	now := time.Now()
+	calls := 0
+	compute := func() string {
+		calls++
+		return fmt.Sprintf("row-%d", calls)
+	}
+
+	if got := memo.get(now, compute); got != "row-1" {
+		t.Fatalf("first get = %q, want row-1", got)
+	}
+	if got := memo.get(now.Add(9*time.Second), compute); got != "row-1" {
+		t.Errorf("get within the TTL = %q, want the cached row-1", got)
+	}
+	if calls != 1 {
+		t.Errorf("compute ran %d times within the TTL, want 1", calls)
+	}
+	if got := memo.get(now.Add(11*time.Second), compute); got != "row-2" {
+		t.Errorf("get after the TTL = %q, want a fresh row-2", got)
+	}
+	if calls != 2 {
+		t.Errorf("compute ran %d times after the TTL, want 2", calls)
+	}
+}
+
+func TestCensusMemo_DoesNotCacheAnEmptyRow(t *testing.T) {
+	// An empty row means "nobody could count". Caching it would keep the row
+	// quiet about a real problem for the whole TTL.
+	memo := censusMemo{ttl: time.Minute}
+	now := time.Now()
+	if got := memo.get(now, func() string { return "" }); got != "" {
+		t.Fatalf("get with an empty compute = %q, want empty", got)
+	}
+	calls := 0
+	if got := memo.get(now.Add(time.Second), func() string { calls++; return "row" }); got != "row" || calls != 1 {
+		t.Errorf("get after an empty row = %q (calls %d), want a fresh row", got, calls)
 	}
 }
 

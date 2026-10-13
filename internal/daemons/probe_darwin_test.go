@@ -3,11 +3,54 @@
 package daemons
 
 import (
+	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestHelperCommandsAreBounded is the other half of the timeout: the bound must
+// actually be applied, and a helper that does not answer in time must come back
+// as a deadline error (which the census turns into an unknown reason) rather than
+// hanging the caller.
+func TestHelperCommandsAreBounded(t *testing.T) {
+	old := helperTimeout
+	helperTimeout = time.Nanosecond
+	t.Cleanup(func() { helperTimeout = old })
+
+	if _, err := psCommandLines(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("psCommandLines with a 1ns bound = %v, want a deadline error", err)
+	}
+
+	listing := newLsofListing([]string{"/tmp/does-not-matter"})
+	if _, err := listing.openers("/tmp/does-not-matter"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("lsof with a 1ns bound = %v, want a deadline error", err)
+	}
+}
+
+// TestPS_TimeoutIsAnUnknownReason follows the deadline one step further: the
+// probe must report an unreadable process table rather than answering "no
+// daemons" from a helper that never ran. A clean answer here would be the exact
+// fail-open the census exists to prevent.
+func TestPS_TimeoutIsAnUnknownReason(t *testing.T) {
+	old := helperTimeout
+	helperTimeout = time.Nanosecond
+	t.Cleanup(func() { helperTimeout = old })
+
+	found, unknown := osProcesses(os.Getuid())
+	if len(found) != 0 {
+		t.Errorf("a timed-out ps produced %d daemons: %+v", len(found), found)
+	}
+	if len(unknown) == 0 {
+		t.Fatal("a timed-out ps produced no unknown reason, so the census would read as clean")
+	}
+	if !strings.Contains(strings.Join(unknown, " "), "the process table could not be read") {
+		t.Errorf("unknown reasons = %v, want one saying the process table could not be read", unknown)
+	}
+}
 
 // TestProcArgsOverridesThePSLine is the test for darwin's two-step rule: ps is
 // only a prefilter, and the process's own arguments are what decide. The

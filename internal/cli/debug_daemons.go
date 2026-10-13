@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -84,12 +85,55 @@ func debugDaemonsExit(v daemons.Verdict) error {
 
 // daemonCensusRow is the one-line form of the census for daemon_info, which has
 // no columns to align and one job for this fact: to make "exactly one daemon"
-// visible in the place an agent already looks. It is called on every
-// daemon_info, so it stays in the census's cheap path — no fd scan of every
-// process, no lock taken — and its cost is a process-table read.
+// visible in the place an agent already looks. It is memoised for
+// daemonCensusTTL, because an agent calls daemon_info repeatedly and an uncached
+// census costs a process-table read plus, on macOS, two execs (measured at 1.46 s
+// cold on the owner's machine).
 func daemonCensusRow() string {
+	return daemonCensusMemo.get(time.Now(), daemonCensusCompute)
+}
+
+// daemonCensusCompute runs the census and renders the row.
+func daemonCensusCompute() string {
 	report := daemons.Census(daemonCensusOptions())
 	return daemonCensusRowFor(report.Verdict())
+}
+
+// daemonCensusTTL is how long the daemon_info row may be reused. It is short on
+// purpose: the row exists so that a violation is noticed, and a stale "1" would
+// be exactly the blind spot this tool was written to remove.
+const daemonCensusTTL = 10 * time.Second
+
+// daemonCensusMemo is the single memo the daemon_info row uses.
+//
+// Only that row is memoised. `plumb debug daemons` and `doctor` call
+// daemons.Census directly, so a diagnosis is never answered from a cached
+// reading — a person asking "how many daemons are there right now?" gets an
+// answer about now.
+var daemonCensusMemo = censusMemo{ttl: daemonCensusTTL}
+
+// censusMemo is a one-entry, short-lived memo, split out from the row so the TTL
+// behaviour can be tested without a process table or a clock.
+type censusMemo struct {
+	mu   sync.Mutex
+	row  string
+	when time.Time
+	ttl  time.Duration
+}
+
+// get returns the memoised row when it is younger than the TTL, and otherwise
+// computes, stores and returns a fresh one.
+func (m *censusMemo) get(now time.Time, compute func() string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.row != "" && now.Sub(m.when) < m.ttl {
+		return m.row
+	}
+	// An empty row is stored as empty, which the check above then reads as "no
+	// cache": nobody could count, so the next caller must try again rather than
+	// be told the same nothing.
+	m.row, m.when = compute(), now
+	return m.row
 }
 
 // daemonCensusRowFor is the pure half of daemonCensusRow.

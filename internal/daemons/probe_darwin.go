@@ -3,6 +3,7 @@
 package daemons
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -34,6 +35,16 @@ import (
 // normal machine (measured on macOS arm64, ~1100 processes) against 0.05 s for
 // the single ps call, and this census also runs inside daemon_info, which an
 // agent calls routinely.
+// helperTimeout bounds each external helper (ps, lsof) this probe runs. They are
+// read-only and never interactive, but they are separate programs on a machine
+// that may have a hung mount, and an unbounded wait here would block the caller
+// — daemon_info runs this census, and an agent calls daemon_info routinely. A
+// helper that does not answer in time is reported as an unknown reason, never as
+// a clean answer.
+//
+// A var rather than a const so a test can shrink it to prove the bound exists.
+var helperTimeout = 3 * time.Second
+
 // platformProbe batches the lock and socket questions into ONE lsof: darwin has
 // no /proc/locks, so lsof is the only way to say who has a file open, and a call
 // per path costs a process launch each (~150 ms).
@@ -88,6 +99,12 @@ func osProcesses(uid int) ([]Daemon, []string) {
 
 	lines, err := psCommandLines()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// A ps that timed out is a host problem, not a slow path: falling back
+			// to a sysctl per process would spend longer still and answer from the
+			// same unhappy machine.
+			return nil, []string{fmt.Sprintf("the process table could not be read: %v", err)}
+		}
 		return daemonsByProcArgs(known, unexec,
 			fmt.Sprintf("ps could not be read (%v), so each process's arguments were read directly", err))
 	}
@@ -157,9 +174,14 @@ func psCommandLines() (map[int]string, error) {
 	if _, err := exec.LookPath("ps"); err != nil {
 		return nil, err
 	}
-	out, err := exec.Command("ps", "-axww", "-o", "pid=,command=").Output() //nolint:gosec // G204: ps with fixed flags, no user input
+	ctx, cancel := context.WithTimeout(context.Background(), helperTimeout)
+	defer cancel()
+	// CommandContext kills the helper at the deadline and returns an error that
+	// wraps ctx.Err(), so the bound needs no extra branch here: the caller sees a
+	// deadline either way, and reports it as an unknown reason.
+	out, err := exec.CommandContext(ctx, "ps", "-axww", "-o", "pid=,command=").Output() //nolint:gosec // G204: ps with fixed flags, no user input
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ps could not be read: %w", err)
 	}
 	lines := make(map[int]string)
 	for line := range strings.SplitSeq(string(out), "\n") {
@@ -219,7 +241,7 @@ func (l *lsofListing) openers(path string) ([]int, error) {
 
 func (l *lsofListing) run() {
 	wanted := make(map[string]bool, len(l.paths))
-	args := []string{"-w", "-F", "pn", "--"}
+	args := []string{"-b", "-w", "-F", "pn", "--"}
 	for _, p := range l.paths {
 		if p == "" || wanted[p] {
 			continue
@@ -230,8 +252,14 @@ func (l *lsofListing) run() {
 	if len(wanted) == 0 {
 		return
 	}
-	out, err := exec.Command("lsof", args...).Output() //nolint:gosec // G204: lsof with fixed flags and paths this process resolved itself
+	// -b keeps lsof from calling kernel functions that can block (it is the flag
+	// for a machine whose mounts are misbehaving); -w drops warnings. Either way
+	// the call is bounded, and a timeout is an error the census reports as unknown.
+	ctx, cancel := context.WithTimeout(context.Background(), helperTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", args...).Output() //nolint:gosec // G204: lsof with fixed flags and paths this process resolved itself
 	if err != nil {
+		// A helper killed at the deadline returns an error wrapping ctx.Err().
 		var exit *exec.ExitError
 		// lsof exits 1 when nothing has any of the files open, which is an answer.
 		if !errors.As(err, &exit) || len(out) > 0 {
