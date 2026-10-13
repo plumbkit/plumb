@@ -65,12 +65,19 @@ func runDebugDaemons(out io.Writer) error {
 	report := daemons.Census(daemonCensusOptions())
 	verdict := report.Verdict()
 	fmt.Fprint(out, renderDaemonCensus(report, verdict))
-	switch verdict.State {
+	return debugDaemonsExit(verdict)
+}
+
+// debugDaemonsExit is the exit rule. The report has already said what is wrong
+// and what to do about it; this exists so a script (or the doctor gate) can read
+// the answer, and it is a rule rather than an expression so it can be tested: a
+// violation and a census that could not read the process table are both
+// non-zero, while a clean account and an idle one are success.
+func debugDaemonsExit(v daemons.Verdict) error {
+	switch v.State {
 	case daemons.StateOK, daemons.StateNone:
 		return nil
 	default:
-		// The report has already said what is wrong and what to do about it;
-		// this is only the exit status a script or the doctor gate can read.
 		return silentExitError{}
 	}
 }

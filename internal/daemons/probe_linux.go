@@ -57,7 +57,7 @@ func osLockHeld(path string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("cannot read /proc/locks: %w", err)
 	}
-	want := fmt.Sprintf("%02x:%02x:%d", unix.Major(uint64(st.Dev)), unix.Minor(uint64(st.Dev)), st.Ino)
+	want := fmt.Sprintf("%02x:%02x:%d", unix.Major(st.Dev), unix.Minor(st.Dev), st.Ino)
 	return lockHeldBy(string(data), want), nil
 }
 
@@ -94,30 +94,13 @@ func osProcesses(uid int) ([]Daemon, []string) {
 // not be read; a nil Daemon with no reason means the process is simply not a
 // plumb daemon of this user (or exited mid-scan).
 func readProc(pid, uid int, boot time.Time) (*Daemon, string) {
-	base := "/proc/" + strconv.Itoa(pid)
-	info, err := os.Stat(base)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, "" // exited between the listing and now
-		}
-		return nil, fmt.Sprintf("cannot stat %s: %v", base, err)
+	base, reason := procBase(pid, uid)
+	if base == "" {
+		return nil, reason
 	}
-	// The directory's owner IS the process's real uid, which is one stat cheaper
-	// than /proc/<pid>/status and never touches another user's file.
-	if st, ok := info.Sys().(*unix.Stat_t); ok && int(st.Uid) != uid {
-		return nil, ""
-	}
-
-	stat, err := os.ReadFile(base + "/stat")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ""
-		}
-		return nil, fmt.Sprintf("cannot read %s/stat: %v", base, err)
-	}
-	fields, err := statFields(pid, string(stat))
-	if err != nil {
-		return nil, fmt.Sprintf("%s/stat: %v", base, err)
+	fields, reason := procStatFields(base, pid)
+	if fields == nil {
+		return nil, reason
 	}
 	flags, err := strconv.ParseUint(fields[statFlagsField], 10, 32)
 	if err != nil {
@@ -126,17 +109,9 @@ func readProc(pid, uid int, boot time.Time) (*Daemon, string) {
 	if forkedNotYetExec(flags) {
 		return nil, "" // forked, not yet exec'd: its argv is still its parent's
 	}
-
-	cmdline, err := os.ReadFile(base + "/cmdline")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ""
-		}
-		return nil, fmt.Sprintf("cannot read %s/cmdline: %v", base, err)
-	}
-	args := splitNUL(cmdline)
-	if !isPlumbDaemonArgv(args) {
-		return nil, ""
+	args, reason := procArgv(base)
+	if args == nil {
+		return nil, reason
 	}
 
 	d := Daemon{PID: pid, Argv: strings.Join(args, " "), Identity: IdentityArgv}
@@ -144,12 +119,66 @@ func readProc(pid, uid int, boot time.Time) (*Daemon, string) {
 		d.PPID = ppid
 	}
 	if ticks, err := strconv.ParseUint(fields[statStartField], 10, 64); err == nil && !boot.IsZero() {
+		//nolint:gosec // G115: ticks is a count of clock ticks since boot and cannot approach math.MaxInt64 (that would be some 2.9e9 years of uptime)
 		d.Start = boot.Add(time.Duration(ticks) * time.Second / userHZ)
 	}
 	if exe, err := os.Readlink(base + "/exe"); err == nil {
 		d.Executable = exe
 	}
 	return &d, ""
+}
+
+// procBase returns /proc/<pid> when that process belongs to uid. A blank path
+// with no reason means "not ours, or gone" — a skip, not a failure.
+func procBase(pid, uid int) (base string, reason string) {
+	base = "/proc/" + strconv.Itoa(pid)
+	info, err := os.Stat(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", "" // exited between the listing and now
+		}
+		return "", fmt.Sprintf("cannot stat %s: %v", base, err)
+	}
+	// The directory's owner IS the process's real uid, which is one stat cheaper
+	// than /proc/<pid>/status and never touches another user's file.
+	if st, ok := info.Sys().(*unix.Stat_t); ok && int(st.Uid) != uid {
+		return "", ""
+	}
+	return base, ""
+}
+
+// procStatFields reads and parses /proc/<pid>/stat, reporting a reason when a
+// process that still exists cannot be read.
+func procStatFields(base string, pid int) (fields []string, reason string) {
+	stat, err := os.ReadFile(base + "/stat")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ""
+		}
+		return nil, fmt.Sprintf("cannot read %s/stat: %v", base, err)
+	}
+	fields, err = statFields(pid, string(stat))
+	if err != nil {
+		return nil, fmt.Sprintf("%s/stat: %v", base, err)
+	}
+	return fields, ""
+}
+
+// procArgv reads the process's own arguments, which after exec belong to nobody
+// else. A nil result with no reason means the process is not a plumb daemon.
+func procArgv(base string) (args []string, reason string) {
+	cmdline, err := os.ReadFile(base + "/cmdline")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ""
+		}
+		return nil, fmt.Sprintf("cannot read %s/cmdline: %v", base, err)
+	}
+	args = splitNUL(cmdline)
+	if !isPlumbDaemonArgv(args) {
+		return nil, ""
+	}
+	return args, ""
 }
 
 // bootTime reads btime from /proc/stat, the anchor /proc's per-process start

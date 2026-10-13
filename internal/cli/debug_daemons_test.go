@@ -125,6 +125,29 @@ func TestDaemonCensusRowFor(t *testing.T) {
 	}
 }
 
+func TestDebugDaemonsExit(t *testing.T) {
+	// The rule a script or the doctor gate reads: a violation and an unreadable
+	// census are both failures, a clean account and an idle one are not.
+	tests := []struct {
+		name    string
+		state   daemons.State
+		wantErr bool
+	}{
+		{"clean", daemons.StateOK, false},
+		{"idle", daemons.StateNone, false},
+		{"violation", daemons.StateViolation, true},
+		{"cannot tell", daemons.StateUnknown, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := debugDaemonsExit(daemons.Verdict{State: tt.state})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("debugDaemonsExit(%v) error = %v, want error: %v", tt.state, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestDaemonCensusOptions_NamesTheLockAndBothSockets(t *testing.T) {
 	// The options are one function so the CLI, doctor and daemon_info cannot
 	// disagree about which lock is the authority or which sockets are plumb's.

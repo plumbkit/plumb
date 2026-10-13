@@ -220,9 +220,6 @@ func parseLsofOpeners(out string, wanted map[string]bool) map[string][]int {
 				continue
 			}
 			key, ok := index[name]
-			if !ok {
-				key, ok = index[resolvedPath(name)]
-			}
 			if ok {
 				owners[key] = append(owners[key], pid)
 			}
