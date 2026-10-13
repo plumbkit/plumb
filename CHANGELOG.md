@@ -13,6 +13,20 @@
 
 ### Added
 
+- **A second daemon can no longer start under a different `$HOME`.** The right to
+  start a daemon was the runtime lifetime lock, and that lock lives in a
+  directory derived from `$HOME` — so overriding `HOME` or `XDG_RUNTIME_DIR` made
+  a second daemon legal and unreachable, which is how 64 of them accumulated.
+  Launching now takes an account-wide **authority lock** first, under the
+  account's data directory, which the environment cannot move; the runtime
+  lifetime lock is taken second, so an older binary's launcher still loses to the
+  file it always contended for. A launcher that finds the authority held attaches
+  to the daemon holding it, through the socket that daemon recorded, rather than
+  dialling its own `$HOME`-derived path. The account comes from the operating
+  system's account database, and a uid it cannot resolve is refused rather than
+  guessed: `plumb debug daemons` reports that state instead of a count.
+
+
 - **`context_for_task` names the tests that run your seed, as a ready
   `run_task` call.** The affected-tests estimate named only packages
   (`./internal/tools/... — 1808 test(s)`), so agents built their own `-run`
