@@ -359,6 +359,18 @@
   never hashed is reported as a possible gap, while two absent sides still
   read as continuous. `write_file` keeps one copy of the content for the write
   and the history side.
+- **The account test seam now contains the runtime directory too.**
+  `PLUMB_TEST_ACCOUNT_ROOT` redirects every account path — data, cache, config,
+  state, the authority lock — except that on Linux the runtime directory came
+  from the kernel's `/run/user/<uid>` instead, which is a real, usable directory
+  on any machine with a login session. A test binary could therefore resolve, and
+  bind its daemon's socket in, the account's own runtime directory: exactly the
+  cross-contamination the seam exists to prevent. A seam root now outranks the
+  kernel's runtime directory on every platform, and the runtime directory sits
+  under it like every other account path. The Linux-only checks the kernel's
+  runtime directory has to pass are exercised on every platform as well, so a
+  darwin-only test run can no longer hide a Linux answer.
+
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released

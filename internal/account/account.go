@@ -148,15 +148,35 @@ func (u User) LogDir() string {
 	return u.StateDir()
 }
 
+// appDir is plumb's own directory name under a runtime base.
+const appDir = "plumb"
+
+// seamRuntimeDirRelative is where the runtime directory sits under a seam root:
+// a private "run" base with plumb under it, the shape a real runtime base gives
+// the daemon (and the shape a HOME-derived $XDG_RUNTIME_DIR takes). It is
+// deliberately NOT the cache directory, RuntimeDir's other answer, so a test can
+// tell which of the two it got.
+const seamRuntimeDirRelative = "run/plumb"
+
 // RuntimeDir returns the canonical runtime directory for this account: where the
 // daemon's sockets, pid file, version file and lifetime lock live, and therefore
 // the account-wide singleton's address.
 //
-// On Linux it prefers /run/user/<uid>/plumb when the runtime directory the
-// kernel provides is present, a directory, owned by this uid and mode 0700 —
-// the spec's own checks, not a trusted variable. Otherwise (and always on
-// darwin) it is the cache directory above.
+// A seam root outranks every other answer, on every platform: the runtime
+// directory is an account path like the rest, and the seam exists so that a test
+// binary cannot touch the real one. Without that, a Linux test run — where
+// /run/user/<uid> is a real, usable directory — resolved /run/user/<uid>/plumb,
+// and a test's daemon could bind its socket in the real account runtime
+// directory, which is exactly the cross-contamination the seam prevents.
+//
+// Otherwise, on Linux, it prefers /run/user/<uid>/plumb when the runtime
+// directory the kernel provides is present, a directory, owned by this uid and
+// mode 0700 — the spec's own checks, not a trusted variable. Elsewhere (and
+// always on darwin) it is the cache directory above.
 func (u User) RuntimeDir() string {
+	if root := testRoot(); root != "" {
+		return filepath.Join(root, seamRuntimeDirRelative)
+	}
 	if dir, ok := linuxRuntimeDir(u.UID); ok {
 		return dir
 	}
@@ -234,8 +254,21 @@ func linuxRuntimeDir(uid int) (string, bool) {
 	if runtime.GOOS != "linux" {
 		return "", false
 	}
-	dir := "/run/user/" + strconv.Itoa(uid)
-	info, err := os.Stat(dir) //nolint:gosec // G304: the path is built from this process's own uid
+	return runtimeDirUnder("/run/user/"+strconv.Itoa(uid), uid)
+}
+
+// runtimeDirUnder applies the checks the XDG base directory spec requires of a
+// consumer before it trusts a runtime base — the base must already exist, be a
+// directory, be owned by this uid and be mode 0700, because the daemon socket
+// would otherwise be exposed to whoever owns the directory — and names plumb's
+// directory under it.
+//
+// The base is a parameter rather than the constant /run/user/<uid> so these
+// checks can be exercised on any platform: they otherwise run only on Linux,
+// which is how a darwin-only pass let the runtime directory escape the seam
+// root.
+func runtimeDirUnder(base string, uid int) (string, bool) {
+	info, err := os.Stat(base) //nolint:gosec // G304: the base is this process's own uid's runtime directory, or a test's own temp dir
 	if err != nil || !info.IsDir() {
 		return "", false
 	}
@@ -245,7 +278,7 @@ func linuxRuntimeDir(uid int) (string, bool) {
 	if !ownedByUID(info, uid) {
 		return "", false
 	}
-	return filepath.Join(dir, "plumb"), true
+	return filepath.Join(base, appDir), true
 }
 
 // ParseTestRoot validates a seam root from the environment. Exported for the

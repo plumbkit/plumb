@@ -2,6 +2,7 @@ package account
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -48,6 +49,96 @@ func TestCurrent_UsesTheSeamRoot(t *testing.T) {
 		if !strings.HasPrefix(path, dir+string(filepath.Separator)) {
 			t.Errorf("%s path %q escapes the seam root %q", name, path, dir)
 		}
+	}
+}
+
+// The rule the Linux CI leg broke. /run/user/<uid> is a real, usable directory
+// there, so the runtime directory resolved to /run/user/<uid>/plumb — outside
+// the seam root, where a test binary's daemon could bind its socket in the
+// account's own runtime directory. The assertion is the exact seam path rather
+// than containment: on darwin the cache fallback is inside the root too, so a
+// containment-only check passes with the seam branch deleted, which is how a
+// darwin-only run let this through.
+//
+// /run/user/<uid> cannot be created from a test (and does not exist on darwin at
+// all), so the kernel's base is injected instead: runtimeDirUnder is the function
+// linuxRuntimeDir calls, and the directory below passes the same checks.
+func TestCurrent_SeamRootContainsTheRuntimeDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits and file ownership have no meaning on Windows")
+	}
+	root := t.TempDir()
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", root)
+	u, err := Current()
+	if err != nil {
+		t.Fatalf("Current() with a seam root: %v", err)
+	}
+
+	// The shape the Linux runner has: a runtime base it would accept.
+	base := t.TempDir()
+	if err := os.Chmod(base, 0o700); err != nil {
+		t.Fatalf("chmod %s: %v", base, err)
+	}
+	kernel, ok := runtimeDirUnder(base, u.UID)
+	if !ok {
+		t.Fatalf("runtimeDirUnder(%q, %d) rejected a 0700 directory owned by this uid; "+
+			"the injected base must reproduce the Linux shape", base, u.UID)
+	}
+
+	got, want := u.RuntimeDir(), filepath.Join(root, "run", "plumb")
+	if got != want {
+		t.Errorf("RuntimeDir() = %q, want %q: the seam root must contain the runtime directory "+
+			"(the directory Linux would otherwise pick is %q)", got, want, kernel)
+	}
+}
+
+// The checks linuxRuntimeDir applies to the kernel's runtime base — the XDG
+// spec's own, because the daemon socket is exposed to whoever owns that
+// directory. They are exercised on every platform because the base is injected:
+// on Linux this is the one path a darwin-only run never executes, so it was
+// untested on the machine that let the runtime directory escape the seam root.
+func TestRuntimeDirUnder_AppliesTheSpecChecksToTheKernelRuntimeBase(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits and file ownership have no meaning on Windows")
+	}
+	uid := os.Getuid()
+
+	good := t.TempDir()
+	if err := os.Chmod(good, 0o700); err != nil {
+		t.Fatalf("chmod %s: %v", good, err)
+	}
+	// Explicit chmod: a directory's mode is masked by the process umask, so
+	// under `umask 077` this one would be created 0700 and correctly ACCEPTED,
+	// silently turning the world-readable case into a no-op.
+	loose := t.TempDir()
+	if err := os.Chmod(loose, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", loose, err)
+	}
+	notADir := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(notADir, nil, 0o600); err != nil {
+		t.Fatalf("writing %s: %v", notADir, err)
+	}
+
+	tests := []struct {
+		name string
+		base string
+		ok   bool
+	}{
+		{"a private base this uid owns", good, true},
+		{"a base that does not exist", filepath.Join(t.TempDir(), "missing"), false},
+		{"a world-readable base", loose, false},
+		{"a base that is not a directory", notADir, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := runtimeDirUnder(tt.base, uid)
+			if ok != tt.ok {
+				t.Fatalf("runtimeDirUnder(%q, %d) ok = %v, want %v", tt.base, uid, ok, tt.ok)
+			}
+			if ok && got != filepath.Join(tt.base, "plumb") {
+				t.Errorf("runtimeDirUnder(%q, %d) = %q, want plumb's directory under it", tt.base, uid, got)
+			}
+		})
 	}
 }
 
