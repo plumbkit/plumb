@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/account"
-	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // The account authority (PLAN-527).
@@ -165,12 +164,27 @@ func readAuthority(path string) (authorityMetadata, bool) {
 // attachSocket returns the socket a launcher should dial to reach the current
 // holder of the authority, and whether it could be trusted.
 //
-// A recorded socket is used only when every part of it checks out: the recorded
-// pid must be alive, the path must be a unix socket this user owns, and it must
-// sit under a runtime root plumb could have chosen. A stale record from a daemon
-// that has since died, or a path pointing anywhere else, falls through to the
-// caller's own sockets — never dialled, because metadata is a record of where a
-// daemon said it was, not an instruction.
+// The LOCK is the trust anchor, not the socket's directory: only a process this
+// user runs can take the account authority and write its record through the held
+// fd, so the checks below are the ones that make the dial safe — the recorded pid
+// is alive, the recorded path is absolute, that path IS a unix socket, and this
+// user OWNS it. A stale record from a daemon that has since died, a path that is
+// not a socket, or a socket somebody else bound, falls through to the caller's
+// own sockets — never dialled, because metadata is a record of where a daemon
+// said it was, not an instruction.
+//
+// The record used to have to sit under a runtime root plumb could have chosen
+// (this process's own, or the account's). That was a sanity gate and not the
+// safety property, and it stranded real clients: with the account's directory
+// gate off — a release build, where account.AuthorityEnabled is false — a daemon
+// launched under a HOME-derived runtime root is under neither, so a client whose
+// HOME differed from the daemon's found the authority held, refused the only
+// socket that could have reached it, waited out its bounded wait and exited with
+// no daemon at all. The gate bought nothing either: a same-user process that can
+// bind a socket in a plumb-shaped root can equally bind the path this client
+// dials first (l.dial), which has never been checked, and a socket under a root
+// this user does not own fails the ownership check below whatever directory it
+// is in.
 func attachSocket(authorityPath string) (string, bool) {
 	m, ok := readAuthority(authorityPath)
 	if !ok || m.Socket == "" {
@@ -179,7 +193,11 @@ func attachSocket(authorityPath string) (string, bool) {
 	if !processAlive(m.PID) {
 		return "", false
 	}
-	if !underKnownRuntimeRoot(m.Socket) {
+	// Absolute because a record is a path, not a fragment: a relative one would
+	// resolve against this client's working directory, which the daemon that
+	// recorded it knows nothing about. It cannot strand a real client — every
+	// socket plumb records comes from a runtime directory, which is absolute.
+	if !filepath.IsAbs(m.Socket) {
 		return "", false
 	}
 	info, err := os.Stat(m.Socket)
@@ -190,41 +208,6 @@ func attachSocket(authorityPath string) (string, bool) {
 		return "", false
 	}
 	return m.Socket, true
-}
-
-// underKnownRuntimeRoot reports whether path sits under a directory plumb could
-// have chosen for a runtime socket: the account's canonical one, or the
-// environment-derived one (which a legacy or spoofed-HOME daemon may be using).
-// It is a sanity check on metadata, not an authorisation decision — the socket's
-// ownership and liveness are what make the dial safe.
-func underKnownRuntimeRoot(path string) bool {
-	if !filepath.IsAbs(path) {
-		return false
-	}
-	dir := filepath.Dir(path)
-	for _, root := range []string{paths.RuntimeDir(), accountRuntimeDirOrEmpty()} {
-		if root == "" {
-			continue
-		}
-		if dir == root || dir == paths.Canonical(root) {
-			return true
-		}
-	}
-	return false
-}
-
-// accountRuntimeDirOrEmpty is the ACCOUNT's runtime directory — a second place a
-// daemon this user owns may have put its socket — or "" when the account cannot
-// be resolved.
-//
-// It resolves nothing itself: the caller canonicalises what it returns (see
-// underKnownRuntimeRoot), which is why the name says account, not canonical.
-func accountRuntimeDirOrEmpty() string {
-	u, err := account.Current()
-	if err != nil {
-		return ""
-	}
-	return u.RuntimeDir()
 }
 
 // dialAuthoritySocket dials the recorded socket, if there is one worth dialling.

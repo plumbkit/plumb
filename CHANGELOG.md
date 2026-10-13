@@ -359,6 +359,20 @@
   never hashed is reported as a possible gap, while two absent sides still
   read as continuous. `write_file` keeps one copy of the content for the write
   and the history side.
+- **A launcher whose `$HOME` differs from the daemon's reaches the daemon that
+  exists, instead of waiting out its whole start deadline and exiting with no
+  daemon.** The account authority records the socket the daemon serves, so that a
+  launcher which finds the authority held can dial it. It refused that record
+  unless the socket sat under a runtime directory the launcher itself could have
+  chosen — its own, or the account's — and a daemon launched under a different
+  `$HOME` or `XDG_RUNTIME_DIR` is under neither (in a release build the account's
+  directories are not in play at all, whatever the environment says), so a client
+  whose `$HOME` differed from the daemon's was served nothing. The record is now
+  dialled whenever the recorded pid is alive, the path is absolute, the path is a
+  unix socket, and this user owns it: the authority lock is the trust anchor —
+  only a process running as this user can hold it and write the record through
+  it — and the directory a socket sits in was never the safety property.
+
 - **The account test seam now contains the runtime directory too.**
   `PLUMB_TEST_ACCOUNT_ROOT` redirects every account path — data, cache, config,
   state, the authority lock — except that on Linux the runtime directory came

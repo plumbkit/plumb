@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/account"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // authorityLockPathForTest is where acquireAuthority would put the lock under
@@ -19,6 +22,37 @@ func authorityLockPathForTest(t *testing.T) string {
 		t.Fatalf("authorityPath: %v", err)
 	}
 	return path
+}
+
+// shortTempDir makes a directory under the shortest available base. Socket tests
+// need it (see withShortTempRuntime): a macOS t.TempDir() path would push the
+// socket past the ~104-byte sun_path ceiling and the bind would fail with EINVAL,
+// which says nothing about length.
+func shortTempDir(t *testing.T, prefix string) string {
+	t.Helper()
+	base := "/tmp"
+	if info, err := os.Stat(base); err != nil || !info.IsDir() {
+		base = os.TempDir()
+	}
+	//nolint:usetesting // t.TempDir() is exactly what cannot be used here: its macOS path exhausts the sun_path ceiling.
+	dir, err := os.MkdirTemp(base, prefix)
+	if err != nil {
+		t.Fatalf("creating a short temp directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// accountRuntimeDirForTest is the ACCOUNT's runtime directory under the current
+// seam: the second root the attach gate used to accept, and so the one a test
+// asserting "outside every runtime root" has to rule out explicitly.
+func accountRuntimeDirForTest(t *testing.T) string {
+	t.Helper()
+	u, err := account.Current()
+	if err != nil {
+		t.Fatalf("account.Current: %v", err)
+	}
+	return u.RuntimeDir()
 }
 
 func TestAcquireAuthority_SecondAttemptFails(t *testing.T) {
@@ -140,27 +174,78 @@ func TestAttachSocket_TrustsOnlyALiveHolderAtAPlumbSocket(t *testing.T) {
 		t.Errorf("attachSocket trusted a dead holder: %q", got)
 	}
 
-	// A socket outside every runtime root plumb could have chosen is refused,
-	// however live it looks: metadata says where a daemon claimed to be.
-	// Short enough to bind, and in a subdirectory that is NOT a runtime root:
-	// the point is that a live socket elsewhere is still refused.
-	elsewhereDir := filepath.Join(filepath.Dir(daemonSocketPath()), "elsewhere")
-	if err := os.MkdirAll(elsewhereDir, 0o700); err != nil {
-		t.Fatalf("creating %s: %v", elsewhereDir, err)
+	// What the record names must be a socket of ours, and a path at all: a
+	// regular file, a path that is not there, and a path relative to this
+	// client's working directory are all things a stale or hand-edited record
+	// could name, and none of them is a place to dial.
+	plain := filepath.Join(filepath.Dir(socket), "plumb.pid")
+	if err := os.WriteFile(plain, []byte("1234\n"), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", plain, err)
 	}
-	elsewhere := filepath.Join(elsewhereDir, "plumb.sock")
-	other, err := net.Listen("unix", elsewhere)
+	notASocket := map[string]string{
+		"a regular file":              plain,
+		"a path that is not there":    filepath.Join(filepath.Dir(socket), "gone.sock"),
+		"a path that is not absolute": filepath.Join("run", "plumb", "plumb.sock"),
+	}
+	for name, path := range notASocket {
+		t.Run(name, func(t *testing.T) {
+			record := authorityMetadata{PID: os.Getpid(), Socket: path}
+			if err := os.WriteFile(authority, authorityJSON(t, record), 0o600); err != nil {
+				t.Fatalf("writing the metadata: %v", err)
+			}
+			if got, ok := attachSocket(authority); ok {
+				t.Errorf("attachSocket trusted %s: %q", name, got)
+			}
+		})
+	}
+}
+
+// FINDING-1 from the container probe: the daemon runs under one HOME (its socket
+// in <home-a>/run/plumb) and the client under another, so the socket the authority
+// metadata records is under neither the client's runtime root nor the ACCOUNT's.
+// The "known runtime root" gate refused it, and the client waited out its whole
+// bounded wait and exited with no daemon at all. The LOCK is the trust anchor, so
+// that record is dialled on the checks that carry the safety: a live pid, a unix
+// socket, and this user's ownership.
+func TestAttachSocket_DialsALiveSocketOutsideEveryRuntimeRoot(t *testing.T) {
+	withShortTempRuntime(t) // it binds a socket: see the note on the test above
+	authority := authorityLockPathForTest(t)
+	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil {
+		t.Fatalf("creating the authority directory: %v", err)
+	}
+
+	// A second HOME's runtime directory, the shape the probe's /work/home-a has:
+	// the socket lives where a daemon under ANOTHER environment put it.
+	socket := filepath.Join(shortTempDir(t, "plumb-home-"), "run", "plumb", "plumb.sock")
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		t.Fatalf("creating %s: %v", filepath.Dir(socket), err)
+	}
+	ln, err := net.Listen("unix", socket)
 	if err != nil {
-		t.Fatalf("listening on %s: %v", elsewhere, err)
+		t.Fatalf("listening on %s: %v", socket, err)
 	}
-	defer func() { _ = other.Close() }()
-	stray := authorityMetadata{PID: os.Getpid(), Socket: elsewhere}
-	if err := os.WriteFile(authority, authorityJSON(t, stray), 0o600); err != nil {
+	defer func() { _ = ln.Close() }()
+
+	// Guard the premise, or this test proves nothing about the gate it pins: the
+	// socket's directory is neither root.
+	for _, root := range []string{paths.RuntimeDir(), accountRuntimeDirForTest(t)} {
+		if dir := filepath.Dir(socket); dir == root || dir == paths.Canonical(root) {
+			t.Fatalf("the socket at %s is under the runtime root %s; it must be under neither", socket, root)
+		}
+	}
+
+	if err := os.WriteFile(authority, authorityJSON(t, authorityMetadata{PID: os.Getpid(), Socket: socket}), 0o600); err != nil {
 		t.Fatalf("writing the metadata: %v", err)
 	}
-	if got, ok := attachSocket(authority); ok {
-		t.Errorf("attachSocket trusted a socket outside the runtime roots: %q", got)
+	if got, ok := attachSocket(authority); !ok || got != socket {
+		t.Errorf("attachSocket = %q, %v; want the recorded socket %q though it is under neither runtime root",
+			got, ok, socket)
 	}
+	conn, ok := dialAuthoritySocket(authority)
+	if !ok || conn == nil {
+		t.Fatal("dialAuthoritySocket did not dial a live recorded socket outside the runtime roots")
+	}
+	_ = conn.Close()
 }
 
 func TestDialAuthoritySocket_DialsTheRecordedSocket(t *testing.T) {
