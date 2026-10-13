@@ -144,6 +144,18 @@ func (x XDG) Vars() []EnvVar {
 	}
 }
 
+// Value returns the recorded value of the named XDG variable, or "" when it is
+// not recorded. It is the read half of With, so a caller never has to know the
+// field order.
+func (x XDG) Value(name string) string {
+	for _, v := range x.Vars() {
+		if v.Name == name {
+			return v.Value
+		}
+	}
+	return ""
+}
+
 // With returns a copy of x with value recorded for the named XDG variable. An
 // unknown name is ignored, so a caller cannot smuggle an arbitrary variable
 // into the profile.

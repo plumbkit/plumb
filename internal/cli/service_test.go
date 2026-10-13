@@ -361,3 +361,40 @@ func TestServiceSetXDG_FlagWiring(t *testing.T) {
 		t.Errorf("set-xdg left the PATH empty; it must not touch an unrelated setting (%v)", u.UID)
 	}
 }
+
+// A set-* changes ONE setting. A directory that setting does not govern must
+// survive it — the same rule an install obeys, applied to the other writer.
+func TestServiceSetXDG_LeavesTheRolesItDoesNotName(t *testing.T) {
+	serviceInstallEnv(t)
+	if err := runServiceInstall(nil, nil); err != nil {
+		t.Fatalf("runServiceInstall: %v", err)
+	}
+	path, err := service.Path()
+	if err != nil {
+		t.Fatalf("service.Path: %v", err)
+	}
+	arranged, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	arranged.Dirs.Config = filepath.Join(t.TempDir(), "arranged", "plumb")
+	if err := arranged.Write(path); err != nil {
+		t.Fatalf("writing the arranged profile: %v", err)
+	}
+
+	base := t.TempDir()
+	if err := setXDGProfile(map[string]string{"XDG_STATE_HOME": base}); err != nil {
+		t.Fatalf("setXDGProfile: %v", err)
+	}
+	got, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got.Dirs.Config != arranged.Dirs.Config {
+		t.Errorf("config dir = %q, want the arranged %q: set-xdg recomputed a role it does not govern",
+			got.Dirs.Config, arranged.Dirs.Config)
+	}
+	if want := service.DirUnder(base); got.Dirs.State != want {
+		t.Errorf("state dir = %q, want %q", got.Dirs.State, want)
+	}
+}

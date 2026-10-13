@@ -245,6 +245,11 @@ func runServiceSetXDG(cmd *cobra.Command, _ []string) error {
 // setXDGProfile records the named XDG variables in the profile and recomputes
 // the directories they govern. An empty value DROPS an override, so the role
 // goes back to the account standard path.
+//
+// Only the roles a NAMED variable governs are recomputed. A set-* is a change to
+// one setting, and a profile is not a place plumb may quietly reset the rest of:
+// a directory the user arranged some other way survives a later set-xdg, exactly
+// as it survives an install.
 func setXDGProfile(changed map[string]string) error {
 	if len(changed) == 0 {
 		return errors.New("set-xdg needs at least one of --config-home, --data-home, --state-home, --cache-home, --runtime-dir")
@@ -261,11 +266,21 @@ func setXDGProfile(changed map[string]string) error {
 		}
 	}
 	return mutateProfile("xdg", func(p *service.Profile, u account.User) error {
-		x := p.XDG
 		for name, v := range changed {
-			x = x.With(name, v)
+			p.XDG = p.XDG.With(name, v)
 		}
-		*p = p.Adopt(u, x)
+		def := service.Default(u, p.Executable, p.Path).Dirs
+		for _, role := range service.Roles() {
+			name := paths.EnvVarForRole(role)
+			if _, named := changed[name]; name == "" || !named {
+				continue
+			}
+			if v := p.XDG.Value(name); v != "" {
+				p.Dirs = p.Dirs.With(role, service.DirUnder(v))
+				continue
+			}
+			p.Dirs = p.Dirs.With(role, def.Dir(role))
+		}
 		return nil
 	})
 }
@@ -365,22 +380,11 @@ func describeChange(before, after service.Profile) string {
 		}
 	}
 	for _, v := range after.XDG.Vars() {
-		if was := xdgValue(before.XDG, v.Name); was != v.Value {
+		if was := before.XDG.Value(v.Name); was != v.Value {
 			fmt.Fprintf(&b, "  %s: %q -> %q\n", v.Name, was, v.Value)
 		}
 	}
 	return b.String()
-}
-
-// xdgValue reads one recorded XDG variable by name, so a change report does not
-// have to know the order the profile stores them in.
-func xdgValue(x service.XDG, name string) string {
-	for _, v := range x.Vars() {
-		if v.Name == name {
-			return v.Value
-		}
-	}
-	return ""
 }
 
 // reportProfile renders a freshly written profile for its installer.
