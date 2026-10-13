@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/account"
 	"github.com/plumbkit/plumb/internal/service"
@@ -348,4 +349,83 @@ func envSlice(env []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// The REAL exec path: not the command plumb would build, but the process it
+// actually starts. The profile's executable is a shell script that records what
+// it was handed, so the evidence is the child's own view of its argv, its
+// environment and its inherited fds — and nothing daemon-shaped is started on
+// this host.
+func TestStartDaemonProcess_ExecsTheProfileExecutableWithTheCleanEnvironment(t *testing.T) {
+	p := withCanonicalService(t)
+	dir := filepath.Dir(p.Executable)
+	report := filepath.Join(dir, "child.txt")
+	script := "#!/bin/sh\n" +
+		"{\n" +
+		"  echo \"argv=$0 $*\"\n" +
+		"  echo \"HOME=${HOME-unset}\"\n" +
+		"  echo \"USER=${USER-unset}\"\n" +
+		"  echo \"PATH=${PATH-unset}\"\n" +
+		"  echo \"XDG_CONFIG_HOME=${XDG_CONFIG_HOME-unset}\"\n" +
+		"  echo \"fd3=$([ -e /dev/fd/3 ] && echo open || echo closed)\"\n" +
+		"  echo \"fd4=$([ -e /dev/fd/4 ] && echo open || echo closed)\"\n" +
+		"} > \"" + report + "\"\n"
+	if err := os.WriteFile(p.Executable, []byte(script), 0o755); err != nil { //nolint:gosec // G306: a test's own script must be executable
+		t.Fatalf("writing the stand-in executable: %v", err)
+	}
+	// A client environment that must not reach the child.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "client-config"))
+
+	spec, err := resolveLaunchSpec()
+	if err != nil {
+		t.Fatalf("resolveLaunchSpec: %v", err)
+	}
+	if spec.Executable != p.Executable {
+		// Never exec whatever else the spec named: in a test binary that is this
+		// test binary, and running it with "daemon" would run the suite.
+		t.Skipf("the launch spec names %q rather than the profile's executable; not executing it from a test", spec.Executable)
+	}
+
+	locks := launchLocks{Authority: lockFile(t, "authority"), Lifetime: lockFile(t, "lifetime")}
+	if err := startDaemonProcess(locks); err != nil {
+		t.Fatalf("startDaemonProcess: %v", err)
+	}
+
+	var lines []string
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if data, err := os.ReadFile(report); err == nil && len(data) > 0 {
+			lines = strings.Split(strings.TrimSpace(string(data)), "\n")
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(lines) == 0 {
+		t.Fatal("the profile's executable was never run: no report file appeared")
+	}
+	got := map[string]string{}
+	for _, ln := range lines {
+		if k, v, ok := strings.Cut(ln, "="); ok {
+			got[k] = v
+		}
+	}
+	u, err := account.Current()
+	if err != nil {
+		t.Fatalf("account.Current: %v", err)
+	}
+	if want := p.Executable + " daemon"; got["argv"] != want {
+		t.Errorf("argv = %q, want %q", got["argv"], want)
+	}
+	if got["HOME"] != u.Home {
+		t.Errorf("child HOME = %q, want the account's %q", got["HOME"], u.Home)
+	}
+	if got["PATH"] != p.Path {
+		t.Errorf("child PATH = %q, want the profile's %q", got["PATH"], p.Path)
+	}
+	if got["XDG_CONFIG_HOME"] != "unset" {
+		t.Errorf("child XDG_CONFIG_HOME = %q, want it unset: the profile records no such override", got["XDG_CONFIG_HOME"])
+	}
+	if got["fd3"] != "open" || got["fd4"] != "open" {
+		t.Errorf("handover fds: fd3=%s fd4=%s, want both open (authority on 3, lifetime on 4)", got["fd3"], got["fd4"])
+	}
 }
