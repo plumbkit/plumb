@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -116,6 +117,33 @@ func publishAuthority(f *os.File, m authorityMetadata) error {
 		return fmt.Errorf("writing the authority metadata: %w", err)
 	}
 	return nil
+}
+
+// publishAuthorityMetadata records this daemon as the authority's holder,
+// through the held fd: who it is, and the MCP socket it is about to serve. A
+// launcher that finds the authority held reads that record and dials the socket,
+// which is how a client whose HOME or XDG resolves elsewhere reaches the one
+// daemon instead of failing.
+//
+// A failure is a warning, not fatal. The record is what lets a differently
+// rooted client attach; the daemon still serves every client whose environment
+// resolves as its own does, which is what it did before there was a record.
+func publishAuthorityMetadata(locks daemonLocks, socketPath string) {
+	if locks.Authority == nil {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "" // best effort: the record still names the pid and the socket
+	}
+	if err := publishAuthority(locks.Authority, authorityMetadata{
+		PID:        os.Getpid(),
+		Version:    Version,
+		Executable: exe,
+		Socket:     socketPath,
+	}); err != nil {
+		slog.Warn("daemon: could not publish the authority metadata", "err", err)
+	}
 }
 
 // readAuthority reads the holder's metadata, or reports that there is none. A

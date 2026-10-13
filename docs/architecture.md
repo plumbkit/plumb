@@ -210,19 +210,27 @@ Key design properties:
   both command sandboxes. The daemon log is the one exception: it lives in the
   OS log dir (`~/Library/Logs/plumb/` on macOS), not the runtime dir. See
   *Persistence layout* for the `$XDG_RUNTIME_DIR` validity checks.
-- **Singleton enforced by `flock(2)`** — two advisory locks (`plumb.spawn.lock`
-  held briefly by `plumb serve` around its dial-or-spawn block, and
-  `plumb.daemon.lock` held by `plumb daemon` for its lifetime) guarantee at
-  most one daemon process ever binds the socket. Without them, two `plumb
-  serve` processes racing from a cold start could each spawn a daemon and the
-  second would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the
-  path from the first. The lifetime lock is also the right to launch: `plumb
-  serve` and `plumb restart` take it before starting a daemon and hand it to
-  the child on fd 3, so it is held from the moment the daemon exists, and a
-  launcher that finds it held (a daemon running or still starting) never
-  starts another; it keeps dialling for up to 30 s
-  (`PLUMB_DAEMON_START_TIMEOUT`) and then fails. Lock release is automatic via
-  fd close on process exit (clean or crash) — see `internal/cli/lock.go` and
+- **Singleton enforced by `flock(2)`** — three advisory locks (`plumb.spawn.lock`
+  held briefly by `plumb serve` around its dial-or-spawn block, and two held by
+  `plumb daemon` for its lifetime: the account's `daemon.authority.lock` under
+  its data directory, and the runtime's `plumb.daemon.lock`) guarantee at most
+  one daemon process ever binds the socket. Without them, two `plumb serve`
+  processes racing from a cold start could each spawn a daemon and the second
+  would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the path from
+  the first. The two daemon locks are also the right to launch: `plumb serve`
+  and `plumb restart` take them — the authority first, then the runtime
+  lifetime lock — before starting a daemon, and hand them to the child on fds 3
+  and 4, so they are held from the moment the daemon exists, and a launcher that
+  finds either held (a daemon running or still starting) never starts another;
+  it keeps dialling for up to 30 s (`PLUMB_DAEMON_START_TIMEOUT`) and then
+  fails. The account authority sits outside the runtime directory because that
+  directory is derived from `$HOME`: a client whose environment resolves
+  elsewhere still contends for this one file, and reaches the daemon holding it
+  by dialling the socket that daemon recorded in the lock's metadata. An
+  inherited lock fd is adopted only when it is the very file it must be (same
+  device and inode); anything else fails closed rather than taking a second lock
+  at the expected path. Lock release is automatic via fd close on process exit
+  (clean or crash) — see `internal/cli/lock.go` and
   `internal/cli/daemon_launch.go`.
 - **One language server per (root, language)** — multiple MCP connections to
   the same project share each server, its cache, and its diagnostic stream. A
@@ -352,7 +360,8 @@ Rung 1 outranks client roots because it is the workspace the caller chose, not w
 | `~/.local/state/plumb/serve/resume-credentials/<hash>.json` | serve | The resume credential the daemon disclosed, one file per conversation (0600, written atomically, bound to the daemon whose `session_state.db` issued it, capped at 256 with the oldest evicted); presented by a replacement serve, never in a workspace (OS state dir; `~/Library/Application Support/plumb/` on macOS) |
 | `~/.local/state/plumb/serve/hook-proof.key` | hook, serve | The per-user 32-byte key the identity hook proves a `session_start`'s conversation with and `plumb serve` verifies it against (0600; made by `plumb hooks install` or the hook's first run; never in a workspace) |
 | `<runtime>/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
-| `<runtime>/plumb.daemon.lock` | serve, restart, daemon | Advisory `flock` held for the daemon's lifetime and taken by the launcher before it starts one (handed to the daemon on fd 3); rejects duplicate daemons and launches beside a starting one |
+| `~/.local/share/plumb/daemon.authority.lock` | serve, restart, daemon | The **account authority**: the advisory `flock` held by the one daemon for its lifetime and taken by every launcher before it starts a child (handed over on fd 3, with the runtime lifetime lock on fd 4); on macOS the data dir is `~/Library/Application Support/plumb/`. It sits outside the runtime dir on purpose: that dir is derived from `$HOME`, so this is the lock a client whose environment resolves elsewhere still contends for. The holder writes its pid, version, executable and MCP socket through the held fd, and a launcher that finds it held dials that socket |
+| `<runtime>/plumb.daemon.lock` | serve, restart, daemon | Advisory `flock` held for the daemon's lifetime and taken by the launcher before it starts one (handed to the daemon on fd 4); rejects duplicate daemons and launches beside a starting one |
 | `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |

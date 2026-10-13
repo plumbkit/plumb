@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -141,11 +142,20 @@ func daemonStartTimeoutError(action, socketPath string, wait time.Duration) erro
 }
 
 // startDaemonProcess launches a detached plumb daemon subprocess that inherits
-// lock, the held lifetime lock, as fd 3 (see daemon_launch.go): the caller must
-// hold it, and closes its own copy afterwards. Logs are written to
-// daemonLogPath(); the process is detached with Setsid so it outlives the
-// calling plumb serve process.
-func startDaemonProcess(lock *os.File) error {
+// the two held launch locks — the account authority on fd 3 and the runtime
+// lifetime lock on fd 4 (see daemon_launch.go): the caller must hold both, and
+// closes its own copies afterwards. Logs are written to daemonLogPath(); the
+// process is detached with Setsid so it outlives the calling plumb serve
+// process.
+func startDaemonProcess(locks launchLocks) error {
+	files := locks.files()
+	if len(files) != 2 {
+		// Unreachable through acquireLaunchLocks, which returns both locks or
+		// none. Guarded because a nil *os.File in ExtraFiles panics os/exec, and
+		// because a daemon handed half the pair would be a second authority in
+		// waiting.
+		return errors.New("starting daemon: both launch locks must be held to hand them over")
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolving executable path: %w", err)
@@ -161,8 +171,13 @@ func startDaemonProcess(lock *os.File) error {
 	cmd := exec.Command(exe, "daemon")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.ExtraFiles = []*os.File{lock} // fd 3 in the child
-	cmd.Env = append(os.Environ(), fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD))
+	// fd 3 in the child is the authority and fd 4 the lifetime lock: the order
+	// the daemon adopts them in, and the order it holds them in.
+	cmd.ExtraFiles = files
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("%s=%d", authorityLockFDEnv, inheritedAuthorityLockFD),
+		fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD),
+	)
 	// Never let the daemon inherit this serve proxy's working directory. The daemon
 	// is a singleton shared across every connection, so an inherited cwd belongs to
 	// one arbitrary client's project — and any stray relative path would resolve

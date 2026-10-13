@@ -216,11 +216,13 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Acquire the daemon-lifetime lock before doing anything else. If another
-	// daemon already holds it, exit immediately rather than stealing the socket
-	// path from it (which is what `os.Remove(socketPath); net.Listen(...)`
-	// below would otherwise do, leaving two daemons running on the same path).
-	lock, err := daemonLifetimeLock()
+	// Acquire both launch locks before doing anything else — the account
+	// authority first, then the runtime lifetime lock (lock.go). If another
+	// daemon already holds either, exit immediately rather than stealing the
+	// socket path from it (which is what `os.Remove(socketPath);
+	// net.Listen(...)` below would otherwise do, leaving two daemons running on
+	// the same path).
+	locks, err := daemonLaunchLocks()
 	if err != nil {
 		if errors.Is(err, errDaemonAlreadyRunning) {
 			slog.Info("daemon: another plumb daemon is already running — exiting")
@@ -228,7 +230,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		}
 		return err
 	}
-	defer lock.Close()
+	defer locks.closeAll()
 
 	detachWorkingDirectory()
 
@@ -296,6 +298,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	}
 	defer os.Remove(socketPath)
 	defer ln.Close()
+
+	// Announce, through the held authority fd, who holds the authority and the
+	// socket it serves, so a launcher that finds it held — a client whose own
+	// environment resolved elsewhere — dials THIS daemon instead of waiting out
+	// its deadline and failing (PLAN-527).
+	publishAuthorityMetadata(locks, socketPath)
 
 	pidPath := daemonPIDPath()
 	if err := publishDaemonPID(os.WriteFile); err != nil {

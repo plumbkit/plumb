@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -13,10 +14,10 @@ import (
 	"time"
 )
 
-// testLauncher is a launcher on the real lifetime lock (in a temp runtime dir)
+// testLauncher is a launcher on the real launch locks (in a temp runtime dir)
 // whose dial succeeds once ready reports true. Its start counts, and keeps a
-// duplicate of the lock open until the test ends: a stand-in for a live child
-// that inherited it.
+// duplicate of each lock open until the test ends: a stand-in for a live child
+// that inherited them.
 func testLauncher(t *testing.T, ready *atomic.Bool, starts *atomic.Int32, wait time.Duration) daemonLauncher {
 	t.Helper()
 	return daemonLauncher{
@@ -28,18 +29,37 @@ func testLauncher(t *testing.T, ready *atomic.Bool, starts *atomic.Int32, wait t
 			}
 			return nil, errors.New("connection refused")
 		},
-		acquire: acquireDaemonLock,
-		start: func(lock *os.File) error {
+		acquire: acquireLaunchLocks,
+		start: func(locks launchLocks) error {
 			starts.Add(1)
-			child, err := syscall.Dup(int(lock.Fd()))
-			if err != nil {
-				return err
+			for _, f := range locks.files() {
+				child, err := syscall.Dup(int(f.Fd()))
+				if err != nil {
+					return err
+				}
+				t.Cleanup(func() { _ = syscall.Close(child) })
 			}
-			t.Cleanup(func() { _ = syscall.Close(child) })
 			return nil
 		},
 		wait: wait,
 		poll: 10 * time.Millisecond,
+	}
+}
+
+// freeLaunchLocks asserts that neither launch lock is held any more, naming the
+// one that is: a launcher that returns must not sit on a lock it did not hand
+// over.
+func freeLaunchLocks(t *testing.T) {
+	t.Helper()
+	for name, acquire := range map[string]func() (*os.File, error){
+		"account authority": acquireAuthority,
+		"lifetime":          acquireDaemonLock,
+	} {
+		f, err := acquire()
+		if err != nil {
+			t.Fatalf("the %s lock is still held: %v", name, err)
+		}
+		_ = f.Close()
 	}
 }
 
@@ -50,7 +70,7 @@ func TestDialOrLaunch_ARunningDaemonIsDialledWithoutTheLock(t *testing.T) {
 	ready.Store(true)
 	l := testLauncher(t, &ready, &starts, time.Second)
 	acquired := false
-	l.acquire = func() (*os.File, error) { acquired = true; return acquireDaemonLock() }
+	l.acquire = func() (launchLocks, error) { acquired = true; return acquireLaunchLocks() }
 	conn, launched, err := l.dialOrLaunch(context.Background())
 	if err != nil || conn == nil || launched {
 		t.Fatalf("got conn=%v launched=%v err=%v, want a dial and no launch", conn, launched, err)
@@ -60,9 +80,9 @@ func TestDialOrLaunch_ARunningDaemonIsDialledWithoutTheLock(t *testing.T) {
 	}
 }
 
-// The race PLAN-528 fixes: a daemon is starting (it holds the lock) but does
-// not accept yet. The launcher must never start a second one; it waits and,
-// at its deadline, fails naming the silent holder.
+// The race #649 fixes: a daemon is starting (it holds the locks) but does not
+// accept yet. The launcher must never start a second one; it waits and, at its
+// deadline, fails naming the silent holder.
 func TestDialOrLaunch_NeverStartsBesideAHolder(t *testing.T) {
 	withTempRuntime(t)
 	holder, err := acquireDaemonLock()
@@ -79,6 +99,124 @@ func TestDialOrLaunch_NeverStartsBesideAHolder(t *testing.T) {
 	}
 	if starts.Load() != 0 {
 		t.Fatalf("started %d daemon(s) beside the holder", starts.Load())
+	}
+}
+
+// A held account authority means a daemon exists, wherever its environment put
+// it: the launcher spawns nothing and waits for that daemon instead.
+func TestDialOrLaunch_HeldAuthoritySpawnsNothing(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 300*time.Millisecond)
+	_, launched, err := l.dialOrLaunch(context.Background())
+	if !errors.Is(err, errDaemonHeldButSilent) || launched {
+		t.Fatalf("got launched=%v err=%v, want errDaemonHeldButSilent", launched, err)
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("started %d daemon(s) while another held the account authority", starts.Load())
+	}
+}
+
+// The authority is taken first, so a lifetime lock that turns out to be held
+// must give it back: a launcher that lost the race may not leave the account
+// authority held by a process that is about to return.
+func TestDialOrLaunch_HeldLifetimeLockReleasesTheAuthority(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 200*time.Millisecond)
+	_, launched, err := l.dialOrLaunch(context.Background())
+	if !errors.Is(err, errDaemonHeldButSilent) || launched || starts.Load() != 0 {
+		t.Fatalf("got launched=%v err=%v starts=%d, want a wait and no launch", launched, err, starts.Load())
+	}
+	authority, err := acquireAuthority()
+	if err != nil {
+		t.Fatalf("the account authority is still held after the lifetime lock was found held: %v", err)
+	}
+	_ = authority.Close()
+}
+
+// The same rule as the launcher test above, at the acquire level and with no
+// launcher in the way: the authority is taken first, so a lifetime lock that is
+// already held must give it back — a launcher that lost the race may not leave
+// the account authority held by a process that is about to return.
+func TestAcquireLaunchLocks_ReleasesTheAuthorityWhenTheLifetimeLockIsHeld(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireDaemonLock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if _, err := acquireLaunchLocks(); !errors.Is(err, errDaemonAlreadyRunning) {
+		t.Fatalf("acquireLaunchLocks = %v, want errDaemonAlreadyRunning", err)
+	}
+	authority, err := acquireAuthority()
+	if err != nil {
+		t.Fatalf("the account authority is still held after the lifetime lock was found held: %v", err)
+	}
+	_ = authority.Close()
+}
+
+// The one order, launcher side: a held authority is reported without the runtime
+// lifetime lock ever being opened. Pinned behaviourally — the lifetime lock path
+// is made unopenable, so a launcher that took it first would report that open
+// error instead of the held authority.
+func TestAcquireLaunchLocks_TakesTheAuthorityBeforeTheLifetimeLock(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	brokeLifetimeLockPath(t)
+
+	if _, err := acquireLaunchLocks(); !errors.Is(err, errDaemonAlreadyRunning) {
+		t.Fatalf("acquireLaunchLocks = %v, want errDaemonAlreadyRunning", err)
+	}
+}
+
+// A client whose own environment resolves elsewhere must reach the one daemon:
+// while the authority is held, the launcher dials the socket that holder
+// recorded, before its bounded redial gives up.
+func TestDialOrLaunch_HeldAuthorityDialsTheRecordedSocket(t *testing.T) {
+	withTempRuntime(t)
+	holder, err := acquireAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, 5*time.Second)
+	recorded, other := net.Pipe()
+	t.Cleanup(func() { _ = recorded.Close(); _ = other.Close() })
+	var dialled atomic.Int32
+	l.dialHeld = func() (net.Conn, bool) { dialled.Add(1); return recorded, true }
+
+	conn, launched, err := l.dialOrLaunch(context.Background())
+	if err != nil || conn == nil || launched {
+		t.Fatalf("got conn=%v launched=%v err=%v, want the recorded socket and no launch", conn, launched, err)
+	}
+	if dialled.Load() == 0 {
+		t.Error("the held-authority path never dialled the socket the holder recorded")
+	}
+	if conn != recorded {
+		t.Error("the connection returned is not the one the recorded socket gave")
+	}
+	if starts.Load() != 0 {
+		t.Fatalf("started %d daemon(s) beside the authority's holder", starts.Load())
 	}
 }
 
@@ -100,7 +238,7 @@ func TestDialOrLaunch_JoinsAHolderThatComesUp(t *testing.T) {
 	}
 }
 
-// `plumb restart`: the stopped daemon still holds the lock while it exits.
+// `plumb restart`: the stopped daemon still holds the locks while it exits.
 // The launcher waits for the release, then starts exactly one.
 func TestDialOrLaunch_StartsOnceAfterTheHolderExits(t *testing.T) {
 	withTempRuntime(t)
@@ -112,16 +250,22 @@ func TestDialOrLaunch_StartsOnceAfterTheHolderExits(t *testing.T) {
 	var starts atomic.Int32
 	l := testLauncher(t, &ready, &starts, 5*time.Second)
 	inner := l.start
-	l.start = func(lock *os.File) error {
-		// The launcher holds the authority while it starts the child.
+	l.start = func(locks launchLocks) error {
+		// The launcher holds both locks while it starts the child.
+		if other, err := acquireAuthority(); !errors.Is(err, errDaemonAlreadyRunning) {
+			if other != nil {
+				_ = other.Close()
+			}
+			t.Errorf("start ran without the account authority: %v", err)
+		}
 		if other, err := acquireDaemonLock(); !errors.Is(err, errDaemonAlreadyRunning) {
 			if other != nil {
 				_ = other.Close()
 			}
-			t.Errorf("start ran without holding the lock: %v", err)
+			t.Errorf("start ran without the lifetime lock: %v", err)
 		}
 		ready.Store(true)
-		return inner(lock)
+		return inner(locks)
 	}
 	time.AfterFunc(150*time.Millisecond, func() { _ = holder.Close() })
 	conn, launched, err := l.dialOrLaunch(context.Background())
@@ -149,7 +293,7 @@ func TestDialOrLaunch_ReportsADaemonThatExitedEarly(t *testing.T) {
 	var ready atomic.Bool
 	var starts atomic.Int32
 	l := testLauncher(t, &ready, &starts, 5*time.Second)
-	l.start = func(*os.File) error { starts.Add(1); return nil } // no child keeps the lock
+	l.start = func(launchLocks) error { starts.Add(1); return nil } // no child keeps the locks
 	began := time.Now()
 	_, launched, err := l.dialOrLaunch(context.Background())
 	if !errors.Is(err, errDaemonExitedEarly) || !launched || starts.Load() != 1 {
@@ -209,11 +353,7 @@ func TestDialOrLaunch_ACancelledCallStartsNothing(t *testing.T) {
 	if _, _, err := l.dialOrLaunch(ctx); !errors.Is(err, context.Canceled) || starts.Load() != 0 {
 		t.Fatalf("got err=%v starts=%d, want a cancelled call to start nothing", err, starts.Load())
 	}
-	f, err := acquireDaemonLock()
-	if err != nil {
-		t.Fatalf("a cancelled call kept the lock: %v", err)
-	}
-	_ = f.Close()
+	freeLaunchLocks(t)
 }
 
 func TestDialOrLaunch_ReturnsALockError(t *testing.T) {
@@ -222,27 +362,69 @@ func TestDialOrLaunch_ReturnsALockError(t *testing.T) {
 	var starts atomic.Int32
 	l := testLauncher(t, &ready, &starts, time.Second)
 	boom := errors.New("opening daemon lock: permission denied")
-	l.acquire = func() (*os.File, error) { return nil, boom }
+	l.acquire = func() (launchLocks, error) { return launchLocks{}, boom }
 	if _, _, err := l.dialOrLaunch(context.Background()); !errors.Is(err, boom) || starts.Load() != 0 {
 		t.Fatalf("got err=%v starts=%d, want the lock error and no start", err, starts.Load())
 	}
 }
 
-// The launcher must not keep its copy of the lock: a long-lived serve would
+// A launcher that holds neither lock must not spawn: starting a daemon beside
+// one that already exists is the defect the locks exist to prevent.
+func TestDialOrLaunch_NoLocksHeldStartsNothing(t *testing.T) {
+	withTempRuntime(t)
+	var ready atomic.Bool
+	var starts atomic.Int32
+	l := testLauncher(t, &ready, &starts, time.Second)
+	l.acquire = func() (launchLocks, error) { return launchLocks{}, nil }
+	_, launched, err := l.dialOrLaunch(context.Background())
+	if !errors.Is(err, errNoLaunchLocks) || launched || starts.Load() != 0 {
+		t.Fatalf("got launched=%v err=%v starts=%d, want errNoLaunchLocks and no start", launched, err, starts.Load())
+	}
+}
+
+// The production launcher takes both locks, hands them to the child, and knows
+// the attach path; a test launcher replaces those, nothing else does.
+func TestNewDaemonLauncher_WiresBothLocksAndTheAttachPath(t *testing.T) {
+	withTempRuntime(t)
+	l := newDaemonLauncher("/tmp/plumb/plumb.sock")
+	if l.dial == nil {
+		t.Fatal("the launcher must be able to dial a daemon socket")
+	}
+	for _, c := range []struct {
+		name string
+		got  any
+		want any
+	}{
+		{"acquire", l.acquire, acquireLaunchLocks},
+		{"start", l.start, startDaemonProcess},
+		{"dialHeld", l.dialHeld, dialHeldAuthority},
+	} {
+		if c.got == nil {
+			t.Fatalf("the launcher's %s is not wired", c.name)
+		}
+		if reflect.ValueOf(c.got).Pointer() != reflect.ValueOf(c.want).Pointer() {
+			t.Errorf("the launcher's %s is not the production one", c.name)
+		}
+	}
+}
+
+// The launcher must not keep its copies of the locks: a long-lived serve would
 // otherwise hold the authority itself and block its own later reconnect.
 func TestDialOrLaunch_ClosesItsCopyOfTheLock(t *testing.T) {
 	withTempRuntime(t)
 	var ready atomic.Bool
 	var starts atomic.Int32
 	l := testLauncher(t, &ready, &starts, time.Second)
-	var passed *os.File
+	var passed launchLocks
 	inner := l.start
-	l.start = func(lock *os.File) error { passed = lock; ready.Store(true); return inner(lock) }
+	l.start = func(locks launchLocks) error { passed = locks; ready.Store(true); return inner(locks) }
 	if _, _, err := l.dialOrLaunch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := passed.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("the launcher's copy of the lock is still open (Stat: %v)", err)
+	for _, f := range passed.files() {
+		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("the launcher's copy of a lock is still open (Stat: %v)", err)
+		}
 	}
 }
 
@@ -290,137 +472,48 @@ func TestLaunchError(t *testing.T) {
 	}
 }
 
-func TestDialOrLaunch_AFailedStartReleasesTheLock(t *testing.T) {
+func TestDialOrLaunch_AFailedStartReleasesTheLocks(t *testing.T) {
 	withTempRuntime(t)
 	var ready atomic.Bool
 	var starts atomic.Int32
 	l := testLauncher(t, &ready, &starts, time.Second)
-	l.start = func(*os.File) error { return errors.New("exec failed") }
+	l.start = func(launchLocks) error { return errors.New("exec failed") }
 	if _, _, err := l.dialOrLaunch(context.Background()); err == nil || !strings.Contains(err.Error(), "exec failed") {
 		t.Fatalf("got %v, want the start error", err)
 	}
-	f, err := acquireDaemonLock()
-	if err != nil {
-		t.Fatalf("the lock is still held after a failed start: %v", err)
-	}
-	_ = f.Close()
+	freeLaunchLocks(t)
 }
 
-// The real hand-over: a child given the locked file as fd 3 keeps the lock
-// after the launcher closes its copy, and releases it when it exits. A plain
-// `sleep` stands in for the daemon; no daemon is started.
-func TestLaunchLock_ChildKeepsItAfterTheLauncherCloses(t *testing.T) {
+// The real hand-over: a child given the locked files as fd 3 and fd 4 keeps the
+// locks after the launcher closes its copies, and releases them when it exits. A
+// plain `sleep` stands in for the daemon; no daemon is started.
+func TestLaunchLocks_ChildKeepsThemAfterTheLauncherCloses(t *testing.T) {
 	withTempRuntime(t)
-	lock, err := acquireDaemonLock()
+	locks, err := acquireLaunchLocks()
 	if err != nil {
 		t.Fatal(err)
 	}
 	child := exec.Command("sleep", "30")
-	child.ExtraFiles = []*os.File{lock}
+	child.ExtraFiles = locks.files() // fd 3 and fd 4 in the child
 	if err := child.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
-	_ = lock.Close()
-	if f, err := acquireDaemonLock(); !errors.Is(err, errDaemonAlreadyRunning) {
-		if f != nil {
-			_ = f.Close()
-		}
-		t.Fatalf("after the launcher closed its copy the lock was free (%v); the child must hold it", err)
-	}
-	_ = child.Process.Kill()
-	_ = child.Wait()
-	f, err := acquireDaemonLock()
-	if err != nil {
-		t.Fatalf("the lock was not released when the child exited: %v", err)
-	}
-	_ = f.Close()
-}
-
-func TestAdoptDaemonLock(t *testing.T) {
-	withTempRuntime(t)
-	t.Run("the held lock file is adopted and made close-on-exec", func(t *testing.T) {
-		lock, err := acquireDaemonLock()
-		if err != nil {
-			t.Fatal(err)
-		}
-		dup, err := syscall.Dup(int(lock.Fd())) // a fresh fd, inheritable, on the same description
-		if err != nil {
-			t.Fatal(err)
-		}
-		adopted, err := adoptDaemonLock(os.NewFile(uintptr(dup), "dup"), daemonLockPath())
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer adopted.Close()
-		_ = lock.Close()
-		flags, err := fcntlGetFD(int(adopted.Fd()))
-		if err != nil || flags&syscall.FD_CLOEXEC == 0 {
-			t.Fatalf("the adopted fd must be close-on-exec: flags=%#x err=%v", flags, err)
-		}
-		if f, err := acquireDaemonLock(); !errors.Is(err, errDaemonAlreadyRunning) {
+	locks.closeAll()
+	for name, acquire := range map[string]func() (*os.File, error){
+		"account authority": acquireAuthority,
+		"lifetime":          acquireDaemonLock,
+	} {
+		if f, err := acquire(); !errors.Is(err, errDaemonAlreadyRunning) {
 			if f != nil {
 				_ = f.Close()
 			}
-			t.Fatalf("the adopted lock is not held: %v", err)
-		}
-	})
-	t.Run("another file is refused", func(t *testing.T) {
-		other, err := os.CreateTemp(t.TempDir(), "not-the-lock")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := adoptDaemonLock(other, daemonLockPath()); err == nil {
-			t.Fatal("adopted a file that is not the lock")
-		}
-	})
-	t.Run("the lock file, but held by someone else, is refused", func(t *testing.T) {
-		holder, err := acquireDaemonLock()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer holder.Close()
-		f, err := os.OpenFile(daemonLockPath(), os.O_RDWR, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := adoptDaemonLock(f, daemonLockPath()); err == nil {
-			t.Fatal("adopted a description that does not hold the lock")
-		}
-	})
-}
-
-func TestDaemonLifetimeLock_RefusesABadInheritedFD(t *testing.T) {
-	withTempRuntime(t)
-	for _, v := range []string{"", "4", "x"} {
-		t.Setenv(daemonLockFDEnv, v)
-		if f, err := daemonLifetimeLock(); err == nil {
-			_ = f.Close()
-			t.Fatalf("%s=%q: started without the launch lock", daemonLockFDEnv, v)
-		}
-		if _, ok := os.LookupEnv(daemonLockFDEnv); ok {
-			t.Fatalf("%s must be unset before the daemon starts children", daemonLockFDEnv)
+			t.Fatalf("after the launcher closed its copies the %s lock was free (%v); the child must hold it", name, err)
 		}
 	}
-}
-
-// A `plumb daemon` started directly (a service manager, a container CMD) has
-// no inherited lock and acquires its own, as before.
-func TestDaemonLifetimeLock_WithoutALauncherAcquiresItsOwn(t *testing.T) {
-	withTempRuntime(t)
-	t.Setenv(daemonLockFDEnv, "")
-	os.Unsetenv(daemonLockFDEnv) //nolint:usetesting // must be absent, not empty; t.Setenv above restores it
-	lock, err := daemonLifetimeLock()
-	if err != nil {
-		t.Fatalf("a directly started daemon could not take its lock: %v", err)
-	}
-	defer lock.Close()
-	if f, err := acquireDaemonLock(); !errors.Is(err, errDaemonAlreadyRunning) {
-		if f != nil {
-			_ = f.Close()
-		}
-		t.Fatalf("the lock is not held: %v", err)
-	}
+	_ = child.Process.Kill()
+	_ = child.Wait()
+	freeLaunchLocks(t)
 }
 
 func TestDaemonStartWait(t *testing.T) {
@@ -442,12 +535,4 @@ func TestDaemonStartWait(t *testing.T) {
 			t.Errorf("PLUMB_DAEMON_START_TIMEOUT=%q: got %s, want %s", c.env, got, c.want)
 		}
 	}
-}
-
-func fcntlGetFD(fd int) (int, error) {
-	r, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), uintptr(syscall.F_GETFD), 0)
-	if errno != 0 {
-		return 0, errno
-	}
-	return int(r), nil
 }
