@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // The parsers below are pure: they take the bytes a platform's probe read and
@@ -200,7 +202,7 @@ func parseLsofOpeners(out string, wanted map[string]bool) map[string][]int {
 	index := make(map[string]string, len(wanted)*2)
 	for p := range wanted {
 		index[p] = p
-		if r := resolvedPath(p); r != p {
+		if r := paths.Canonical(p); r != p {
 			index[r] = p
 		}
 	}
@@ -226,13 +228,4 @@ func parseLsofOpeners(out string, wanted map[string]bool) map[string][]int {
 		}
 	}
 	return owners
-}
-
-// resolvedPath canonicalises a path for the comparison above, or returns it
-// unchanged when it cannot be resolved.
-func resolvedPath(p string) string {
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
-	}
-	return p
 }

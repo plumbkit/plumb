@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Darwin has no /proc, and it has the same fork-before-exec trap as Linux: until
@@ -212,7 +214,7 @@ func (l *lsofListing) openers(path string) ([]int, error) {
 	if pids := l.owners[path]; len(pids) > 0 {
 		return pids, nil
 	}
-	return l.owners[resolvedPath(path)], nil
+	return l.owners[paths.Canonical(path)], nil
 }
 
 func (l *lsofListing) run() {

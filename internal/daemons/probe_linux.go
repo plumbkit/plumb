@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // Linux answers every question from the processes' own files, so the census
@@ -279,7 +281,7 @@ func fileTargets(path string) (map[string]bool, error) {
 		return map[string]bool{"socket:[" + strconv.FormatUint(ino, 10) + "]": true}, nil
 	}
 	out := map[string]bool{path: true}
-	if resolved := resolvedPath(path); resolved != path {
+	if resolved := paths.Canonical(path); resolved != path {
 		out[resolved] = true
 	}
 	return out, nil

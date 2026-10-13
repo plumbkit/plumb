@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 func TestIsPlumbDaemonArgv(t *testing.T) {
@@ -219,10 +221,7 @@ func TestParseLsofOpeners_MatchesAResolvedSpelling(t *testing.T) {
 	if err := os.WriteFile(lock, nil, 0o600); err != nil {
 		t.Fatalf("creating %s: %v", lock, err)
 	}
-	resolved, err := filepath.EvalSymlinks(lock)
-	if err != nil {
-		t.Skipf("cannot resolve %s: %v", lock, err)
-	}
+	resolved := paths.Canonical(lock)
 	if resolved == lock {
 		t.Skip("this temp directory has no symlinked spelling to distinguish")
 	}
