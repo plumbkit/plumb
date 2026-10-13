@@ -483,6 +483,21 @@
   names an existing path outside the repository is refused, a search pattern
   such as `/usr` included. A refusal names the argument and why.
 
+### Tests
+
+- **The `CGO_ENABLED=0` getent fallback now runs in CI, not only in reasoning.**
+  `internal/account/home_linux_pure.go` is `linux && !cgo` — the shape
+  goreleaser builds — while every gate builds with a Linux toolchain whose C
+  compiler turns cgo on by default, so the `runGetent` exec path had never
+  executed anywhere. `runGetent` and the exec it drives now live in
+  `internal/account/getent_linux.go` under a `linux` tag, which every Linux build
+  compiles (production behaviour is unchanged: the cgo build's `platformHome`
+  never calls them). `TestRunGetent_ResolvesThisAccount` executes the real
+  `getent(1)` for the current uid and requires status 0 with a non-empty absolute
+  home out of `parsePasswdHome`;
+  `TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold` pins the status-2 refusal
+  against the real binary too.
+
 ## 0.24.0 (2026-10-10)
 
 ### Security
