@@ -317,6 +317,79 @@ func TestLookupHome_RefusesAGetentAnswerNamingAnotherUID(t *testing.T) {
 	}
 }
 
+// The rule for a getent that RAN and said the key is not there: that is the name
+// service answering the question it was asked, so the lookup ends as a refusal.
+// Treating it as a failure to run and putting the question to the other copy of
+// the binary is a second round trip to the same database — spent on the way to
+// starting a daemon, where a slow directory server is exactly the worry — and it
+// can only ever come back with the same answer.
+func TestQueryGetent_TreatsKeyNotFoundAsARefusalRatherThanATryAgain(t *testing.T) {
+	const entry = "bob:x:502:20:Bob:/home/bob:/bin/bash\n"
+	// A binary that is not installed: ENOENT, not a status, which is what tells
+	// the lookup to try the other path.
+	notInstalled := errors.New("fork/exec /usr/bin/getent: no such file or directory")
+
+	// paths is the script each getent path follows, in order; the lookup must
+	// never run more of them than that.
+	type outcome struct {
+		out  string
+		exit int
+		err  error
+	}
+	tests := []struct {
+		name      string
+		paths     []outcome
+		want      string
+		ok        bool
+		wantAsked int
+	}{
+		{"the first path answers", []outcome{{out: entry}, {out: "other:x:9:9:x:/elsewhere:/bin/sh\n"}}, entry, true, 1},
+		{"the key is not in the database", []outcome{{exit: getentKeyNotFound}, {out: entry}}, "", false, 1},
+		{"the first path is not installed, the second answers", []outcome{{err: notInstalled}, {out: entry}}, entry, true, 2},
+		{"neither path is installed", []outcome{{err: notInstalled}, {err: notInstalled}}, "", false, 2},
+		{"a usage error is not the key's absence", []outcome{{exit: 1}, {out: entry}}, entry, true, 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var asked []string
+			run := func(_ context.Context, path string, _ int) (string, int, error) {
+				i := len(asked)
+				asked = append(asked, path)
+				if i >= len(tt.paths) {
+					t.Fatalf("getent path %d (%s) was run, but the lookup must have ended after %d", i+1, path, len(tt.paths))
+				}
+				return tt.paths[i].out, tt.paths[i].exit, tt.paths[i].err
+			}
+
+			home, ok := queryGetent(context.Background(), 502, []string{"getent-first", "getent-second"}, run)
+			if ok != tt.ok || home != tt.want {
+				t.Errorf("queryGetent = %q, %v; want %q, %v", home, ok, tt.want, tt.ok)
+			}
+			if len(asked) != tt.wantAsked {
+				t.Errorf("getent was run %d times (%v), want %d: "+
+					"the key's absence must end the lookup, and a binary that cannot run must not", len(asked), asked, tt.wantAsked)
+			}
+		})
+	}
+}
+
+// getent is never found through PATH: it decides the account, and so where the
+// daemon's authority lock, sockets and metadata live, and PATH is environment.
+// A bare name here is the whole retargeting defect in one word.
+func TestGetentPaths_AreAbsoluteAndTriedInOrder(t *testing.T) {
+	if len(getentPaths) == 0 {
+		t.Fatal("no getent path to try: the NSS fallback could never run")
+	}
+	for i, path := range getentPaths {
+		if !filepath.IsAbs(path) {
+			t.Errorf("getentPaths[%d] = %q, want an absolute path: PATH must not decide this lookup", i, path)
+		}
+		if filepath.Base(path) != "getent" {
+			t.Errorf("getentPaths[%d] = %q, want the getent binary", i, path)
+		}
+	}
+}
+
 // Only BOTH sources failing is a refusal, and that refusal names the remedy. The
 // uid is one no account database can hold: the assertion is about lookup's own
 // wiring, so it must not depend on which source answered — or on which platform
@@ -327,8 +400,18 @@ func TestLookup_RefusesWhenNeitherPasswdNorGetentAnswers(t *testing.T) {
 	if !errors.Is(err, ErrNoAccount) {
 		t.Fatalf("lookup(%d) = %v, want it to wrap ErrNoAccount", nowhere, err)
 	}
-	if !strings.Contains(err.Error(), "getent") {
-		t.Errorf("the refusal must name the remedy for the build that ships, got: %v", err)
+	// The remedy, not only the fact: the message has to say what to change. Both
+	// halves of it — add the account to the database, or run plumb as a user it
+	// knows — are asserted, because a refusal that only reports the failure
+	// leaves the reader with a host that cannot start a daemon and no way out.
+	for _, want := range []string{
+		"getent",
+		"run plumb as an account the OS account database can resolve",
+		"needs an entry in one of them",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name the remedy (%q) for the build that ships, got: %v", want, err)
+		}
 	}
 }
 

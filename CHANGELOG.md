@@ -26,7 +26,9 @@
   system's account database, and a uid it cannot resolve is refused rather than
   guessed — on the Linux release build (`CGO_ENABLED=0`) that means `/etc/passwd`
   and then `getent`, so an account served only by NSS (LDAP, SSSD,
-  systemd-homed) still resolves, and only both sources failing is a refusal;
+  systemd-homed) still resolves, and only both sources failing is a refusal — a
+  `getent` that answers "no such key" (status 2) has answered, so the lookup ends
+  there rather than asking the other copy of the binary;
   `plumb debug daemons` reports a uid neither source holds instead of a count.
   The daemon adopts the launch-lock fd the environment names rather than
   requiring the 3/4 pair, so a `plumb serve` from before the authority — which

@@ -599,6 +599,124 @@ func TestHoldDaemonLock_RefusesABadInheritedFD(t *testing.T) {
 	}
 }
 
+// The handover variable is an instruction to THIS process, and it must not
+// outlive its reading: the daemon starts children of its own — language servers,
+// git, hooks — and an inherited PLUMB_DAEMON_*_FD that still names a number is an
+// instruction to adopt whatever file holds that number in the child. The adopted
+// descriptor is close-on-exec for the same reason: no child may be handed the
+// lock at all, or it would outlive the daemon that owns it.
+func TestHoldDaemonLock_UnsetsTheVariableAndMakesTheAdoptedFDCloseOnExec(t *testing.T) {
+	withTempRuntime(t)
+	unsetInheritedLockEnv(t)
+	authority, err := authorityPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	fd, err := syscall.Dup(int(held.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(authorityLockFDEnv, strconv.Itoa(fd))
+
+	adopted, err := holdDaemonLock(lockHandover{
+		env: authorityLockFDEnv, path: authority, other: daemonLockPath(), acquire: acquireAuthority,
+	})
+	if err != nil {
+		t.Fatalf("the authority lock the environment named was not adopted: %v", err)
+	}
+	defer adopted.Close()
+
+	if _, ok := os.LookupEnv(authorityLockFDEnv); ok {
+		t.Errorf("%s outlived its reading: a child of this daemon would be told to adopt a stale fd number",
+			authorityLockFDEnv)
+	}
+	flags, err := fcntlGetFD(int(adopted.Fd()))
+	if err != nil || flags&syscall.FD_CLOEXEC == 0 {
+		t.Fatalf("the adopted fd must be close-on-exec: flags=%#x err=%v", flags, err)
+	}
+	if f, err := acquireAuthority(); !errors.Is(err, errDaemonAlreadyRunning) {
+		if f != nil {
+			_ = f.Close()
+		}
+		t.Fatalf("the adopted authority is not held: %v", err)
+	}
+}
+
+// One fd cannot be two locks. A launcher that writes the same number into both
+// variables — a bug in the launcher, or an environment assembled by hand — must
+// have it refused rather than adopted twice: a daemon that held the authority's
+// file as its lifetime lock too would leave the real lifetime lock free, and a
+// second daemon could take it and start beside this one.
+//
+// The identity check is what refuses it, so both directions are pinned, and each
+// error must name the lock the fd turned out not to be.
+func TestDaemonLaunchLocks_RefusesOneFDNamedAsBothLocks(t *testing.T) {
+	withTempRuntime(t)
+	unsetInheritedLockEnv(t)
+	authority, err := authorityPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both lock files must EXIST before the subtests, so what refuses the fd is
+	// the identity check and not a path os.Stat cannot find: with either file
+	// absent, every fd is refused and the test would pass with the check gone.
+	// They are created through the real acquisitions, which release at once.
+	for _, acquire := range []func() (*os.File, error){acquireAuthority, acquireDaemonLock} {
+		f, err := acquire()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	}
+	tests := []struct {
+		name string
+		// held is the lock the fd actually names; not is the lock the handover
+		// that must refuse it believes it is adopting.
+		held func() (*os.File, error)
+		not  string
+	}{
+		{"the authority's fd named as the lifetime lock too", acquireAuthority, daemonLockPath()},
+		{"the lifetime lock's fd named as the authority too", acquireDaemonLock, authority},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			held, err := tt.held()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer held.Close()
+			fd, err := syscall.Dup(int(held.Fd()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				// The refusal closes the fd it was handed; close it only if some
+				// path left it open, so a leak does not sit in the test binary's fd
+				// table either.
+				if _, err := fcntlGetFD(fd); err == nil {
+					_ = syscall.Close(fd)
+				}
+			})
+			t.Setenv(authorityLockFDEnv, strconv.Itoa(fd))
+			t.Setenv(daemonLockFDEnv, strconv.Itoa(fd))
+
+			locks, err := daemonLaunchLocks()
+			if err == nil {
+				locks.closeAll()
+				t.Fatalf("one fd (%d) was adopted as both locks; the daemon must refuse to start", fd)
+			}
+			if !strings.Contains(err.Error(), tt.not) {
+				t.Errorf("the refusal must name the lock the fd is not (%s), got: %v", tt.not, err)
+			}
+		})
+	}
+}
+
 // A `plumb daemon` started directly (a service manager, a container CMD) has no
 // inherited locks and acquires both itself, in the one order.
 func TestDaemonLaunchLocks_WithoutALauncherAcquiresBoth(t *testing.T) {
