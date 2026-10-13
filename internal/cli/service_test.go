@@ -296,3 +296,68 @@ func TestAdoptXDG_AdoptsOnlyARealPlumbSetup(t *testing.T) {
 		t.Errorf("XDG_RUNTIME_DIR = %q, want nothing: a world-readable base is not a runtime directory", got.RuntimeDir)
 	}
 }
+
+// The command surface itself: the subcommands a user types, and the flag-to-XDG
+// mapping behind `set-xdg`. It is driven through the real cobra command so a
+// renamed or unwired flag fails here rather than in a user's shell.
+func TestServiceCmd_HasItsSubcommands(t *testing.T) {
+	names := make([]string, 0, len(serviceCmd.Commands()))
+	for _, c := range serviceCmd.Commands() {
+		names = append(names, c.Name())
+	}
+	joined := strings.Join(names, ",")
+	for _, want := range []string{"install", "show", "set-executable", "set-path", "set-xdg"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("subcommand %q is not registered; got %v", want, names)
+		}
+	}
+	registered := false
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == "service" {
+			registered = true
+		}
+	}
+	if !registered {
+		t.Error("`plumb service` is not registered on the root command")
+	}
+	for _, f := range serviceSetXDGFlags {
+		if serviceVarFor(f.name) == "" {
+			t.Errorf("flag --%s records no XDG variable", f.name)
+		}
+	}
+}
+
+func TestServiceSetXDG_FlagWiring(t *testing.T) {
+	u := serviceInstallEnv(t)
+	if err := runServiceInstall(nil, nil); err != nil {
+		t.Fatalf("runServiceInstall: %v", err)
+	}
+	base := t.TempDir()
+
+	// Driven through the ROOT command, because that is how a user reaches it:
+	// cobra resolves the subcommand from the root's arguments, and the root's own
+	// pre-run (theme, logo) then runs exactly as it does in a shell.
+	rootCmd.SetArgs([]string{"service", "set-xdg", "--state-home", base})
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("plumb service set-xdg --state-home: %v", err)
+	}
+
+	path, err := service.Path()
+	if err != nil {
+		t.Fatalf("service.Path: %v", err)
+	}
+	got, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if got.XDG.StateHome != base {
+		t.Errorf("XDG_STATE_HOME = %q, want %q", got.XDG.StateHome, base)
+	}
+	if want := service.DirUnder(base); got.Dirs.State != want {
+		t.Errorf("state dir = %q, want %q", got.Dirs.State, want)
+	}
+	if got.Path == "" {
+		t.Errorf("set-xdg left the PATH empty; it must not touch an unrelated setting (%v)", u.UID)
+	}
+}

@@ -25,6 +25,11 @@ import (
 
 func init() {
 	serviceCmd.AddCommand(serviceInstallCmd, serviceShowCmd, serviceSetExecutableCmd, serviceSetPathCmd, serviceSetXDXCmd)
+	// The XDG flags are registered from the same table the run path reads, so a
+	// flag cannot exist without its variable or its variable without its flag.
+	for _, f := range serviceSetXDGFlags {
+		serviceSetXDXCmd.Flags().String(f.name, "", f.usage+" (an empty value drops it)")
+	}
 }
 
 var serviceCmd = &cobra.Command{
