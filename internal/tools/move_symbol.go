@@ -378,6 +378,7 @@ func buildDestPlan(a moveSymbolArgs, srcBefore []byte, srcPath, dstPath, movedTe
 		after:         appendDeclaration(destBefore, movedText, seed, existed),
 		mode:          mode,
 		existedBefore: existed,
+		from:          srcPath,
 	}, nil
 }
 
@@ -461,7 +462,7 @@ func (t *MoveSymbol) formatMove(ctx context.Context, plans []movePlan, name, not
 	var sections []string
 	if resolveShowDiff(t.showDiff) {
 		for _, p := range plans {
-			if d := t.deps.gatedDiff(ctx, p.path, unifiedDiff(p.path, string(p.before), string(p.after))); d != "" {
+			if d := t.deps.gatedDiffAcross(ctx, p.path, p.from, unifiedDiff(p.path, string(p.before), string(p.after))); d != "" {
 				sections = append(sections, d)
 			}
 		}

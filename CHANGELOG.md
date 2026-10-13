@@ -269,6 +269,14 @@
   The dot-importing files are now read once per census: on the real tasks that
   starved, a pack takes 0.23–0.36 s and carries its test estimate again.
 
+- **`move_symbol` no longer shows or stores content moved out of a sensitive
+  file.** Moving a declaration out of a file matching `[history]
+  sensitive_globs` (`secrets.go`, `credentials.go`) into an ordinary file put
+  the moved text in the write response and in `history.db` under the
+  destination, because the destination was judged by its own name alone. The
+  destination's diff and history row now carry the source as `From`, so the
+  change is judged by both paths, as `copy_file` and `rename_file` already are
+  (#599).
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released
