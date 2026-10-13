@@ -24,7 +24,7 @@ func TestRenderDaemonCensus(t *testing.T) {
 		}},
 		Unknown: []string{"cannot read the owner of /run/plumb/plumb.sock"},
 	}
-	got := renderDaemonCensus(report, report.Verdict())
+	got := renderDaemonCensus(report, report.Verdict(), nil)
 
 	for _, want := range []string{
 		"4242", // the pid
@@ -42,7 +42,7 @@ func TestRenderDaemonCensus(t *testing.T) {
 	// A violation must name the remedy; a report with nothing in it must not
 	// print an empty table.
 	empty := daemons.Report{Authority: "/data/plumb/daemon.authority.lock"}
-	if out := renderDaemonCensus(empty, empty.Verdict()); !strings.Contains(out, "no plumb daemon process was found") {
+	if out := renderDaemonCensus(empty, empty.Verdict(), nil); !strings.Contains(out, "no plumb daemon process was found") {
 		t.Errorf("an empty census should say so:\n%s", out)
 	}
 }
@@ -53,7 +53,7 @@ func TestRenderDaemonCensus_UnknownTable(t *testing.T) {
 	report := daemons.Report{
 		Daemons: []daemons.Daemon{{PID: 7, Identity: daemons.IdentityCandidate}},
 	}
-	out := renderDaemonCensus(report, report.Verdict())
+	out := renderDaemonCensus(report, report.Verdict(), nil)
 	if strings.Contains(out, "0001-01-01") {
 		t.Errorf("a start time that could not be read must render as a dash:\n%s", out)
 	}
@@ -181,7 +181,7 @@ func TestDebugDaemonsExit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := debugDaemonsExit(daemons.Verdict{State: tt.state})
+			err := debugDaemonsExit(daemons.Verdict{State: tt.state}, nil)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("debugDaemonsExit(%v) error = %v, want error: %v", tt.state, err, tt.wantErr)
 			}

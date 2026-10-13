@@ -132,13 +132,22 @@ type ctrlHandlers struct {
 	contextHint func(context.Context, contextHintRequest) contextHintReply
 }
 
-// serveControlSocket accepts admin connections on ln and handles each in its
-// own goroutine. It returns when ln is closed (daemon shutdown). All callbacks
-// in h are optional; pass a zero ctrlHandlers when the daemon has no workspace
-// pool (e.g. in tests that don't need it).
-func serveControlSocket(ln net.Listener, configLevel, logFormat string, h ctrlHandlers) {
+// ctrlAcceptor is the accept surface serveControlSocket needs. Production passes
+// the daemon's socketGuard (PLAN-529), which re-binds the control socket if its
+// path is deleted under a running daemon and refuses to remove a live socket
+// somebody else put there; tests pass a plain net.Listener.
+type ctrlAcceptor interface {
+	Accept() (net.Conn, error)
+}
+
+// serveControlSocket accepts admin connections on ac and handles each in its
+// own goroutine. It returns when ac stops accepting (daemon shutdown, or a
+// listener the guard replaced). All callbacks in h are optional; pass a zero
+// ctrlHandlers when the daemon has no workspace pool (e.g. in tests that don't
+// need it).
+func serveControlSocket(ac ctrlAcceptor, configLevel, logFormat string, h ctrlHandlers) {
 	for {
-		conn, err := ln.Accept()
+		conn, err := ac.Accept()
 		if err != nil {
 			return
 		}

@@ -22,6 +22,18 @@ plumb stop --force   # skip the prompt (useful in scripts/Makefiles)
 `plumb serve` warns on stderr when the running daemon's version differs from
 your binary.
 
+## A daemon is running but its socket path is gone or replaced
+
+If the runtime directory (sockets, pid, version file) is deleted while a daemon
+is running, the daemon re-binds its socket within 30 s and clients reconnect on
+their own — nothing to do. If something else has taken the socket path, the
+daemon deliberately leaves it alone rather than unlinking a file it did not
+create, so it stays up but unreachable at that path. `plumb doctor` and
+`plumb debug daemons` both report it (`debug daemons` exits non-zero). Move the
+foreign file aside and run `plumb restart`; the daemon never removes it for you.
+`plumb daemon` also refuses to start when a *live* socket already occupies the
+path, and says which path it found.
+
 ## "… has not been read in this session"
 
 Strict mode is on (`[edits] strict = true`). `edit_file` requires the target to

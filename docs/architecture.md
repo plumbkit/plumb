@@ -399,6 +399,22 @@ left `plumb web` and `plumb log-level` dialling a control socket that was not
 there, doctor calling a version file missing when it existed one directory
 over, and `plumb restart` spawning a duplicate.
 
+Because that directory is removable, the daemon treats every file in it as its
+own only while the path still names the file it created there (device and inode,
+`fileMarker` in `internal/cli/daemon_hygiene.go`): both listeners bind with
+`SetUnlinkOnClose(false)`, so `net` never unlinks a path it no longer owns, and
+the pid, socket and version files are removed at shutdown only when the identity
+still matches. A file somebody else put at the socket path is never removed, and
+is logged as the fault it is. The daemon also re-checks its socket paths every
+30 s and on any accept error: a path deleted while the daemon holds the account
+authority is re-bound (`socketGuard` — the authority is what guarantees no
+competitor is binding it; a daemon without it leaves the path alone), and a path
+that now holds a different file is left exactly where it is while the daemon
+keeps serving the connections it already has. Each socket's identity is
+published in the authority record, which is how `plumb doctor` and
+`plumb debug daemons` report a daemon that is alive but unreachable — the state
+64 leaked daemons reached.
+
 The consequence is that the runtime directory identifies the daemon instance,
 and `$XDG_RUNTIME_DIR` is absent under cron, systemd system units,
 `docker exec` and ssh without `pam_systemd`. A plumb launched from one of those

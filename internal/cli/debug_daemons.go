@@ -65,22 +65,34 @@ func daemonCensusOptions() daemons.Options {
 func runDebugDaemons(out io.Writer) error {
 	report := daemons.Census(daemonCensusOptions())
 	verdict := report.Verdict()
-	fmt.Fprint(out, renderDaemonCensus(report, verdict))
-	return debugDaemonsExit(verdict)
+	states := daemonSocketStates(report)
+	fmt.Fprint(out, renderDaemonCensus(report, verdict, states))
+	return debugDaemonsExit(verdict, states)
 }
 
 // debugDaemonsExit is the exit rule. The report has already said what is wrong
 // and what to do about it; this exists so a script (or the doctor gate) can read
 // the answer, and it is a rule rather than an expression so it can be tested: a
-// violation and a census that could not read the process table are both
-// non-zero, while a clean account and an idle one are success.
-func debugDaemonsExit(v daemons.Verdict) error {
+// violation, a census that could not read the process table, and a socket path
+// that no longer holds the socket its live daemon published are all non-zero,
+// while a clean account and an idle one are success.
+//
+// The socket fault is part of the exit rule because the count alone cannot see
+// it: exactly one daemon holding the authority, whose socket path has been
+// replaced under it, is one daemon that no client can reach — the state that used
+// to read as perfectly healthy.
+func debugDaemonsExit(v daemons.Verdict, states []socketPathState) error {
 	switch v.State {
 	case daemons.StateOK, daemons.StateNone:
-		return nil
 	default:
 		return silentExitError{}
 	}
+	for _, s := range states {
+		if s.fault() != "" {
+			return silentExitError{}
+		}
+	}
+	return nil
 }
 
 // daemonCensusRow is the one-line form of the census for daemon_info, which has
@@ -151,10 +163,10 @@ func daemonCensusRowFor(v daemons.Verdict) string {
 }
 
 // renderDaemonCensus lays the report out for a human: one row per process, then
-// whatever could not be read, then the verdict. Presentation lives here rather
-// than in the census so the census stays reusable by doctor and daemon_info,
-// which have no columns to align.
-func renderDaemonCensus(r daemons.Report, v daemons.Verdict) string {
+// the socket paths with something to say, then whatever could not be read, then
+// the verdict. Presentation lives here rather than in the census so the census
+// stays reusable by doctor and daemon_info, which have no columns to align.
+func renderDaemonCensus(r daemons.Report, v daemons.Verdict, sockets []socketPathState) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", verdictLine(v))
 	if len(r.Daemons) == 0 {
@@ -175,6 +187,18 @@ func renderDaemonCensus(r daemons.Report, v daemons.Verdict) string {
 			)
 		}
 		_ = w.Flush()
+	}
+	// A socket path is printed only when there is something to say about it: a
+	// path a live daemon published that no longer holds its socket (a fault), or a
+	// socket file nothing serves. A healthy path is already visible in the table's
+	// SOCKET column.
+	for _, s := range sockets {
+		switch {
+		case s.fault() != "":
+			fmt.Fprintf(&b, "  %s %s: %s\n", tui.WarnStyle.Render("!"), s.Path, s.fault())
+		case s.note() != "":
+			fmt.Fprintf(&b, "  %s %s: %s\n", tui.MutedStyle.Render("-"), s.Path, s.note())
+		}
 	}
 	for _, reason := range r.Unknown {
 		fmt.Fprintf(&b, "  %s unknown: %s\n", tui.WarnStyle.Render("!"), reason)

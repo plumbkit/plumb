@@ -109,12 +109,31 @@ type Daemon struct {
 // opposed to an argv look-alike that this platform cannot confirm.
 func (d *Daemon) Confirmed() bool { return d.Identity >= IdentityArgv }
 
+// SocketReading is what the census could establish about one socket path it was
+// given. It is separate from a daemon's OwnsSocket because it also records the
+// question that could NOT be answered — the difference between "nobody serves
+// this path" and "this census cannot tell who does" (PLAN-529).
+type SocketReading struct {
+	// Path is the socket path the caller asked about.
+	Path string
+	// Answered reports whether the platform could say which candidate processes
+	// hold this path open. False is "cannot tell", never "nobody".
+	Answered bool
+	// Owners names the candidates that answered yes. Empty with Answered true
+	// means, positively, that no plumb daemon of this account is serving the
+	// path — a stale or foreign socket at a path plumb owns.
+	Owners []int
+}
+
 // Report is one reading of the account's daemons.
 type Report struct {
 	// Daemons is every candidate found, ordered by ascending PID.
 	Daemons []Daemon
 	// Authority is the lock path inspected ("" when none was named).
 	Authority string
+	// Sockets is one reading per socket path the caller named, in the order it
+	// named them.
+	Sockets []SocketReading
 	// Unknown lists every reason this picture may be incomplete or a fact could
 	// not be read. Non-empty means the report can never read as OK.
 	Unknown []string
