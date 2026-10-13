@@ -202,7 +202,7 @@ func underKnownRuntimeRoot(path string) bool {
 		return false
 	}
 	dir := filepath.Dir(path)
-	for _, root := range []string{paths.RuntimeDir(), canonicalRuntimeDirOrEmpty()} {
+	for _, root := range []string{paths.RuntimeDir(), accountRuntimeDirOrEmpty()} {
 		if root == "" {
 			continue
 		}
@@ -213,9 +213,13 @@ func underKnownRuntimeRoot(path string) bool {
 	return false
 }
 
-// canonicalRuntimeDirOrEmpty is the account's canonical runtime directory, or ""
-// when the account cannot be resolved.
-func canonicalRuntimeDirOrEmpty() string {
+// accountRuntimeDirOrEmpty is the ACCOUNT's runtime directory — a second place a
+// daemon this user owns may have put its socket — or "" when the account cannot
+// be resolved.
+//
+// It resolves nothing itself: the caller canonicalises what it returns (see
+// underKnownRuntimeRoot), which is why the name says account, not canonical.
+func accountRuntimeDirOrEmpty() string {
 	u, err := account.Current()
 	if err != nil {
 		return ""
