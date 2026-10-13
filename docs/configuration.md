@@ -58,6 +58,35 @@ those as restart-needed.
 |---|---|---|
 | `~/.config/plumb/config.toml` | Global | Honours `$XDG_CONFIG_HOME`. Optional — defaults apply if absent. |
 | `<workspace>/.plumb/config.toml` | Project | Created next to `.plumb/`; overrides the global layer. |
+| `<account data dir>/service.toml` | Global, service-owned | The service **launch profile** — see below. Not a settings file: change it with `plumb service set-*`. |
+
+### The service launch profile
+
+`<account data dir>/service.toml` is the record of the account's one plumb
+service: the **executable** a managed launch starts, the **PATH** its language
+servers inherit, the resolved **config / data / state / log / cache**
+directories, and any XDG base directory the service has explicitly **adopted**.
+It is written by `plumb service install` (and by `plumb setup` once the
+account-authority mode is the default) and changed only through
+`plumb service set-*`.
+
+It exists because a launch used to mean "whatever binary the calling client
+happened to be, with whatever environment it happened to have". A managed launch
+now starts the profile's executable with an environment built from the profile
+and the account database — `HOME` and `USER` from the account database, `PATH`
+from the profile, `XDG_*` only as recorded, plus the launching session's locale.
+A client's `HOME`, `XDG_*` or `PATH` cannot retarget the daemon, its files or
+its language servers, and a client whose environment would have resolved
+elsewhere is told so, once (`plumb serve` logs it; where the ignored directory
+holds a real `config.toml`, the message names the
+`plumb service set-xdg --config-home <dir>` remedy).
+
+**A missing profile is never inferred.** A cold start with no profile fails with
+the `plumb service install` instruction: plumb does not fall back to the calling
+binary, does not probe a login shell for a PATH, and does not derive directories
+from the environment. With the account-authority mode disabled — every build
+until the default flip — the profile is ignored entirely and directories resolve
+from `XDG_*` as they always did.
 
 ---
 

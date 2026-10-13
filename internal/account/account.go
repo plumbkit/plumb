@@ -39,6 +39,10 @@ type User struct {
 	UID int
 	// Home is the account's home directory, from the account database.
 	Home string
+	// Name is the account's login name, from the account database, and empty
+	// when that database holds no name for the uid. It is what a managed launch
+	// sets USER to; an account the database will not name gets no invented one.
+	Name string
 }
 
 // ErrNoAccount reports that the account database could not be consulted or does
@@ -49,7 +53,13 @@ var ErrNoAccount = errors.New("cannot determine this account from the OS account
 // Current resolves the account this process runs as, or fails closed.
 func Current() (User, error) {
 	if root := testRoot(); root != "" {
-		return User{UID: os.Getuid(), Home: root}, nil
+		// The seam redirects the HOME, and only the HOME: the login name still
+		// comes from the account database when it has one, so a redirected test
+		// account is named exactly as the real one is (and a daemon launched by a
+		// harness gets a sensible USER). Nothing here reads the environment, and
+		// a name that does not resolve is empty rather than guessed.
+		name, _, _ := platformAccount(os.Getuid())
+		return User{UID: os.Getuid(), Home: root, Name: name}, nil
 	}
 	if err := testBinaryRefusal(); err != nil {
 		return User{}, err
@@ -59,7 +69,7 @@ func Current() (User, error) {
 
 // lookup asks the platform's account database for uid.
 func lookup(uid int) (User, error) {
-	home, ok := platformHome(uid)
+	name, home, ok := platformAccount(uid)
 	if !ok {
 		// The remedy, not only the fact. This refusal is a host whose account
 		// database cannot answer for its own process, and on the build every Linux
@@ -74,7 +84,7 @@ func lookup(uid int) (User, error) {
 		// A relative or root home is not a place to keep a daemon's lock file.
 		return User{}, fmt.Errorf("%w: uid %d has no usable home directory (%q)", ErrNoAccount, uid, home)
 	}
-	return User{UID: uid, Home: home}, nil
+	return User{UID: uid, Home: home, Name: name}, nil
 }
 
 // DataDir returns the account's private data directory for plumb: the home for
@@ -277,17 +287,29 @@ func linuxRuntimeDir(uid int) (string, bool) {
 // which is how a darwin-only pass let the runtime directory escape the seam
 // root.
 func runtimeDirUnder(base string, uid int) (string, bool) {
-	info, err := os.Stat(base) //nolint:gosec // G304: the base is this process's own uid's runtime directory, or a test's own temp dir
-	if err != nil || !info.IsDir() {
-		return "", false
-	}
-	if info.Mode().Perm() != 0o700 {
-		return "", false
-	}
-	if !ownedByUID(info, uid) {
+	if !UsableRuntimeBase(base, uid) {
 		return "", false
 	}
 	return filepath.Join(base, appDir), true
+}
+
+// UsableRuntimeBase reports whether base satisfies the checks the XDG base
+// directory spec requires of a consumer before it trusts a runtime directory:
+// it must already exist, be a directory, be mode 0700, and be owned by uid. The
+// daemon socket lives there, so a world-readable base would expose it.
+//
+// Exported because it is the same question `plumb service install` asks before
+// adopting a client's XDG_RUNTIME_DIR into the service profile: a directory that
+// would not be usable as a runtime base must never be recorded as one.
+func UsableRuntimeBase(base string, uid int) bool {
+	info, err := os.Stat(base) //nolint:gosec // G304: the base is this process's own uid's runtime directory, or a test's own temp dir
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if info.Mode().Perm() != 0o700 {
+		return false
+	}
+	return ownedByUID(info, uid)
 }
 
 // ParseTestRoot validates a seam root from the environment. Exported for the

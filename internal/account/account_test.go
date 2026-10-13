@@ -169,7 +169,7 @@ func TestParseTestRoot(t *testing.T) {
 	}
 }
 
-func TestParsePasswdHome(t *testing.T) {
+func TestParsePasswdEntry(t *testing.T) {
 	data := strings.Join([]string{
 		"# a comment line with:colons:in:it",
 		"root:x:0:0:root:/root:/bin/sh",
@@ -178,28 +178,35 @@ func TestParsePasswdHome(t *testing.T) {
 		"emptyhome:x:503:20:Empty::/bin/sh",
 		"short:x:504",
 		"textuid:x:notanumber:20:x:/home/x:/bin/sh",
+		"nameless:x:506:20:Nameless:/home/nameless:/bin/sh",
 		"",
 	}, "\n")
+	// The entry with no login name field, reached with an empty name: the home
+	// still resolves, and the caller names no USER rather than inventing one.
+	data = strings.Replace(data, "nameless:x:506", ":x:506", 1)
 
 	tests := []struct {
-		name string
-		uid  int
-		want string
-		ok   bool
+		name     string
+		uid      int
+		wantName string
+		wantHome string
+		ok       bool
 	}{
-		{"an ordinary account", 501, "/Users/alice", true},
-		{"root", 0, "/root", true},
-		{"an account with no gecos", 502, "/home/nohome", true},
-		{"an empty home field", 503, "", false},
-		{"a uid that is not there", 999, "", false},
-		{"a line with too few fields is skipped", 504, "", false},
-		{"a non-numeric uid field never matches", 505, "", false},
+		{"an ordinary account", 501, "alice", "/Users/alice", true},
+		{"root", 0, "root", "/root", true},
+		{"an account with no gecos", 502, "nohome", "/home/nohome", true},
+		{"an entry with no login name", 506, "", "/home/nameless", true},
+		{"an empty home field", 503, "", "", false},
+		{"a uid that is not there", 999, "", "", false},
+		{"a line with too few fields is skipped", 504, "", "", false},
+		{"a non-numeric uid field never matches", 505, "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := parsePasswdHome(data, tt.uid)
-			if got != tt.want || ok != tt.ok {
-				t.Errorf("parsePasswdHome(uid %d) = %q, %v; want %q, %v", tt.uid, got, ok, tt.want, tt.ok)
+			name, home, ok := parsePasswdEntry(data, tt.uid)
+			if name != tt.wantName || home != tt.wantHome || ok != tt.ok {
+				t.Errorf("parsePasswdEntry(uid %d) = %q, %q, %v; want %q, %q, %v",
+					tt.uid, name, home, ok, tt.wantName, tt.wantHome, tt.ok)
 			}
 		})
 	}
@@ -251,15 +258,18 @@ func TestLookupHome_FallsBackToGetentForAnAccountAbsentFromPasswd(t *testing.T) 
 		return "bob:x:502:20:Bob:/home/bob:/bin/bash\n", true
 	}
 
-	home, ok := lookupHome(context.Background(), passwd, 502, getent)
+	name, home, ok := lookupAccount(context.Background(), passwd, 502, getent)
 	if !ok {
 		t.Fatal("an account absent from /etc/passwd but present in getent must resolve")
 	}
 	if home != "/home/bob" {
 		t.Errorf("home = %q, want /home/bob from the getent entry", home)
 	}
+	if name != "bob" {
+		t.Errorf("name = %q, want bob from the getent entry", name)
+	}
 	if asked != 502 {
-		t.Errorf("getent was asked for uid %d, want the uid passed to lookupHome (502)", asked)
+		t.Errorf("getent was asked for uid %d, want the uid passed to lookupAccount (502)", asked)
 	}
 
 	// What the resolved home is FOR: every directory the daemon's locks, sockets
@@ -293,9 +303,9 @@ func TestLookupHome_DoesNotAskGetentWhenPasswdAnswers(t *testing.T) {
 		return "bob:x:502:20:Bob:/home/elsewhere:/bin/bash\n", true
 	}
 
-	home, ok := lookupHome(context.Background(), "bob:x:502:20:Bob:/home/bob:/bin/bash\n", 502, getent)
+	_, home, ok := lookupAccount(context.Background(), "bob:x:502:20:Bob:/home/bob:/bin/bash\n", 502, getent)
 	if !ok || home != "/home/bob" {
-		t.Fatalf("lookupHome = %q, %v; want /home/bob from the passwd file", home, ok)
+		t.Fatalf("lookupAccount = %q, %v; want /home/bob from the passwd file", home, ok)
 	}
 	if called {
 		t.Error("getent was consulted for a uid the passwd file already answered")
@@ -311,9 +321,9 @@ func TestLookupHome_RefusesAGetentAnswerNamingAnotherUID(t *testing.T) {
 		return "bob:x:999:20:Bob:/home/bob:/bin/bash\n", true
 	}
 
-	home, ok := lookupHome(context.Background(), "root:x:0:0:root:/root:/bin/sh\n", 502, getent)
+	_, home, ok := lookupAccount(context.Background(), "root:x:0:0:root:/root:/bin/sh\n", 502, getent)
 	if ok {
-		t.Fatalf("lookupHome resolved %q from a getent answer naming uid 999", home)
+		t.Fatalf("lookupAccount resolved %q from a getent answer naming uid 999", home)
 	}
 }
 
@@ -428,8 +438,8 @@ func TestLookupHome_BoundsTheGetentLookup(t *testing.T) {
 		return "", false
 	}
 
-	if home, ok := lookupHome(context.Background(), "", 501, getent); ok {
-		t.Fatalf("lookupHome resolved %q from a source that answered nothing", home)
+	if _, home, ok := lookupAccount(context.Background(), "", 501, getent); ok {
+		t.Fatalf("lookupAccount resolved %q from a source that answered nothing", home)
 	}
 	if !hasLimit {
 		t.Fatal("the getent lookup ran with no deadline; NSS can block indefinitely")

@@ -23,6 +23,7 @@ language `none`.
 | [`plumb daemon`](#plumb-daemon) | Run the shared background daemon (usually automatic) |
 | [`plumb stop`](#plumb-stop) | Stop the background daemon |
 | [`plumb restart`](#plumb-restart) | Restart the daemon (stop + fresh spawn) |
+| [`plumb service`](#plumb-service) | Manage the account-wide service: its launch profile (`install` / `show` / `set-*`) |
 | [`plumb init`](#plumb-init) | Create a `.plumb/` workspace marker |
 | [`plumb setup`](#plumb-setup) | Register plumb as an MCP server for a client |
 | [`plumb skills`](#plumb-skills) | Show or sync plumb's embedded skills per client |
@@ -89,6 +90,7 @@ prints a warning to stderr suggesting `plumb restart` to refresh.
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
 | `--allow-dir <path>` | — | Grant an extra **read-write** root to this connection (repeatable). Additive to the pinned workspace and config `extra_roots`; never replaces them. On a serve with no workspace pinned yet (no `--workspace`/`PLUMB_WORKSPACE`, no `session_start` yet) the grant is **inert** until the first pin, then additive to it — a grant never supplies a workspace. Also read from `PLUMB_ALLOWED_DIRS` (OS-list-separated). Each path is `$VAR`-expanded and made absolute, then canonicalised (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
+| `--attach-only` | `false` | Dial the running daemon and **never start one**: if nothing is listening, `serve` fails instead of spawning. The resilient proxy's redial takes the same path, so a reconnect cannot start a daemon either. Use it in scripts and test harnesses that must not become the reason a daemon exists. |
 | `--workspace <path>` | — | Pre-pin this connection's **workspace** to `<path>` — for MCP clients that spawn `serve` without controlling its directory and report no roots. Also read from `PLUMB_WORKSPACE`; the flag wins over the env var. Without either, `serve` starts **unattached** and `session_start` pins the workspace. The value is `$VAR`-expanded and made absolute, then validated (symlink-aware) by the daemon. Requires the resilient proxy (the default); ignored under `--no-reconnect`. |
 
 The `--allow-dir` grant is transported to the daemon inside the captured
@@ -96,6 +98,13 @@ The `--allow-dir` grant is transported to the daemon inside the captured
 handshake replay automatically — a reconnected daemon re-applies it with no
 separate message. The grant is per-connection: it never leaks into another
 client's session, and it survives a workspace re-pin.
+
+`--attach-only` exists for callers that must not start anything. Ordinarily a
+`serve` that finds no daemon starts one — the installed binary the service
+profile records (`plumb service show`) — but a scripted client, a harness or a
+diagnostic wants to know whether a daemon is *already* there. With the flag,
+`serve` dials, waits only while a daemon is demonstrably starting or running,
+and exits non-zero otherwise.
 
 `serve` also transports an explicit workspace pre-pin the same way
 (`dev.plumbkit/workspace`) for clients that report no MCP roots (e.g. Claude
@@ -122,9 +131,16 @@ subprocesses (one per `(root, language)` — a single workspace root may host
 several, e.g. `gopls` + an HTML server), the per-connection MCP sessions, the
 stats database, and the topology pool.
 
-It takes an exclusive `flock` on `plumb.daemon.lock` for its lifetime; a second
-`plumb daemon` invocation sees the lock held and exits immediately, enforcing
-the single-daemon invariant.
+It takes two exclusive `flock`s, in this order, for its lifetime: the
+**account authority** (`<account data dir>/daemon.authority.lock`, outside the
+removable runtime directory) and then the **runtime lifetime lock**
+(`plumb.daemon.lock`). A second `plumb daemon` invocation sees either held and
+exits immediately, enforcing the one-daemon-per-account invariant. Managed
+launches — `plumb serve`, `plumb restart`, `plumb service install` — take both
+*before* starting a child and hand them over on fds 3 and 4, so the locks are
+held from the moment the daemon exists; a launcher that finds either held waits
+and re-dials instead of starting a second candidate. A direct `plumb daemon`
+attempts the locks itself and exits if another daemon holds them.
 
 No flags.
 
@@ -162,6 +178,47 @@ without manually stopping and waiting for the next `serve`.
 | Flag | Default | Effect |
 |---|---|---|
 | `--force` | `false` | Skip the confirmation prompt. |
+
+---
+
+## `plumb service`
+
+```
+plumb service install
+plumb service show
+plumb service set-executable <path>
+plumb service set-path <path>
+plumb service set-xdg [--config-home <dir>] [--data-home <dir>] [--state-home <dir>] [--cache-home <dir>] [--runtime-dir <dir>]
+```
+
+Manage the account-wide service's **launch profile**
+(`<account data dir>/service.toml`) — the record of which binary is *the*
+daemon, the PATH its language servers inherit, and the global directories it
+serves from. The profile is what a managed launch obeys, so that no client's
+`HOME`, `XDG_*` or `PATH` can decide what runs or where it keeps its files.
+
+| Subcommand | Effect |
+|---|---|
+| `install` | Write the profile, or update the executable in an existing one. Run from the binary that should be the service — this is what a package manager's post-install step runs. **Idempotent, and it never resets your settings**: an existing profile keeps its directories, PATH and adopted XDG overrides, and only the recorded executable changes. |
+| `show` | Print the profile path and its contents. |
+| `set-executable <path>` | Point the service at another installed binary (an absolute path to a runnable file). |
+| `set-path <path>` | Replace the PATH the daemon and its children inherit. |
+| `set-xdg` | Adopt an XDG base directory explicitly, or drop one by passing an empty value. The service's directories for the roles that base governs follow it. |
+
+`install` records the account's standard directories by default (macOS:
+`~/Library/Application Support/plumb`, `~/Library/Logs/plumb` and
+`~/Library/Caches/plumb`; Linux: `~/.config/plumb`, `~/.local/share/plumb`,
+`~/.local/state/plumb` and `~/.cache/plumb`). If the environment it runs in sets
+an XDG base that already holds a plumb directory of its own, that base is
+**adopted** and printed, so a real XDG setup keeps its configuration instead of
+being silently abandoned. A base that holds no plumb state — a session
+manager's throwaway temp directory — is never adopted.
+
+A launch with **no profile refuses**: `plumb serve` fails with the
+`plumb service install` instruction rather than guessing an executable, a PATH
+or a directory. In this version the profile is consulted only when the
+account-authority mode is enabled; until it is the default, every build
+behaves exactly as before and the profile is ignored.
 
 ---
 

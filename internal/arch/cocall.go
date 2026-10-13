@@ -108,7 +108,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.resumeStore.prune":           "serve proxy's own resume-credential store under the state directory, not an agent file write",
 		"internal/cli.resumeStore.put":             "serve proxy's own resume-credential store under the state directory, not an agent file write",
 		"internal/cli.runDaemon":                   "daemon/CLI bookkeeping, not an agent file write",
-		"internal/cli.startDaemonProcess":          "daemon/CLI bookkeeping, not an agent file write",
+		"internal/cli.daemonCommand":               "daemon/CLI bookkeeping, not an agent file write: the daemon log the child writes to",
 		"internal/cli.stopByPID":                   "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.sweepWakeDir":                "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.wakeLock.release":            "daemon/CLI bookkeeping, not an agent file write",

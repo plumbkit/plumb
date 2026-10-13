@@ -68,29 +68,32 @@ func queryGetent(ctx context.Context, uid int, paths []string, run getentExec) (
 	return "", false
 }
 
-// lookupHome resolves uid's home directory from passwdData — the contents of a
-// passwd file — and, when that file has no entry for uid, from getent.
+// lookupAccount resolves uid's login name and home directory from passwdData —
+// the contents of a passwd file — and, when that file has no entry for uid, from
+// getent.
 //
 // getent is NSS-authoritative: it asks the same name service the C library does,
 // so an account served by LDAP, SSSD, Active Directory, systemd-homed or NIS
 // answers here even though /etc/passwd never names it. It is also never
 // environment-derived — it reads no $HOME or $USER — so consulting it keeps the
-// property this package exists for: the home comes from the OS account database,
-// or there is no answer.
+// property this package exists for: the account comes from the OS account
+// database, or there is no answer.
 //
-// The uid field must be the one asked for. parsePasswdHome enforces that, so an
+// The uid field must be the one asked for. parsePasswdEntry enforces that, so an
 // answer naming a different account is a refusal rather than a home to fall back
 // on, and so is an answer with an empty home. Only BOTH sources failing is a
-// refusal overall.
-func lookupHome(ctx context.Context, passwdData string, uid int, getent getentRunner) (string, bool) {
-	if home, ok := parsePasswdHome(passwdData, uid); ok {
-		return home, true
+// refusal overall. The name may be empty in either source: the home is what the
+// daemon's directories are built from, and a nameless entry yields no USER rather
+// than one guessed from the environment.
+func lookupAccount(ctx context.Context, passwdData string, uid int, getent getentRunner) (name, home string, ok bool) {
+	if name, home, ok := parsePasswdEntry(passwdData, uid); ok {
+		return name, home, true
 	}
 	ctx, cancel := context.WithTimeout(ctx, getentTimeout)
 	defer cancel()
 	out, ok := getent(ctx, uid)
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	return parsePasswdHome(out, uid)
+	return parsePasswdEntry(out, uid)
 }

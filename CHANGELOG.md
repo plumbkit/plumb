@@ -13,6 +13,31 @@
 
 ### Added
 
+- **`plumb service install` records what the account's one daemon is.** A launch
+  used to mean "whatever binary the client happened to be, with whatever
+  environment it happened to have", so a branch build, a worktree checkout or a
+  spoofed `HOME`/`XDG_*` could cold-start the account's shared daemon as an
+  arbitrary binary rooted in temporary directories — and every later client then
+  talked to that one. `<account data dir>/service.toml` now records the installed
+  executable, the PATH language servers need, the resolved config/data/state/log/
+  cache directories and any explicitly adopted XDG base, written by
+  `plumb service install` (idempotent, and it never resets a user's recorded
+  directories, PATH or XDG overrides) and changed only through
+  `plumb service set-executable` / `set-path` / `set-xdg`. A managed launch —
+  `plumb serve`, `plumb restart`, `plumb service install` — starts the profile's
+  executable with an environment built from the profile and the account database
+  (`HOME` and `USER` from the account database, `PATH` from the profile, `XDG_*`
+  only as recorded, plus the launching session's locale), and a client whose
+  environment would have resolved elsewhere is told once, with the
+  `plumb service set-xdg` remedy when the ignored directory holds a real config.
+  A cold start with no profile **fails** with the `plumb service install`
+  instruction rather than inferring one — no `os.Executable()`, no login-shell
+  PATH probe, no environment-derived directory. `plumb serve --attach-only` dials
+  and never spawns, including on the resilient proxy's redial, for scripts and
+  harnesses that must not be the reason a daemon exists. All of it is inert until
+  the account-authority mode becomes the default: a build with it off ignores the
+  profile entirely and behaves exactly as before.
+
 - **A second daemon can no longer start under a different `$HOME`.** The right to
   start a daemon was the runtime lifetime lock, and that lock lives in a
   directory derived from `$HOME` — so overriding `HOME` or `XDG_RUNTIME_DIR` made
