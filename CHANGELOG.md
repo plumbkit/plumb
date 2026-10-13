@@ -288,6 +288,11 @@
   minutes) changes it. Each reconnect attempt of a `plumb serve` whose daemon
   died can now take up to that long too.
 
+- **`check-changelog` catches a replayed `### ` subsection or a repeated
+  entry.** A rebase can replay a whole subsection as additions under the right
+  version heading, which the duplicate-version check and the placement guard
+  both pass. The topmost version must now hold one `### ` of each kind and no
+  verbatim-repeated `- ` entry; released versions keep their legacy repeats.
 - **The Go call graph no longer guesses between two same-named declarations in
   a file, and links generic calls.** The extractor's same-file call edges matched
   by name alone, so with two methods called `Close` in one file, a call of either
