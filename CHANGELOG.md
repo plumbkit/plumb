@@ -282,12 +282,37 @@
   The macOS ownership query ran `lsof -b` — the flag for a machine whose mounts
   are misbehaving — and on macOS it also suppresses the attribution the query
   exists for: a live daemon holding both its lock and its socket was reported as
-  holding neither, which is a VIOLATION against a perfectly healthy account.
-  Measured: `lsof -b -w -F pn -- <path>` lists nothing for a socket that the same
-  command without `-b` attributes to the daemon. The hang risk `-b` was meant to
-  cover is bounded by the command's own deadline instead, which is the part that
-  protects a caller. Guard: `TestLsofAttributesARealSocket` binds a real socket
-  and requires the listing to name this process.
+  holding neither. Measured: `lsof -b -w -F pn -- <path>` lists nothing for a
+  socket that the same command without `-b` attributes to the daemon. Dropping
+  `-b` removed that trigger but not the path it fed: an lsof that FAILS also
+  exits 1 with nothing on stdout, which the census read as the answer "nobody has
+  it open" — so a status error on stderr (`lsof: status error on
+  /private/…/plumb.sock: Permission denied`) accused a daemon that held its
+  authority perfectly well, and told the operator to run `plumb stop`. The census
+  now captures lsof's stderr (exit 1 with empty stdout is an answer only when
+  stderr is empty too; a complaint with no output is an error, and an error means
+  unknown — never OK, never a violation), asks lsof only about paths that exist
+  (`os.Lstat`, since a path that is not there has no openers by definition and a
+  status error for it would turn an ordinary idle account into an unknown), and
+  still uses the output of the paths that did answer (measured: a missing lock
+  beside an open socket still lists the socket). Two neighbouring gaps go the
+  same way rather than reading as answers: a path whose existence could not even
+  be established (a parent directory that denies search) is unknown rather than
+  "nobody has it open", and a path that a complained-about listing never named is
+  unknown too, because lsof stopped at the path it could not read. The verdict
+  carries the matching defence in depth: a violation needs positive evidence —
+  more than one confirmed daemon, or one the census positively established is not
+  the holder — so a single daemon whose lock could not be attributed is UNKNOWN
+  ("could not confirm that it holds the launch authority"), never a violation
+  with `plumb stop` as its remedy. The hang risk `-b` was meant to cover is
+  bounded by the command's own deadline instead, which is the part that protects
+  a caller. Guards: `TestLsofAttributesARealSocket` binds a real socket and
+  requires the listing to name this process, `TestLsofStatusErrorIsAnError` makes
+  a real lsof fail on a socket behind an unreadable directory,
+  `TestLsofUnstattablePathIsAnError` pins the path the census cannot stat,
+  `TestLsofMissingPathIsNoOpenersAndNoError` and
+  `TestLsofPartialOutputIsStillUsed` pin the two halves of the Lstat filter, and
+  `TestVerdict_UnattributedSingleDaemonIsUnknown` pins the verdict.
 
 
 - **`context_for_task` no longer spends seconds on its caller census, which

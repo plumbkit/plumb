@@ -3,9 +3,11 @@
 package daemons
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -217,13 +219,25 @@ func procArgs(pid int) (exe string, args []string, err error) {
 // launch. It runs on the first question, so a census with nothing to ask never
 // pays for it, and it is built once per census rather than once per path.
 type lsofListing struct {
-	paths  []string
-	once   sync.Once
+	paths []string
+	once  sync.Once
+	// owners maps a wanted path to the pids that have it open.
 	owners map[string][]int
-	err    error
+	// unreadable names each path the census could not even ask about, with the
+	// reason: its existence could not be established, so "nobody has it open" is
+	// not an answer this listing is entitled to give.
+	unreadable map[string]error
+	// partial records that lsof listed some paths and complained while doing so.
+	// A path no record names is then not proven unheld — lsof stopped at the path
+	// it could not read, and which one that was is not something its stderr says
+	// reliably — so the path is reported as unknown rather than as nobody.
+	partial bool
+	err     error
 }
 
-func newLsofListing(paths []string) *lsofListing { return &lsofListing{paths: paths} }
+func newLsofListing(paths []string) *lsofListing {
+	return &lsofListing{paths: paths, unreadable: make(map[string]error)}
+}
 
 func (l *lsofListing) openers(path string) ([]int, error) {
 	if path == "" {
@@ -233,10 +247,19 @@ func (l *lsofListing) openers(path string) ([]int, error) {
 	if l.err != nil {
 		return nil, l.err
 	}
+	if err := l.unreadable[path]; err != nil {
+		return nil, err
+	}
 	if pids := l.owners[path]; len(pids) > 0 {
 		return pids, nil
 	}
-	return l.owners[paths.Canonical(path)], nil
+	if pids := l.owners[paths.Canonical(path)]; len(pids) > 0 {
+		return pids, nil
+	}
+	if l.partial {
+		return nil, fmt.Errorf("lsof listed some of the paths it was given but not %s, and complained while listing: it does not answer for it", path)
+	}
+	return nil, nil
 }
 
 func (l *lsofListing) run() {
@@ -244,6 +267,22 @@ func (l *lsofListing) run() {
 	args := []string{"-w", "-F", "pn", "--"}
 	for _, p := range l.paths {
 		if p == "" || wanted[p] {
+			continue
+		}
+		if _, err := os.Lstat(p); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// Not there: nobody has it open, by definition, so it is dropped
+				// rather than asked about. lsof answers a missing path with a
+				// status error on stderr and exit 1, which is indistinguishable
+				// from a failure — and an ordinary idle account (its lock file
+				// never created, its socket unlinked) would then read as unknown
+				// instead of as "no daemon is running".
+				continue
+			}
+			// Its existence could not even be established — a parent directory
+			// that denies search, say. That is a gap, not the answer "nobody has
+			// it open", and the caller must hear it as one.
+			l.unreadable[p] = fmt.Errorf("cannot tell whether %s is there: %w", p, err)
 			continue
 		}
 		wanted[p] = true
@@ -260,17 +299,66 @@ func (l *lsofListing) run() {
 	// deadline instead, which is the part that actually protects the caller.
 	ctx, cancel := context.WithTimeout(context.Background(), helperTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", args...).Output() //nolint:gosec // G204: lsof with fixed flags and paths this process resolved itself
-	if err != nil {
-		// A helper killed at the deadline returns an error wrapping ctx.Err().
-		var exit *exec.ExitError
-		// lsof exits 1 when nothing has any of the files open, which is an answer.
-		if !errors.As(err, &exit) || len(out) > 0 {
-			l.err = fmt.Errorf("lsof: %w", err)
-			return
-		}
+	// stderr is captured rather than discarded: what lsof complains about is the
+	// only thing that separates its exit 1 as an ANSWER ("nothing has any of
+	// these open") from its exit 1 as a FAILURE.
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "lsof", args...) //nolint:gosec // G204: lsof with fixed flags and paths this process resolved itself
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if l.err = lsofOutcome(ctx, err, out, stderr.Bytes()); l.err != nil {
+		return
 	}
+	// Output that came WITH a complaint is partial: lsof stopped at the path it
+	// could not read (measured: a live socket beside an unreadable symlink is
+	// listed, with the status error on stderr), so a path no record names is not
+	// thereby proven unheld and the listing must say so rather than answer
+	// "nobody".
+	l.partial = len(out) > 0 && stderr.Len() > 0
 	l.owners = parseLsofOpeners(string(out), wanted)
+}
+
+// lsofOutcome decides what one lsof run means: nil for an answer — including
+// partial output — or the error the census must report as unknown.
+//
+// lsof exits 1 both when it cannot read a path it was given and when nothing has
+// any of its paths open, so the exit status alone cannot tell an answer from a
+// failure. The complaint on stderr is what separates them, and the difference is
+// everything: an empty listing read as the answer "nobody holds the authority"
+// becomes a violation against a daemon that is holding it perfectly well.
+func lsofOutcome(ctx context.Context, err error, out, stderr []byte) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// Killed at the deadline: a helper that never finished did not answer.
+		return fmt.Errorf("lsof: %w", ctxErr)
+	}
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		return fmt.Errorf("lsof: %w", err)
+	}
+	if len(out) > 0 {
+		// Usable partial output. lsof gives up on the paths it could not read but
+		// still prints the ones it could (measured: a missing lock beside an open
+		// socket still lists the socket), and discarding that would lose real
+		// attribution.
+		return nil
+	}
+	if msg := firstLine(string(stderr)); msg != "" {
+		// Empty output AND a complaint is an error, whatever the exit status.
+		// This is the case that must never be read as "nobody has it open".
+		if err == nil {
+			return errors.New("lsof: " + msg)
+		}
+		return fmt.Errorf("lsof: %w: %s", err, msg)
+	}
+	return nil // exit 1, nothing open, nothing complained about: an answer
+}
+
+// firstLine keeps a helper's complaint to its first line: lsof follows a status
+// error with its whole usage text, and this message is rendered into a one-line
+// verdict.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimSpace(line)
 }
 
 // filterPIDs keeps only the pids in candidates, or all of them when candidates

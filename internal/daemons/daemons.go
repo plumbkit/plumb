@@ -125,6 +125,16 @@ type Report struct {
 	// cannot tell — reporting a violation there would accuse a daemon that may
 	// well be the holder.
 	AuthorityHeldByUnidentified bool
+	// AuthorityUnattributed records that the census could not attribute the
+	// authority lock to anybody at all: it had no way to ask (no ownership probe
+	// on this platform), or the source it asked could not be read (a failing
+	// lsof, an unreadable descriptor scan). It is NOT the same as "nobody holds
+	// it", which the census establishes by asking and being told nobody, and the
+	// verdict turns on the difference: an absence of attribution is a gap in the
+	// census, never evidence against a daemon, so one daemon that appears not to
+	// hold the lock must read as unknown rather than as a violation whose remedy
+	// is `plumb stop`.
+	AuthorityUnattributed bool
 }
 
 // State is the census verdict, in the order of how much it can be trusted.
@@ -178,10 +188,12 @@ type Verdict struct {
 // unreadable, because two daemons in front of you outweigh a missing lsof; and
 // an unreadable source is reported as Unknown even when exactly one daemon was
 // seen, because "exactly one" from a census that may have missed processes is
-// not evidence. The one exception is a lock that is held by a process this
-// census could not identify: that is a gap in the census, not a fact about the
-// daemon, so it reads as Unknown rather than as a violation against an innocent
-// process.
+// not evidence. The two exceptions are both gaps in the census rather than facts
+// about the daemon, so they read as Unknown instead of as a violation against an
+// innocent process: a lock held by a process this census could not identify, and
+// a lock it could not attribute at all. `plumb stop` is only ever printed for
+// positive evidence — more than one confirmed daemon, or one confirmed daemon the
+// census positively established is not the holder.
 func (r *Report) Verdict() Verdict {
 	var confirmed, candidates []Daemon
 	var holder int
@@ -209,6 +221,16 @@ func (r *Report) Verdict() Verdict {
 		return v
 	}
 	if len(confirmed) == 1 && holder == 0 && !r.AuthorityHeldByUnidentified {
+		if r.AuthorityUnattributed {
+			// The census could not say who holds the lock, so it cannot say this
+			// daemon does not: an absence of attribution is not evidence against
+			// it, and accusing it would hand the reader `plumb stop`.
+			v.State = StateUnknown
+			v.Detail = fmt.Sprintf("cannot tell: plumb daemon %d is running, but the census could not confirm that it holds the launch authority %s — %s",
+				confirmed[0].PID, backtick(r.Authority), firstUnknown(r.Unknown))
+			v.Remedy = unknownRemedy
+			return v
+		}
 		v.State = StateViolation
 		v.Detail = fmt.Sprintf("plumb daemon %d does not hold the launch authority %s", confirmed[0].PID, backtick(r.Authority))
 		v.Remedy = remedy(r.Authority)
@@ -218,7 +240,7 @@ func (r *Report) Verdict() Verdict {
 		v.State = StateUnknown
 		v.Detail = fmt.Sprintf("cannot tell: %d confirmed daemon(s), %d candidate(s), and %d unreadable source(s) — %s",
 			len(confirmed), len(candidates), len(r.Unknown), firstUnknown(r.Unknown))
-		v.Remedy = "re-run as the account that owns the daemon, on a host where the process table and lsof are readable; the verdict is only trustworthy from a complete reading"
+		v.Remedy = unknownRemedy
 		return v
 	}
 	if holder != 0 {
@@ -242,6 +264,12 @@ func remedy(authority string) string {
 	return "run `plumb stop`, which stops every daemon of this account; the survivors hold no socket anybody can reach, so stop any that remain by pid"
 }
 
+// unknownRemedy is what a reader can do about a census that could not read
+// everything it asked. It is deliberately not `plumb stop`: an unreadable source
+// is a gap in the census, not a fault in a daemon, and the two verdicts that use
+// this remedy both mean "nobody can say yet".
+const unknownRemedy = "re-run as the account that owns the daemon, on a host where the process table and lsof are readable; the verdict is only trustworthy from a complete reading"
+
 func pidList(ds []Daemon) string {
 	pids := make([]int, 0, len(ds))
 	for _, d := range ds {
@@ -251,7 +279,15 @@ func pidList(ds []Daemon) string {
 	return fmt.Sprintf("%v", pids)
 }
 
-func firstUnknown(reasons []string) string { return reasons[0] }
+// firstUnknown names the first reason a picture is incomplete. A report with no
+// reason recorded is still a report that cannot be trusted, so it says that
+// rather than panicking on the empty slice.
+func firstUnknown(reasons []string) string {
+	if len(reasons) == 0 {
+		return "no reason was recorded"
+	}
+	return reasons[0]
+}
 
 // backtick renders a path for a message, or a dash when the caller named none.
 func backtick(p string) string {
