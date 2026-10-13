@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -59,6 +60,20 @@ func TestDeleteMemoryTakesThePathLock(t *testing.T) {
 	del, _ := json.Marshal(map[string]any{"name": "gone"})
 	assertWaitsForPathLock(t, path, func() error {
 		_, err := dm.Execute(ctx, del)
+		return err
+	})
+	if len(f.all()) != 1 {
+		t.Fatalf("want one history row, got %d", len(f.all()))
+	}
+}
+
+func TestGitInitMarkerTakesThePathLock(t *testing.T) {
+	dir := t.TempDir()
+	var f fakeHistory
+	gi := NewGitInit(WriteDeps{HistoryFn: f.record, WorkspaceFn: func(context.Context) string { return dir }})
+	args, _ := json.Marshal(map[string]any{"path": dir, "init_plumb": true})
+	assertWaitsForPathLock(t, filepath.Join(dir, ".plumb", "context.md"), func() error {
+		_, err := gi.Execute(context.Background(), args)
 		return err
 	})
 	if len(f.all()) != 1 {

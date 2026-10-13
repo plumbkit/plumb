@@ -138,11 +138,24 @@ func createPlumbMarker(ctx context.Context, root string, deps WriteDeps) (string
 		return "", fmt.Errorf("creating .plumb/: %w", err)
 	}
 	contextPath := filepath.Join(plumbDir, "context.md")
-	if _, err := os.Stat(contextPath); err == nil {
+	// The lock spans the create and its history row, so a concurrent plumb
+	// write to context.md cannot land between them.
+	defer lockPath(contextPath)()
+	// O_EXCL makes "already exists" and "create" one step: an existing file is
+	// never truncated, even by a writer that ignores the lock.
+	f, err := os.OpenFile(contextPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644) //nolint:gosec // G302/G304: context.md is a user-edited project file; 0644 is intentional
+	if errors.Is(err, os.ErrExist) {
 		return "", nil // already exists — do not overwrite
 	}
-	if err := os.WriteFile(contextPath, []byte(plumbContextTemplate), 0o644); err != nil { //nolint:gosec // G306: context.md is a user-edited project file; 0644 is intentional
+	if err != nil {
 		return "", err
+	}
+	_, werr := f.WriteString(plumbContextTemplate)
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return "", werr
 	}
 	created := history.SideFromBytes([]byte(plumbContextTemplate))
 	deps.historySink(ctx).recordHistory(history.Change{

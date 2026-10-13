@@ -277,6 +277,12 @@
   destination's diff and history row now carry the source as `From`, so the
   change is judged by both paths, as `copy_file` and `rename_file` already are
   (#599).
+- **`git_init` no longer races a plumb write to `.plumb/context.md`.** It
+  checked for the file and then wrote it without the per-path write lock, so a
+  write landing in between was overwritten and history recorded a create from
+  an absent side. It now holds the lock across the create and its history row,
+  and creates the file with `O_EXCL`, so an existing file is never truncated
+  (#600).
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released
