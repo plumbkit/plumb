@@ -225,6 +225,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 			return p, hiddenToolCount(srv), reason
 		}).
 		WithPinProvenanceFor(s.pinProvenanceFor).
+		WithDaemonCensus(daemonCensusRow).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).

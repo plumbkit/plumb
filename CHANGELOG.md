@@ -217,6 +217,24 @@
   (`start_line`, `end_line`, `pattern`). `grep -O`/`--open-files-in-pager`,
   which runs a program, and `grep --no-index`, which searches outside the
   repository, are refused.
+- **`plumb debug daemons` finds the daemons nobody can reach, and `plumb doctor`
+  fails when the account has more than one (PLAN-531).** A daemon that has lost
+  its runtime directory is invisible in the usual way — its socket is unlinked,
+  so nothing dials it and nothing complains — while it keeps memory and
+  per-project databases open, which is exactly what "one daemon per user" exists
+  to prevent. The new subcommand lists every `plumb daemon` of this user with its
+  pid, parent, start time and executable, says which one holds the launch
+  authority and which plumb socket it owns, and exits non-zero when that is not
+  exactly one. It dials no socket (the state it exists to find answers nothing),
+  signals no process, removes no stale pid file and takes no lock, so it is safe
+  to run against a live daemon. `plumb doctor` gains the same verdict as a
+  `census` row, and `daemon_info` gains one line — `daemons for this user: N
+  (expected 1)` — so an agent sees the count in the place it already looks. Both
+  platforms need the same correction, for the same reason: a process that has
+  forked but not yet exec'd still shows its parent's argv, so Linux skips
+  `PF_FORKNOEXEC` and macOS skips a process whose `P_EXEC` is clear before any
+  argv is read. A census that cannot read the process table says so rather than
+  reporting zero.
 
 ### Changed
 

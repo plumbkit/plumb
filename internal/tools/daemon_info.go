@@ -62,6 +62,7 @@ type daemonInfo struct {
 	protocol      func() ProtocolStatus                              // optional; nil when no protocol accessor is wired
 	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
 	proxyVersion  func() string                                      // optional; nil when no serve proxy declared one
+	daemonCensus  func() string                                      // optional; nil when no daemon-census accessor is wired
 }
 
 // sourceRevision is the build-time provenance of the running daemon binary: the
@@ -212,6 +213,16 @@ func (t *daemonInfo) WithProtocol(fn func() ProtocolStatus) *daemonInfo {
 	return t
 }
 
+// WithDaemonCensus wires an accessor returning how many plumb daemons are
+// running for this account, and whether that is the one it should have — the
+// line that turns "one daemon per user" from a rule nobody checks into a fact
+// every client sees (PLAN-531). Nil or empty means nobody could count, and the
+// row then says so rather than going quiet. Returns the receiver for chaining.
+func (t *daemonInfo) WithDaemonCensus(fn func() string) *daemonInfo {
+	t.daemonCensus = fn
+	return t
+}
+
 // NewDaemonInfo creates a tool that exposes session and daemon metadata.
 // sessID and sessName identify the current MCP connection; daemonVersion and
 // startedAt describe the daemon process itself.
@@ -237,7 +248,7 @@ func NewDaemonInfoFunc(sessID func() string, name func() string, daemonVersion s
 func (t *daemonInfo) Name() string { return "daemon_info" }
 
 func (t *daemonInfo) Description() string {
-	return "Metadata about this session and the daemon: session name and ID, daemon version and build commit, the serve proxy's own version (a separate binary that a daemon restart does not update, so check it before assuming a proxy-side fix is live), Go runtime, OS, uptime, the negotiated MCP protocol revision, config-store state (generation, last reload, restart needed), workspace-pin provenance, and this session's call count and slowest calls."
+	return "Metadata about this session and the daemon: session name and ID, daemon version and build commit, the serve proxy's own version (a separate binary that a daemon restart does not update, so check it before assuming a proxy-side fix is live), Go runtime, OS, uptime, how many plumb daemons are running for this user (the account is meant to have exactly one, and the row names the remedy when it has more), the negotiated MCP protocol revision, config-store state (generation, last reload, restart needed), workspace-pin provenance, and this session's call count and slowest calls."
 }
 
 func (t *daemonInfo) InputSchema() json.RawMessage {
@@ -286,6 +297,11 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 		t.startedAt.Format(time.RFC3339),
 		formatUptime(time.Since(t.startedAt)),
 	)
+	if t.daemonCensus != nil {
+		if row := t.daemonCensus(); row != "" {
+			out += "\ndaemons for this user: " + row
+		}
+	}
 	if t.pinProvenance != nil {
 		if prov := t.pinProvenance(ctx).String(); prov != "" {
 			out += "\n" + prov
@@ -312,27 +328,40 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 		out += "\nlsp:            " + formatLSPStatusRow(t.lspStatus())
 	}
 	if t.configStatus != nil {
-		cs := t.configStatus()
-		restart := "no"
-		if cs.RestartNeeded {
-			restart = "yes — restart the daemon for the pending change to take effect"
-		}
-		out += fmt.Sprintf(
-			"\nconfig generation: %d\nconfig reloaded:   %s\nrestart needed:    %s",
-			cs.Generation,
-			cs.LastReloaded.Format(time.RFC3339),
-			restart,
-		)
+		out += t.configStatusRows()
 	}
 	if t.toolProfile != nil {
-		profile, hidden, reason := t.toolProfile()
-		out += fmt.Sprintf("\nTool profile: %s (reason: %s)", profile, reason)
-		if profile == "lean" {
-			out += fmt.Sprintf(", %d tools hidden", hidden)
-		}
+		out += t.profileRow()
 	}
 	out += formatSessionLatency(t.sessID())
 	return out, nil
+}
+
+// configStatusRows renders the live config-store rows, which is a block of its
+// own so Execute stays inside the repository's complexity budget.
+func (t *daemonInfo) configStatusRows() string {
+	cs := t.configStatus()
+	restart := "no"
+	if cs.RestartNeeded {
+		restart = "yes — restart the daemon for the pending change to take effect"
+	}
+	return fmt.Sprintf(
+		"\nconfig generation: %d\nconfig reloaded:   %s\nrestart needed:    %s",
+		cs.Generation,
+		cs.LastReloaded.Format(time.RFC3339),
+		restart,
+	)
+}
+
+// profileRow renders the tool-profile row, including how many tools the lean
+// profile hides.
+func (t *daemonInfo) profileRow() string {
+	profile, hidden, reason := t.toolProfile()
+	out := fmt.Sprintf("\nTool profile: %s (reason: %s)", profile, reason)
+	if profile == "lean" {
+		out += fmt.Sprintf(", %d tools hidden", hidden)
+	}
+	return out
 }
 
 // formatLSPStatusRow renders the language-server row: the primary's three-state
