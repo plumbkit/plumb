@@ -78,10 +78,12 @@ func withShortTempRuntime(t *testing.T) {
 		t.Fatalf("creating short runtime dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	// Same three variables, and the same reasons, as withTempRuntime.
+	// Same three variables, and the same reasons, as withTempRuntime — plus the
+	// account seam (PLAN-527), which must point at this short directory too.
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", dir)
 }
 
 // listenOnDaemonSocket stands a listener up on daemonSocketPath(), the way a

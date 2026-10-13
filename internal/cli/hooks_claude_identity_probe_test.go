@@ -37,6 +37,10 @@ func probeTestEnv(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
 	t.Setenv("PLUMB_WAKE_DIR", filepath.Join(home, "wake"))
+	// The account seam (PLAN-527), for the same reason as HOME and the XDG vars
+	// above: with the account authority on, these tests must not resolve the
+	// owner's real data directory.
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", home)
 	// The hook's probe budget runs from the process's start, which a test binary
 	// outlives within seconds; restart it so the real glue still gets to dial.
 	started := hookProcessStart

@@ -466,6 +466,7 @@ func TestLeanHintAt_EveryClientEveryState(t *testing.T) {
 func TestCheckMCPClientsGradesEveryLeanClient(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", home)
 	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 

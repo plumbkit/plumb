@@ -70,6 +70,9 @@ func TestCheckDaemon_ReportsVersionMismatch(t *testing.T) {
 	// redirect it too — otherwise a CI environment that sets it would point
 	// the test at the developer's real runtime dir.
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	// And the account seam (PLAN-527), so this test cannot resolve the owner's
+	// real data directory while the account authority is on.
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", home)
 
 	// checkDaemon dials the socket before reading the version file, so stand a
 	// listener up at the (redirected) path.
@@ -344,6 +347,7 @@ func TestClaudeDesktopExtraProfilesResultBranchesUnderClaudeDesktop(t *testing.T
 func TestCheckMCPClients_TopLevelClientsAlphabetical(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", home)
 	t.Setenv("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code"))
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 

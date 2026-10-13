@@ -27,6 +27,13 @@ func withTempRuntime(t *testing.T) {
 	// HOME on macOS. Setting both is the portable way to redirect it.
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	// The account seam (PLAN-527): with the account authority on, a test binary
+	// resolves its global directories from the account database, and the authority
+	// lock lives under the account's data directory. Without this a test would name
+	// — and, once the authority is taken unconditionally, CONTEND FOR — the
+	// developer's real lock, which would make their own `plumb serve` wait out its
+	// full start deadline and fail. The seam is inert while the authority is off.
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", dir)
 }
 
 func TestAcquireDaemonLock_SecondAttemptFails(t *testing.T) {
