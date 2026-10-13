@@ -19,6 +19,9 @@ type movePlan struct {
 	mode          os.FileMode
 	existedBefore bool
 	written       fileSnapshot
+	// from is the file the moved text came out of, set on the destination so the
+	// sensitivity decision judges the change by both paths, as copy_file does.
+	from string
 }
 
 func beforeSide(p movePlan) history.Side {
@@ -53,6 +56,7 @@ func applyMovePlans(plans []movePlan, onApplied func(), sink historySink) ([]str
 			Op:     op,
 			Tool:   "move_symbol",
 			Path:   p.path,
+			From:   p.from,
 			Before: beforeSide(p),
 			After:  history.SideFromBytes(p.after),
 		})

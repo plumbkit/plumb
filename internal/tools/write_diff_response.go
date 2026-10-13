@@ -178,10 +178,17 @@ func ResponseDiffSuffix(ctx context.Context, deps WriteDeps, path string, before
 // same config), and second-guessing it here would silently suppress a diff a
 // caller's own knob had enabled. An empty diff stays empty.
 func (d WriteDeps) gatedDiff(ctx context.Context, path, diff string) string {
+	return d.gatedDiffAcross(ctx, path, "", diff)
+}
+
+// gatedDiffAcross is gatedDiff for a change with a source (from → path), judged
+// as one change by both paths, as responseDiffAcross does. An empty from asks
+// about path alone.
+func (d WriteDeps) gatedDiffAcross(ctx context.Context, path, from, diff string) string {
 	if diff == "" {
 		return ""
 	}
-	if m := d.withheldForResponse(ctx, path, ""); m != "" {
+	if m := d.withheldForResponse(ctx, path, from); m != "" {
 		return m
 	}
 	return diff
