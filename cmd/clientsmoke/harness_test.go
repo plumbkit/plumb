@@ -84,7 +84,7 @@ func TestMain(m *testing.M) {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	build := exec.Command("go", "build", "-o", bin, "./cmd/plumb/")
+	build := exec.Command("go", "build", "-o", bin, "-tags=plumbtest", "./cmd/plumb/")
 	build.Dir = root
 	if out, berr := build.CombinedOutput(); berr != nil {
 		fmt.Fprintf(os.Stderr, "clientsmoke: build plumb: %v\n%s", berr, out)
@@ -261,6 +261,7 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
 			strings.HasPrefix(e, "XDG_RUNTIME_DIR="),
+			strings.HasPrefix(e, "PLUMB_TEST_ACCOUNT_ROOT="),
 			strings.HasPrefix(e, "TSM_ORIG_XDG_"),
 			strings.HasPrefix(e, "CODEX_HOME="),
 			strings.HasPrefix(e, "PLUMB_STRICT_EDITS="),
@@ -284,6 +285,7 @@ func isolatedEnv(tmpHome string, extra ...string) []string {
 		// fails the absolute-path check, so resolution falls back to
 		// XDG_CACHE_HOME above, which is where daemonPIDPaths looks.
 		"XDG_RUNTIME_DIR=",
+		"PLUMB_TEST_ACCOUNT_ROOT="+tmpHome,
 		"CODEX_HOME="+filepath.Join(tmpHome, ".codex"),
 	)
 	return append(out, extra...)
@@ -309,6 +311,7 @@ func isConformanceEnvKey(key string) bool {
 	case "HOME", "PATH", "TMPDIR", "TMP", "TEMP", "SHELL", "TERM", "COLORTERM",
 		"LANG", "USER", "LOGNAME", "TZ", "CI", "NO_COLOR", "CODEX_HOME",
 		"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME",
+		"PLUMB_TEST_ACCOUNT_ROOT",
 		"PLUMB_STRICT_EDITS", "OPENCODE_DISABLE_AUTOUPDATE":
 		return true
 	default:

@@ -225,10 +225,10 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 
 	l := newDaemonLauncher(socketPath)
 	start := l.start
-	l.start = func(lock *os.File) error {
+	l.start = func(locks launchLocks) error {
 		warnIfDaemonAtLegacyPath()
 		slog.Info("serve: daemon not running — starting", "socket", socketPath)
-		return start(lock)
+		return start(locks)
 	}
 	l.decided = release
 	l.onHeld = func() {

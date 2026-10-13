@@ -72,7 +72,7 @@ func buildPlumb(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/plumb/")
+	cmd := exec.Command("go", "build", "-o", bin, "-tags=plumbtest", "./cmd/plumb/")
 	cmd.Dir = root
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -279,7 +279,10 @@ func isolatedEnv(tmpHome string) []string {
 			strings.HasPrefix(e, "XDG_CACHE_HOME="),
 			strings.HasPrefix(e, "XDG_DATA_HOME="),
 			strings.HasPrefix(e, "XDG_STATE_HOME="),
-			strings.HasPrefix(e, "XDG_RUNTIME_DIR="):
+			strings.HasPrefix(e, "XDG_RUNTIME_DIR="),
+			// Scrubbed as well as redirected below: without this a developer's own
+			// exported seam would be inherited by the child.
+			strings.HasPrefix(e, "PLUMB_TEST_ACCOUNT_ROOT="):
 			continue
 		default:
 			out = append(out, e)
@@ -299,6 +302,13 @@ func isolatedEnv(tmpHome string) []string {
 		// fails the absolute-path check, so resolution falls back to
 		// XDG_CACHE_HOME above, which is what daemonPIDPath expects.
 		"XDG_RUNTIME_DIR=",
+		// The account seam (PLAN-527). The daemon resolves its global directories
+		// from the OS account database once the account authority is on, and the
+		// authority lock lives under the account's data directory — so a child that
+		// inherited the developer's real account would name, and contend for, the
+		// lock their own daemon holds. Pointed at the same temp home as everything
+		// else, so this child still owns its authority.
+		"PLUMB_TEST_ACCOUNT_ROOT="+tmpHome,
 		// A cold gopls in a fresh workspace needs more than the 300 ms default
 		// to emit the first diagnostics after a write.
 		"PLUMB_POST_WRITE_DIAG_MS=5000",

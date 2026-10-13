@@ -41,6 +41,8 @@ import (
 	"testing"
 
 	"github.com/adrg/xdg"
+
+	"github.com/plumbkit/plumb/internal/account"
 )
 
 // appDir is the per-application subdirectory placed under each base directory.
@@ -106,14 +108,32 @@ func base(envVar string, pick func() string) string {
 
 // ConfigDir returns plumb's config directory (e.g. ~/.config/plumb on Linux,
 // ~/Library/Application Support/plumb on macOS).
-func ConfigDir() string { return appPath("XDG_CONFIG_HOME", func() string { return xdg.ConfigHome }) }
+//
+// With the account authority enabled it comes from the OS account database
+// instead of the environment — see authority.go.
+func ConfigDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.ConfigDir() }); ok {
+		return dir
+	}
+	return appPath("XDG_CONFIG_HOME", func() string { return xdg.ConfigHome })
+}
 
 // DataDir returns plumb's persistent-data directory (sessions, stats).
-func DataDir() string { return appPath("XDG_DATA_HOME", func() string { return xdg.DataHome }) }
+func DataDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.DataDir() }); ok {
+		return dir
+	}
+	return appPath("XDG_DATA_HOME", func() string { return xdg.DataHome })
+}
 
 // StateDir returns plumb's state directory (regenerable state). For logs use
 // LogDir, which diverges from this on macOS.
-func StateDir() string { return appPath("XDG_STATE_HOME", func() string { return xdg.StateHome }) }
+func StateDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.StateDir() }); ok {
+		return dir
+	}
+	return appPath("XDG_STATE_HOME", func() string { return xdg.StateHome })
+}
 
 // LogDir returns plumb's log directory. Logs are the single role where the macOS
 // convention diverges from XDG: macOS keeps user logs in ~/Library/Logs (the
@@ -125,6 +145,9 @@ func StateDir() string { return appPath("XDG_STATE_HOME", func() string { return
 //   - Linux  : $XDG_STATE_HOME/plumb  (fallback ~/.local/state/plumb)
 //   - Windows: %LocalAppData%\plumb
 func LogDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.LogDir() }); ok {
+		return dir
+	}
 	if runtime.GOOS == "darwin" {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, "Library", "Logs", appDir)
@@ -136,7 +159,12 @@ func LogDir() string {
 
 // CacheDir returns plumb's cache directory (heap profiles, and the runtime
 // files on any platform where RuntimeDir falls back to it).
-func CacheDir() string { return appPath("XDG_CACHE_HOME", func() string { return xdg.CacheHome }) }
+func CacheDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.CacheDir() }); ok {
+		return dir
+	}
+	return appPath("XDG_CACHE_HOME", func() string { return xdg.CacheHome })
+}
 
 // RuntimeDir returns the directory for the daemon's runtime files: the MCP and
 // control sockets, the pid and version files, and the two flocks. It is the
@@ -160,6 +188,9 @@ func CacheDir() string { return appPath("XDG_CACHE_HOME", func() string { return
 // so the one caller that needs the directory (the CLI, before binding the
 // socket or taking a lock) does the MkdirAll itself.
 func RuntimeDir() string {
+	if dir, ok := accountDir(func(u account.User) string { return u.RuntimeDir() }); ok {
+		return dir
+	}
 	return filepath.Join(runtimeBase(), appDir)
 }
 

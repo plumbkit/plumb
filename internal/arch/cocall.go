@@ -94,6 +94,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/tools/txlog.ScanRecording":       "write-ahead-log bookkeeping under .plumb/tx-log; crash-recovery restores recorded via RestoreSink",
 
 		// CLI daemon runtime and bookkeeping files (PID, socket, profiler dumps, wake locks).
+		"internal/cli.acquireAuthority":            "the account authority lock file: created open-and-locked so two daemons cannot both hold it, and its metadata is written through that held fd rather than as a user-visible change",
 		"internal/cli.acquireDaemonLock":           "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.acquireSpawnLock":            "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.acquireWakeLockWith":         "daemon/CLI bookkeeping, not an agent file write",

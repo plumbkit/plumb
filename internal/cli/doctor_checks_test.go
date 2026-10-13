@@ -16,6 +16,7 @@ import (
 func TestCheckConfigs_WarnsOnFrozenDefaults(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("PLUMB_TEST_ACCOUNT_ROOT", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
 	cfgDir := filepath.Join(home, ".config", "plumb")

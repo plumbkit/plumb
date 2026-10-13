@@ -13,6 +13,28 @@
 
 ### Added
 
+- **A second daemon can no longer start under a different `$HOME`.** The right to
+  start a daemon was the runtime lifetime lock, and that lock lives in a
+  directory derived from `$HOME` — so overriding `HOME` or `XDG_RUNTIME_DIR` made
+  a second daemon legal and unreachable, which is how 64 of them accumulated.
+  Launching now takes an account-wide **authority lock** first, under the
+  account's data directory, which the environment cannot move; the runtime
+  lifetime lock is taken second, so an older binary's launcher still loses to the
+  file it always contended for. A launcher that finds the authority held attaches
+  to the daemon holding it, through the socket that daemon recorded, rather than
+  dialling its own `$HOME`-derived path. The account comes from the operating
+  system's account database, and a uid it cannot resolve is refused rather than
+  guessed — on the Linux release build (`CGO_ENABLED=0`) that means `/etc/passwd`
+  and then `getent`, so an account served only by NSS (LDAP, SSSD,
+  systemd-homed) still resolves, and only both sources failing is a refusal — a
+  `getent` that answers "no such key" (status 2) has answered, so the lookup ends
+  there rather than asking the other copy of the binary;
+  `plumb debug daemons` reports a uid neither source holds instead of a count.
+  The daemon adopts the launch-lock fd the environment names rather than
+  requiring the 3/4 pair, so a `plumb serve` from before the authority — which
+  hands over the lifetime lock alone, on fd 3 — still starts one.
+
+
 - **`context_for_task` names the tests that run your seed, as a ready
   `run_task` call.** The affected-tests estimate named only packages
   (`./internal/tools/... — 1808 test(s)`), so agents built their own `-run`
@@ -345,6 +367,32 @@
   never hashed is reported as a possible gap, while two absent sides still
   read as continuous. `write_file` keeps one copy of the content for the write
   and the history side.
+- **A launcher whose `$HOME` differs from the daemon's reaches the daemon that
+  exists, instead of waiting out its whole start deadline and exiting with no
+  daemon.** The account authority records the socket the daemon serves, so that a
+  launcher which finds the authority held can dial it. It refused that record
+  unless the socket sat under a runtime directory the launcher itself could have
+  chosen — its own, or the account's — and a daemon launched under a different
+  `$HOME` or `XDG_RUNTIME_DIR` is under neither (in a release build the account's
+  directories are not in play at all, whatever the environment says), so a client
+  whose `$HOME` differed from the daemon's was served nothing. The record is now
+  dialled whenever the recorded pid is alive, the path is absolute, the path is a
+  unix socket, and this user owns it: the authority lock is the trust anchor —
+  only a process running as this user can hold it and write the record through
+  it — and the directory a socket sits in was never the safety property.
+
+- **The account test seam now contains the runtime directory too.**
+  `PLUMB_TEST_ACCOUNT_ROOT` redirects every account path — data, cache, config,
+  state, the authority lock — except that on Linux the runtime directory came
+  from the kernel's `/run/user/<uid>` instead, which is a real, usable directory
+  on any machine with a login session. A test binary could therefore resolve, and
+  bind its daemon's socket in, the account's own runtime directory: exactly the
+  cross-contamination the seam exists to prevent. A seam root now outranks the
+  kernel's runtime directory on every platform, and the runtime directory sits
+  under it like every other account path. The Linux-only checks the kernel's
+  runtime directory has to pass are exercised on every platform as well, so a
+  darwin-only test run can no longer hide a Linux answer.
+
 - **A slow daemon start can no longer produce a second daemon, and waits
   30 s, not 10.** When `plumb serve` started the daemon and it took longer than
   the 10 s wait (a loaded machine, a cold start), serve gave up and released

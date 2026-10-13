@@ -52,7 +52,14 @@ func init() {
 	// idempotent, so the help/error paths never double-print.
 	rootCmd.Annotations = map[string]string{annoSkipLogo: "true"}
 	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
-		applyConfiguredTheme()
+		// The daemon adopts its launch locks before anything else it does, and
+		// config resolution must not sit between that handover and the lock: a
+		// config being rewritten, or a project config on a slow mount, would
+		// otherwise delay the very thing that keeps a second daemon from starting.
+		// It renders nothing, so skipping the theme costs it nothing.
+		if cmd.Name() != "daemon" {
+			applyConfiguredTheme()
+		}
 		if suppressLogo(cmd) {
 			return
 		}
