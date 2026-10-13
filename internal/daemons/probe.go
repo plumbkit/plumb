@@ -66,7 +66,10 @@ func census(p probe, opts Options) Report {
 	if opts.Authority == "" {
 		r.Unknown = append(r.Unknown, "no launch-authority lock was named, so no daemon could be confirmed as the authority holder")
 	} else {
-		r.mark(p, opts.Authority, func(d *Daemon) {
+		// Only an ANSWERED question can make "no holder" a fact about the daemon;
+		// a question the census could not answer is recorded as a gap, so the
+		// verdict does not accuse a daemon of losing a lock nobody could read.
+		r.AuthorityUnattributed = !r.mark(p, opts.Authority, func(d *Daemon) {
 			d.HoldsAuthority = true
 			d.raiseTo(IdentityAuthority)
 		})
@@ -82,25 +85,28 @@ func census(p probe, opts Options) Report {
 	return r
 }
 
-// mark asks the platform which candidate processes hold path, and records them.
-// A question the build cannot ask, or a source it cannot read, becomes an
-// Unknown reason — never silence.
-func (r *Report) mark(p probe, path string, record func(*Daemon)) {
+// mark asks the platform which candidate processes hold path, records them, and
+// reports whether the question was ANSWERED: true when the platform answered,
+// naming holders or naming nobody, false when this build cannot ask or the source
+// could not be read. A question that was not answered becomes an Unknown reason —
+// never silence, and never the answer "nobody holds it".
+func (r *Report) mark(p probe, path string, record func(*Daemon)) bool {
 	if path == "" {
-		return
+		return false
 	}
 	if p.owners == nil {
 		r.Unknown = append(r.Unknown, "this build cannot tell which process holds "+path)
-		return
+		return false
 	}
 	pids, err := p.owners(path, r.pids())
 	if err != nil {
 		r.Unknown = append(r.Unknown, fmt.Sprintf("cannot tell which process holds %s: %v", path, err))
-		return
+		return false
 	}
 	for _, pid := range pids {
 		record(r.ensure(pid))
 	}
+	return true
 }
 
 // reportUnidentifiedHolder turns a real gap into a flagged unknown: ownership is

@@ -223,6 +223,47 @@ func TestVerdict_UnknownBeatsOK(t *testing.T) {
 	}
 }
 
+// TestVerdict_UnattributedSingleDaemonIsUnknown is the defence in depth: an
+// absence of attribution is not evidence against a daemon. One confirmed daemon
+// whose lock the census could not attribute reads as UNKNOWN — never as a
+// violation carrying the remedy `plumb stop`, which is what a failing lsof used
+// to produce against a daemon holding its authority perfectly well.
+func TestVerdict_UnattributedSingleDaemonIsUnknown(t *testing.T) {
+	procs := []Daemon{{PID: 100, Argv: "plumb daemon", Identity: IdentityArgv}}
+	p := probe{
+		processes: func(int) ([]Daemon, []string) { return procs, nil },
+		// What a failing lsof looks like from here: the ownership question comes
+		// back as an error instead of an answer.
+		owners: func(string, []int) ([]int, error) {
+			return nil, errors.New("lsof: exit status 1: lsof: status error on " + authority + ": Permission denied")
+		},
+	}
+	r := census(p, Options{Authority: authority})
+	v := r.Verdict()
+
+	if v.State != StateUnknown {
+		t.Fatalf("state = %v (%s), want UNKNOWN: a lock nobody could attribute must never be a violation", v.State, v.Detail)
+	}
+	if !strings.Contains(v.Detail, "could not confirm") {
+		t.Errorf("detail = %q, want it to say the lock could not be confirmed", v.Detail)
+	}
+	if v.Confirmed != 1 {
+		t.Errorf("confirmed = %d, want the daemon still counted", v.Confirmed)
+	}
+	if strings.Contains(v.Remedy, "plumb stop") {
+		t.Errorf("remedy = %q, want no stop instruction: the census could not say this daemon is the wrong one", v.Remedy)
+	}
+
+	// The mirror, so the rule cannot be satisfied by never accusing anybody: when
+	// the census DID ask and was told nobody holds the lock, one daemon without it
+	// is exactly the E1 breach.
+	p.owners = func(string, []int) ([]int, error) { return nil, nil }
+	r = census(p, Options{Authority: authority})
+	if v := r.Verdict(); v.State != StateViolation {
+		t.Errorf("state = %v (%s), want VIOLATION for an answered `nobody holds it`", v.State, v.Detail)
+	}
+}
+
 // includesSocket reports whether a socket path is in the list. It is a function,
 // not a method, so Daemon has one receiver kind (pointer) throughout.
 func includesSocket(d Daemon, path string) bool {
