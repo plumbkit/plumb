@@ -278,6 +278,18 @@
 
 ### Fixed
 
+- **`plumb debug daemons` no longer reports a healthy daemon as a violation.**
+  The macOS ownership query ran `lsof -b` — the flag for a machine whose mounts
+  are misbehaving — and on macOS it also suppresses the attribution the query
+  exists for: a live daemon holding both its lock and its socket was reported as
+  holding neither, which is a VIOLATION against a perfectly healthy account.
+  Measured: `lsof -b -w -F pn -- <path>` lists nothing for a socket that the same
+  command without `-b` attributes to the daemon. The hang risk `-b` was meant to
+  cover is bounded by the command's own deadline instead, which is the part that
+  protects a caller. Guard: `TestLsofAttributesARealSocket` binds a real socket
+  and requires the listing to name this process.
+
+
 - **`context_for_task` no longer spends seconds on its caller census, which
   starved the affected-tests estimate.** The census (#648) checked, for every
   recorded call of a seed's name, whether its file dot-imports a package, and the

@@ -241,7 +241,7 @@ func (l *lsofListing) openers(path string) ([]int, error) {
 
 func (l *lsofListing) run() {
 	wanted := make(map[string]bool, len(l.paths))
-	args := []string{"-b", "-w", "-F", "pn", "--"}
+	args := []string{"-w", "-F", "pn", "--"}
 	for _, p := range l.paths {
 		if p == "" || wanted[p] {
 			continue
@@ -252,9 +252,12 @@ func (l *lsofListing) run() {
 	if len(wanted) == 0 {
 		return
 	}
-	// -b keeps lsof from calling kernel functions that can block (it is the flag
-	// for a machine whose mounts are misbehaving); -w drops warnings. Either way
-	// the call is bounded, and a timeout is an error the census reports as unknown.
+	// -w drops warnings. NOT -b: it is the flag for a machine whose mounts are
+	// misbehaving, and on macOS it also suppresses the very attribution this call
+	// exists for — measured, `lsof -b -w -F pn -- <path>` returns nothing for a
+	// socket or lock file that the same command without -b attributes to the
+	// daemon. The hang risk -b was meant to cover is bounded by the context
+	// deadline instead, which is the part that actually protects the caller.
 	ctx, cancel := context.WithTimeout(context.Background(), helperTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "lsof", args...).Output() //nolint:gosec // G204: lsof with fixed flags and paths this process resolved itself

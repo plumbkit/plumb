@@ -5,12 +5,52 @@ package daemons
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestLsofAttributesARealSocket is the test that would have caught the -b flag.
+//
+// The census's whole answer rests on this one external command, and a flag that
+// makes lsof return nothing does not fail loudly — it makes every daemon look
+// like it holds no authority, which is a false VIOLATION against a healthy
+// machine. So this binds a real unix socket at a short path and requires the
+// listing to name THIS process.
+func TestLsofAttributesARealSocket(t *testing.T) {
+	// A short base on purpose: a macOS t.TempDir() path exhausts the ~104-byte
+	// sun_path ceiling and the bind fails with EINVAL, which says nothing about
+	// length.
+	dir, err := os.MkdirTemp("/tmp", "plumb-sock-") //nolint:usetesting // the socket path must stay under the sun_path ceiling
+	if err != nil {
+		t.Fatalf("creating a short temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	socket := filepath.Join(dir, "plumb.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("listening on %s: %v", socket, err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	listing := newLsofListing([]string{socket})
+	pids, err := listing.openers(socket)
+	if err != nil {
+		t.Fatalf("openers(%s): %v", socket, err)
+	}
+	me := os.Getpid()
+	for _, pid := range pids {
+		if pid == me {
+			return
+		}
+	}
+	t.Fatalf("lsof did not attribute %s to this process (pids %v); a census built on this would report a healthy daemon as a violation", socket, pids)
+}
 
 // TestHelperCommandsAreBounded is the other half of the timeout: the bound must
 // actually be applied, and a helper that does not answer in time must come back
