@@ -60,9 +60,12 @@ type contextCandidate struct {
 // marks a selector that matched several declarations; Candidates then lists them
 // (bounded) and none was chosen.
 type contextMiss struct {
-	Input      string
-	Reason     string
-	Ambiguous  bool
+	Input     string
+	Reason    string
+	Ambiguous bool
+	// NoMatch is a symbol seed the index holds no declaration for: the one miss an
+	// index on its first pass can explain (markMissesBuilding).
+	NoMatch    bool
 	Candidates []contextCandidate
 	More       int // candidates beyond contextMaxCandidates
 }
@@ -277,6 +280,9 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 	pack.applyHave(req.Have)
 	constraintGaps := c.constraints(ctx, &pack, scope, index, req, reads)
 	pack.SourceRead = reads.spent
+	if index.building {
+		pack.markMissesBuilding()
+	}
 	pack.Gaps = pack.allGaps(index, bodyGaps, constraintGaps)
 	return pack, nil
 }
@@ -287,7 +293,7 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 func (p *contextPack) allGaps(index contextIndex, bodyGaps, constraintGaps []string) []string {
 	gaps := append(collectGaps(index), bodyGaps...)
 	gaps = append(gaps, p.relationGaps()...)
-	gaps = append(gaps, p.affectedGaps()...)
+	gaps = append(gaps, p.affectedGaps(index.building)...)
 	gaps = append(gaps, constraintGaps...)
 	gaps = append(gaps, p.haveGaps()...)
 	gaps = append(gaps, p.unreadBodyGap()...)
@@ -434,5 +440,18 @@ func collectGaps(index contextIndex) []string {
 	if note := indexHealthNote(index.store.Health(), time.Now()); note != "" {
 		return []string{note, labelIndexFailing}
 	}
+	if index.building {
+		return []string{indexBuildingNote(index.indexed)}
+	}
 	return nil
+}
+
+// indexBuildingNote leads a pack read from an index on its first full pass. An
+// agent's first call in a fresh worktree lands here: the index then holds a few
+// dozen of a few thousand files, and a pack that does not say so reads as a
+// complete answer with no callers and no tests.
+func indexBuildingNote(indexed int) string {
+	return fmt.Sprintf("the topology index is still being built: its first pass over this workspace has not finished "+
+		"(%d files indexed so far), so symbol seeds may not resolve and callers, tests and relationships may be missing; "+
+		"an absence in this pack is not evidence of absence. topology_status shows progress; call again once it reports idle", indexed)
 }

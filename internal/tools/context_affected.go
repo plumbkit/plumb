@@ -377,14 +377,19 @@ func namedMore(shown, total int) string {
 }
 
 // affectedGaps words what bounded the estimate. An estimate with no test in it is
-// not proof that nothing exercises the seeds.
-func (p *contextPack) affectedGaps() []string {
+// not proof that nothing exercises the seeds, and from an index still on its first
+// pass (building) the tests may simply not be indexed yet.
+func (p *contextPack) affectedGaps(building bool) []string {
 	a := p.Affected
 	if !a.Ran {
 		return nil
 	}
 	var gaps []string
-	if len(a.Packages) == 0 && !a.Deadline {
+	switch {
+	case len(a.Packages) > 0 || a.Deadline:
+	case building:
+		gaps = append(gaps, "affected tests: the index lists none for these seeds so far, but it is still being built, so their tests may not be indexed yet")
+	default:
 		gaps = append(gaps, "affected tests: the index lists none for these seeds; that is not proof that nothing exercises them")
 	}
 	if a.Excluded > 0 {

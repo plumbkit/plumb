@@ -401,6 +401,17 @@
 
 ### Fixed
 
+- **`context_for_task` says when its index is still on its first pass.** An
+  agent's first call in a fresh worktree reached an index holding a few dozen of
+  a few thousand files, and the pack read like a complete answer: "no indexed
+  declaration matches", "the index lists none" for tests. The pack now leads
+  with "the topology index is still being built" and the number of files indexed
+  so far, and an unresolved symbol seed or an empty test estimate says it may
+  simply not be indexed yet. Whether a full pass has completed is persisted in
+  the index (a new `topology_meta` row), so a complete index the daemon reopens
+  after a restart is not labelled; an index built before this version is
+  labelled until its first pass under it completes.
+
 - **`context_for_task` detects each directory's project once per call.** After
   the per-file memo below, a pack still resolved the project of each of its 100
   to 250 files on disk, and the slowest arm R pack ran at 1.7–1.9 s of its 2 s

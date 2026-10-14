@@ -29,6 +29,11 @@ type TopologyForRootFn func(root string) *topology.Store
 type contextIndex struct {
 	store    *topology.Store
 	mismatch bool
+	// building is an index whose first full pass has not completed, so it holds
+	// only the part of the tree it has reached; indexed is how many files that is.
+	// Read once per call, so every line of one pack says the same thing.
+	building bool
+	indexed  int
 }
 
 // indexFor asks the root-keyed accessor for root's index and checks the answer.
@@ -46,7 +51,20 @@ func (c *ContextCollector) indexFor(root string) contextIndex {
 	if canonicalRoot(store.Root()) != root {
 		return contextIndex{mismatch: true}
 	}
-	return contextIndex{store: store}
+	index := contextIndex{store: store, building: indexBuilding(store.Health())}
+	if index.building {
+		index.indexed, _ = store.IndexedFileCount(context.Background())
+	}
+	return index
+}
+
+// indexBuilding reports an index on its first full pass: an indexer is attached,
+// nothing says it is failing (which collectGaps words on its own), and no full
+// pass has completed in this process or an earlier one. Built is persisted, so a
+// complete index the daemon has just reopened is not "being built"; an index
+// mid-way through an incremental cycle is not either.
+func indexBuilding(h topology.Health) bool {
+	return !h.Failing && !h.Built && h.State != "stopped"
 }
 
 // unavailable words why symbols cannot be resolved, or "" when they can.

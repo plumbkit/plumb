@@ -31,6 +31,10 @@ type Health struct {
 	// since. It stays set while retry cycles run, and through a later cycle
 	// that succeeds without a full resync, which queues one instead.
 	Failing bool
+	// Built reports that a full pass over the tree has completed, in this process
+	// or an earlier one (it is persisted). False while a first build runs, when
+	// the index holds only the part of the tree it has reached.
+	Built bool
 }
 
 // healthOf reads idx's liveness, reporting a nil indexer as stopped.

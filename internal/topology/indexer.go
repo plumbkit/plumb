@@ -103,6 +103,7 @@ type Indexer struct {
 	lastErr       string
 	failing       bool // a cycle failed and no full resync has succeeded since
 	resyncPending bool // set when Enqueue overflows; triggers a recovery resync
+	built         bool // a full pass has completed, in this process or one before (indexer_built.go)
 }
 
 // defaultIdleReclaim is the debounce window after the indexer goes quiet before
@@ -218,7 +219,7 @@ func (idx *Indexer) LastError() string {
 func (idx *Indexer) Health() Health {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return Health{State: idx.state, LastSync: idx.lastSync, LastError: idx.lastErr, Failing: idx.failing}
+	return Health{State: idx.state, LastSync: idx.lastSync, LastError: idx.lastErr, Failing: idx.failing, Built: idx.built}
 }
 
 // setState records a state transition. failing follows only the states that
@@ -402,6 +403,9 @@ func (idx *Indexer) runQueueCycle(initial indexOp) bool {
 		idx.Enqueue("", opResync)
 	default:
 		idx.catchUpQueued = false
+		if resynced {
+			idx.markBuilt(context.Background())
+		}
 		idx.setState("idle", "")
 	}
 	// A successful resync drained the arena pool as its final step.
