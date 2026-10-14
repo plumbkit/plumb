@@ -363,7 +363,16 @@ func processAlive(pid int) bool {
 // readDaemonPID reads the PID file written by the current daemon. Returns 0
 // if the file does not exist or cannot be parsed.
 func readDaemonPID() int {
-	data, err := os.ReadFile(daemonPIDPath())
+	return readPIDFileAt(daemonPIDPath())
+}
+
+// readPIDFileAt reads a pid file at an explicit path. It is read-only, and exists
+// so a caller naming a LEGACY runtime location can read its pid file without
+// going through daemonPIDPath — which resolves this process's own directory and,
+// deliberately, creates it. `plumb restart` names the daemons it stops by
+// identity, and every legacy location is one of those identities.
+func readPIDFileAt(path string) int {
+	data, err := os.ReadFile(path) //nolint:gosec // G304: a runtime directory plumb itself resolved
 	if err != nil {
 		return 0
 	}

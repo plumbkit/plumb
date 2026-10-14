@@ -45,14 +45,30 @@ import (
 // carry a second copy of that rule.
 type Options struct {
 	// Authority is the file whose exclusive flock marks the account's launch
-	// authority. The daemon holding it is the one clients should reach and the
-	// only one E1 allows. "" when the caller cannot name one, which makes every
-	// verdict Unknown rather than OK.
+	// authority — the ACCOUNT lock (PLAN-527), not a runtime lock: since 527 the
+	// account authority is what every launcher takes and every daemon holds, and a
+	// runtime lifetime lock is no longer evidence of anything on its own. The
+	// daemon holding it is the one clients should reach and the only one E1
+	// allows. "" when the caller cannot name one, which makes every verdict
+	// Unknown rather than OK.
 	Authority string
 	// Sockets are the runtime socket paths that belong to plumb on this
 	// account, most-preferred first (the canonical runtime dir, then any legacy
 	// location). A process owning one of them is a daemon whatever its argv.
 	Sockets []string
+	// LegacyLocks are the runtime LIFETIME locks of the legacy runtime locations
+	// (PLAN-530): the files an older binary's daemon holds and a pre-527 launcher
+	// contends for.
+	//
+	// Holding one is EVIDENCE, and evidence of exactly one thing: this process is
+	// a daemon of an OLDER binary's runtime directory. It is deliberately not the
+	// launch authority — a daemon can hold a lifetime lock whose FILE has been
+	// deleted with its runtime directory while the flock lives on the unlinked
+	// inode, which is the state PLAN-529's self-heal creates and which once made a
+	// perfectly healthy daemon read as a violation. The account authority above
+	// decides that question; these decide only whether a daemon that does NOT hold
+	// it is a legacy survivor worth naming.
+	LegacyLocks []string
 }
 
 // Identity says how a process was recognised. It is ordered by strength, and
@@ -69,6 +85,11 @@ const (
 	IdentityArgv
 	// IdentitySocket: the process owns a plumb runtime socket.
 	IdentitySocket
+	// IdentityLifetimeLock: the process holds the runtime lifetime lock of a
+	// legacy location (Options.LegacyLocks), which only a plumb daemon of that
+	// runtime directory does. It confirms a daemon even where argv cannot, and it
+	// is what names a survivor as a LEGACY one.
+	IdentityLifetimeLock
 	// IdentityAuthority: the process holds the launch authority lock.
 	IdentityAuthority
 )
@@ -80,6 +101,8 @@ func (i Identity) String() string {
 		return "argv"
 	case IdentitySocket:
 		return "socket"
+	case IdentityLifetimeLock:
+		return "lifetime-lock"
 	case IdentityAuthority:
 		return "authority"
 	default:
@@ -99,8 +122,12 @@ type Daemon struct {
 	// Identity is the strongest evidence found for this process.
 	Identity Identity
 	// HoldsAuthority reports that this process holds the flock on
-	// Options.Authority.
+	// Options.Authority — the account's launch authority.
 	HoldsAuthority bool
+	// HoldsLegacyLock names the legacy runtime lifetime locks
+	// (Options.LegacyLocks) this process holds. Holding one says this process is a
+	// daemon of that runtime directory, and that the directory is a legacy one.
+	HoldsLegacyLock []string
 	// OwnsSocket names the plumb socket paths this process owns, if any.
 	OwnsSocket []string
 }
@@ -251,7 +278,7 @@ func (r *Report) Verdict() Verdict {
 			return v
 		}
 		v.State = StateViolation
-		v.Detail = fmt.Sprintf("plumb daemon %d does not hold the launch authority %s", confirmed[0].PID, backtick(r.Authority))
+		v.Detail = notHoldingAuthority(confirmed[0], r.Authority)
 		v.Remedy = remedy(r.Authority)
 		return v
 	}
@@ -270,6 +297,24 @@ func (r *Report) Verdict() Verdict {
 	v.State = StateNone
 	v.Detail = "no plumb daemon is running"
 	return v
+}
+
+// notHoldingAuthority is the violation sentence for one confirmed daemon that
+// does not hold the launch authority.
+//
+// A daemon that holds a LEGACY runtime lifetime lock is named as what it is — a
+// survivor of an older binary's runtime directory — because that is the fact the
+// reader has to act on, and because the E1 remedy differs for it: `plumb restart`
+// migrates it, while a daemon that holds neither lock is one that simply lost the
+// authority. The verdict is the same either way. Holding a legacy lock is
+// EVIDENCE, never an excuse: a daemon that holds no authority is the breach D9
+// exists to surface, and the lock it does hold is what says which kind.
+func notHoldingAuthority(d Daemon, authority string) string {
+	if len(d.HoldsLegacyLock) > 0 {
+		return fmt.Sprintf("plumb daemon %d holds the legacy launch lock %s and not the account launch authority %s — it is a daemon of an older binary's runtime directory",
+			d.PID, backtick(d.HoldsLegacyLock[0]), backtick(authority))
+	}
+	return fmt.Sprintf("plumb daemon %d does not hold the launch authority %s", d.PID, backtick(authority))
 }
 
 // remedy is the one instruction that actually clears a violation. Stop is safe

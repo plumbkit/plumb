@@ -66,18 +66,25 @@ func daemonStartWait() time.Duration {
 	return min(d, maxDaemonStartWait)
 }
 
-// launchLocks are the two locks a launcher holds while it starts a daemon: the
-// account authority and the runtime lifetime lock (lock.go). Not safe for
-// concurrent use.
+// launchLocks are the locks a launcher holds while it starts a daemon: the
+// account authority, the runtime lifetime lock (lock.go), and the lifetime lock
+// of every KNOWN LEGACY runtime location (PLAN-530). Not safe for concurrent use.
 type launchLocks struct {
 	Authority *os.File
 	Lifetime  *os.File
+	// Legacy are the legacy lifetime locks, in the order they were resolved. They
+	// are the fence that closes the handover gap: they are held from before the
+	// child exists until the child — which inherits them — exits, so an old
+	// launcher's reconnect can never win one and start a legacy successor beside
+	// the canonical daemon.
+	Legacy []heldLegacyLock
 }
 
 // files returns the locks in handover order, which is the order of
-// exec.Cmd.ExtraFiles: the authority becomes fd 3 and the lifetime lock fd 4. A
-// nil lock is skipped, which shifts the later ones — the child then refuses the
-// fd, because it does not name the file its env var says it should.
+// exec.Cmd.ExtraFiles: the authority becomes fd 3, the lifetime lock fd 4, and
+// the legacy locks fd 5 onwards. A nil lock is skipped, which shifts the later
+// ones — the child then refuses the fd, because it does not name the file the
+// env var beside it says it should.
 func (l launchLocks) files() []*os.File {
 	var out []*os.File
 	for _, f := range []*os.File{l.Authority, l.Lifetime} {
@@ -85,11 +92,16 @@ func (l launchLocks) files() []*os.File {
 			out = append(out, f)
 		}
 	}
+	for _, held := range l.Legacy {
+		if held.File != nil {
+			out = append(out, held.File)
+		}
+	}
 	return out
 }
 
-// closeAll closes both copies. Once the child holds the same descriptions this
-// releases nothing; with no child started it releases both locks.
+// closeAll closes every copy. Once the child holds the same descriptions this
+// releases nothing; with no child started it releases every lock.
 func (l launchLocks) closeAll() {
 	for _, f := range l.files() {
 		_ = f.Close()
@@ -102,13 +114,23 @@ func (l launchLocks) empty() bool {
 	return l.Authority == nil && l.Lifetime == nil
 }
 
-// acquireLaunchLocks takes both locks, in the one order: the account authority
-// first, then the runtime lifetime lock.
+// acquireLaunchLocks takes every lock, in the one order: the account authority
+// first, then the runtime lifetime lock, then every known legacy lifetime lock
+// (PLAN-530).
 //
 // If the lifetime lock is held, the authority is released before
 // errDaemonAlreadyRunning is returned: a launcher that loses the race leaves the
 // account's authority exactly as it found it, so a daemon that is only starting
-// never appears to hold a lock it did not take.
+// never appears to hold a lock it did not take. A failure anywhere releases
+// everything taken so far, for the same reason.
+//
+// The legacy locks come last because they are the fence around the gap a crash or
+// a restart opens, not a second opinion about whether a daemon exists: by the
+// time they are taken, the authority and the runtime lifetime lock have already
+// said that no daemon of THIS account is running or starting. What they add is
+// the answer to "and could an older binary's launcher start one the moment we let
+// go?" — which is yes unless this launcher, and then the daemon it starts, holds
+// them.
 func acquireLaunchLocks() (launchLocks, error) {
 	authority, err := acquireAuthority()
 	if err != nil {
@@ -119,7 +141,14 @@ func acquireLaunchLocks() (launchLocks, error) {
 		_ = authority.Close()
 		return launchLocks{}, err
 	}
-	return launchLocks{Authority: authority, Lifetime: lifetime}, nil
+	locks := launchLocks{Authority: authority, Lifetime: lifetime}
+	legacy, err := acquireLegacyLocks()
+	if err != nil {
+		locks.closeAll()
+		return launchLocks{}, err
+	}
+	locks.Legacy = legacy
+	return locks, nil
 }
 
 // daemonLauncher dials the daemon, launching one only while it holds the launch

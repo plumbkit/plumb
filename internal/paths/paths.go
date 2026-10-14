@@ -296,6 +296,22 @@ func RuntimeDirLever() string {
 	return "XDG_CACHE_HOME"
 }
 
+// EnvRuntimeDir returns the runtime directory the ENVIRONMENT resolves: the
+// answer every plumb gave before the account authority, and the one an older
+// binary launched from this environment still uses.
+//
+// It is RuntimeDir's legacy counterpart, not a fallback: in canonical mode this
+// process serves from the account's directory, and this is where a daemon of the
+// environment's own would be — the location PLAN-530 probes and fences. It is
+// deliberately not a second opinion about where to SERVE: RuntimeDir stays the
+// single definition of that.
+//
+// Like RuntimeDir it resolves only, and creates nothing: a caller asking where a
+// legacy daemon might be must not bring the place into existence.
+func EnvRuntimeDir() string {
+	return filepath.Join(runtimeBase(), appDir)
+}
+
 // LegacyRuntimeDir returns the pre-XDG_RUNTIME_DIR location, so a caller can
 // notice a daemon left behind there by an older build. It returns "" when it is
 // the same directory RuntimeDir already resolves to — i.e. whenever there is

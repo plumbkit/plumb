@@ -298,3 +298,66 @@ func includesSocket(d Daemon, path string) bool {
 	}
 	return false
 }
+
+const legacyLock = "/home/a/.cache/plumb/plumb.daemon.lock"
+
+// TestCensus_ALegacyLifetimeLockIsEvidenceNotTheAuthority is PLAN-530's half of
+// the census finding on its card. The account authority decides "holds the launch
+// authority"; the legacy lifetime lock only ever says a process is a daemon of an
+// older binary's runtime directory.
+func TestCensus_ALegacyLifetimeLockIsEvidenceNotTheAuthority(t *testing.T) {
+	// A daemon found by nothing but the legacy lifetime lock it holds: no argv of
+	// its own this platform can confirm, no socket.
+	// The process itself is a bare candidate — on darwin an argv look-alike this
+	// platform cannot confirm — and the lock it holds is what confirms it.
+	p := fakeProbe([]Daemon{{PID: 61}}, nil, map[string][]int{legacyLock: {61}}, nil)
+	r := census(p, Options{Authority: authority, LegacyLocks: []string{legacyLock}})
+
+	if len(r.Daemons) != 1 {
+		t.Fatalf("census found %d processes, want the lock holder", len(r.Daemons))
+	}
+	d := r.Daemons[0]
+	if !includesLegacy(d, legacyLock) {
+		t.Errorf("pid 61 = %+v, want the legacy lifetime lock recorded", d)
+	}
+	if !d.Confirmed() || d.Identity != IdentityLifetimeLock {
+		t.Errorf("a process holding a plumb lifetime lock IS a plumb daemon: %+v", d)
+	}
+	if d.HoldsAuthority {
+		t.Errorf("a legacy lifetime lock is not the account authority: %+v", d)
+	}
+	v := r.Verdict()
+	if v.State != StateViolation {
+		t.Fatalf("a daemon that holds no account authority is the E1 breach: %+v", v)
+	}
+	for _, want := range []string{"legacy launch lock", legacyLock, authority} {
+		if !strings.Contains(v.Detail, want) {
+			t.Errorf("verdict %q must name %q", v.Detail, want)
+		}
+	}
+}
+
+// TestVerdict_AuthorityHolderIsOKWithNoAttributableLifetimeLock is the observed
+// bug in one test. The daemon holds the ACCOUNT authority — attributable, because
+// that file is outside the removable runtime subtree — while the lifetime lock's
+// file is gone with the runtime directory it lived in and the flock lives on the
+// unlinked inode. Reading the lifetime lock as the authority reported exactly this
+// daemon as a violation.
+func TestVerdict_AuthorityHolderIsOKWithNoAttributableLifetimeLock(t *testing.T) {
+	r := Report{
+		Authority: authority,
+		Daemons:   []Daemon{{PID: 61, Identity: IdentityAuthority, HoldsAuthority: true}},
+	}
+	if v := r.Verdict(); v.State != StateOK {
+		t.Fatalf("a healthy authority holder must read OK: %+v", v)
+	}
+}
+
+func includesLegacy(d Daemon, path string) bool {
+	for _, p := range d.HoldsLegacyLock {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -88,7 +89,7 @@ func spawnLockPath() string {
 // daemonLockPath returns the path of the runtime lifetime lock the daemon holds
 // for its lifetime, and that every launcher takes before starting one.
 func daemonLockPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.daemon.lock")
+	return currentLocation().Lock
 }
 
 // acquireSpawnLock takes an exclusive flock on spawnLockPath, blocking until
@@ -150,23 +151,30 @@ func acquireDaemonLock() (*os.File, error) {
 // callers can distinguish from genuine open/lock errors.
 var errDaemonAlreadyRunning = errors.New("another plumb daemon is already running")
 
-// daemonLocks are the two flocks a daemon holds for its whole life: the account
-// authority, then the runtime lifetime lock (see the contract above). Both are
-// non-nil in a daemon that got as far as serving.
+// daemonLocks are the flocks a daemon holds for its whole life: the account
+// authority, then the runtime lifetime lock (see the contract above), then every
+// LEGACY lifetime lock the launcher fenced (PLAN-530). The first two are non-nil
+// in a daemon that got as far as serving.
 type daemonLocks struct {
 	Authority *os.File
 	Lifetime  *os.File
+	// Legacy are the lifetime locks of the runtime locations an older binary
+	// could be serving from. Holding them is what makes an old launcher lose at
+	// every location it knows about, so no instant exists in which it can start a
+	// legacy successor beside this daemon.
+	Legacy []heldLegacyLock
 }
 
-// closeAll releases both locks. runDaemon defers it, and the failure paths of
-// daemonLaunchLocks call it so a daemon that cannot take the second lock does
-// not sit on the first.
+// closeAll releases every lock the daemon holds. runDaemon defers it, and the
+// failure paths of daemonLaunchLocks call it so a daemon that cannot take a later
+// lock does not sit on the earlier ones.
 func (l daemonLocks) closeAll() {
 	for _, f := range []*os.File{l.Authority, l.Lifetime} {
 		if f != nil {
 			_ = f.Close()
 		}
 	}
+	closeHeldLegacyLocks(l.Legacy)
 }
 
 // lockHandover describes one of those locks and how this process comes to hold
@@ -183,6 +191,146 @@ type lockHandover struct {
 	// the other lock is the one name the OS can confirm.
 	other   string
 	acquire func() (*os.File, error)
+}
+
+// legacyLocksEnv names the LEGACY lifetime locks a launcher handed its daemon, as
+// JSON: [{"fd":5,"path":"/…/plumb.daemon.lock"}, …] (PLAN-530).
+//
+// The paths travel with the fds because the daemon cannot recompute them: a
+// canonical daemon is launched with the SERVICE PROFILE's environment, so the
+// runtime locations its launcher fenced — the client's own — are not the ones its
+// own environment resolves. Each fd is adopted against the path beside it
+// (adoptDaemonLock), so a handover that names the wrong file fails closed instead
+// of fencing a directory nobody is in.
+const legacyLocksEnv = "PLUMB_DAEMON_LEGACY_LOCKS"
+
+// inheritedLegacyLockFDBase is the child's first legacy-lock fd: 3 is the
+// authority, 4 the runtime lifetime lock, and the legacy locks follow in the
+// order the launcher resolved them — exec.Cmd.ExtraFiles order.
+const inheritedLegacyLockFDBase = 5
+
+// handedLegacyLock is one entry of that handover.
+type handedLegacyLock struct {
+	FD   int    `json:"fd"`
+	Path string `json:"path"`
+}
+
+// heldLegacyLock is a legacy lifetime lock this process holds, with the path an
+// older launcher would open to contend for it.
+type heldLegacyLock struct {
+	Path string
+	File *os.File
+}
+
+// acquireLegacyLocks takes the lifetime lock of every known legacy runtime
+// location without blocking, in a fixed order, and returns them all — the FENCE
+// of PLAN-530, and the reason the handover has no gap.
+//
+// A lock that is HELD is a legacyLockHeldError: an older launcher's daemon owns
+// that location, so the caller must start nothing and say so. Any other failure —
+// a directory that cannot be created, a lock file that cannot be opened — is
+// returned as itself: a launcher that cannot establish the fence does not launch,
+// because the alternative is a duplicate daemon. The distinction matters: one is
+// a fact about another process, the other a fact about this one.
+//
+// This CREATES the lock file when it is absent, which is the one place in the
+// legacy path that may: a launcher has to own the file before its child exists,
+// and a fence that only works once somebody else has made the file is no fence —
+// the old launcher would create it and win. Everything that only LOOKS
+// (probeLegacyDaemons, the census) opens nothing.
+func acquireLegacyLocks() ([]heldLegacyLock, error) {
+	var out []heldLegacyLock
+	for _, loc := range legacyLocations() {
+		held, err := acquireLegacyLock(loc.Lock)
+		if err != nil {
+			closeHeldLegacyLocks(out)
+			return nil, err
+		}
+		out = append(out, held)
+	}
+	return out, nil
+}
+
+// acquireLegacyLock takes the lifetime lock at path, non-blocking.
+func acquireLegacyLock(path string) (heldLegacyLock, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return heldLegacyLock{}, fmt.Errorf("creating the legacy runtime directory %s: %w", dir, err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return heldLegacyLock{}, fmt.Errorf("opening the legacy lifetime lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return heldLegacyLock{}, legacyLockHeldError{lock: path}
+		}
+		return heldLegacyLock{}, fmt.Errorf("acquiring the legacy lifetime lock %s: %w", path, err)
+	}
+	return heldLegacyLock{Path: path, File: f}, nil
+}
+
+// holdLegacyLocks returns the legacy lifetime locks a daemon holds: the ones its
+// launcher handed over, or — for a `plumb daemon` started any other way (a
+// service manager, a container CMD) — every one its own environment can name.
+//
+// A handed-over fd is adopted exactly like the two launch locks: same device and
+// inode as the path it claims, flock re-checked, close-on-exec, and a mismatch
+// FAILS CLOSED rather than falling back to a fresh acquisition. Falling back
+// would take a second lock at the expected path while the launcher still holds
+// the first, which is exactly the fence it is supposed to be.
+func holdLegacyLocks() ([]heldLegacyLock, error) {
+	v, ok := os.LookupEnv(legacyLocksEnv)
+	if !ok {
+		return acquireLegacyLocks()
+	}
+	// The daemon's own children (language servers, git) must not see it.
+	_ = os.Unsetenv(legacyLocksEnv)
+	var handed []handedLegacyLock
+	if err := json.Unmarshal([]byte(v), &handed); err != nil {
+		return nil, fmt.Errorf("%s: refusing to start: the legacy lock handover cannot be read: %w", legacyLocksEnv, err)
+	}
+	out := make([]heldLegacyLock, 0, len(handed))
+	for _, h := range handed {
+		if h.FD < minHandoverFD || h.Path == "" {
+			closeHeldLegacyLocks(out)
+			return nil, fmt.Errorf("%s: refusing to start: %q names no legacy lock to adopt (fd %d, path %q)",
+				legacyLocksEnv, v, h.FD, h.Path)
+		}
+		f, err := adoptDaemonLock(os.NewFile(uintptr(h.FD), h.Path), h.Path, h.FD, "")
+		if err != nil {
+			closeHeldLegacyLocks(out)
+			return nil, err
+		}
+		out = append(out, heldLegacyLock{Path: h.Path, File: f})
+	}
+	return out, nil
+}
+
+// encodeLegacyHandover renders the held legacy locks as the JSON handover a
+// daemon reads, numbering them from inheritedLegacyLockFDBase in ExtraFiles order.
+func encodeLegacyHandover(locks []heldLegacyLock) (string, error) {
+	out := make([]handedLegacyLock, 0, len(locks))
+	for i, l := range locks {
+		out = append(out, handedLegacyLock{FD: inheritedLegacyLockFDBase + i, Path: l.Path})
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "", fmt.Errorf("encoding the legacy lock handover: %w", err)
+	}
+	return string(data), nil
+}
+
+// closeHeldLegacyLocks releases locks this process holds. It is what a failure
+// path calls so a launcher that cannot complete the fence does not sit on half of
+// it.
+func closeHeldLegacyLocks(locks []heldLegacyLock) {
+	for _, l := range locks {
+		if l.File != nil {
+			_ = l.File.Close()
+		}
+	}
 }
 
 // holdDaemonLock returns the lock h describes: the file inherited on the fd
@@ -220,14 +368,15 @@ func holdDaemonLock(h lockHandover) (*os.File, error) {
 	return adoptDaemonLock(os.NewFile(uintptr(fd), h.path), h.path, fd, h.other)
 }
 
-// daemonLaunchLocks is how a daemon comes to hold both locks: each inherited
+// daemonLaunchLocks is how a daemon comes to hold every lock: each inherited
 // from the launcher that started it, or — for a `plumb daemon` started any other
-// way (a service manager, a container CMD) — acquired here non-blocking. They
-// are taken in the one order, authority first.
+// way (a service manager, a container CMD) — acquired here non-blocking. They are
+// taken in the one order, authority first, the legacy fence last.
 //
-// Losing the lifetime lock releases the authority before the error is returned:
-// a daemon that is exiting over a held lifetime lock must not sit on the
-// account's authority while it does.
+// Losing a later lock releases the earlier ones before the error is returned: a
+// daemon that is exiting over a held lifetime lock must not sit on the account's
+// authority while it does, and one exiting over a held legacy lock must not sit
+// on either of the first two.
 func daemonLaunchLocks() (daemonLocks, error) {
 	authorityPath, err := authorityPath()
 	if err != nil {
@@ -252,7 +401,44 @@ func daemonLaunchLocks() (daemonLocks, error) {
 		_ = authority.Close()
 		return daemonLocks{}, err
 	}
-	return daemonLocks{Authority: authority, Lifetime: lifetime}, nil
+	locks := daemonLocks{Authority: authority, Lifetime: lifetime}
+	legacy, err := holdLegacyLocks()
+	if err != nil {
+		locks.closeAll()
+		return daemonLocks{}, err
+	}
+	locks.Legacy = legacy
+	return locks, nil
+}
+
+// daemonStartLocks is how runDaemon comes to hold every lock it needs, and the
+// point at which it refuses to serve beside a daemon an older binary left
+// running (PLAN-530).
+//
+// The locks fence the LAUNCH side: while this process holds them no old launcher
+// can start a successor. They say nothing about a daemon that is already serving
+// at a legacy runtime location, which is answered here, before a socket is bound
+// or any state is opened — a second daemon is the defect whatever the two builds
+// are. A refusal releases everything taken, so a daemon that exits over it does
+// not sit on the account's authority while it does.
+func daemonStartLocks() (daemonLocks, error) {
+	locks, err := daemonLaunchLocks()
+	if err != nil {
+		return daemonLocks{}, err
+	}
+	if err := refuseBesideLegacyDaemon(locks.Legacy); err != nil {
+		locks.closeAll()
+		return daemonLocks{}, err
+	}
+	return locks, nil
+}
+
+// isAlreadyRunning reports whether err means another plumb daemon is already
+// there, so this one should exit quietly rather than treat it as a failure: a
+// launch lock it must hold is held, or a daemon of an older binary owns a legacy
+// runtime location.
+func isAlreadyRunning(err error) bool {
+	return errors.Is(err, errDaemonAlreadyRunning) || isLegacyLockHeld(err)
 }
 
 // adoptDaemonLock takes over an inherited lock. It must be the lock file at path

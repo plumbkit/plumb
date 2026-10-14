@@ -96,6 +96,7 @@ var CoCallRules = []CoCallRule{{
 		// CLI daemon runtime and bookkeeping files (PID, socket, profiler dumps, wake locks).
 		"internal/cli.acquireAuthority":            "the account authority lock file: created open-and-locked so two daemons cannot both hold it, and its metadata is written through that held fd rather than as a user-visible change",
 		"internal/cli.acquireDaemonLock":           "daemon/CLI bookkeeping, not an agent file write",
+		"internal/cli.acquireLegacyLock":           "the LEGACY lifetime lock at a runtime location an older binary would use: created open-and-locked before a launch so an old launcher cannot start a legacy successor in the handover gap, not an agent file write",
 		"internal/cli.acquireSpawnLock":            "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.acquireWakeLockWith":         "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.claudeStopHook":              "daemon/CLI bookkeeping, not an agent file write",

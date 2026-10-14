@@ -12,21 +12,29 @@ import (
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
+// The daemon's runtime paths are resolved as a SET — the MCP socket, the control
+// socket, the pid file, the version file and the lifetime lock all name the one
+// runtime directory this process uses (currentLocation, legacy.go). Each accessor
+// below is a field of that set rather than its own join, which is what makes it
+// impossible for two of them to end up in different directories: that is the
+// half-migration serve.go records, where a process connected to one directory's
+// socket while resolving the rest in another.
+
 // daemonSocketPath returns the Unix socket path for the plumb daemon.
 func daemonSocketPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.sock")
+	return currentLocation().Socket
 }
 
 // daemonCtrlSocketPath returns the Unix socket path for daemon admin commands
 // (log level changes). Separate from the MCP socket so it never appears in the
 // tool list and cannot be reached by MCP clients.
 func daemonCtrlSocketPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.ctrl.sock")
+	return currentLocation().Ctrl
 }
 
 // daemonPIDPath returns the path where the daemon writes its PID.
 func daemonPIDPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.pid")
+	return currentLocation().PID
 }
 
 // publishDaemonPID writes this process's PID file, first clearing a stale control
@@ -54,7 +62,7 @@ func publishDaemonPID(writeFile func(name string, data []byte, perm os.FileMode)
 // daemonVersionPath returns the path where the daemon publishes its build
 // version (read by `plumb serve` to detect a stale daemon).
 func daemonVersionPath() string {
-	return filepath.Join(plumbRuntimeDir(), "plumb.version")
+	return currentLocation().Version
 }
 
 // plumbRuntimeDir returns the directory used for daemon runtime files (sockets,
@@ -119,6 +127,12 @@ func socketPathShortenRemedy() string {
 // control socket that is not there, doctor reads a version file one directory
 // over and calls it missing, and `plumb restart` spawns a duplicate. One
 // directory per process.
+//
+// It names the CACHE-directory location, which is the one an unupgraded install
+// falls back to. The complete set of locations an older binary could be serving
+// from — the environment-derived one included, which is a different directory
+// again when the account authority is on — is legacyLocations (legacy.go), and
+// that is what the migration probe and the launch fence use.
 func legacyDaemonSocketPath() string {
 	dir := paths.LegacyRuntimeDir()
 	if dir == "" {

@@ -88,6 +88,16 @@ func census(p probe, opts Options) Report {
 		reading.Owners = r.socketOwners(path)
 		r.Sockets = append(r.Sockets, reading)
 	}
+	// A legacy lifetime lock is asked about the same way and for the same reason
+	// the authority is: it is a file a daemon holds open for its whole life, so its
+	// holders are daemons whatever their argv says, and a daemon of an older
+	// binary's runtime directory is exactly what E1 wants named.
+	for _, path := range opts.LegacyLocks {
+		r.mark(p, path, func(d *Daemon) {
+			d.HoldsLegacyLock = append(d.HoldsLegacyLock, path)
+			d.raiseTo(IdentityLifetimeLock)
+		})
+	}
 	sort.Slice(r.Daemons, func(i, j int) bool { return r.Daemons[i].PID < r.Daemons[j].PID })
 	return r
 }

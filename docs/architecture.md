@@ -237,6 +237,27 @@ Key design properties:
   at the expected path. Lock release is automatic via fd close on process exit
   (clean or crash) — see `internal/cli/lock.go` and
   `internal/cli/daemon_launch.go`.
+- **Legacy migration and the handover fence (PLAN-530)** — an upgrade moves where
+  the daemon lives, but not the daemon an older binary already started: it is
+  still serving at the runtime directory *its* environment resolved. Every
+  runtime location is one directory with five paths — MCP socket, control socket,
+  pid file, version file and lifetime lock — and a migration that resolves them
+  from two directories is half-migrated (`serve.go` records what that cost). So
+  `plumb serve`, `plumb serve --attach-only` and `plumb daemon` probe each legacy
+  location **before** deciding anything: a daemon that published this binary's
+  build version is reused (logged as `migration pending; run plumb restart`), one
+  from a different build — or one that published no version — makes serve fail
+  with the `plumb restart` / `plumb service install` instruction, and the daemon
+  refuses to start beside either. The probe takes no lock and creates nothing.
+  The window a restart or a crash opens is closed by the launcher taking the
+  authority, the runtime lifetime lock **and every known legacy lifetime lock**
+  before the successor exists — handing all of them over on `ExtraFiles` (fds 3,
+  4, then 5 onwards, with the paths in `PLUMB_DAEMON_LEGACY_LOCKS`) so no instant
+  exists in which an old launcher can win a legacy lock and start a legacy
+  successor. `plumb restart` stops by authority or pid identity, never by a
+  process scan, and starts the successor only once the old daemon's exit *and*
+  the release of every lock are confirmed, within the same 30 s deadline;
+  otherwise it fails closed and starts nothing.
 - **One language server per (root, language)** — multiple MCP connections to
   the same project share each server, its cache, and its diagnostic stream. A
   root may bind several servers at once (e.g. Go + HTML for a web app): each
@@ -367,6 +388,7 @@ Rung 1 outranks client roots because it is the workspace the caller chose, not w
 | `<runtime>/plumb.spawn.lock` | serve | Advisory `flock` serialising daemon spawn decisions across racing `plumb serve` processes |
 | `~/.local/share/plumb/daemon.authority.lock` | serve, restart, daemon | The **account authority**: the advisory `flock` held by the one daemon for its lifetime and taken by every launcher before it starts a child (handed over on fd 3, with the runtime lifetime lock on fd 4); on macOS the data dir is `~/Library/Application Support/plumb/`. It sits outside the runtime dir on purpose: that dir is derived from `$HOME`, so this is the lock a client whose environment resolves elsewhere still contends for. The holder writes its pid, version, executable and MCP socket through the held fd, and a launcher that finds it held dials that socket |
 | `<runtime>/plumb.daemon.lock` | serve, restart, daemon | Advisory `flock` held for the daemon's lifetime and taken by the launcher before it starts one (handed to the daemon on fd 4); rejects duplicate daemons and launches beside a starting one |
+| `<legacy runtime>/plumb.daemon.lock` | serve, restart, daemon | The lifetime lock of a runtime location an **older binary** would use — the environment-derived runtime dir when the account's is in use, and the cache-dir location — taken and held exactly like the one above (fd 5 onwards), so an old launcher's reconnect cannot win it and start a legacy successor in the gap a restart or a crash opens. The path travels to the child in `PLUMB_DAEMON_LEGACY_LOCKS` beside its fd, because a canonical daemon's own environment is the service profile's |
 | `~/.local/state/plumb/daemon.log` | daemon | slog text output (OS log dir; `~/Library/Logs/plumb/` on macOS) |
 | `<workspace>/.plumb/context.md` | user | Project-wide context loaded at session start |
 | `<workspace>/.plumb/memories/<name>.md` | LLM via memory tools | Per-workspace persistent notes |
