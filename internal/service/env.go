@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -122,7 +123,9 @@ var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // directories, its sockets and locks — which the account and the profile decide
 // and no entry may override: HOME, USER, LOGNAME, PATH (the profile's own
 // field), every XDG_* and PLUMB_* variable, and TSM_ORIG_*, which the path
-// resolver reads to recover a session manager's hijacked XDG base.
+// resolver reads to recover a session manager's hijacked XDG base. GIT_DIR and
+// GIT_WORK_TREE are refused too: the daemon serves every workspace, and either
+// one would redirect all of their git commands to a single repository.
 func DeniedEnvName(name string) string {
 	upper := strings.ToUpper(name)
 	switch {
@@ -136,6 +139,8 @@ func DeniedEnvName(name string) string {
 		return name + " is plumb's own control variable and is never recorded for the service"
 	case strings.HasPrefix(upper, "TSM_ORIG_"):
 		return name + " steers plumb's directory resolution and is never recorded for the service"
+	case upper == "GIT_DIR" || upper == "GIT_WORK_TREE":
+		return name + " would point every git command the service runs, in every workspace, at one repository"
 	}
 	return ""
 }
@@ -216,10 +221,15 @@ func parseEnvEntry(name string, raw any) (EnvEntry, error) {
 	}
 }
 
-// checkEnvValue refuses what no process environment can carry.
+// checkEnvValue refuses what no process environment can carry, and what the
+// profile cannot record faithfully: TOML strings are UTF-8, so invalid UTF-8
+// would be rewritten silently on the way through the file.
 func checkEnvValue(name, value string) error {
 	if strings.ContainsRune(value, 0) {
 		return fmt.Errorf("[service.env] %s: a value cannot contain a NUL byte", name)
+	}
+	if !utf8.ValidString(value) {
+		return fmt.Errorf("[service.env] %s: a value must be valid UTF-8", name)
 	}
 	return nil
 }

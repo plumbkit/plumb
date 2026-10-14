@@ -128,18 +128,23 @@ refresh` from a shell that has the new value, then `plumb restart`.
   `plumb service env set NAME=VALUE` (literal); `plumb service env unset NAME`
   removes one, and the seeding never brings it back.
 
-Seeding is preserving and happens once: an entry you have is never replaced, and
+`plumb setup` records the profile through the same path, so the first setup
+seeds too, from the shell it runs in, and prints the names it captured. Seeding
+is preserving and happens once: an entry you have is never replaced, and
 a name you unset stays unset across upgrades. A package manager's post-install
 may run with a filtered environment (Homebrew drops most variables), so after
 `brew upgrade` run `plumb service env refresh` once from your own shell.
 
 `HOME`, `USER`, `LOGNAME` (the account's), `PATH` (`set-path`), every `XDG_*`
-(`set-xdg`), every `PLUMB_*` and `TSM_ORIG_*` decide *where* the service is, so
+(`set-xdg`), every `PLUMB_*` and `TSM_ORIG_*` decide *where* the service is, and
+`GIT_DIR`/`GIT_WORK_TREE` would point every workspace's git at one repository, so
 they can never be entries: `env set` refuses them with the reason, and the
 reader ignores one written by hand (`plumb serve` logs it; `env show` marks it
 `IGNORED`). No entry can move the authority, the sockets, the locks or any of
 the service's directories. The file is mode 0600, because a proxy URL can carry
-credentials; the launcher logs the names it applied, never their values.
+credentials; the launcher logs the names it applied, never their values. A
+profile `plumb service install` cannot read is replaced, and the old file is kept
+beside it as `service.toml.bak`.
 
 **A missing profile is never inferred.** A cold start with no profile fails with
 the `plumb service install` instruction: plumb does not fall back to the calling

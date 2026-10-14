@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
@@ -241,6 +244,15 @@ func TestHelperServiceEnvResolvedPaths(t *testing.T) {
 	} {
 		fmt.Printf("%s=%s\n", kv[0], kv[1])
 	}
+	// What the account decides, compared like the paths: a hostile entry that got
+	// past the deny list would show up here even where it moves no directory.
+	// XDG_DATA_HOME is not printed: this child is the test binary, whose TestMain
+	// sets a fresh temporary one on every run (the data= line above still pins
+	// the directory the service resolves).
+	for _, name := range []string{"HOME", "USER", "LOGNAME", "PATH", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "GIT_DIR"} {
+		v, ok := os.LookupEnv(name)
+		fmt.Printf("launch.%s=%q set=%v\n", name, v, ok)
+	}
 	for _, name := range []string{"GOPROXY", "SSH_AUTH_SOCK", "HTTPS_PROXY", "CLIENT_ONLY"} {
 		v, ok := os.LookupEnv(name)
 		fmt.Printf("env.%s=%q set=%v\n", name, v, ok)
@@ -284,16 +296,17 @@ func TestServiceEnv_NoEntryCanMoveTheService(t *testing.T) {
 	t.Setenv("CLIENT_ONLY", "from-the-spawning-client")
 	t.Setenv("HTTPS_PROXY", "from-the-spawning-client")
 	baseline := resolveInChild(t, u)
-	for _, key := range []string{"authority=", "socket=", "lock=", "runtime=", "config=", "cache="} {
+	for _, key := range []string{"authority=", "socket=", "lock=", "runtime=", "config=", "cache=", "launch.HOME=", "launch.PATH="} {
 		if !strings.Contains(baseline, key) {
 			t.Fatalf("the helper did not report %s: the comparison below would be vacuous\n%s", key, baseline)
 		}
 	}
 
+	// TMPDIR is an ALLOWED entry: it is here to show that it moves nothing either.
 	hostile := []string{
 		"HOME", "USER", "LOGNAME", "PATH", "TMPDIR",
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-		"PLUMB_TEST_ACCOUNT_ROOT", "PLUMB_ACCOUNT_AUTHORITY", "PLUMB_SEPARATE_ENV",
+		"PLUMB_TEST_ACCOUNT_ROOT", "PLUMB_ACCOUNT_AUTHORITY", "PLUMB_SEPARATE_ENV", "GIT_DIR", "GIT_WORK_TREE",
 		"TSM_ORIG_XDG_CONFIG_HOME", "TSM_ORIG_XDG_DATA_HOME", "TSM_ORIG_XDG_STATE_HOME", "TSM_ORIG_XDG_CACHE_HOME", "TSM_ORIG_XDG_RUNTIME_DIR",
 	}
 	data, err := os.ReadFile(path)
@@ -332,5 +345,106 @@ func TestServiceEnv_NoEntryCanMoveTheService(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the child's environment lacks %s:\n%s", want, got)
 		}
+	}
+}
+
+// TestServiceEnv_ValuesAreNeverLoggedOrPrinted: a proxy URL can carry
+// credentials, so a recorded value must never reach the log or a change report —
+// only its NAME. `env show` (the person's own terminal) is the one place values
+// appear, by design.
+func TestServiceEnv_ValuesAreNeverLoggedOrPrinted(t *testing.T) {
+	installClean(t)
+	const sentinel = "s3cr3t-sentinel"
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	printed := captureStdout(t, func() {
+		if err := setServiceEnv("HTTPS_PROXY=http://user:"+sentinel+"@proxy:3128", fakeShell(nil)); err != nil {
+			t.Fatal(err)
+		}
+		if err := setServiceEnv("SSH_AUTH_SOCK", fakeShell(map[string]string{"SSH_AUTH_SOCK": "/" + sentinel})); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if _, err := resolveLaunchSpec(); err != nil {
+		t.Fatalf("resolveLaunchSpec: %v", err)
+	}
+	p := loadTestProfile(t)
+	report := reportProfile(p) + describeEnvChange(service.Env{}, p.Env)
+	for what, out := range map[string]string{"the log": logs.String(), "set's output": printed, "the install/change report": report} {
+		if strings.Contains(out, sentinel) {
+			t.Errorf("%s carries a recorded value:\n%s", what, out)
+		}
+	}
+	if !strings.Contains(logs.String(), "HTTPS_PROXY") {
+		t.Errorf("the launch log must name what it applied:\n%s", logs.String())
+	}
+	if !strings.Contains(report, "SSH_AUTH_SOCK") {
+		t.Errorf("the report must name the recorded variables:\n%s", report)
+	}
+}
+
+// TestServiceInstall_SeedsTheDecidedDefaults pins the seeded set literally: the
+// list is the decision, and checking it against itself would let one vanish.
+func TestServiceInstall_SeedsTheDecidedDefaults(t *testing.T) {
+	want := []string{
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+		"SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+		"SSH_AUTH_SOCK", "GIT_SSH_COMMAND", "GOPRIVATE", "GONOSUMDB", "GOPROXY",
+	}
+	if got := service.DefaultEnvNames(); !slices.Equal(got, want) {
+		t.Fatalf("DefaultEnvNames = %v, want %v", got, want)
+	}
+}
+
+// TestServiceEnvCmd_WiresTheShell drives the cobra commands, so `env set NAME`
+// and `env refresh` are pinned to capture from THIS process's environment.
+func TestServiceEnvCmd_WiresTheShell(t *testing.T) {
+	installClean(t)
+	t.Setenv("GOPRIVATE", "github.com/first/*")
+	if err := serviceEnvSetCmd.RunE(serviceEnvSetCmd, []string{"GOPRIVATE"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOPRIVATE", "github.com/second/*")
+	if err := serviceEnvRefreshCmd.RunE(serviceEnvRefreshCmd, nil); err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := loadTestProfile(t).Env.Lookup("GOPRIVATE"); e.Value != "github.com/second/*" || !e.Captured {
+		t.Fatalf("set + refresh did not capture from this shell: %+v", e)
+	}
+}
+
+// TestServiceInstall_KeepsAnUnreadableProfile: install replaces a profile it
+// cannot read (it is the remedy every error names), but keeps the old file, so a
+// typo in a hand-edited [service.env] does not cost every recorded setting.
+func TestServiceInstall_KeepsAnUnreadableProfile(t *testing.T) {
+	path := installClean(t)
+	broken := []byte("executable = \"/x\"\n[service.env]\nGOPROXY = 3\n")
+	if err := os.WriteFile(path, broken, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := installServiceProfile(false); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := os.ReadFile(path + ".bak")
+	if err != nil || !bytes.Equal(kept, broken) {
+		t.Fatalf("the unreadable profile was not kept at %s.bak (err %v): %q", path, err, kept)
+	}
+	if info, err := os.Stat(path + ".bak"); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the backup must be private (0600): %v %v", info, err)
+	}
+	if _, err := service.LoadFile(path); err != nil {
+		t.Fatalf("install did not write a usable profile: %v", err)
+	}
+}
+
+func TestDescribeEnvChange_SaysALiteralWasReplaced(t *testing.T) {
+	before := service.Env{}.With(service.EnvEntry{Name: "GOPROXY", Value: "https://literal"})
+	after := before.With(service.EnvEntry{Name: "GOPROXY", Value: "https://shell", Inherit: true, Captured: true})
+	if got := describeEnvChange(before, after); !strings.Contains(got, "literal value was replaced") {
+		t.Fatalf("describeEnvChange = %q", got)
 	}
 }

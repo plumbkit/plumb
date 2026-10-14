@@ -192,6 +192,8 @@ func describeEnvChange(before, after service.Env) string {
 		switch {
 		case !ok:
 			fmt.Fprintf(&b, "  env %s: recorded\n", e.Name)
+		case !was.Inherit && e.Inherit:
+			fmt.Fprintf(&b, "  env %s: the literal value was replaced by one captured from this shell\n", e.Name)
 		case was != e:
 			fmt.Fprintf(&b, "  env %s: changed\n", e.Name)
 		}

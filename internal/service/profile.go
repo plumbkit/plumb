@@ -446,6 +446,9 @@ func (p Profile) LaunchEnv(u account.User) []string {
 	}
 	env = append(env, p.Env.Applied()...)
 	for _, name := range localeEnv() {
+		// A recorded name is the account's: its entry decides, including an
+		// uncaptured symbol, which passes NOTHING — the session's value for a
+		// recorded name is never the fallback (decision 2).
 		if _, recorded := p.Env.Lookup(name); recorded {
 			continue
 		}

@@ -27,10 +27,14 @@
   refresh` manage it; the first install seeds the proxy, CA, ssh-agent and Go
   module variables from the installing shell, once, and never replaces an entry
   you have. `HOME`, `USER`, `LOGNAME`, `PATH`, `XDG_*`, `PLUMB_*` and
-  `TSM_ORIG_*` can never be entries — `env set` refuses them and the reader
+  `TSM_ORIG_*` (and `GIT_DIR`/`GIT_WORK_TREE`, which would point every
+  workspace's git at one repository) can never be entries — `env set` refuses
+  them and the reader
   ignores one written by hand — so no entry can move the authority, the sockets,
   the locks or the service's directories. Values are never logged; the launcher
-  logs the names it applied (PLAN-554).
+  logs the names it applied. `plumb setup` seeds the same way and prints what it
+  captured, and an unreadable profile that `service install` replaces is kept as
+  `service.toml.bak` (PLAN-554).
 - **`plumb service install` records what the account's one daemon is.** A launch
   used to mean "whatever binary the client happened to be, with whatever
   environment it happened to have", so a branch build, a worktree checkout or a

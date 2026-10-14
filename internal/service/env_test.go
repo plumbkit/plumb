@@ -207,9 +207,30 @@ func TestCheckEnvName(t *testing.T) {
 			t.Errorf("CheckEnvName(%s) = %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "1X", "A-B", "A=B", "HOME", "PATH", "XDG_CACHE_HOME", "PLUMB_DEBUG", "LOGNAME", "USER", "TSM_ORIG_XDG_CONFIG_HOME", "TSM_ORIG_FOO"} {
+	for _, bad := range []string{"", "1X", "A-B", "A=B", "HOME", "GIT_DIR", "GIT_WORK_TREE", "PATH", "XDG_CACHE_HOME", "PLUMB_DEBUG", "LOGNAME", "USER", "TSM_ORIG_XDG_CONFIG_HOME", "TSM_ORIG_FOO"} {
 		if err := CheckEnvName(bad); err == nil {
 			t.Errorf("CheckEnvName(%q) accepted it", bad)
 		}
+	}
+}
+
+// TestLaunchEnv_AnUncapturedLocaleIsNotTheSessions pins decision 2 for the locale
+// names, which LaunchEnv otherwise carries from the launching session: a recorded
+// name is the account's, so an uncaptured LANG passes nothing — not the
+// session's value.
+func TestLaunchEnv_AnUncapturedLocaleIsNotTheSessions(t *testing.T) {
+	t.Setenv("LANG", "client-only")
+	p := testProfile()
+	p.Env = p.Env.With(EnvEntry{Name: "LANG", Inherit: true})
+	if v, ok := envMap(p.LaunchEnv(testUser()))["LANG"]; ok {
+		t.Fatalf("LANG=%q reached the daemon: the account recorded LANG as uncaptured", v)
+	}
+}
+
+func TestWrite_RefusesInvalidUTF8(t *testing.T) {
+	p := testProfile()
+	p.Env = p.Env.With(EnvEntry{Name: "GOPROXY", Value: "\xff"})
+	if err := p.Write(filepath.Join(t.TempDir(), "service.toml")); err == nil {
+		t.Fatal("Write recorded a value that is not valid UTF-8: TOML would rewrite it silently")
 	}
 }

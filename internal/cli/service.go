@@ -187,8 +187,14 @@ func installServiceProfile(verbose bool) error {
 	case !errors.Is(err, service.ErrNoProfile):
 		// install is the remedy every other error names, so it has to work on a
 		// profile that cannot be read. Nothing can be preserved from a file that
-		// does not parse, and it says so rather than pretending otherwise.
-		fmt.Fprintf(os.Stderr, "plumb service: the profile at %s could not be read (%v); replacing it\n", path, err)
+		// does not parse, and it says so rather than pretending otherwise — but
+		// the file is kept beside the new one first: a typo in a hand-edited
+		// [service.env] must not cost the user every recorded setting.
+		backup := path + ".bak"
+		if berr := copyProfileBackup(path, backup); berr != nil {
+			return fmt.Errorf("the profile at %s could not be read (%w), and keeping a copy before replacing it failed: %w", path, err, berr)
+		}
+		fmt.Fprintf(os.Stderr, "plumb service: the profile at %s could not be read (%v); replacing it (the old file is kept at %s)\n", path, err, backup)
 	}
 
 	p := freshProfile(u, exe)
@@ -197,6 +203,11 @@ func installServiceProfile(verbose bool) error {
 		return err
 	}
 	fmt.Printf("plumb service: wrote %s\n", path)
+	if names := p.Env.AppliedNames(); len(names) > 0 && !verbose {
+		// The setup path prints one line, and it may run in an agent's or a
+		// sandbox's shell: what it captured must be visible there too.
+		fmt.Printf("plumb service: captured %s from this shell (`plumb service env show`)\n", strings.Join(names, ", "))
+	}
 	if verbose {
 		fmt.Print("\n")
 		fmt.Print(reportProfile(p))
@@ -475,6 +486,16 @@ func reportProfile(p service.Profile) string {
 		fmt.Fprintf(&b, "  env:       %s (captured from this shell; `plumb service env show`)\n", strings.Join(names, ", "))
 	}
 	return b.String()
+}
+
+// copyProfileBackup keeps a profile that is about to be replaced, byte for byte
+// and private (0600), because a profile can carry credentials.
+func copyProfileBackup(from, to string) error {
+	data, err := os.ReadFile(from) //nolint:gosec // G304: the account's own service profile
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(to, data, 0o600) //nolint:gosec // G703: the account's own service profile path plus ".bak"
 }
 
 // isDir reports whether path names an existing directory.

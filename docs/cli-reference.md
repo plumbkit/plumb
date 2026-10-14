@@ -274,8 +274,8 @@ the profile's `[service.env]` on top of that clean environment. The first
 agent (`SSH_AUTH_SOCK`, `GIT_SSH_COMMAND`) and Go module (`GOPRIVATE`,
 `GONOSUMDB`, `GOPROXY`) variables; see
 [the service environment](configuration.md#the-service-environment-serviceenv).
-`HOME`, `USER`, `LOGNAME`, `PATH`, `XDG_*`, `PLUMB_*` and `TSM_ORIG_*` can never
-be recorded there. Run `plumb restart` for a change to reach the daemon.
+`HOME`, `USER`, `LOGNAME`, `PATH`, `XDG_*`, `PLUMB_*`, `TSM_ORIG_*`, `GIT_DIR` and
+`GIT_WORK_TREE` can never be recorded there. Run `plumb restart` for a change to reach the daemon.
 
 A launch with **no profile refuses**: `plumb serve` fails with the
 `plumb service install` instruction rather than guessing an executable, a PATH
