@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -562,6 +566,46 @@ func TestRestartDaemonPIDs_NamesTheAuthorityHolder(t *testing.T) {
 
 	if got := restartDaemonPIDs(); !slices.Contains(got, holder) {
 		t.Fatalf("the authority's recorded holder %d must be stopped, got %v", holder, got)
+	}
+}
+
+// TestRestartStopsByIdentityNotByAScan pins the card's rule where it can be pinned
+// for certain: `plumb restart` must not reach for the pgrep sweep at all, whatever the
+// host makes of it. A behavioural test cannot carry this on every host — the sweep's
+// ownership probe shells out to `ps` and `lsof`, and a host that denies either makes the
+// sweep find nothing, which would let a reintroduced scan pass unnoticed. The rule is a
+// property of the code, so the code is what is checked: the calls restart.go makes, and
+// the command names it passes around, with comments ignored (the incident that rule comes
+// from is worth citing, and it is cited in a comment).
+func TestRestartStopsByIdentityNotByAScan(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "restart.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing restart.go: %v", err)
+	}
+	forbiddenCalls := []string{"findAllDaemonPIDs", "findAllDaemonByArgs", "commandOutput"}
+	var found []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok && slices.Contains(forbiddenCalls, id.Name) {
+				found = append(found, id.Name+"()")
+			}
+		case *ast.BasicLit:
+			if x.Kind != token.STRING {
+				return true
+			}
+			// An EXACT command name, never a substring: "ps" appears inside half the
+			// words this file uses legitimately ("stop", "maps").
+			if unquoted, uerr := strconv.Unquote(x.Value); uerr == nil && (unquoted == "pgrep" || unquoted == "ps") {
+				found = append(found, "the command name "+unquoted)
+			}
+		}
+		return true
+	})
+	if len(found) > 0 {
+		t.Fatalf("restart.go reaches for %s: a restart stops by authority or pid identity, never by a process scan", strings.Join(found, ", "))
 	}
 }
 
