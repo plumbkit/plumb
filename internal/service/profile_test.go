@@ -161,7 +161,10 @@ func TestLaunchEnv_CarriesTheProfileAndNothingFromTheClient(t *testing.T) {
 	}
 
 	p := testProfile()
-	env := p.LaunchEnv(testUser())
+	p.XDG.RuntimeDir = usableRuntimeBase(t)
+	u := testUser()
+	u.UID = os.Getuid() // the recorded runtime base must be this uid's to be passed on
+	env := p.LaunchEnv(u)
 	got := envMap(env)
 
 	if got["HOME"] != "/home/tester" {
@@ -179,8 +182,8 @@ func TestLaunchEnv_CarriesTheProfileAndNothingFromTheClient(t *testing.T) {
 	if _, ok := got["XDG_DATA_HOME"]; ok {
 		t.Error("an XDG variable the profile does NOT record was carried into the daemon")
 	}
-	if got["XDG_RUNTIME_DIR"] != "/data/xdg/run" {
-		t.Errorf("XDG_RUNTIME_DIR = %q, want the profile's recorded %q", got["XDG_RUNTIME_DIR"], "/data/xdg/run")
+	if got["XDG_RUNTIME_DIR"] != p.XDG.RuntimeDir {
+		t.Errorf("XDG_RUNTIME_DIR = %q, want the profile's recorded %q", got["XDG_RUNTIME_DIR"], p.XDG.RuntimeDir)
 	}
 	if got["LANG"] != "en_AU.UTF-8" || got["LC_ALL"] != "en_AU.UTF-8" {
 		t.Error("the launching session's locale must survive: the daemon's children format messages with it")
@@ -294,4 +297,34 @@ func envMap(env []string) map[string]string {
 		}
 	}
 	return out
+}
+
+// usableRuntimeBase is a runtime base that passes the XDG spec's checks: a
+// directory this uid owns, mode 0700.
+func usableRuntimeBase(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "run")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestLaunchEnv_DropsAnUnusableRecordedRuntimeBase: a recorded XDG_RUNTIME_DIR
+// that fails the XDG spec's own checks is not handed to the daemon (PLAN-550),
+// the same refusal paths.accountRuntimeDir makes for the sockets.
+func TestLaunchEnv_DropsAnUnusableRecordedRuntimeBase(t *testing.T) {
+	u := testUser()
+	u.UID = os.Getuid()
+	p := testProfile()
+	p.XDG.RuntimeDir = usableRuntimeBase(t)
+	if got := envMap(p.LaunchEnv(u))["XDG_RUNTIME_DIR"]; got != p.XDG.RuntimeDir {
+		t.Fatalf("control: a usable base must be passed, got %q", got)
+	}
+	if err := os.Chmod(p.XDG.RuntimeDir, 0o777); err != nil { //nolint:gosec // G302: the unsafe mode IS the case under test
+		t.Fatal(err)
+	}
+	if got, ok := envMap(p.LaunchEnv(u))["XDG_RUNTIME_DIR"]; ok {
+		t.Fatalf("XDG_RUNTIME_DIR=%q was handed to the daemon though the base is world-writable", got)
+	}
 }

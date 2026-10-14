@@ -447,9 +447,16 @@ func (p Profile) LaunchEnv(u account.User) []string {
 	}
 	env = append(env, "PATH="+p.Path)
 	for _, v := range p.XDG.Vars() {
-		if v.Value != "" {
-			env = append(env, v.Name+"="+v.Value)
+		if v.Value == "" {
+			continue
 		}
+		// A recorded runtime base the XDG spec's own checks refuse is not handed
+		// to the daemon either (PLAN-550): paths.accountRuntimeDir refuses it for
+		// the sockets, and a child of the daemon must not be told to use it.
+		if v.Name == "XDG_RUNTIME_DIR" && !account.UsableRuntimeBase(v.Value, u.UID) {
+			continue
+		}
+		env = append(env, v.Name+"="+v.Value)
 	}
 	env = append(env, p.Env.Applied()...)
 	for _, name := range localeEnv() {

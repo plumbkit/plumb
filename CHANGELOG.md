@@ -48,7 +48,8 @@
   `plumb service install` (idempotent, and it never resets a user's recorded
   directories, PATH or XDG overrides) and changed only through
   `plumb service set-executable` / `set-path` / `set-xdg`. A managed launch —
-  `plumb serve` and `plumb restart`, the two commands that start a daemon —
+  `plumb serve`, `plumb restart` and `plumb web`, the three commands that
+  start a daemon —
   starts the profile's executable with an environment built from the profile and
   the account database
   (`HOME` and `USER` from the account database, `PATH` from the profile, `XDG_*`
@@ -458,6 +459,17 @@
   daemon's refusal to start beside a legacy daemon, the symlink-spelling dedup
   of a held legacy lock and the stale-authority-record rule are now each pinned
   by a test that fails without them.
+- **A profile-recorded `XDG_RUNTIME_DIR` is re-checked on every read.** Both
+  writers (install's adoption and `plumb service set-xdg`) already refused a base
+  that is not a 0700 directory this user owns, but the reader trusted the file:
+  a hand-edited profile could put the daemon's MCP and control sockets in a
+  directory somebody else can write. Every reader now refuses such a base: the
+  sockets use the account's own runtime directory, with a warning naming the
+  remedy, the launch no longer hands the base to the daemon as its
+  `XDG_RUNTIME_DIR`, and the rest of the profile still applies. The docs also name `plumb web`
+  as the third command that starts a daemon (they said two), and the
+  `--attach-only` rule "takes no lock, not even briefly" is pinned by a test
+  (PLAN-550).
 - **`context_for_task` says when its index is still on its first pass.** An
   agent's first call in a fresh worktree reached an index holding a few dozen of
   a few thousand files, and the pack read like a complete answer: "no indexed
