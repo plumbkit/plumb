@@ -197,6 +197,9 @@ type Profile struct {
 	Dirs Dirs `toml:"dirs"`
 	// XDG are the explicitly adopted XDG overrides, if any.
 	XDG XDG `toml:"xdg"`
+	// Env is the recorded environment for the daemon's children, [service.env]
+	// (env.go). It is encoded by hand, so one variable stays on one line.
+	Env Env `toml:"-"`
 }
 
 // Path returns the profile's location: <account data dir>/service.toml. It is
@@ -233,6 +236,9 @@ func LoadFile(path string) (Profile, error) {
 	if err := toml.Unmarshal(data, &p); err != nil {
 		return Profile{}, fmt.Errorf("%w: %s: %w", ErrInvalidProfile, path, err)
 	}
+	if p.Env, err = parseEnv(data); err != nil {
+		return Profile{}, fmt.Errorf("%w: %s: %w", ErrInvalidProfile, path, err)
+	}
 	if err := p.Validate(); err != nil {
 		return Profile{}, fmt.Errorf("%w: %s: %w", ErrInvalidProfile, path, err)
 	}
@@ -254,6 +260,13 @@ func (p Profile) Write(path string) error {
 	if err := fsync.AtomicWrite(path, data, fsync.Options{Mode: 0o600, Label: "service"}); err != nil {
 		return fmt.Errorf("writing the service profile %s: %w", path, err)
 	}
+	// AtomicWrite keeps an existing file's mode, and this file must be private
+	// whatever it was before: it can carry a proxy URL's credentials
+	// ([service.env]), and a profile left unreadable (0000) would brick every
+	// launch after the install meant to repair it.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("making the service profile %s private: %w", path, err)
+	}
 	return nil
 }
 
@@ -273,7 +286,11 @@ func marshalUnchecked(p Profile) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encoding the service profile: %w", err)
 	}
-	return append([]byte(header), body...), nil
+	env, err := p.Env.marshal()
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]byte(header), body...), env...), nil
 }
 
 // header is the file's own statement of who owns it. A user editing this file
@@ -281,7 +298,8 @@ func marshalUnchecked(p Profile) ([]byte, error) {
 // says so where they would look.
 const header = `# plumb service launch profile.
 #
-# Written by ` + "`plumb service install`" + `. Change it with ` + "`plumb service set-*`" + `,
+# Written by ` + "`plumb service install`" + `. Change it with ` + "`plumb service set-*`" + `
+# and ` + "`plumb service env`" + `,
 # not by hand: every field here decides what the account's ONE daemon runs as
 # and which directories it serves. A launch with no profile refuses to start.
 
@@ -316,7 +334,7 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("%s %q is not an absolute path", v.Name, v.Value)
 		}
 	}
-	return nil
+	return p.Env.validate()
 }
 
 // Default returns the profile a first install writes for u: the account's
@@ -405,8 +423,14 @@ func seamEnv() []string {
 
 // LaunchEnv builds the environment a managed launch gives the daemon: HOME and
 // USER from the account database, PATH from the profile, XDG only as the
-// profile recorded it, the launching session's locale, and the account test
-// seam when one is in play.
+// profile recorded it, the profile's recorded [service.env] entries, the
+// launching session's locale (unless an entry records that variable — the
+// account's record wins), and the account test seam when one is in play.
+//
+// The [service.env] entries are applied from the profile alone. An inherited
+// symbol was captured when it was configured; the CALLER's value for it is never
+// read here, so a transient client cannot freeze its proxy or agent socket into
+// the account's one daemon (PLAN-554).
 //
 // It is built from nothing, deliberately: the daemon does not inherit the
 // calling client's environment, so no client variable can retarget the
@@ -427,7 +451,14 @@ func (p Profile) LaunchEnv(u account.User) []string {
 			env = append(env, v.Name+"="+v.Value)
 		}
 	}
+	env = append(env, p.Env.Applied()...)
 	for _, name := range localeEnv() {
+		// A recorded name is the account's: its entry decides, including an
+		// uncaptured symbol, which passes NOTHING — the session's value for a
+		// recorded name is never the fallback (decision 2).
+		if _, recorded := p.Env.Lookup(name); recorded {
+			continue
+		}
 		if v, ok := os.LookupEnv(name); ok && v != "" {
 			env = append(env, name+"="+v)
 		}

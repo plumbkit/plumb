@@ -13,6 +13,30 @@
 
 ### Added
 
+- **`[service.env]`: the variables the daemon's children need, recorded per
+  account.** The managed launch starts the daemon from a clean environment, so
+  git, the language servers and `run_task` commands lost `SSH_AUTH_SOCK`, proxy
+  and custom-CA variables and `GOPRIVATE`/`GONOSUMDB`/`GOPROXY` — on a corporate
+  or CI machine, private modules, git-over-ssh and TLS to internal hosts stopped
+  working. The service profile now records them: a literal (`NAME = "VALUE"`) or
+  an inherited symbol whose value is **captured at configuration time** by
+  `plumb service env set NAME`, `plumb service env refresh` or the first
+  `plumb service install`, and never read from the client that happens to start
+  the daemon (a transient client would otherwise freeze its own proxy or agent
+  socket into the account's one daemon). `plumb service env show | set | unset |
+  refresh` manage it; the first install seeds the proxy, CA, ssh-agent and Go
+  module variables from the installing shell, once, and never replaces an entry
+  you have. `HOME`, `USER`, `LOGNAME`, `PATH`, `XDG_*`, `PLUMB_*` and
+  `TSM_ORIG_*` (and `GIT_DIR`/`GIT_WORK_TREE`, which would point every
+  workspace's git at one repository) can never be entries — `env set` refuses
+  them and the reader
+  ignores one written by hand — so no entry can move the authority, the sockets,
+  the locks or the service's directories. Values are never logged; the launcher
+  logs the names it applied. `plumb setup` seeds the same way and prints what it
+  captured, and an unreadable profile that `service install` replaces is kept as
+  `service.toml.bak`. A shell variable that is not valid UTF-8 is skipped (and
+  said) rather than failing the install, and the profile is made 0600 on every
+  write, whatever mode an older file had (PLAN-554).
 - **`plumb service install` records what the account's one daemon is.** A launch
   used to mean "whatever binary the client happened to be, with whatever
   environment it happened to have", so a branch build, a worktree checkout or a

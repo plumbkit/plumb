@@ -83,12 +83,68 @@ It exists because a launch used to mean "whatever binary the calling client
 happened to be, with whatever environment it happened to have". A managed launch
 now starts the profile's executable with an environment built from the profile
 and the account database — `HOME` and `USER` from the account database, `PATH`
-from the profile, `XDG_*` only as recorded, plus the launching session's locale.
+from the profile, `XDG_*` only as recorded, the profile's
+[`[service.env]`](#the-service-environment-serviceenv), plus the launching
+session's locale.
 A client's `HOME`, `XDG_*` or `PATH` cannot retarget the daemon, its files or
 its language servers, and a client whose environment would have resolved
 elsewhere is told so, once (`plumb serve` logs it; where the ignored directory
 holds a real `config.toml`, the message names the
 `plumb service set-xdg --config-home <dir>` remedy).
+
+#### The service environment (`[service.env]`)
+
+The clean launch environment drops what a corporate or CI machine's tools need:
+an HTTP proxy, a custom CA bundle, the ssh-agent socket, private Go module rules.
+Those are recorded per account in the profile's `[service.env]` and given to the
+daemon, and so to its children (git, the language servers, `run_task`):
+
+```toml
+[service.env]
+GOPRIVATE = "github.com/acme/*"                                      # a literal
+SSH_AUTH_SOCK = { inherit = true, value = "/private/tmp/…/Listeners" } # captured from a shell
+HTTPS_PROXY = { inherit = true }                                     # recorded, not set when captured: not passed
+```
+
+**Values are captured at configuration time, never at launch.** `plumb service
+env set NAME` (bare), `plumb service env refresh` and the first `plumb service
+install` read the variable from the shell you run them in and store it. A launch
+reads only the profile — never the environment of the client that happened to
+start the daemon — because a transient client (a dev container, a session with
+a temporary proxy or token) would otherwise freeze *its* values into the one
+daemon every later client shares. The cost is that a captured value is frozen:
+after a proxy, certificate or agent socket moves, run `plumb service env
+refresh` from a shell that has the new value, then `plumb restart`.
+
+- **Corporate proxy** — `http_proxy`/`https_proxy`/`no_proxy`/`all_proxy` (both
+  cases) are seeded by the first install; `plumb service env refresh` updates them.
+- **Custom CA** — `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`,
+  `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS` are seeded.
+- **ssh-agent** — `SSH_AUTH_SOCK` and `GIT_SSH_COMMAND` are seeded. macOS's
+  launchd agent socket is stable across logins; an agent whose socket changes
+  per session needs `env refresh` (or a literal pointing at a stable symlink).
+- **Private Go modules** — `GOPRIVATE`, `GONOSUMDB`, `GOPROXY` are seeded.
+- **Anything else** — `plumb service env set NAME` (captured) or
+  `plumb service env set NAME=VALUE` (literal); `plumb service env unset NAME`
+  removes one, and the seeding never brings it back.
+
+`plumb setup` records the profile through the same path, so the first setup
+seeds too, from the shell it runs in, and prints the names it captured. Seeding
+is preserving and happens once: an entry you have is never replaced, and
+a name you unset stays unset across upgrades. A package manager's post-install
+may run with a filtered environment (Homebrew drops most variables), so after
+`brew upgrade` run `plumb service env refresh` once from your own shell.
+
+`HOME`, `USER`, `LOGNAME` (the account's), `PATH` (`set-path`), every `XDG_*`
+(`set-xdg`), every `PLUMB_*` and `TSM_ORIG_*` decide *where* the service is, and
+`GIT_DIR`/`GIT_WORK_TREE` would point every workspace's git at one repository, so
+they can never be entries: `env set` refuses them with the reason, and the
+reader ignores one written by hand (`plumb serve` logs it; `env show` marks it
+`IGNORED`). No entry can move the authority, the sockets, the locks or any of
+the service's directories. The file is mode 0600, because a proxy URL can carry
+credentials; the launcher logs the names it applied, never their values. A
+profile `plumb service install` cannot read is replaced, and the old file is kept
+beside it as `service.toml.bak`.
 
 **A missing profile is never inferred.** A cold start with no profile fails with
 the `plumb service install` instruction: plumb does not fall back to the calling

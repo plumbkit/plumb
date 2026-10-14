@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -227,7 +228,7 @@ func TestSetExecutable_RefusesAPathThatCannotBeRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile: %v", err)
 	}
-	if after != before {
+	if !reflect.DeepEqual(after, before) {
 		t.Errorf("a refused set-executable changed the profile:\n got %+v\nwant %+v", after, before)
 	}
 
