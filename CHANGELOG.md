@@ -741,6 +741,12 @@
 
 ### Tests
 
+- **Every `plumb setup` entry point is pinned to record the service profile.**
+  The flip made all five (claude-code, claude-desktop, the target-backed clients,
+  `--all` and the interactive picker) record it, because a canonical cold start
+  with no profile refuses; three of them were pinned by nothing, so dropping the
+  call there would have re-bricked those installs silently. One table test now
+  covers all five (PLAN-555).
 - **The Linux `CGO_ENABLED=0` build is now compiled and executed by a gate, not
   only by the release.** `internal/account/home_linux_pure.go` is `linux && !cgo`
   — the shape goreleaser builds — while every gate builds with a toolchain whose

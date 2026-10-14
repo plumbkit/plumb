@@ -35,7 +35,7 @@ func runSetupAll(cmd *cobra.Command, _ []string) error {
 		return cmd.Help()
 	}
 	PrintLogo()
-	if err := ensureServiceProfileForSetup(); err != nil {
+	if err := recordServiceProfileForSetup(); err != nil {
 		return err
 	}
 
