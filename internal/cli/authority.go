@@ -66,6 +66,13 @@ type authorityMetadata struct {
 	// could not read them, and zero in records written by an older daemon.
 	SocketDev uint64 `json:"socket_dev,omitempty"`
 	SocketIno uint64 `json:"socket_ino,omitempty"`
+	// SocketCtime is the socket inode's change time, in nanoseconds since the
+	// epoch — the kernel metadata that tells the socket this holder created from a
+	// different file that later inherited the same (device, inode) on a
+	// filesystem that reuses freed inodes (PLAN-529). Absent, not zero, in a
+	// record written before that field existed; a reader then compares device and
+	// inode alone, which is all such a record can support.
+	SocketCtime int64 `json:"socket_ctime,omitempty"`
 }
 
 // authorityPath returns the account authority lock path.
@@ -150,12 +157,13 @@ func publishAuthorityMetadata(locks daemonLocks, socketPath string, socketID fil
 		exe = "" // best effort: the record still names the pid and the socket
 	}
 	if err := publishAuthority(locks.Authority, authorityMetadata{
-		PID:        os.Getpid(),
-		Version:    Version,
-		Executable: exe,
-		Socket:     socketPath,
-		SocketDev:  socketID.dev,
-		SocketIno:  socketID.ino,
+		PID:         os.Getpid(),
+		Version:     Version,
+		Executable:  exe,
+		Socket:      socketPath,
+		SocketDev:   socketID.dev,
+		SocketIno:   socketID.ino,
+		SocketCtime: socketID.ctime,
 	}); err != nil {
 		slog.Warn("daemon: could not publish the authority metadata", "err", err)
 	}

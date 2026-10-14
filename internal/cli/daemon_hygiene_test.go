@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -174,15 +175,76 @@ func TestFileMarker_RemovesOnlyItsOwnFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		marker := markRuntimeFile(path)
+		own, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(path, []byte("somebody else"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		replacement, err := os.Lstat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// This test is about a DIFFERENT file, so say what "different" rests on.
+		// On a filesystem that hands the freed inode straight back — ext4 does,
+		// 20 of 20 immediate recreations in a container measurement — the device
+		// and inode are identical and the change time is the whole distinction;
+		// the assertion below is what proves the test is not vacuous there.
+		if identityOf(own).dev == identityOf(replacement).dev && identityOf(own).ino == identityOf(replacement).ino {
+			t.Logf("the filesystem reused inode %d; the change time is what distinguishes the replacement (%+v vs %+v)",
+				identityOf(own).ino, identityOf(own), identityOf(replacement))
+		}
+		if marker.namesInfo(replacement) {
+			t.Fatalf("the marker claims a file this daemon did not create: own=%+v replacement=%+v", identityOf(own), identityOf(replacement))
+		}
 		marker.removeIfOurs("pid file")
 		if _, err := os.Lstat(path); err != nil {
-			t.Fatalf("a file that replaced this daemon's own was removed: %v", err)
+			t.Fatalf("a file that replaced this daemon's own was removed (own=%+v replacement=%+v): %v",
+				identityOf(own), identityOf(replacement), err)
+		}
+	})
+
+	t.Run("a file that inherited the inode is refused", func(t *testing.T) {
+		// The ext4 case, made deterministic so it does not depend on the
+		// allocator: the marker's device and inode are the live file's, and only
+		// the change time differs. (A platform whose identityOf cannot read a
+		// change time has 0 on both sides; the marker there is the weaker
+		// (device, inode) claim, and this subtest's expectation is the ctime one.)
+		path := filepath.Join(t.TempDir(), "plumb.pid")
+		if err := os.WriteFile(path, []byte("1"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		marker := markRuntimeFile(path)
+		switch {
+		case marker.id.ctime != 0:
+			// The identity carries the change time: the case below is real.
+		case runtime.GOOS == "linux" || runtime.GOOS == "darwin":
+			// Both platforms plumb SHIPS on read the change time (their
+			// daemon_identity_*.go files), so a zero here means the identity
+			// silently lost the field it was strengthened with. Skipping would
+			// turn that into a test that passes by not looking.
+			t.Fatalf("identityOf read no change time on %s: %+v", runtime.GOOS, marker.id)
+		default:
+			t.Skipf("this platform (%s) has no change time in its identity", runtime.GOOS)
+		}
+		forged := marker
+		forged.id.ctime++
+		if !forged.id.known() {
+			t.Fatal("precondition: the forged marker must still name a device and inode")
+		}
+		forged.removeIfOurs("pid file")
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("a marker whose change time does not match removed the file: %v", err)
+		}
+		// The genuine marker still removes it: the strengthening must not turn
+		// every removal into a refusal.
+		marker.removeIfOurs("pid file")
+		if _, err := os.Lstat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("this daemon's own file survived its own marker (%v)", err)
 		}
 	})
 
@@ -260,6 +322,46 @@ func TestSocketGuard_NeverRemovesAReplacementAndSaysSo(t *testing.T) {
 	g.check()
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatalf("a second check removed the foreign socket: %v", err)
+	}
+}
+
+// TestSocketGuard_TreatsAReusedInodeAsSomebodyElses makes the ext4 case
+// deterministic: the marker's device and inode are the live socket's and only the
+// change time differs, which is exactly the state a filesystem that hands the
+// freed inode straight back creates. The guard must see a stranger's socket —
+// not rebind over it, not remove it, and say so.
+func TestSocketGuard_TreatsAReusedInodeAsSomebodyElses(t *testing.T) {
+	withShortTempRuntime(t)
+	logs := captureLogs(t)
+	path := daemonSocketPath()
+	g, _ := guardFor(t, path, true)
+	if g.marker.id.ctime == 0 {
+		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
+			t.Fatalf("identityOf read no change time on %s: %+v", runtime.GOOS, g.marker.id)
+		}
+		t.Skipf("this platform (%s) has no change time in its identity", runtime.GOOS)
+	}
+	own, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.marker.id.ctime++ // same device and inode, a different change time
+
+	if g.check() {
+		t.Error("the guard re-bound a path that holds a file it did not create")
+	}
+	if !g.foreign {
+		t.Error("the guard accepted a socket whose change time is not the one it recorded")
+	}
+	now, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("the daemon removed a file whose change time does not match: %v", err)
+	}
+	if identityOf(now) != identityOf(own) {
+		t.Errorf("the file at the path changed: %+v -> %+v", identityOf(own), identityOf(now))
+	}
+	if !strings.Contains(logs.String(), "no longer names this daemon's socket") {
+		t.Errorf("the daemon never reported the mismatched change time; log:\n%s", logs.String())
 	}
 }
 
@@ -558,10 +660,19 @@ func TestDaemonSocketPublication_TrustsOnlyALiveFreshRecord(t *testing.T) {
 		}
 	}
 
-	write(authorityMetadata{PID: os.Getpid(), Socket: socket, SocketDev: 7, SocketIno: 4242, Published: time.Now()})
+	write(authorityMetadata{PID: os.Getpid(), Socket: socket, SocketDev: 7, SocketIno: 4242, SocketCtime: 99, Published: time.Now()})
 	pub, ok := daemonSocketPublication()
-	if !ok || pub.pid != os.Getpid() || pub.path != socket || pub.id.ino != 4242 {
-		t.Fatalf("a fresh record of a live holder must be trusted: %+v (ok=%v)", pub, ok)
+	if !ok || pub.pid != os.Getpid() || pub.path != socket || pub.id.ino != 4242 || pub.id.ctime != 99 {
+		t.Fatalf("a fresh record of a live holder must be trusted, change time included: %+v (ok=%v)", pub, ok)
+	}
+
+	// A record written before the change time was published carries none. It is
+	// still a record of a live holder, with the weaker (device, inode) identity:
+	// the reader must not treat "no change time" as a mismatch, or every healthy
+	// daemon an older binary started would be reported as a replaced socket.
+	write(authorityMetadata{PID: os.Getpid(), Socket: socket, SocketDev: 7, SocketIno: 4242, Published: time.Now()})
+	if older, ok := daemonSocketPublication(); !ok || older.id.ctime != 0 {
+		t.Fatalf("a record without a change time must still be trusted, with ctime 0: %+v (ok=%v)", older, ok)
 	}
 
 	stale := authorityMetadata{PID: os.Getpid(), Socket: socket, Published: time.Now().Add(-2 * daemonSocketPublicationFreshness)}
@@ -625,9 +736,23 @@ func TestSocketPathStateFor_ComparesThePathWithThePublication(t *testing.T) {
 	if err := os.WriteFile(path, []byte("somebody else's file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	replacement, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identityOf(replacement).ino == pub.id.ino {
+		t.Logf("the filesystem reused inode %d; the change time is what distinguishes the replacement", pub.id.ino)
+	}
 	replaced := socketPathStateFor(path, true, nil, pub, true)
 	if !replaced.IdentityKnown || replaced.IdentityMatches {
-		t.Fatalf("the path no longer holds the published file: %+v", replaced)
+		t.Fatalf("the path no longer holds the published file: published=%+v replacement=%+v state=%+v", pub.id, identityOf(replacement), replaced)
+	}
+	// The same inode with a different change time is a replacement too — the ext4
+	// case, made deterministic here rather than left to the allocator.
+	forged := pub
+	forged.id.ctime++
+	if st := socketPathStateFor(path, true, nil, forged, true); st.IdentityMatches {
+		t.Errorf("a file whose change time differs from the published one was accepted: published=%+v state=%+v", forged.id, st)
 	}
 	if !strings.Contains(replaced.fault(), "replaced") {
 		t.Errorf("a replaced socket must be a fault, got %q", replaced.fault())

@@ -400,8 +400,11 @@ there, doctor calling a version file missing when it existed one directory
 over, and `plumb restart` spawning a duplicate.
 
 Because that directory is removable, the daemon treats every file in it as its
-own only while the path still names the file it created there (device and inode,
-`fileMarker` in `internal/cli/daemon_hygiene.go`): both listeners bind with
+own only while the path still names the file it created there — its device,
+inode and change time, the last because a filesystem that reuses freed inodes
+(ext4 hands a just-deleted inode straight back) would otherwise make a stranger's
+file indistinguishable from the daemon's own (`fileMarker` in
+`internal/cli/daemon_hygiene.go`): both listeners bind with
 `SetUnlinkOnClose(false)`, so `net` never unlinks a path it no longer owns, and
 the pid, socket and version files are removed at shutdown only when the identity
 still matches. A file somebody else put at the socket path is never removed, and

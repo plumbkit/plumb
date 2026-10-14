@@ -525,7 +525,9 @@
   daemon whose runtime directory was deleted went on running, unreachable, which
   is the state 64 leaked daemons reached. Both listeners now bind with
   unlink-on-close off, each runtime file is removed only while the path still
-  names the file that daemon created there (device and inode), and a daemon
+  names the file that daemon created there — its device, inode and **change
+  time**, since a filesystem that hands a freed inode straight back (ext4 does)
+  makes a recreated file inherit the first two — and a daemon
   re-checks its socket paths every 30 s and on any accept error: a path that has
   been deleted is re-bound (the daemon holds the account authority, so nobody else
   may be serving this account), while a path that now holds a different file is

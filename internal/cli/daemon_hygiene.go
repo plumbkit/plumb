@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -46,25 +45,49 @@ import (
 // test can shorten it.
 const daemonSocketCheckInterval = 30 * time.Second
 
-// fileIdentity is the (device, inode) pair that names one file on this host.
+// fileIdentity is what names one file on this host: its device, its inode, and
+// the inode's change time.
+//
+// The change time is the part that makes the claim honest. (Device, inode) alone
+// does NOT mean "the file I created": on a filesystem that hands a freed inode
+// straight back — measured on ext4, 20 of 20 immediate delete-and-recreate cycles
+// at one path reused the same inode — a stranger's file created at this path
+// after the daemon's own was removed carries the SAME pair, so a marker that
+// compared only those two would delete a file it did not create (exactly what
+// PLAN-529's D7 forbids) and would never notice a replaced socket either. The
+// change time is kernel metadata that userspace cannot set and that necessarily
+// differs for a file created later, so the triple is a claim about THIS file
+// rather than about an inode number.
+//
 // An identity of zero is "unknown" and matches nothing: a marker whose identity
 // could not be read must never authorise a removal.
 type fileIdentity struct {
 	dev uint64
 	ino uint64
+	// ctime is the inode's change time in nanoseconds since the epoch. Zero when
+	// this platform's identityOf cannot read one (see the build-tagged files).
+	ctime int64
 }
 
 // known reports whether this identity names a file at all.
 func (id fileIdentity) known() bool { return id.ino != 0 }
 
-// identityOf returns the (device, inode) pair naming info.
-func identityOf(info os.FileInfo) fileIdentity {
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fileIdentity{}
+// matches reports whether this identity — a live file — is the other one, which
+// is either a marker this daemon recorded or a record it published.
+//
+// The change time is compared when the OTHER identity carries one. A record
+// written before PLAN-529 (or by a build whose platform cannot read a change
+// time) has none, and treating that as a mismatch would accuse every healthy
+// daemon an older binary started; the fallback there is the weaker (device,
+// inode) claim such a record can support.
+func (id fileIdentity) matches(other fileIdentity) bool {
+	if !id.known() || !other.known() {
+		return false
 	}
-	//nolint:gosec,unconvert // G115: a device number and an inode are opaque kernel identifiers here, never arithmetic. unconvert: the casts are needed on darwin (Dev int32, Ino uint64) and redundant on linux (both uint64), and this file is linted on both platforms, so one of the two is always "unnecessary".
-	return fileIdentity{dev: uint64(st.Dev), ino: uint64(st.Ino)}
+	if id.dev != other.dev || id.ino != other.ino {
+		return false
+	}
+	return other.ctime == 0 || id.ctime == other.ctime
 }
 
 // fileMarker is one runtime path, remembered as the file this daemon created
@@ -85,9 +108,10 @@ func markRuntimeFile(path string) fileMarker {
 	return fileMarker{path: path, id: identityOf(info)}
 }
 
-// namesInfo reports whether info is the file this marker recorded.
+// namesInfo reports whether info is the file this marker recorded: same device
+// and inode, and the same change time (see fileIdentity.matches).
 func (m fileMarker) namesInfo(info os.FileInfo) bool {
-	return m.id.known() && identityOf(info) == m.id
+	return identityOf(info).matches(m.id)
 }
 
 // removeIfOurs removes the path only while it still names the file this daemon
@@ -351,7 +375,8 @@ func (g *socketGuard) reportForeign(info os.FileInfo) {
 	g.foreign = true
 	slog.Error("daemon: the socket path no longer names this daemon's socket — it is NOT being removed, and clients dialling this path will not reach this daemon",
 		"path", g.path, "mode", info.Mode().String(),
-		"this_daemon_inode", g.marker.id.ino, "path_inode", identityOf(info).ino)
+		"this_daemon_inode", g.marker.id.ino, "path_inode", identityOf(info).ino,
+		"this_daemon_ctime", g.marker.id.ctime, "path_ctime", identityOf(info).ctime)
 }
 
 // clearForeign records that the path names this daemon's own socket again, once.

@@ -69,7 +69,7 @@ func daemonSocketPublication() (socketPublication, bool) {
 	return socketPublication{
 		pid:  m.PID,
 		path: m.Socket,
-		id:   fileIdentity{dev: m.SocketDev, ino: m.SocketIno},
+		id:   fileIdentity{dev: m.SocketDev, ino: m.SocketIno, ctime: m.SocketCtime},
 	}, true
 }
 
@@ -169,7 +169,9 @@ func socketPathStateFor(path string, answered bool, owners []int, pub socketPubl
 	switch {
 	case err == nil:
 		st.Exists = true
-		st.IdentityMatches = st.IdentityKnown && identityOf(info) == pub.id
+		// matches, not equality: a record written before the change time was
+		// published compares on (device, inode) alone (see fileIdentity.matches).
+		st.IdentityMatches = st.IdentityKnown && identityOf(info).matches(pub.id)
 	case errors.Is(err, fs.ErrNotExist):
 	default:
 		st.Unreadable = true
