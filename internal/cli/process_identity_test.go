@@ -38,6 +38,26 @@ func TestProcessIsPlumbDaemon(t *testing.T) {
 	}
 }
 
+// TestProcessArgv_RefusesAPidThatCannotBeRead pins the READER's fail-closed
+// branch, which is the direction that would be fail-OPEN if it regressed: a
+// reader that fabricates an argv, or reports ok for a pid whose argv nobody could
+// see, makes the identity check say yes for a process it never looked at. Nothing
+// else asks processArgv about a pid that cannot be read, and on Linux this is the
+// branch a vanished process, a zombie with an empty cmdline, or a
+// hidepid-restricted pid takes.
+//
+// The pids are chosen to be unreadable everywhere: 1<<30 is past any Linux
+// pid_max, and 0 and -1 are not process ids at all (on darwin `ps` rejects them
+// too, so the answer is false on both readers).
+func TestProcessArgv_RefusesAPidThatCannotBeRead(t *testing.T) {
+	for _, pid := range []int{1 << 30, 0, -1} {
+		argv, ok := processArgv(pid)
+		if ok {
+			t.Errorf("processArgv(%d) = %q, true; an unreadable pid must answer false", pid, argv)
+		}
+	}
+}
+
 // TestProcessArgv_ReadsThisProcess is the PLAN-553 regression, in the shape a
 // host can carry: the argv reader must work with no external command at all.
 //
