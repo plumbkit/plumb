@@ -521,9 +521,41 @@ type HistoryConfig struct {
 	MaxDiffBytes    int64    `toml:"max_diff_bytes"`
 }
 
+// DaemonConfig is the [daemon] section: the account-wide service itself.
+//
+// Concurrency: read-only after Load returns.
+type DaemonConfig struct {
+	// AccountAuthority resolves plumb's global directories — runtime, data,
+	// state, logs, caches — and what a managed launch starts, from the OS
+	// ACCOUNT (and, once `plumb service install` has run, from the service
+	// profile) instead of from this process's environment. With it on, an
+	// upgraded `plumb serve` starts the profile's executable with a clean
+	// environment, so no client's HOME, XDG or PATH can retarget the account's
+	// one daemon.
+	//
+	// Default TRUE, and it is the only mode a shipped build has ever run.
+	//
+	// FALSE IS AN OPT-OUT, NOT A DISARMING. It returns the directories and the
+	// launch to the pre-flip, environment-derived resolution; it does NOT stop
+	// plumb taking the account authority lock, and it does NOT stop a launch
+	// refusing to start a daemon beside one that holds it. An opted-out plumb can
+	// therefore never run two daemons — the property PLAN-518 exists for is not
+	// configurable. It does not move the config file either: see
+	// internal/paths/authority.go's configDir and docs/configuration.md.
+	//
+	// Env: PLUMB_ACCOUNT_AUTHORITY — any value other than 0/false/no turns it on.
+	// Restart-needed: the gate decides where a running daemon's sockets and
+	// state live, so it is read once, at config load, and a later change is
+	// reported by `plumb config show` and the daemon as needing a restart.
+	AccountAuthority bool `toml:"account_authority"`
+}
+
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
+	// Daemon governs the account-wide service: one daemon per account, and
+	// where it lives (PLAN-518 D3).
+	Daemon    DaemonConfig         `toml:"daemon"`
 	History   HistoryConfig        `toml:"history"`
 	LogLevel  string               `toml:"log_level"`
 	LogFormat string               `toml:"log_format"`

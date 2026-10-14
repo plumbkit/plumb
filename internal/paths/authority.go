@@ -21,14 +21,20 @@ import (
 // and the SERVICE PROFILE (PLAN-528) records them once, at install, so that what
 // a client's environment says can never move them again.
 //
-// THE GATE IS NOT USER-SETTABLE YET. The account authority only reaches users as
-// one transition (PLAN-518 rollout invariant 1): until the legacy detection of
-// PLAN-530 is in, no release may contain a build where an upgraded serve can
-// start a second daemon beside an old-path one. So pre-flip,
-// account.AuthorityEnabled is true only for a test or a container harness, and
-// the user-facing switch lands with the default flip. In LEGACY mode the profile
-// is ignored entirely — not read, not consulted, not missed — which is what
-// makes this change inert in every shipped build.
+// THE GATE IS USER-SETTABLE NOW. It is `daemon.account_authority`, default TRUE,
+// resolved by internal/config and recorded in internal/account (PLAN-518 D3) —
+// the default flip, which PLAN-530's legacy detection made safe to ship. In
+// LEGACY mode the profile is ignored entirely — not read, not consulted, not
+// missed — and every directory comes from the environment again.
+//
+// ONE DIRECTORY DELIBERATELY DOES NOT FOLLOW IT. Read ConfigDir below: the
+// config directory is resolved at the SEED, because the config file is where
+// this setting is declared, and a file that could move itself could hide its own
+// value from the next start.
+//
+// What the gate does NOT decide is whether the authority is taken: every managed
+// launch takes the account authority lock and refuses to start beside a holder
+// in every mode, opted out included (PLAN-518 D4).
 
 // AuthorityEnabled reports whether this process resolves its global directories
 // — and launches its daemon — through the account authority.
@@ -61,6 +67,35 @@ func accountDir(role service.Role) (string, bool) {
 		return dir, true
 	}
 	return accountDefaultDir(u, role), true
+}
+
+// configDir is accountDir for the CONFIG role, and it asks a different question
+// on purpose: whether the ACCOUNT's config directory is the one this process
+// reads, which is the gate as the ENVIRONMENT states it rather than as the
+// config file resolved it.
+//
+// The file that turns the account authority off is the file this resolves, so a
+// config directory that followed the resolved value would move out from under
+// its own setting. Set `daemon.account_authority = false`, and from the next
+// start the resolved gate is OFF: a config directory that followed it would
+// resolve the environment's, which is a different file on any host where the
+// two differ — and the opt-out would then be read exactly once and lost. With
+// the seed in charge the location is stable, the opt-out is read from the file
+// it was written to, and `plumb config set` writes to the file that will be read
+// back. Every other global directory follows the resolved value; this one does
+// not, and docs/configuration.md says so.
+func configDir() (string, bool) {
+	if !account.ConfigAuthorityEnabled() {
+		return "", false
+	}
+	u, err := account.Current()
+	if err != nil {
+		return "", false
+	}
+	if dir, ok := profileDir(service.RoleConfig); ok {
+		return dir, true
+	}
+	return u.ConfigDir(), true
 }
 
 // profileDir returns the directory the service profile records for role.

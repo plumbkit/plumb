@@ -11,6 +11,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/plumbkit/plumb/internal/account"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -98,6 +99,16 @@ func Load() (Config, error) {
 	if err := validate(cfg); err != nil {
 		return Config{}, fmt.Errorf("invalid config: %w", err)
 	}
+	// Record the resolved gate in internal/account, which is where every
+	// directory resolution below this layer reads it from. It has to happen here
+	// rather than at each consumer: the gate decides which CONFIG FILE this
+	// function just read (paths.ConfigDir consults it), so the layer that owns
+	// the file is the layer that must publish the answer.
+	//
+	// The first Load in a process wins (account.SetResolvedAuthority), which is
+	// what makes the key tier ReloadRestart: a live reload cannot move a running
+	// daemon's sockets, state or logs, and reports a restart is needed instead.
+	account.SetResolvedAuthority(cfg.Daemon.AccountAuthority)
 	return cfg, nil
 }
 
@@ -164,6 +175,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v, ok := envBool("PLUMB_PERSIST_SESSION_STATE"); ok {
 		cfg.Session.PersistState = v
+	}
+	// Parsed by internal/account rather than by envBoolNeg here, because the
+	// account package reads the SAME variable for the decisions that run before
+	// any config file is opened (which config file to open, and the daemon's
+	// runtime lock). One variable, one parser: two readings of one string is how
+	// a gate and its configuration come to disagree about whether a value means
+	// on.
+	if v, ok := account.ParseAuthorityEnv(); ok {
+		cfg.Daemon.AccountAuthority = v
 	}
 	normaliseConfig(cfg)
 }
@@ -463,6 +483,12 @@ func forceGlobalOnlyToBase(base Config, merged *Config) {
 	// the project file sets. This single chokepoint keeps the guarantee true for
 	// every consumer (the daemon gate, `config show`, the TUI display).
 	merged.AgentConfigWrites = base.AgentConfigWrites
+	// [daemon] decides where the ACCOUNT's daemon lives — its sockets, state,
+	// logs and the executable a launch starts. Nothing about that is a property
+	// of one workspace, and a cloned repository shipping account_authority = false
+	// would otherwise be able to move every later session's daemon back into an
+	// environment-derived directory. Force the global value to win.
+	merged.Daemon = base.Daemon
 	// [web] and [ui] are daemon-global presentation settings, not per-project
 	// concerns — the web server is one process-wide listener and the theme is a
 	// single global preference. Force the global values to win so a project's

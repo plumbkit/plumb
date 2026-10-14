@@ -24,18 +24,7 @@ import (
 //
 // Release builds pass no such tag, so in them this file does not exist at all
 // and seam_off.go's answer — the empty string — is the only one available.
-// authorityEnabled is the gate itself, and it is the same two conditions as the
-// seam root: a tagged CHILD process needs separateenv evidence (CI, a container
-// or a declared VM), while an in-process test binary needs only the env var.
-// A tagged binary on a developer's machine therefore cannot turn the authority
-// on, which is what keeps a harness from reaching the owner's live daemon.
-func authorityEnabled() bool {
-	if !testing.Testing() && separateenv.Current() == "" {
-		return false
-	}
-	return envTrue("PLUMB_ACCOUNT_AUTHORITY")
-}
-
+//
 // seamRoot is where the account resolution is redirected to, when anything
 // redirects it.
 func seamRoot() string {
@@ -44,3 +33,25 @@ func seamRoot() string {
 	}
 	return ParseTestRoot(os.Getenv("PLUMB_TEST_ACCOUNT_ROOT"))
 }
+
+// authorityEnabled reports whether the account authority drives this process.
+//
+// A TAGGED build — the smoke suites' children — keeps the pre-flip reading:
+// PLUMB_ACCOUNT_AUTHORITY, default OFF, and nothing at all without separateenv
+// evidence (CI, a container, a declared VM), so a tagged binary on a developer's
+// machine still cannot take the authority. The container end-to-end evidence for
+// the flip is produced from an UNTAGGED build, which is the build users get; a
+// harness that wants the canonical resolution asks for it explicitly, exactly as
+// it does today.
+func authorityEnabled() bool {
+	if !testing.Testing() && separateenv.Current() == "" {
+		return false
+	}
+	return authorityFromEnv()
+}
+
+// configAuthorityEnabled is the config-directory half of the gate. In a tagged
+// build it is the same reading as authorityEnabled, because the seed question
+// and the resolved one have the same answer there: a harness sets the variable
+// once, in the environment, and no config file is involved.
+func configAuthorityEnabled() bool { return authorityEnabled() }
