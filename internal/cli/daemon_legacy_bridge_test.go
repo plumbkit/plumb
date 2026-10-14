@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -21,9 +22,10 @@ import (
 // bridgeFixture holds a legacy location's lifetime lock (as the daemon does) and
 // binds the bridge for it, answering every connection with "ok".
 type bridgeFixture struct {
-	loc    legacyLocation
-	bridge *legacyBridge
-	wg     sync.WaitGroup
+	loc         legacyLocation
+	bridge      *legacyBridge
+	wg          sync.WaitGroup
+	republished atomic.Int64
 }
 
 func newBridgeFixture(t *testing.T) *bridgeFixture {
@@ -38,7 +40,7 @@ func newBridgeFixture(t *testing.T) *bridgeFixture {
 	t.Cleanup(func() { _ = held.File.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	f.bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath())
+	f.bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath(), func() { f.republished.Add(1) })
 	f.bridge.serve(&f.wg, func(c net.Conn) {
 		_, _ = c.Write([]byte("ok"))
 		_ = c.Close()
@@ -118,7 +120,7 @@ func TestLegacyBridge_NeverDisplacesALiveForeignSocket(t *testing.T) {
 	defer func() { _ = held.File.Close() }()
 
 	b := newLegacyBridge()
-	b.bind(context.Background(), []heldLegacyLock{held}, daemonSocketPath())
+	b.bind(context.Background(), []heldLegacyLock{held}, daemonSocketPath(), nil)
 	defer b.close()
 	if len(b.records()) != 0 {
 		t.Fatalf("the bridge bound over a live foreign socket: %+v", b.records())
@@ -230,7 +232,7 @@ func TestRenderLegacyBridges(t *testing.T) {
 func TestCheckDaemon_DoesNotPointAtOurOwnBridge(t *testing.T) {
 	f := newBridgeFixture(t)
 	if legacyDaemonSocketPath() != f.loc.Socket {
-		t.Skipf("doctor's legacy path %s is not this account's legacy location %s here", legacyDaemonSocketPath(), f.loc.Socket)
+		t.Fatalf("doctor's legacy path %s is not this account's legacy location %s: the test would prove nothing", legacyDaemonSocketPath(), f.loc.Socket)
 	}
 	hint := func() string {
 		var b strings.Builder
@@ -279,7 +281,7 @@ func TestRunDaemonAcceptLoop_ServesTheBridge(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	bridge := newLegacyBridge()
-	bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath())
+	bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath(), nil)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -302,5 +304,189 @@ func TestRunDaemonAcceptLoop_ServesTheBridge(t *testing.T) {
 	case <-done:
 	case <-time.After(30 * time.Second):
 		t.Fatal("the accept loop did not stop after cancellation")
+	}
+}
+
+// TestLegacyBridge_PublishesAtOnce: a bind, a re-bind and a first client each ask
+// for the authority record to be rewritten now, so a reader never sees the
+// account's own bridge as a legacy daemon for a tick (PLAN-549 review).
+func TestLegacyBridge_PublishesAtOnce(t *testing.T) {
+	f := newBridgeFixture(t)
+	if f.republished.Load() < 1 {
+		t.Fatal("binding the bridge did not republish the authority record")
+	}
+	after := f.republished.Load()
+	_ = dialBridge(t, f.loc.Socket)
+	if f.republished.Load() <= after {
+		t.Fatal("the first client through the bridge did not republish the record")
+	}
+	// A deleted bridge path is re-bound by its guard, and the new identity is
+	// published straight away.
+	after = f.republished.Load()
+	before := f.bridge.records()[0]
+	if err := os.Remove(f.loc.Socket); err != nil {
+		t.Fatal(err)
+	}
+	f.bridge.sockets[0].guard.check()
+	deadline := time.Now().Add(5 * time.Second)
+	for f.republished.Load() <= after {
+		if time.Now().After(deadline) {
+			t.Fatal("a re-bound bridge socket was not republished")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := f.bridge.records()[0]; got.Ino == before.Ino && got.Ctime == before.Ctime {
+		t.Fatalf("the record still names the deleted socket: %+v", got)
+	}
+	if got := dialBridge(t, f.loc.Socket); got != "ok" {
+		t.Fatalf("the re-bound bridge socket does not answer: %q", got)
+	}
+}
+
+// TestLegacyBridge_RefusesADirectoryOthersCanWrite: a legacy location comes from
+// a client's environment, so the bridge listens only in a 0700 directory this
+// user owns — the canonical runtime base's own rule — and its socket is 0600.
+func TestLegacyBridge_RefusesADirectoryOthersCanWrite(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	loc := legacyLocationForTest(t)
+	held, err := acquireLegacyLock(loc.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.File.Close() }()
+	if err := os.Chmod(loc.Dir, 0o777); err != nil { //nolint:gosec // G302: the unsafe mode IS the case under test
+		t.Fatal(err)
+	}
+	b := newLegacyBridge()
+	b.bind(context.Background(), []heldLegacyLock{held}, daemonSocketPath(), nil)
+	defer b.close()
+	if len(b.records()) != 0 {
+		t.Fatalf("the bridge listens in a world-writable directory: %+v", b.records())
+	}
+}
+
+func TestLegacyBridge_SocketIsPrivate(t *testing.T) {
+	f := newBridgeFixture(t)
+	info, err := os.Stat(f.loc.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("the bridge socket is mode %04o, want 0600", perm)
+	}
+}
+
+// TestServeConnections_DrainsAndClosesTheBridge pins the shared lifecycle: a
+// connection through the bridge is handled by the SAME handler and joins the
+// SAME drain as the account socket's, and shutdown closes the bridge.
+func TestServeConnections_DrainsAndClosesTheBridge(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	loc := legacyLocationForTest(t)
+	held, err := acquireLegacyLock(loc.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.File.Close() }()
+	guard, err := newSocketGuard(daemonSocketPath(), func() bool { return true }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	bridge := newLegacyBridge()
+	bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath(), nil)
+
+	inHandler := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	handle := func(c net.Conn) {
+		inHandler <- struct{}{}
+		<-release
+		finished.Store(true)
+		_ = c.Close()
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); serveConnections(ctx, guard, bridge, handle, func() {}) }()
+
+	conn, err := net.DialTimeout("unix", loc.Socket, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	select {
+	case <-inHandler:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a bridge connection never reached the daemon's handler")
+	}
+	cancel()
+	// Shutdown closes the bridge: nothing answers there any more.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.DialTimeout("unix", loc.Socket, 200*time.Millisecond)
+		if err != nil {
+			break
+		}
+		_ = c.Close()
+		if time.Now().After(deadline) {
+			t.Fatal("the bridge still accepts connections after shutdown began")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The drain waits for the bridge connection in flight.
+	select {
+	case <-done:
+		t.Fatal("serveConnections returned while a bridge connection was still in its handler: it was not in the drain")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("serveConnections did not return after the drain")
+	}
+	if !finished.Load() {
+		t.Fatal("the handler had not finished when serveConnections returned")
+	}
+}
+
+// TestLiveLegacyBridges_ReportsOnlyOurLiveBridge: `plumb debug daemons` lists a
+// bridge only while the file at its path is the one the live daemon published.
+func TestLiveLegacyBridges_ReportsOnlyOurLiveBridge(t *testing.T) {
+	f := newBridgeFixture(t)
+	publishBridges(t, os.Getpid(), f.bridge.records())
+	if got := liveLegacyBridges(); len(got) != 1 || got[0].Path != f.loc.Socket {
+		t.Fatalf("liveLegacyBridges = %+v, want the live bridge", got)
+	}
+	if !strings.Contains(renderLegacyBridges(liveLegacyBridges()), f.loc.Socket) {
+		t.Fatal("the census output does not name the bridge")
+	}
+	if err := os.Remove(f.loc.Socket); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f.loc.Socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := liveLegacyBridges(); len(got) != 0 {
+		t.Fatalf("a replaced bridge path is still reported as ours: %+v", got)
+	}
+}
+
+func TestOurBridgeAt_RefusesAStaleRecord(t *testing.T) {
+	f := newBridgeFixture(t)
+	fa, err := acquireAuthority()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = fa.Close() }()
+	m := authorityMetadata{
+		PID: os.Getpid(), Socket: daemonSocketPath(), Bridges: f.bridge.records(),
+		Published: time.Now().Add(-2 * daemonSocketPublicationFreshness),
+	}
+	if err := publishAuthority(fa, m); err != nil {
+		t.Fatal(err)
+	}
+	if ourBridgeAt(f.loc.Socket) {
+		t.Fatal("a record nobody refreshed within the freshness window claimed the socket")
 	}
 }

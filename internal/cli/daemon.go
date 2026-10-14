@@ -290,6 +290,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// environment resolved elsewhere dial THIS daemon (PLAN-527) and what lets
 	// doctor and `plumb debug daemons` report a replaced path from outside.
 	bridge := newLegacyBridge()
+	// Every rewrite of the record goes through the guard's own lock — its checks
+	// and the bridge's republish alike — so two writers never interleave.
 	guard, err := newSocketGuard(socketPath,
 		func() bool { return daemonHoldsAuthority(locks) },
 		func(path string, id fileIdentity) { publishAuthorityMetadata(locks, path, id, bridge.records()) })
@@ -302,8 +304,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer guard.close()
 	go guard.run(ctx)
 	// Old clients at the legacy socket paths whose locks this daemon holds
-	// (PLAN-549); published with the next refresh of the authority record.
-	bridge.bind(ctx, locks.Legacy, socketPath)
+	// (PLAN-549), published in the authority record as soon as they are bound.
+	bridge.bind(ctx, locks.Legacy, socketPath, guard.republish)
 	defer bridge.close()
 
 	pidPath := daemonPIDPath()

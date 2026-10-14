@@ -260,7 +260,7 @@ Key design properties:
   the release of every lock are confirmed, within the same 30 s deadline;
   otherwise it fails closed and starts nothing.
 - **The legacy bridge (PLAN-549), and what retires it** — an old `plumb serve`
-  proxy from before the account authority (pre-0.24) knows only its legacy socket
+  proxy from before the account authority (0.24.0 and earlier) knows only its legacy socket
   path, and after a migration its daemon is gone and it cannot start another (the
   canonical daemon holds that location's lifetime lock). So the canonical daemon
   also binds the **MCP** socket — never the control socket — of every legacy
@@ -271,14 +271,17 @@ Key design properties:
   if its path is deleted. The bridge sockets and their identities are published
   in the authority record, which is how the legacy probe, `plumb doctor` and the
   census tell the account's own daemon answering there from a daemon an older
-  binary left running (identity match + live publisher, no lock, no dial). The
+  binary left running (identity match + a live, fresh publisher, no lock, no
+  dial). A bridge binds only in a 0700 directory this user owns, its socket is
+  0600, and each bind, re-bind and first client is published at once. The
   first client through each path is logged with the remedy (restart that client
   so it uses the account socket), and `plumb debug daemons` shows each bridge and
   whether an old client has used it since the daemon started. **Removal horizon:**
-  the bridge exists only to make the 0.24 upgrade seamless for clients that were
-  running before it. It is to be removed in the first minor release at least
-  three months after 0.24.0, once `plumb debug daemons` on maintained installs
-  shows no bridge with a recorded client; removing it means deleting
+  the bridge exists only to make the upgrade to the account authority seamless
+  for clients that were running before it. It is to be removed in the first
+  minor release at least three months after the first release that ships the
+  account authority, once `plumb debug daemons` on maintained installs shows no
+  bridge with a recorded client; removing it means deleting
   `daemon_legacy_bridge.go`, the `Bridges` field of the authority record and its
   readers — nothing else depends on it.
 - **One language server per (root, language)** — multiple MCP connections to
