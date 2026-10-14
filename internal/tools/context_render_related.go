@@ -135,6 +135,9 @@ func (p *contextPack) relatedLines() []packLine {
 		ls = append(ls, packLine{text: relatedText(r), prio: prio, section: secRelated, class: classRelated})
 		if u, ok := p.relatedBodyLine(i); ok {
 			ls = append(ls, u)
+			if uses, ok := p.usesLine(r.Body, u.body, secRelated); ok {
+				ls = append(ls, uses)
+			}
 		}
 	}
 	if len(ls) == 0 {

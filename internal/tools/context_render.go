@@ -95,6 +95,9 @@ func (p *contextPack) seedLines() []packLine {
 		ls = append(ls, packLine{text: "  " + seedText(s), prio: prioSeed, section: secSeeds, class: classSeed})
 		if u, ok := p.bodyLine(i); ok {
 			ls = append(ls, u)
+			if uses, ok := p.usesLine(p.Bodies[i], u.body, secSeeds); ok {
+				ls = append(ls, uses)
+			}
 		}
 	}
 	for _, m := range p.Misses {
