@@ -48,6 +48,7 @@ which binary runs or where it keeps its files.
   plumb service set-executable   point the service at another installed binary
   plumb service set-path         change the PATH its language servers get
   plumb service set-xdg          adopt (or drop) an XDG base directory override
+  plumb service env              the variables its children inherit ([service.env])
 
 "install" is what a package manager runs after an upgrade: it updates the
 recorded executable and leaves every other setting alone.`,
@@ -60,7 +61,12 @@ var serviceInstallCmd = &cobra.Command{
 
 Idempotent by construction, and safe to run after every upgrade: only the
 executable is ever changed, so a user's adopted directories, PATH and XDG
-overrides survive. Run it from the binary that should be the service.`,
+overrides survive. Run it from the binary that should be the service.
+
+The first install also seeds [service.env] from this shell: the proxy, CA
+bundle, ssh-agent and Go module variables (see ` + "`plumb service env`" + `), each
+captured now and never read from a client later. It never replaces an entry
+you have, and it seeds once: a variable you unset stays unset.`,
 	Args: cobra.NoArgs,
 	RunE: runServiceInstall,
 }
@@ -177,7 +183,7 @@ func installServiceProfile(verbose bool) error {
 	existing, err := service.LoadFile(path)
 	switch {
 	case err == nil:
-		return updateProfileExecutable(path, existing, exe, verbose)
+		return updateInstalledProfile(path, existing, exe, verbose)
 	case !errors.Is(err, service.ErrNoProfile):
 		// install is the remedy every other error names, so it has to work on a
 		// profile that cannot be read. Nothing can be preserved from a file that
@@ -186,6 +192,7 @@ func installServiceProfile(verbose bool) error {
 	}
 
 	p := freshProfile(u, exe)
+	p.Env = seedServiceEnv(p.Env, os.LookupEnv)
 	if err := p.Write(path); err != nil {
 		return err
 	}
@@ -197,25 +204,28 @@ func installServiceProfile(verbose bool) error {
 	return nil
 }
 
-// updateProfileExecutable is the upgrade path: the executable changes, and every
-// other recorded setting is left exactly as the user has it. A package's
+// updateInstalledProfile is the upgrade path: the executable changes, a profile
+// recorded before [service.env] existed is seeded once (seedServiceEnv), and
+// every other recorded setting is left exactly as the user has it. A package's
 // post_install runs this on every upgrade, so it must be safe to run at any
 // time, repeatedly.
-func updateProfileExecutable(path string, existing service.Profile, exe string, verbose bool) error {
-	if existing.Executable == exe {
+func updateInstalledProfile(path string, existing service.Profile, exe string, verbose bool) error {
+	before := existing
+	existing.Env = seedServiceEnv(existing.Env, os.LookupEnv)
+	existing.Executable = exe
+	changes := describeChange(before, existing)
+	if changes == "" && before.Env.Seeded == existing.Env.Seeded {
 		if verbose {
 			fmt.Printf("plumb service: %s is already current (executable %s)\n", path, exe)
 		}
 		return nil
 	}
-	previous := existing.Executable
-	existing.Executable = exe
 	if err := existing.Write(path); err != nil {
 		return err
 	}
-	fmt.Printf("plumb service: updated the executable in %s\n  was: %s\n  now: %s\n", path, previous, exe)
+	fmt.Printf("plumb service: updated %s\n%s", path, changes)
 	if verbose {
-		fmt.Print("  your directories, PATH and XDG settings were left alone\n")
+		fmt.Print("  your directories, PATH, XDG settings and recorded environment were left alone\n")
 	}
 	return nil
 }
@@ -444,6 +454,7 @@ func describeChange(before, after service.Profile) string {
 			fmt.Fprintf(&b, "  %s: %q -> %q\n", v.Name, was, v.Value)
 		}
 	}
+	b.WriteString(describeEnvChange(before.Env, after.Env))
 	return b.String()
 }
 
@@ -459,6 +470,9 @@ func reportProfile(p service.Profile) string {
 		if v.Value != "" {
 			fmt.Fprintf(&b, "  adopted %s=%s\n", v.Name, v.Value)
 		}
+	}
+	if names := p.Env.AppliedNames(); len(names) > 0 {
+		fmt.Fprintf(&b, "  env:       %s (captured from this shell; `plumb service env show`)\n", strings.Join(names, ", "))
 	}
 	return b.String()
 }

@@ -232,6 +232,7 @@ plumb service show
 plumb service set-executable <path>
 plumb service set-path <path>
 plumb service set-xdg [--config-home <dir>] [--data-home <dir>] [--state-home <dir>] [--cache-home <dir>] [--runtime-dir <dir>]
+plumb service env show | set NAME=VALUE | set NAME | unset NAME | refresh
 ```
 
 Manage the account-wide service's **launch profile**
@@ -250,6 +251,11 @@ anything: it only writes the profile.
 | `set-executable <path>` | Point the service at another installed binary (an absolute path to a runnable file). |
 | `set-path <path>` | Replace the PATH the daemon and its children inherit. |
 | `set-xdg` | Adopt an XDG base directory explicitly, or drop one by passing an empty value. The service's directories for the roles that base governs follow it. |
+| `env show` | Print the variables recorded in `[service.env]` — literals, captured values, and names that were not set when captured. |
+| `env set NAME=VALUE` | Record a literal value for the daemon's children. |
+| `env set NAME` | Record `NAME` from **this shell**: its value is captured now and frozen until `env refresh`. |
+| `env unset NAME` | Stop passing `NAME` to the service. |
+| `env refresh` | Re-capture every variable recorded from a shell (after a proxy or certificate path moves). Literals are left alone. |
 
 `install` records the account's standard directories by default (macOS:
 `~/Library/Application Support/plumb`, `~/Library/Logs/plumb` and
@@ -259,6 +265,17 @@ an XDG base that already holds a plumb directory of its own, that base is
 **adopted** and printed, so a real XDG setup keeps its configuration instead of
 being silently abandoned. A base that holds no plumb state — a session
 manager's throwaway temp directory — is never adopted.
+
+The daemon's children — git, the language servers, `run_task` commands — get
+the profile's `[service.env]` on top of that clean environment. The first
+`install` seeds it from the installing shell with the proxy (`http_proxy`,
+`https_proxy`, `no_proxy`, `all_proxy`, both cases), CA (`SSL_CERT_FILE`,
+`SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`),
+agent (`SSH_AUTH_SOCK`, `GIT_SSH_COMMAND`) and Go module (`GOPRIVATE`,
+`GONOSUMDB`, `GOPROXY`) variables; see
+[the service environment](configuration.md#the-service-environment-serviceenv).
+`HOME`, `USER`, `LOGNAME`, `PATH`, `XDG_*`, `PLUMB_*` and `TSM_ORIG_*` can never
+be recorded there. Run `plumb restart` for a change to reach the daemon.
 
 A launch with **no profile refuses**: `plumb serve` fails with the
 `plumb service install` instruction rather than guessing an executable, a PATH

@@ -76,6 +76,14 @@ func resolveLaunchSpec() (daemonLaunchSpec, error) {
 	if err != nil {
 		return daemonLaunchSpec{}, fmt.Errorf("resolving the account to launch the plumb service: %w", err)
 	}
+	// The NAMES of the recorded variables, never their values: a proxy URL can
+	// carry credentials, and this lands in the log (PLAN-554).
+	if names := p.Env.AppliedNames(); len(names) > 0 {
+		slog.Info("serve: launching the daemon with the recorded service environment", "names", names)
+	}
+	if len(p.Env.Ignored) > 0 {
+		slog.Warn("serve: the service profile records variables that are never passed to the daemon", "names", p.Env.Ignored)
+	}
 	return daemonLaunchSpec{Executable: p.Executable, Env: p.LaunchEnv(u)}, nil
 }
 

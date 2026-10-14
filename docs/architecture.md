@@ -223,8 +223,8 @@ Key design properties:
   and 4, so they are held from the moment the daemon exists, and a launcher that
   finds either held (a daemon running or still starting) never starts another;
   it keeps dialling for up to 30 s (`PLUMB_DAEMON_START_TIMEOUT`) and then
-  fails. What those two launches start, and the directories and `PATH` the child
-  inherits, come from the account's service launch profile
+  fails. What those two launches start, and the directories, `PATH` and
+  recorded `[service.env]` variables the child inherits, come from the account's service launch profile
   (`<account data dir>/service.toml`, written by `plumb service install` and
   changed through `plumb service set-*`): a launch never infers an executable,
   a `PATH` or a global directory from the calling client's environment.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestProfile_WriteLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("round trip changed the profile:\n got %+v\nwant %+v", got, want)
 	}
 
@@ -80,7 +81,7 @@ func TestLoadFile_MissingProfileIsNeverInferred(t *testing.T) {
 	if !errors.Is(err, ErrNoProfile) {
 		t.Errorf("err = %v, want ErrNoProfile", err)
 	}
-	if got != (Profile{}) {
+	if !reflect.DeepEqual(got, Profile{}) {
 		t.Errorf("a missing profile produced %+v, want the zero Profile", got)
 	}
 	if !strings.Contains(err.Error(), path) {

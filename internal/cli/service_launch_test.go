@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"syscall"
@@ -472,7 +473,7 @@ func TestServiceSetXDG_RefusesAnUnusableRuntimeBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile: %v", err)
 	}
-	if after != before {
+	if !reflect.DeepEqual(after, before) {
 		t.Errorf("a refused set-xdg changed the profile:\n got %+v\nwant %+v", after, before)
 	}
 
