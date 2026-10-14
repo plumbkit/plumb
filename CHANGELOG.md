@@ -409,7 +409,10 @@
   daemon alive there now (its pid file names a live `plumb daemon` and is no
   newer than the version file), not on a file a SIGKILL left behind. A restart
   re-identifies the daemons it will stop after the confirmation prompt, so a pid
-  that changed hands while the prompt waited is not signalled. And the
+  that changed hands while the prompt waited is not signalled. On darwin a
+  process's argv is now read from the kernel (`kern.procargs2`) rather than
+  `ps`, so a binary under a path with a space, or a sandbox that denies `ps`,
+  no longer hides a running daemon from `plumb restart`/`stop`. And the
   daemon's refusal to start beside a legacy daemon, the symlink-spelling dedup
   of a held legacy lock and the stale-authority-record rule are now each pinned
   by a test that fails without them.

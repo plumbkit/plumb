@@ -116,14 +116,54 @@ func TestRunRestart_ReidentifiesAfterThePrompt(t *testing.T) {
 	if err := os.WriteFile(loc.PID, []byte(strconv.Itoa(stranger)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stubRestart(t, func(daemonActionPrompt) (bool, bool, error) {
+	got := stubRestart(t, func(daemonActionPrompt) (bool, bool, error) {
 		isDaemon = false // the daemon exited; its pid now names somebody else
 		return true, false, nil
 	})
+	before := time.Now()
 	if err := runRestart(nil, nil); err != nil {
 		t.Fatalf("runRestart: %v", err)
 	}
 	if !processAlive(stranger) {
 		t.Fatalf("restart signalled PID %d, which stopped being a daemon of ours during the prompt", stranger)
 	}
+	// Nothing left to stop: the successor still gets a whole launcher deadline.
+	if got.Sub(before) < daemonStartWait()-time.Second {
+		t.Fatalf("respawn was handed %s after the prompt, want about %s", got.Sub(before), daemonStartWait())
+	}
+}
+
+// TestRunRestart_StopsWhatIsADaemonAfterThePrompt: the re-identified set is the
+// one used, not merely checked for emptiness — a pid that stopped being ours is
+// spared while one that still is gets stopped.
+func TestRunRestart_StopsWhatIsADaemonAfterThePrompt(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	stranger := startReapedSleep(t)
+	daemon := startReapedSleep(t)
+	strangerIsDaemon := true
+	stubDaemonIdentity(t, func(pid int) bool { return pid == daemon || (pid == stranger && strangerIsDaemon) })
+	loc := currentLocation()
+	if err := os.MkdirAll(loc.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loc.PID, []byte(strconv.Itoa(stranger)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The second daemon is named by a legacy location's pid file.
+	legacy := legacyLocationForTest(t)
+	if err := os.WriteFile(legacy.PID, []byte(strconv.Itoa(daemon)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubRestart(t, func(daemonActionPrompt) (bool, bool, error) {
+		strangerIsDaemon = false
+		return true, false, nil
+	})
+	if err := runRestart(nil, nil); err != nil {
+		t.Fatalf("runRestart: %v", err)
+	}
+	if !processAlive(stranger) {
+		t.Errorf("restart signalled PID %d, which stopped being a daemon of ours during the prompt", stranger)
+	}
+	waitGone(t, daemon)
 }
