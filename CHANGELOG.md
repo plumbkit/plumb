@@ -322,7 +322,11 @@
   removed. Every pid `plumb restart` reads from a **file** is verified before it is
   signalled: a record whose lock is free belongs to a daemon that is gone, and one
   that names a process which is not a `plumb daemon` is a reused pid, so neither is
-  stopped. All of it is inert until the account-authority mode becomes the
+  stopped. That check reads `/proc` on Linux rather than shelling out to `ps`,
+  because the images plumb is most often deployed into may ship no procps at all:
+  a check that cannot RUN there answers "not a daemon" for every pid, which stops
+  nothing and leaves a legacy daemon serving instead of migrating it. All of it is
+  inert until the account-authority mode becomes the
   default: with it off, the environment's runtime directory *is* the one in use,
   so there is no legacy location to probe and the behaviour is exactly as before.
 
