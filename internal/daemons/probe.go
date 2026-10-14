@@ -3,6 +3,7 @@ package daemons
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 )
 
@@ -76,13 +77,30 @@ func census(p probe, opts Options) Report {
 		r.reportUnidentifiedHolder(p, opts.Authority)
 	}
 	for _, path := range opts.Sockets {
-		r.mark(p, path, func(d *Daemon) {
+		if path == "" {
+			continue
+		}
+		reading := SocketReading{Path: path}
+		reading.Answered = r.mark(p, path, func(d *Daemon) {
 			d.OwnsSocket = append(d.OwnsSocket, path)
 			d.raiseTo(IdentitySocket)
 		})
+		reading.Owners = r.socketOwners(path)
+		r.Sockets = append(r.Sockets, reading)
 	}
 	sort.Slice(r.Daemons, func(i, j int) bool { return r.Daemons[i].PID < r.Daemons[j].PID })
 	return r
+}
+
+// socketOwners lists the processes marked as holding path open, by pid.
+func (r *Report) socketOwners(path string) []int {
+	var pids []int
+	for _, d := range r.Daemons {
+		if slices.Contains(d.OwnsSocket, path) {
+			pids = append(pids, d.PID)
+		}
+	}
+	return pids
 }
 
 // mark asks the platform which candidate processes hold path, records them, and

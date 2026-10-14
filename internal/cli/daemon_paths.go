@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -28,16 +29,25 @@ func daemonPIDPath() string {
 	return filepath.Join(plumbRuntimeDir(), "plumb.pid")
 }
 
-// publishDaemonPID writes this process's PID file, first removing the control
+// publishDaemonPID writes this process's PID file, first clearing a stale control
 // socket. The identity hook names a daemon instance by the PID file plus the
 // control socket's inode and mtime. After a kill -9 both survive, and a
 // successor that reuses the PID would show the dead daemon's marker until it
 // re-binds the socket, so the hook would serve the dead daemon's cached answer.
 // With the socket gone first, that window reads as an empty marker, which never
-// matches a cache. writeFile is os.WriteFile; it is a parameter so a test can
-// see the socket's state at the instant the PID file appears.
+// matches a cache.
+//
+// Only a STALE socket is cleared (PLAN-529): one something is still listening on
+// is somebody else's, and unlinking it is exactly the file-a-live-process-is-
+// using defect this phase removes. The bind below refuses a live occupant too, so
+// the two agree about what may be displaced. writeFile is os.WriteFile; it is a
+// parameter so a test can see the socket's state at the instant the PID file
+// appears.
 func publishDaemonPID(writeFile func(name string, data []byte, perm os.FileMode) error) error {
-	_ = os.Remove(daemonCtrlSocketPath())
+	ctrlPath := daemonCtrlSocketPath()
+	if err := clearStaleSocket(ctrlPath); err != nil {
+		slog.Warn("daemon: leaving the control socket path alone", "path", ctrlPath, "err", err)
+	}
 	return writeFile(daemonPIDPath(), fmt.Appendf(nil, "%d", os.Getpid()), 0o600)
 }
 

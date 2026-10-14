@@ -22,6 +22,39 @@ plumb stop --force   # skip the prompt (useful in scripts/Makefiles)
 `plumb serve` warns on stderr when the running daemon's version differs from
 your binary.
 
+## A daemon is running but its socket path is gone or replaced
+
+If the runtime directory (sockets, pid, version file) is deleted while a daemon
+is running, the daemon re-binds its socket within 30 s and clients reconnect on
+their own — nothing to do.
+
+If something else is *at* the socket path, a running daemon leaves it exactly
+where it is: it never unlinks a file it did not create, and it keeps serving the
+connections it already has, so it stays reachable to them and unreachable to
+everyone else. `plumb doctor` and `plumb debug daemons` report it (`debug daemons`
+exits non-zero and names the path), and the daemon's log says so once. What is
+*not* a replacement: a chmod or a backup tool that rewrites the metadata of the
+daemon's own socket. That moves the file's change time without changing its
+inode, and the daemon goes on serving — doctor warns rather than fails, and
+`debug daemons` still exits 0. The daemon
+will not take the path back, so a live occupant has to go before a successor can
+serve, and the successor refuses to start while it is there — the refusal, naming
+the path, is in the daemon log (`plumb restart` then reports only that the daemon
+did not come back up).
+
+The exception is a path that nothing is listening on. When a daemon *binds* the
+path — at startup, or re-binding after the path disappeared — it clears a stale
+entry first: a leftover socket file from a daemon that was killed, or a regular
+file somebody dropped there. That is deliberate crash recovery: it is why a
+`plumb restart` after a `kill -9` needs no tidying up. What it never displaces is
+a path something is answering on: there the bind fails closed and the daemon
+refuses to start rather than stealing the socket. Between the check that found the
+path gone and the bind that replaces it there is a window of microseconds in
+which a new file can appear at the path; the bind clears it only if nothing
+answers on it, and refuses — logged, retried on the next tick — if something does.
+So the file you must move aside by hand is the one that is alive; a dead one goes
+by itself.
+
 ## "… has not been read in this session"
 
 Strict mode is on (`[edits] strict = true`). `edit_file` requires the target to

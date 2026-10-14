@@ -79,6 +79,30 @@ func TestCensus_MergesEverySource(t *testing.T) {
 	}
 }
 
+func TestCensus_ReportsWhatItCouldEstablishAboutEachSocket(t *testing.T) {
+	// The per-path reading is what PLAN-529's socket state is built on, so the
+	// difference between "nobody serves this path" and "this census could not
+	// tell" has to survive the census rather than being flattened into an empty
+	// owner list.
+	procs := []Daemon{{PID: 100, Argv: "plumb daemon", Identity: IdentityArgv, HoldsAuthority: true}}
+	other := "/run/plumb/plumb.ctrl.sock"
+	p := fakeProbe(procs, nil, map[string][]int{authority: {100}}, map[string][]int{socket: {100}, other: nil})
+	r := census(p, Options{Authority: authority, Sockets: []string{socket, other}})
+
+	if len(r.Sockets) != 2 {
+		t.Fatalf("got %d socket readings, want 2: %+v", len(r.Sockets), r.Sockets)
+	}
+	if got := r.Sockets[0]; got.Path != socket || !got.Answered || len(got.Owners) != 1 || got.Owners[0] != 100 {
+		t.Errorf("the served socket's reading = %+v, want it answered and owned by 100", got)
+	}
+	if got := r.Sockets[1]; got.Path != other || got.Answered {
+		t.Errorf("an ownership question the platform could not answer must be recorded as unanswered: %+v", got)
+	}
+	if len(r.Unknown) == 0 {
+		t.Error("an unanswered ownership question must still reach Report.Unknown")
+	}
+}
+
 func TestCensus_IgnoresAHolderOutsideTheCandidates(t *testing.T) {
 	// Ownership is asked only about processes the census already found, because a
 	// scan of every descriptor on the machine is far too expensive for something

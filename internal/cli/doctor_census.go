@@ -13,10 +13,39 @@ import (
 // perfectly healthy.
 
 // checkDaemonCensus answers E1 in doctor: exactly one plumb daemon for this
-// account, and it is the one holding the launch authority.
+// account, it is the one holding the launch authority, and — since PLAN-529 — the
+// socket path it published still holds the socket it bound. The three questions
+// come from ONE census, so the rows cannot disagree about what was seen.
 func checkDaemonCensus() []checkResult {
 	report := daemons.Census(daemonCensusOptions())
-	return daemonCensusResult(report.Verdict())
+	rows := daemonCensusResult(report.Verdict())
+	return append(rows, daemonSocketResults(daemonSocketStates(report))...)
+}
+
+// daemonSocketResults is the socket half of the daemon section, and its pure half
+// so the state-to-row mapping is testable without a filesystem.
+//
+// A path a live daemon published that no longer holds its socket is a FAILURE:
+// the daemon is running and no client can reach it, which is the state 64 leaked
+// daemons reached and the reason this row exists. Anything weaker — a socket file
+// nothing serves, a question the census could not answer — is a warning, because
+// accusing a daemon of losing a path nobody could read would be a guess.
+func daemonSocketResults(states []socketPathState) []checkResult {
+	var rows []checkResult
+	for _, s := range states {
+		switch {
+		case s.fault() != "":
+			rows = append(rows, checkResult{
+				name:   "socket",
+				ok:     false,
+				detail: s.Path + ": " + s.fault(),
+				fix:    "if the file at that path is not yours, move it aside and run `plumb restart`; a daemon deliberately never removes a file it did not create",
+			})
+		case s.note() != "":
+			rows = append(rows, checkResult{name: "socket", ok: true, warn: true, detail: s.Path + ": " + s.note()})
+		}
+	}
+	return rows
 }
 
 // daemonCensusResult is the pure half of checkDaemonCensus, so the verdict-to-row

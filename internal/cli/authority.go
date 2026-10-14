@@ -57,6 +57,22 @@ type authorityMetadata struct {
 	// the authority held dials THIS path, whatever its own environment resolved,
 	// which is how a client under a different HOME still reaches the one daemon.
 	Socket string `json:"socket"`
+	// SocketDev and SocketIno identify the SOCKET FILE the holder bound at
+	// Socket: the device and inode os.Stat reports for it (PLAN-529). A reader
+	// compares them with the file at Socket, so a path that was deleted or
+	// replaced under a live daemon is reported as exactly that instead of reading
+	// as healthy — which is how `plumb debug daemons` and `plumb doctor` see the
+	// defect, without dialling anything or taking a lock. Zero when the holder
+	// could not read them, and zero in records written by an older daemon.
+	SocketDev uint64 `json:"socket_dev,omitempty"`
+	SocketIno uint64 `json:"socket_ino,omitempty"`
+	// SocketCtime is the socket inode's change time, in nanoseconds since the
+	// epoch — the kernel metadata that tells the socket this holder created from a
+	// different file that later inherited the same (device, inode) on a
+	// filesystem that reuses freed inodes (PLAN-529). Absent, not zero, in a
+	// record written before that field existed; a reader then compares device and
+	// inode alone, which is all such a record can support.
+	SocketCtime int64 `json:"socket_ctime,omitempty"`
 }
 
 // authorityPath returns the account authority lock path.
@@ -119,15 +135,20 @@ func publishAuthority(f *os.File, m authorityMetadata) error {
 }
 
 // publishAuthorityMetadata records this daemon as the authority's holder,
-// through the held fd: who it is, and the MCP socket it is about to serve. A
-// launcher that finds the authority held reads that record and dials the socket,
-// which is how a client whose HOME or XDG resolves elsewhere reaches the one
-// daemon instead of failing.
+// through the held fd: who it is, the MCP socket it is about to serve, and the
+// identity of that socket file. A launcher that finds the authority held reads
+// that record and dials the socket, which is how a client whose HOME or XDG
+// resolves elsewhere reaches the one daemon instead of failing; a reader that is
+// only diagnosing compares the identity with what is at the path (PLAN-529).
+//
+// The daemon calls it again when its socket guard re-binds the path, so the
+// record always names the socket the holder serves now — and never a file that
+// replaced it, which the holder deliberately leaves alone.
 //
 // A failure is a warning, not fatal. The record is what lets a differently
 // rooted client attach; the daemon still serves every client whose environment
 // resolves as its own does, which is what it did before there was a record.
-func publishAuthorityMetadata(locks daemonLocks, socketPath string) {
+func publishAuthorityMetadata(locks daemonLocks, socketPath string, socketID fileIdentity) {
 	if locks.Authority == nil {
 		return
 	}
@@ -136,10 +157,13 @@ func publishAuthorityMetadata(locks daemonLocks, socketPath string) {
 		exe = "" // best effort: the record still names the pid and the socket
 	}
 	if err := publishAuthority(locks.Authority, authorityMetadata{
-		PID:        os.Getpid(),
-		Version:    Version,
-		Executable: exe,
-		Socket:     socketPath,
+		PID:         os.Getpid(),
+		Version:     Version,
+		Executable:  exe,
+		Socket:      socketPath,
+		SocketDev:   socketID.dev,
+		SocketIno:   socketID.ino,
+		SocketCtime: socketID.ctime,
 	}); err != nil {
 		slog.Warn("daemon: could not publish the authority metadata", "err", err)
 	}

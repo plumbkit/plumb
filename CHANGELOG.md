@@ -517,6 +517,33 @@
   counting as a second conversation on the connection. Hooks installed by
   `plumb hooks install codex` are unchanged: still `SessionStart` and `Stop`.
 
+- **A daemon no longer unlinks a socket file somebody else put at its path, and it
+  repairs a runtime directory deleted under it.** `net.UnixListener.Close` unlinks
+  whatever is at the socket path, and `plumb daemon`'s shutdown removed the pid,
+  socket and version files unconditionally — so a file that replaced a live
+  daemon's socket was deleted by the daemon that no longer owned the path, and a
+  daemon whose runtime directory was deleted went on running, unreachable, which
+  is the state 64 leaked daemons reached. Both listeners now bind with
+  unlink-on-close off, each runtime file is removed only while the path still
+  names the file that daemon created there — its device, inode and **change
+  time**, since a filesystem that hands a freed inode straight back (ext4 does)
+  makes a recreated file inherit the first two — and a daemon
+  re-checks its socket paths every 30 s and on any accept error: a path that has
+  been deleted is re-bound (the daemon holds the account authority, so nobody else
+  may be serving this account), while a path that now holds a different file is
+  never removed and is reported in the daemon log. A socket whose *metadata*
+  moves instead — a chmod, a backup tool touching the path — is not mistaken for
+  a replacement: the daemon's own listener holds the bound inode open, so an
+  inode with a live reference cannot be handed out again and a genuine
+  replacement always has a different one. Each socket's identity is
+  published in the authority record and re-published on every check — including
+  while somebody else's file is at the path, so the report cannot go quiet while
+  the daemon is up — so `plumb debug daemons` and `plumb doctor` say when a live
+  daemon's socket is gone or has been replaced instead of calling it healthy, and
+  `plumb debug daemons` exits non-zero for it. Binding a socket
+  also refuses a live occupant — a stale socket left by a daemon that died is
+  still cleared, so ordinary crash recovery is unchanged.
+
 ### Security
 
 - **The `git` tool's read tier no longer writes files or reads outside the

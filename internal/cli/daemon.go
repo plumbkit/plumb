@@ -281,27 +281,32 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	store := config.NewStore(cfg)
 
 	socketPath := daemonSocketPath()
-	_ = os.Remove(socketPath)
-	_ = os.MkdirAll(filepath.Dir(socketPath), 0o700)
 
-	ln, err := net.Listen("unix", socketPath)
+	// The MCP socket is bound through the guard that owns it for the daemon's
+	// life (PLAN-529): it records which file this daemon created at the path,
+	// re-binds it if it is deleted while the authority is held, and never removes
+	// a file that replaced it. The guard publishes the socket's identity in the
+	// authority metadata as it binds, which is what lets a launcher whose own
+	// environment resolved elsewhere dial THIS daemon (PLAN-527) and what lets
+	// doctor and `plumb debug daemons` report a replaced path from outside.
+	guard, err := newSocketGuard(socketPath,
+		func() bool { return daemonHoldsAuthority(locks) },
+		func(path string, id fileIdentity) { publishAuthorityMetadata(locks, path, id) })
 	if err != nil {
-		return fmt.Errorf("daemon: listening on %s: %w%s", socketPath, err, socketPathLengthHint(socketPath))
+		return fmt.Errorf("daemon: %w", err)
 	}
-	defer os.Remove(socketPath)
-	defer ln.Close()
-
-	// Announce, through the held authority fd, who holds the authority and the
-	// socket it serves, so a launcher that finds it held — a client whose own
-	// environment resolved elsewhere — dials THIS daemon instead of waiting out
-	// its deadline and failing (PLAN-527).
-	publishAuthorityMetadata(locks, socketPath)
+	// LIFO: the listener closes first, then the removal — which checks the path's
+	// identity, so a file that replaced this daemon's socket is left alone.
+	defer guard.removeSocketIfOurs("daemon socket")
+	defer guard.close()
+	go guard.run(ctx)
 
 	pidPath := daemonPIDPath()
 	if err := publishDaemonPID(os.WriteFile); err != nil {
 		slog.Warn("daemon: could not write PID file", "path", pidPath, "err", err)
 	}
-	defer os.Remove(pidPath)
+	pidMarker := markRuntimeFile(pidPath)
+	defer pidMarker.removeIfOurs("pid file")
 
 	// Publish our build version next to the PID so `plumb serve` can detect a
 	// version mismatch (running daemon older than the binary that's launching).
@@ -309,7 +314,8 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	if err := os.WriteFile(versionPath, []byte(Version), 0o600); err != nil {
 		slog.Warn("daemon: could not write version file", "path", versionPath, "err", err)
 	}
-	defer os.Remove(versionPath)
+	versionMarker := markRuntimeFile(versionPath)
+	defer versionMarker.removeIfOurs("version file")
 
 	statsStore := newStatsStore()
 	defer statsStore.Close()
@@ -396,16 +402,21 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer webServer.Close()
 
 	ctrlPath := daemonCtrlSocketPath()
-	_ = os.Remove(ctrlPath)
-	ctrlLn, ctrlErr := net.Listen("unix", ctrlPath)
+	// The control socket is guarded exactly like the MCP socket, so a runtime
+	// directory deleted under a running daemon repairs the admin channel too
+	// (PLAN-529). A failure here has always been a warning rather than fatal: a
+	// daemon without a control socket is degraded, not absent, and MCP still
+	// works.
+	ctrlGuard, ctrlErr := newSocketGuard(ctrlPath, func() bool { return daemonHoldsAuthority(locks) }, nil)
 	if ctrlErr != nil {
 		slog.Warn("daemon: could not start control socket", "path", ctrlPath, "err", ctrlErr)
 	} else {
-		defer os.Remove(ctrlPath)
-		defer ctrlLn.Close()
+		defer ctrlGuard.removeSocketIfOurs("control socket")
+		defer ctrlGuard.close()
+		go ctrlGuard.run(ctx)
 		go func() {
 			<-ctx.Done()
-			ctrlLn.Close()
+			ctrlGuard.close()
 		}()
 		diagsFn := func(workspace string) string { return workspaceDiagnostics(pool, workspace) }
 		// Advisory context hints (PLAN-462): Slice A's collector over the daemon's
@@ -413,7 +424,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		contextHint, closeHints := startContextHints(ctx, registry, newDaemonContextHinter(topoPool.forRoot, registry),
 			func() bool { return store.Current().Context.Hints })
 		defer closeHints()
-		go serveControlSocket(ctrlLn, configLevel, cfg.LogFormat, ctrlHandlers{
+		go serveControlSocket(ctrlGuard, configLevel, cfg.LogFormat, ctrlHandlers{
 			diags:         diagsFn,
 			reload:        store.Reload,
 			reloadProject: registry.reloadProject,
@@ -456,7 +467,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, ln, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
+	runDaemonAcceptLoop(ctx, guard, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 	return nil
 }
 
@@ -471,7 +482,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 // match `ps`. Extracted from runDaemon so the strip is pinned by a test.
 func daemonStartTime() time.Time { return time.Now().Round(0) }
 
-func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
+func runDaemonAcceptLoop(ctx context.Context, guard *socketGuard, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
 	var wg sync.WaitGroup
 
 	// Idle-session reaper: cancel connections that have not called any tool
@@ -490,11 +501,11 @@ func runDaemonAcceptLoop(ctx context.Context, ln net.Listener, pool *workspacePo
 		// strand mid-commit. In-flight writes finish under their decoupled
 		// context (see tools.runGit).
 		tools.BeginGitWriteDrain()
-		ln.Close()
+		guard.close()
 	}()
 
 	for {
-		conn, err := ln.Accept()
+		conn, err := guard.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():

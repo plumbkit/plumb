@@ -663,7 +663,7 @@ plumb doctor [--workspace <dir>] [--json]
 Run health checks grouped by topic and report what needs attention. Exits
 non-zero if any check fails. Sections:
 
-- **Daemon** — socket reachable; running version matches this binary; exactly one `plumb daemon` for this user and it holds the launch authority (the row fails on a violation and on a census that could not read the process table, because "cannot tell" is not "fine").
+- **Daemon** — socket reachable; running version matches this binary; exactly one `plumb daemon` for this user and it holds the launch authority (the row fails on a violation and on a census that could not read the process table, because "cannot tell" is not "fine"); and each socket path still holds the socket the daemon published for it. That last check adds a row per affected path: a path a *live* daemon published that is now missing, or that holds a file with a *different inode* (a replacement), fails — the daemon is running and no client can reach it — while two weaker states are warnings, never failures: a socket file nothing serves (the ordinary leftover of a killed daemon, which the next `plumb serve` clears), and a socket whose file is still the one the daemon bound but whose *metadata* moved (a chmod, a backup tool; the inode is unchanged, so it is not a replacement, and the daemon keeps serving).
 - **Language Servers** — each configured LSP binary is on `PATH` (enabled
   servers that are missing fail; disabled ones are informational), plus a
   Java 21+ runtime check when `java` is configured.
@@ -1016,16 +1016,19 @@ the control socket and requires it to be up.
 | `plumb debug heap` | Force a GC and write a `runtime/pprof` heap profile to the cache dir. |
 | `plumb debug stacks` | Write a full goroutine stack dump (the `SIGQUIT`-equivalent) for diagnosing a hang. |
 | `plumb debug lsp` | List each language server's state, PID, RSS, and idle time. |
-| `plumb debug daemons` | List every `plumb daemon` of this user and flag any that is not the launch-authority holder. |
+| `plumb debug daemons` | List every `plumb daemon` of this user and flag any that is not the launch-authority holder, or whose socket path no longer holds the socket it bound. |
 
 `plumb debug daemons` is deliberately local: it dials no socket, because the state
 it exists to find is a daemon whose socket has been unlinked and which therefore
 answers nothing. It reports each daemon's pid, parent, start time, executable,
-whether it holds the authority and which plumb socket it owns, and exits non-zero
-when the account does not have exactly one daemon holding the authority — or when
-the census could not read the process table, since "cannot tell" is not "fine".
-It never signals a process, never removes a stale pid file, and never takes a
-lock.
+whether it holds the authority and which plumb socket it owns, and then every
+socket path with something to say about it: a path a *live* daemon published that
+is now missing or holds a different file (its socket was deleted or replaced under
+it) is printed as a fault, and a socket file nothing serves as a note. It exits
+non-zero when the account does not have exactly one daemon holding the authority,
+when the census could not read the process table, or when a live daemon's published
+socket path is gone or replaced — since "cannot tell" is not "fine". It never
+signals a process, never removes a stale pid file, and never takes a lock.
 
 ---
 
