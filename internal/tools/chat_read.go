@@ -38,16 +38,22 @@ func (i Inbox) readStores() ([]*collab.Store, error) {
 
 // ClaimResult is the explicit receive path. It preserves errors and any rows
 // already claimed, unlike advisory Claim, which logs a failure and carries on.
+//
+// The claim budget starts once the stores are open. Opening takes no context,
+// so it cannot be cut short; charged to the budget, a slow open (a cold
+// collab.db, a loaded machine) only turned readable mail into a deadline error.
+// Each claim reports its own context error, so a claim the budget did cut short
+// is still a failure; a call whose claims all succeeded is not.
 func (i Inbox) ClaimResult(ctx context.Context) ([]collab.Row, error) {
 	if !i.Policy.Mailbox || i.Self == "" {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
-	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	stores, err := i.readStores()
+	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
+	defer cancel()
 	var failures []error
 	failures = append(failures, err)
 	var out []collab.Row
@@ -65,7 +71,6 @@ func (i Inbox) ClaimResult(ctx context.Context) ([]collab.Row, error) {
 		out = append(out, rows...)
 		failures = append(failures, claimErr)
 	}
-	failures = append(failures, ctx.Err())
 	return out, errors.Join(failures...)
 }
 
@@ -75,8 +80,6 @@ func (i Inbox) Snapshot(ctx context.Context) (collab.MailboxSnapshot, error) {
 	if !i.Policy.Mailbox || i.Self == "" {
 		return collab.MailboxSnapshot{}, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
-	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return collab.MailboxSnapshot{}, err
 	}
@@ -84,6 +87,9 @@ func (i Inbox) Snapshot(ctx context.Context) (collab.MailboxSnapshot, error) {
 	if err != nil {
 		return collab.MailboxSnapshot{}, err
 	}
+	// The budget covers the reads, not the open (see ClaimResult).
+	ctx, cancel := context.WithTimeout(ctx, chatClaimTimeout)
+	defer cancel()
 	hash := sha256.New()
 	var result collab.MailboxSnapshot
 	now := time.Now()
