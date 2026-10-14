@@ -48,10 +48,11 @@ const (
 	classRelated
 	classAffected
 	classConstraint
+	classUses
 	classCount
 )
 
-var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body", "related", "affected", "constraint"}
+var packClassNames = [classCount]string{"seed", "candidate", "gap", "next", "body", "related", "affected", "constraint", "uses"}
 
 // omissions counts dropped records by class.
 type omissions [classCount]int

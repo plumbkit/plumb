@@ -96,6 +96,11 @@ func (p *contextPack) seedLines() []packLine {
 		if u, ok := p.bodyLine(i); ok {
 			ls = append(ls, u)
 		}
+		if i < len(p.Bodies) {
+			if u, ok := p.usesLine(p.Bodies[i], prioBody, secSeeds); ok {
+				ls = append(ls, u)
+			}
+		}
 	}
 	for _, m := range p.Misses {
 		ls = append(ls, missLines(m)...)
