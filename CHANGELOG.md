@@ -483,6 +483,28 @@
   names an existing path outside the repository is refused, a search pattern
   such as `/usr` included. A refusal names the argument and why.
 
+### Tests
+
+- **The Linux `CGO_ENABLED=0` build is now compiled and executed by a gate, not
+  only by the release.** `internal/account/home_linux_pure.go` is `linux && !cgo`
+  — the shape goreleaser builds — while every gate builds with a toolchain whose
+  C compiler turns cgo on by default (ubuntu-latest, the container verify image),
+  so the file was in no CI build at all. That is where PLAN-527's account lookup
+  read only `/etc/passwd` and would have refused every NSS account, leaving every
+  LDAP/SSSD/AD host unable to start a daemon, with every gate green. Two changes
+  close it. `runGetent` and the exec it drives move to
+  `internal/account/getent_linux.go` under a `linux` tag, which every Linux build
+  compiles (production behaviour is unchanged: the cgo build's `platformHome`
+  never calls them), so `TestRunGetent_ResolvesThisAccount` executes the real
+  `getent(1)` for the current uid and requires an absolute home out of
+  `parsePasswdHome`, and `TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold`
+  pins the status-2 refusal against the real binary — on every Linux leg.
+  `make test-pure` then builds the whole tree with `CGO_ENABLED=0` and runs the
+  account tests in the release's own mode, executing `platformHome` itself
+  (`TestPlatformHome_ResolvesThisAccount`,
+  `TestPlatformHome_RefusesAKeyNoSourceHolds`). It runs in CI on Linux and in
+  `make verify-full-container`, and refuses to pass quietly anywhere else.
+
 ## 0.24.0 (2026-10-10)
 
 ### Security

@@ -56,7 +56,7 @@ UNAME_S          := $(shell uname -s)
 CODESIGN_ID      := $(if $(CODESIGN_IDENTITY),$(CODESIGN_IDENTITY),-)
 CODESIGN_BUNDLE  := com.plumbkit.plumb
 
-.PHONY: build tool-sizes web-ui web-ui-audit test test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-changelog-headings-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom verify-full-container site blog demo-gif
+.PHONY: build tool-sizes web-ui web-ui-audit test test-pure test-race integration-test fuzz build-integration lint lint-tags lint-cross check-size check-brief check-changelog check-site-claims check-verify-disclosure check-changelog-placement check-changelog-placement-test check-changelog-headings-test check-pre-commit cover cover-report vuln tidy-check verify verify-full run clean tidy install install-hooks hooks codesign ts-wasm swift-wasm install-clients clients-test clients-test-auth clients-test-conformance build-clients docker-integration docker-cleanroom verify-full-container site blog demo-gif
 
 $(TESTCACHE):
 	mkdir -p $(TESTCACHE)
@@ -101,6 +101,34 @@ export GO_TEST_TIMEOUT
 
 test: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -timeout=$(GO_TEST_TIMEOUT) ./...
+
+# test-pure builds and tests the tree the way the RELEASE is built rather than
+# the way a developer machine is configured: CGO_ENABLED=0. Every other gate
+# takes the host toolchain's default, and that default is CGO_ENABLED=1 wherever
+# a C compiler is present — ubuntu-latest, this repo's own verify image, a Mac
+# with Xcode. So a file behind `linux && !cgo` is in no gate's build at all,
+# while being exactly the build that ships: .goreleaser.yml sets CGO_ENABLED=0.
+#
+# That blind spot is not hypothetical. It hid a blocking defect in
+# home_linux_pure.go — PLAN-527's account lookup read only /etc/passwd and would
+# have refused every NSS account, so no LDAP/SSSD/AD host could start a daemon,
+# shipped on merge. The gate that would have caught it is the gate that compiles
+# the file, which is why this target is a build before it is a test.
+#
+# `go build ./...` covers the whole class: no `!cgo` file anywhere in the tree
+# can drift back out of every gate unnoticed. The account run then EXECUTES the
+# pure-Go account path — platformHome through /etc/passwd and getent(1) — rather
+# than only compiling it, on a real binary and a real name service.
+#
+# Linux-only, and it says so rather than passing quietly: darwin has no cgo/pure
+# split (home_darwin.go carries no `!cgo` counterpart), so a green run here on a
+# Mac would be evidence about nothing.
+test-pure: $(TESTCACHE)
+	@[ "$$(go env GOOS)" = linux ] || { \
+		echo "test-pure: linux only (GOOS=$$(go env GOOS)); the darwin build has no cgo/pure split to cover" >&2; \
+		exit 1; }
+	CGO_ENABLED=0 GOTMPDIR=$(CURDIR)/$(TESTCACHE) go build ./...
+	CGO_ENABLED=0 GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -timeout=$(GO_TEST_TIMEOUT) ./internal/account/
 
 test-race: $(TESTCACHE)
 	GOTMPDIR=$(CURDIR)/$(TESTCACHE) go test -race -timeout=$(GO_TEST_TIMEOUT) ./...

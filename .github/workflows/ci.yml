@@ -68,6 +68,24 @@ jobs:
       - name: make verify
         run: make verify
 
+      # Every step above takes the runner toolchain's DEFAULT cgo mode, and on
+      # ubuntu-latest that default is CGO_ENABLED=1 — a C compiler is present.
+      # Release builds are CGO_ENABLED=0 (.goreleaser.yml), so a file behind
+      # `linux && !cgo` — internal/account/home_linux_pure.go — was compiled by
+      # no leg of this workflow at all. That is not a coverage gap in the
+      # abstract: it is where PLAN-527's account lookup read only /etc/passwd
+      # and would have refused every NSS account, so no LDAP/SSSD/AD host could
+      # start a daemon, and every gate was green. `make test-pure` builds the
+      # whole tree and runs the account tests in the mode that ships.
+      #
+      # Linux-only, and the target refuses elsewhere rather than passing
+      # quietly: darwin has no cgo/pure split to cover (home_darwin.go carries no
+      # `!cgo` counterpart), so a green run on macos-latest would be evidence
+      # about nothing.
+      - name: pure-Go build and account tests, as released (CGO_ENABLED=0)
+        if: runner.os == 'Linux'
+        run: make test-pure
+
       # Release builds are CGO_ENABLED=0, while `make verify` on macOS builds with
       # cgo, so it never runs the file watcher users actually get. PLAN-488: in
       # CGO_ENABLED=0 builds the old watcher backend (kqueue) opened every file in

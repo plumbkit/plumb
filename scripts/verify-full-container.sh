@@ -31,6 +31,10 @@ docker build ${platform[@]+"${platform[@]}"} -q -f "$root/build/docker/verify.Do
 
 name=plumb-verify-$(date +%s)-$$
 
+# No apostrophes inside this single-quoted string. One would end it early and the
+# rest of the script would run as shell, one word at a time — the failure reads
+# as `step: command not found`, from a comment. Write "the image has" rather
+# than a possessive.
 inside='
 set -uo pipefail
 cd /work || exit 70
@@ -106,6 +110,16 @@ supervisor=$!
 GOFLAGS=-count=1 make verify-full
 rc=$?
 echo "verify-full-container: make verify-full exited $rc"
+
+# The same blind spot the workflow step closes, closed here too: this image ships
+# gcc, so every go command above is CGO_ENABLED=1 and the `linux && !cgo` account
+# path — the one Linux releases actually execute — is in no build of this gate.
+# Its status folds into rc, so a failure fails the run rather than printing
+# underneath a green one.
+GOFLAGS=-count=1 make test-pure
+pure_rc=$?
+echo "verify-full-container: make test-pure exited $pure_rc"
+[ "$rc" -eq 0 ] && rc=$pure_rc
 
 # Trust the peak only from a watcher that ran for the whole suite: alive now,
 # stopped by us (TERM, so it exits 143), with a readable, numeric record.
