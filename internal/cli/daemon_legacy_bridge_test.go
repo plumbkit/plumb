@@ -257,3 +257,50 @@ func exitedPID(t *testing.T) int {
 	}
 	return cmd.Process.Pid
 }
+
+// TestRunDaemonAcceptLoop_ServesTheBridge pins the wiring: the daemon's accept
+// loop serves the bridge's sockets, not only the account socket. A connection
+// through the bridge is accepted (and noted) by the loop; the session itself
+// needs a real daemon (here the handler panics on its nil pools and the daemon's
+// recovery keeps the loop alive, which is the shared handler working) and is the
+// container probe's to exercise.
+func TestRunDaemonAcceptLoop_ServesTheBridge(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	loc := legacyLocationForTest(t)
+	held, err := acquireLegacyLock(loc.Lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.File.Close() }()
+	guard, err := newSocketGuard(daemonSocketPath(), func() bool { return true }, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	bridge := newLegacyBridge()
+	bridge.bind(ctx, []heldLegacyLock{held}, daemonSocketPath())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonAcceptLoop(ctx, guard, bridge, nil, nil, nil, nil, nil, nil, nil, nil, time.Now(), nil, nil, nil)
+	}()
+	conn, err := net.DialTimeout("unix", loc.Socket, time.Second)
+	if err != nil {
+		t.Fatalf("dialling the bridge: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for bridge.records()[0].FirstClient.IsZero() {
+		if time.Now().After(deadline) {
+			t.Fatal("the daemon's accept loop never accepted a connection through the bridge")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = conn.Close()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the accept loop did not stop after cancellation")
+	}
+}
