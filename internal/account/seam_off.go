@@ -35,8 +35,15 @@ func seamRoot() string {
 // legacy detection landed first, so an upgraded serve that takes the authority
 // can no longer start beside an old-path daemon, and `daemon.account_authority`
 // is how a user turns it back off.
-func authorityEnabled() bool {
-	if testing.Testing() {
+func authorityEnabled() bool { return authorityEnabledFor(testing.Testing()) }
+
+// authorityEnabledFor is authorityEnabled with the build fact that selects its
+// answer passed in, so BOTH answers can be exercised by the suite.
+// testing.Testing() is a constant in any one binary, so a rule written only
+// inside the else-branch below would be reachable by a container probe and by
+// nothing else — and a safety rule no test protects is a rule that erodes.
+func authorityEnabledFor(inTestBinary bool) bool {
+	if inTestBinary {
 		return authorityFromEnv()
 	}
 	return resolvedAuthorityValue()
@@ -60,8 +67,12 @@ func authorityEnabled() bool {
 // still isolates its config through HOME/XDG and never touches the developer's
 // real account directory. internal/paths/authority.go's configDir is the only
 // reader; docs/configuration.md states the behaviour for users.
-func configAuthorityEnabled() bool {
-	if testing.Testing() {
+func configAuthorityEnabled() bool { return configAuthorityEnabledFor(testing.Testing()) }
+
+// configAuthorityEnabledFor is configAuthorityEnabled with the build fact passed
+// in, for the same reason authorityEnabledFor takes it.
+func configAuthorityEnabledFor(inTestBinary bool) bool {
+	if inTestBinary {
 		return authorityFromEnv()
 	}
 	return true
