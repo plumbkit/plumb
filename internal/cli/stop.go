@@ -336,16 +336,26 @@ func openFilesUnderDir(lsofOutput, dir string) bool {
 // process — its executable basename is "plumb" and its first argument is
 // "daemon" — so `plumb stop` never signals an unrelated process whose argv
 // merely contains the substring "plumb daemon" (e.g. `vim plumb daemon.go`).
+//
+// The argv comes from processArgv, which reads /proc on Linux. That matters
+// because a FALSE answer here is not neutral: it licenses nothing, so an
+// identity check that cannot run silently turns a migration into a no-op. `ps`
+// is absent from minimal images (debian:bookworm-slim), which is how `plumb
+// restart` stopped being able to replace a legacy daemon there (PLAN-553).
 func isPlumbDaemonProcess(pid int) bool {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output() //nolint:gosec // G204: pid is a strconv-formatted int from pgrep, not user input
-	if err != nil {
+	argv, ok := processArgv(pid)
+	return ok && processIsPlumbDaemon(argv)
+}
+
+// processIsPlumbDaemon is the rule as a pure predicate over an argv, so every
+// platform can pin it without starting a daemon — a real `plumb daemon` cannot
+// be started outside a container (PLAN-518 §2), and the cases that matter are
+// the false positives.
+func processIsPlumbDaemon(argv []string) bool {
+	if len(argv) < 2 {
 		return false
 	}
-	fields := strings.Fields(strings.TrimSpace(string(out)))
-	if len(fields) < 2 {
-		return false
-	}
-	return filepath.Base(fields[0]) == "plumb" && fields[1] == "daemon"
+	return filepath.Base(argv[0]) == "plumb" && argv[1] == "daemon"
 }
 
 // processAlive returns true if a process with the given PID exists.
