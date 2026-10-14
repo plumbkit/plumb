@@ -129,7 +129,7 @@ func TestOpenCallSites(t *testing.T) {
 // TestOpenCallSites_CostDoesNotScaleWithImportsPerSite pins the shape of the
 // census query: whether a call's file dot-imports a package is read once, not
 // asked per site. Asked per site, the planner scans every import node for each
-// call (PLAN-544: 6–10 s per pack on this repository); here that would be 2,000
+// call (PLAN-542: 6–10 s per pack on this repository); here that would be 2,000
 // sites times 20,000 imports. The bound is two orders of magnitude above the
 // fixed query's time, so it measures the shape, not the machine.
 func TestOpenCallSites_CostDoesNotScaleWithImportsPerSite(t *testing.T) {
@@ -172,6 +172,9 @@ func TestOpenCallSites_CostDoesNotScaleWithImportsPerSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Logged so the margin can be read with -v, and beside the error if the
+	// bound is ever crossed.
+	t.Logf("census of 2,000 calls over 20,000 imports took %v (bound 1.5 s)", took)
 	if total != 2000 {
 		t.Fatalf("control: %d open calls, want 2000", total)
 	}
