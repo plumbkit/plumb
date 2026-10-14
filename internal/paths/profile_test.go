@@ -1,9 +1,13 @@
 package paths
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/plumbkit/plumb/internal/account"
@@ -85,8 +89,21 @@ func TestRuntimeDir_RefusesAnUnusableRecordedBase(t *testing.T) {
 				t.Fatalf("control: a usable recorded base must be used: runtime dir = %q, want %q", got, want)
 			}
 			spoil(t, p.XDG.RuntimeDir)
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(prev) })
+			runtimeBaseWarn = sync.Once{}
+			_ = RuntimeDir()
 			if got := RuntimeDir(); got != u.RuntimeDir() {
 				t.Errorf("runtime dir = %q, want the account's own %q: the recorded base %s is not usable", got, u.RuntimeDir(), p.XDG.RuntimeDir)
+			}
+			// The refusal is said, once per process, with the remedy.
+			if n := strings.Count(logs.String(), "is not a usable runtime directory"); n != 1 {
+				t.Errorf("the refusal was logged %d times, want once:\n%s", n, logs.String())
+			}
+			if !strings.Contains(logs.String(), "set-xdg --runtime-dir=") {
+				t.Errorf("the warning must name the remedy:\n%s", logs.String())
 			}
 			if got := ConfigDir(); got != p.Dirs.Config {
 				t.Errorf("config dir = %q, want the profile's %q: a bad runtime base must not move the rest", got, p.Dirs.Config)

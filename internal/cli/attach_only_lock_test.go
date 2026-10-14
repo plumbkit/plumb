@@ -50,8 +50,17 @@ func TestAttachOnly_TakesNoLockNotEvenBriefly(t *testing.T) {
 		name string
 		f    *os.File
 	}
-	probes := make([]held, 0, 2)
-	for name, path := range map[string]string{"account authority": authority, "lifetime": daemonLockPath()} {
+	// Every lock a launch takes: the account authority, the runtime lifetime lock,
+	// and the lifetime lock of each legacy runtime location (PLAN-530's fence).
+	locks := map[string]string{"account authority": authority, "lifetime": daemonLockPath()}
+	for _, loc := range legacyLocations() {
+		locks["legacy "+loc.Dir] = loc.Lock
+	}
+	if len(locks) < 3 {
+		t.Fatalf("this isolated account names no legacy location, so the legacy fence is not probed: %v", locks)
+	}
+	probes := make([]held, 0, len(locks))
+	for name, path := range locks {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatalf("MkdirAll: %v", err)
 		}

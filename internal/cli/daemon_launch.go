@@ -15,7 +15,7 @@ import (
 // Launch authority (PLAN-527, generalising #649).
 //
 // The daemon's two lifetime locks (lock.go) are also the right to launch one.
-// Whoever starts a daemon (`plumb serve`, `plumb restart`) takes them in their
+// Whoever starts a daemon (`plumb serve`, `plumb restart`, `plumb web`) takes them in their
 // one order — the account authority first, then the runtime lifetime lock —
 // BEFORE starting the child, and hands them to it on fds 3 and 4; the child
 // adopts them as its own, and the launcher only closes its copies, which does

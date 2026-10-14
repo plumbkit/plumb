@@ -28,8 +28,8 @@ import (
 // spoofed HOME/XDG rooted its config, state and logs in temporary directories
 // that the next client silently inherited.
 //
-// A managed launch — `plumb serve`, `plumb restart`, `plumb service install`
-// starting a daemon — now starts the executable the SERVICE PROFILE records,
+// A managed launch — `plumb serve`, `plumb restart` or `plumb web` starting a
+// daemon — now starts the executable the SERVICE PROFILE records,
 // with an environment built from the profile and the account database. The
 // profile is never inferred: no profile means no launch, with the
 // `plumb service install` instruction as the remedy.

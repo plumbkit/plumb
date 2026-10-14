@@ -463,9 +463,10 @@
   writers (install's adoption and `plumb service set-xdg`) already refused a base
   that is not a 0700 directory this user owns, but the reader trusted the file:
   a hand-edited profile could put the daemon's MCP and control sockets in a
-  directory somebody else can write. Every reader now refuses such a base and
-  uses the account's own runtime directory, with a warning naming the remedy,
-  while the rest of the profile still applies. The docs also name `plumb web`
+  directory somebody else can write. Every reader now refuses such a base: the
+  sockets use the account's own runtime directory, with a warning naming the
+  remedy, the launch no longer hands the base to the daemon as its
+  `XDG_RUNTIME_DIR`, and the rest of the profile still applies. The docs also name `plumb web`
   as the third command that starts a daemon (they said two), and the
   `--attach-only` rule "takes no lock, not even briefly" is pinned by a test
   (PLAN-550).
