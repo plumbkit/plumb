@@ -490,3 +490,44 @@ func TestOurBridgeAt_RefusesAStaleRecord(t *testing.T) {
 		t.Fatal("a record nobody refreshed within the freshness window claimed the socket")
 	}
 }
+
+// TestRunDebugDaemons_ReportsTheBridge: `plumb debug daemons` itself prints the
+// live bridge — the sunset evidence — not only the renderer in isolation.
+func TestRunDebugDaemons_ReportsTheBridge(t *testing.T) {
+	f := newBridgeFixture(t)
+	publishBridges(t, os.Getpid(), f.bridge.records())
+	var out bytes.Buffer
+	_ = runDebugDaemons(&out)
+	if !strings.Contains(out.String(), "legacy bridge "+f.loc.Socket) {
+		t.Fatalf("plumb debug daemons does not report the live bridge:\n%s", out.String())
+	}
+}
+
+// TestOurBridgeAt_RequiresTheChangeTime: the identity is (dev, ino, ctime) — a
+// record whose change time is not the file's does not claim it, as the reader
+// rule (fileIdentity.matches) demands.
+func TestOurBridgeAt_RequiresTheChangeTime(t *testing.T) {
+	f := newBridgeFixture(t)
+	recs := f.bridge.records()
+	recs[0].Ctime++
+	publishBridges(t, os.Getpid(), recs)
+	if ourBridgeAt(f.loc.Socket) {
+		t.Fatal("a record with a different change time claimed the socket at the path")
+	}
+}
+
+// TestCtrlSocketUnavailable_DoesNotPointAtOurOwnBridge: `plumb log-level`'s hint
+// must not name the account's own bridge as a daemon running elsewhere.
+func TestCtrlSocketUnavailable_DoesNotPointAtOurOwnBridge(t *testing.T) {
+	f := newBridgeFixture(t)
+	if legacyDaemonSocketPath() != f.loc.Socket {
+		t.Fatalf("log-level's legacy path %s is not this account's legacy location %s", legacyDaemonSocketPath(), f.loc.Socket)
+	}
+	if !strings.Contains(ctrlSocketUnavailable(io.EOF).Error(), "IS running") {
+		t.Fatal("control: without a record the bridge reads as a daemon running elsewhere")
+	}
+	publishBridges(t, os.Getpid(), f.bridge.records())
+	if msg := ctrlSocketUnavailable(io.EOF).Error(); strings.Contains(msg, "IS running") {
+		t.Fatalf("log-level named the account's own bridge as a daemon running elsewhere: %s", msg)
+	}
+}

@@ -100,6 +100,7 @@ var CoCallRules = []CoCallRule{{
 		"internal/cli.acquireSpawnLock":            "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.acquireWakeLockWith":         "daemon/CLI bookkeeping, not an agent file write",
 		"internal/cli.claudeStopHook":              "daemon/CLI bookkeeping, not an agent file write",
+		"internal/cli.bindOwnUnixSocket":           "removes the socket it has just bound when making it private fails, so no half-set-up socket is left behind: daemon bookkeeping, never an agent file write",
 		"internal/cli.clearStaleSocket":            "removes a stale daemon socket (or a foreign file left at one of the daemon's runtime paths) before binding it, and only when nothing is listening there: daemon/CLI bookkeeping, never an agent file write",
 		"internal/cli.ensureResumeProofKey":        "the identity hook and serve's own per-user proof key under the state directory (removes its temporary file), not an agent file write",
 		"internal/cli.copyProfileBackup":           "keeps the account's own unreadable service profile as service.toml.bak before `plumb service install` replaces it: service bookkeeping, never an agent file write",
