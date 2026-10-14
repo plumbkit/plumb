@@ -336,7 +336,9 @@ func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack
 // node it reaches, 600 to 2,000 times over a hundred or two files, and the
 // daemon's decision resolves the path's project each time (workspace detection
 // on disk), which made a live pack overrun its graph deadline. A path's
-// sensitivity cannot change within the call that asks.
+// sensitivity cannot change within the call that asks. Only the walk's asks go
+// through this memo; the constraint, document and hint paths ask c.sensitive
+// directly, a few times each.
 func (c *ContextCollector) sensitiveFor(ctx context.Context, root string) func(string) bool {
 	if c.sensitive == nil {
 		return nil
