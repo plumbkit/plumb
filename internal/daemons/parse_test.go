@@ -344,4 +344,10 @@ func TestParseProcArgs_RefusesMissingArguments(t *testing.T) {
 	if _, args, err := ParseProcArgs(raw); err == nil {
 		t.Fatalf("a 3-argument buffer holding 2 was read as %q", args)
 	}
+	// Cut mid-way through the last argument it does hold: the final count check.
+	cut := binary.LittleEndian.AppendUint32(nil, 3)
+	cut = append(cut, "/bin/plumb\x00\x00\x00\x00\x00\x00plumb\x00daemo"...)
+	if _, args, err := ParseProcArgs(cut); err == nil {
+		t.Fatalf("a 3-argument buffer cut inside its second argument was read as %q", args)
+	}
 }
