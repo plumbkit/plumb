@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 // TestProcessIsPlumbDaemon pins the identity rule itself, on every platform, over
@@ -28,9 +30,10 @@ func TestProcessIsPlumbDaemon(t *testing.T) {
 		{"no arguments at all", []string{"/opt/homebrew/bin/plumb"}, false},
 		{"empty argv", nil, false},
 		{"an empty argv element", []string{"", "daemon"}, false},
-		// PLAN-552: the subcommand is found past leading flags, not assumed at argv[1].
-		{"a flag and its value before daemon", []string{"/opt/homebrew/bin/plumb", "--log-level", "debug", "daemon"}, true},
-		{"a flag=value before daemon", []string{"plumb", "--log-level=debug", "daemon"}, true},
+		// PLAN-552: plumb's root has no flags, so nothing can precede a daemon's
+		// subcommand; a word before `daemon` means it is not one.
+		{"a flag before daemon (root has none; it cannot run)", []string{"/opt/homebrew/bin/plumb", "--log-level", "debug", "daemon"}, false},
+		{"darwin's flattened argv of a quoted value", []string{"./plumb", "--msg", "\"hello", "daemon", "y\""}, false},
 		{"daemon as another subcommand's argument", []string{"plumb", "mail", "send", "daemon"}, false},
 		{"daemon as a flag value of serve", []string{"plumb", "serve", "--name", "daemon"}, false},
 		{"daemon after the flag terminator", []string{"plumb", "--", "daemon"}, false},
@@ -95,5 +98,19 @@ func TestProcessArgv_ReadsThisProcess(t *testing.T) {
 	}
 	if isPlumbDaemonProcess(os.Getpid()) {
 		t.Fatalf("isPlumbDaemonProcess(this process) = true for %q", argv)
+	}
+}
+
+// TestRootCommand_HasNoFlags is the premise processIsPlumbDaemon's argv[1] rule
+// rests on (PLAN-552): with no root flag, nothing can precede a daemon's
+// subcommand. A root flag added later must revisit that rule (and the census's
+// isPlumbDaemonArgv) rather than leave `plumb --flag daemon` unrecognised.
+func TestRootCommand_HasNoFlags(t *testing.T) {
+	for _, fs := range []*pflag.FlagSet{rootCmd.PersistentFlags(), rootCmd.Flags()} {
+		fs.VisitAll(func(f *pflag.Flag) {
+			if f.Name != "help" {
+				t.Errorf("the root command has a --%s flag: processIsPlumbDaemon requires argv[1] == \"daemon\" because it had none", f.Name)
+			}
+		})
 	}
 }

@@ -59,6 +59,13 @@ func runRestart(_ *cobra.Command, _ []string) error {
 			return nil
 		}
 		prompted = shown
+		// The prompt waits on a human, and a pid named before it may since have
+		// exited and been handed to somebody else. Re-identify now, so what is
+		// signalled is what is a daemon of ours at the moment of the signal.
+		if pids = restartDaemonPIDs(); len(pids) == 0 {
+			fmt.Println("Daemon is not running.")
+			return restartRespawn(nil, time.Now().Add(daemonStartWait()))
+		}
 	}
 
 	if len(pids) > 1 {

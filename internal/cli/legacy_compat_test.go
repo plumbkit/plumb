@@ -96,7 +96,7 @@ func TestAttachLegacyDaemon_ALeftoverVersionFileIsNotCompatible(t *testing.T) {
 				_ = conn.Close()
 				t.Fatal("a version file the serving daemon did not publish made it compatible: attached")
 			}
-			if err == nil || !strings.Contains(err.Error(), "not published by the daemon serving there") {
+			if err == nil || !strings.Contains(err.Error(), "could not confirm the daemon serving there published it") {
 				t.Fatalf("the refusal must say the version file is not the serving daemon's: %v", err)
 			}
 		})
@@ -113,4 +113,28 @@ func waitGone(t *testing.T, pid int) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// TestAttachLegacyDaemon_EqualMtimesAreCompatible pins versionIsCurrent's boundary:
+// a daemon writes its pid file and then its version file microseconds apart, and
+// on a filesystem with coarse timestamps (ext4, tmpfs) the two share an mtime.
+// That must read as published by the live daemon, or a healthy same-build daemon
+// is refused there.
+func TestAttachLegacyDaemon_EqualMtimesAreCompatible(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	loc := legacyLocationForTest(t)
+	countingListener(t, loc.Socket)
+	publishLegacyDaemon(t, loc, Version)
+	same := time.Now().Add(-time.Minute).Truncate(time.Second)
+	for _, p := range []string{loc.PID, loc.Version} {
+		if err := os.Chtimes(p, same, same); err != nil {
+			t.Fatalf("Chtimes %s: %v", p, err)
+		}
+	}
+	conn, err := attachLegacyDaemon()
+	if err != nil || conn == nil {
+		t.Fatalf("a version file written in the same tick as the pid file must be compatible: conn=%v err=%v", conn, err)
+	}
+	_ = conn.Close()
 }

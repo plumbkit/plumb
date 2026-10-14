@@ -64,3 +64,66 @@ func TestRunRestart_TheConfirmationDoesNotSpendTheDeadline(t *testing.T) {
 		t.Fatalf("respawn was handed a deadline %s in the past: the confirmation prompt spent the launcher deadline", at.Sub(got))
 	}
 }
+
+// stubRestart substitutes the prompt and respawn for one test and records the
+// deadline respawn is handed.
+func stubRestart(t *testing.T, confirm func(daemonActionPrompt) (bool, bool, error)) *time.Time {
+	t.Helper()
+	oldForce, oldConfirm, oldRespawn := restartFlagForce, restartConfirm, restartRespawn
+	t.Cleanup(func() { restartFlagForce, restartConfirm, restartRespawn = oldForce, oldConfirm, oldRespawn })
+	restartFlagForce = false
+	restartConfirm = confirm
+	got := new(time.Time)
+	restartRespawn = func(_ []int, deadline time.Time) error {
+		*got = deadline
+		return nil
+	}
+	return got
+}
+
+// TestRunRestart_NoDaemonStillGetsAWholeDeadline covers the other way into
+// respawn: with nothing to stop, the successor's start is bounded by a whole
+// launcher deadline, not a zero one.
+func TestRunRestart_NoDaemonStillGetsAWholeDeadline(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	got := stubRestart(t, func(daemonActionPrompt) (bool, bool, error) {
+		t.Fatal("nothing runs, so nothing should be confirmed")
+		return false, false, nil
+	})
+	before := time.Now()
+	if err := runRestart(nil, nil); err != nil {
+		t.Fatalf("runRestart: %v", err)
+	}
+	if got.Sub(before) < daemonStartWait()-time.Second {
+		t.Fatalf("respawn was handed %s, want about %s", got.Sub(before), daemonStartWait())
+	}
+}
+
+// TestRunRestart_ReidentifiesAfterThePrompt: a pid named before the prompt that
+// stopped being one of our daemons while the human answered (it exited and the
+// number went to somebody else) is not signalled.
+func TestRunRestart_ReidentifiesAfterThePrompt(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	stranger := startReapedSleep(t)
+	isDaemon := true
+	stubDaemonIdentity(t, func(pid int) bool { return pid == stranger && isDaemon })
+	loc := currentLocation()
+	if err := os.MkdirAll(loc.Dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loc.PID, []byte(strconv.Itoa(stranger)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubRestart(t, func(daemonActionPrompt) (bool, bool, error) {
+		isDaemon = false // the daemon exited; its pid now names somebody else
+		return true, false, nil
+	})
+	if err := runRestart(nil, nil); err != nil {
+		t.Fatalf("runRestart: %v", err)
+	}
+	if !processAlive(stranger) {
+		t.Fatalf("restart signalled PID %d, which stopped being a daemon of ours during the prompt", stranger)
+	}
+}

@@ -203,7 +203,7 @@ func (d legacyDaemon) versionNote() string {
 		return "it published no version; this binary is " + Version
 	}
 	if !d.current {
-		return "its version file says " + d.running + " but was not published by the daemon serving there; this binary is " + Version
+		return "its version file says " + d.running + ", but plumb could not confirm the daemon serving there published it (a version file outlives a crashed daemon); this binary is " + Version
 	}
 	return "its version: " + d.running + "; this binary is " + Version
 }
