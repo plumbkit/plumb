@@ -165,27 +165,48 @@ func TestSocketPathStateFor_ComparesThePathWithThePublication(t *testing.T) {
 	if identityOf(replacement).ino == pub.id.ino {
 		t.Logf("the filesystem reused inode %d; the change time is what distinguishes the replacement", pub.id.ino)
 	}
+	// The replacement is classified, not quoted: on ext4 the file may carry the
+	// reused inode, so the state is a fault either way — and the assertion is
+	// "this is a fault", never "this message says the word replaced".
 	replaced := socketPathStateFor(path, true, nil, pub, true)
 	if !replaced.IdentityKnown || replaced.IdentityMatches {
 		t.Fatalf("the path no longer holds the published file: published=%+v replacement=%+v state=%+v", pub.id, identityOf(replacement), replaced)
 	}
-	// The same inode with a different change time is a replacement too — the ext4
-	// case, made deterministic here rather than left to the allocator.
+	if replaced.fault() == "" {
+		t.Errorf("a replaced socket must be a fault: state=%+v", replaced)
+	}
+	if replaced.note() != "" {
+		t.Errorf("a fault must not also be filed as a note: state=%+v", replaced)
+	}
+	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, []socketPathState{replaced}); err == nil {
+		t.Error("a replaced socket must exit non-zero")
+	}
+	// The one wording requirement, kept loose on purpose: the fault names the
+	// daemon it is about, so a reader knows which process to look at.
+	if !strings.Contains(replaced.fault(), "4242") {
+		t.Errorf("the fault must name the publishing daemon, got %q", replaced.fault())
+	}
+	// A forged change time on the same identity: this asserts only what the
+	// FORGED pair can settle (the file is not accepted as identical). The full
+	// classification of the reused-inode case — fault, not note, non-zero exit —
+	// is pinned by TestSocketPathState_ThreeWayClassification, which constructs
+	// the states instead of growing them, and therefore does not depend on the
+	// allocator or on which file happens to be at the path.
 	forged := pub
 	forged.id.ctime++
 	if st := socketPathStateFor(path, true, nil, forged, true); st.IdentityMatches {
 		t.Errorf("a file whose change time differs from the published one was accepted: published=%+v state=%+v", forged.id, st)
-	}
-	if !strings.Contains(replaced.fault(), "replaced") {
-		t.Errorf("a replaced socket must be a fault, got %q", replaced.fault())
 	}
 
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	gone := socketPathStateFor(path, true, nil, pub, true)
-	if !strings.Contains(gone.fault(), "gone while plumb daemon 4242") {
-		t.Errorf("a missing socket of a live daemon must be a fault, got %q", gone.fault())
+	if gone.fault() == "" {
+		t.Errorf("a missing socket of a live daemon must be a fault: %+v", gone)
+	}
+	if !strings.Contains(gone.fault(), "4242") {
+		t.Errorf("the fault must name the publishing daemon, got %q", gone.fault())
 	}
 
 	// With no publication there is nothing to compare, so nothing is claimed —
@@ -351,6 +372,125 @@ func TestMetadataChangeIsNotAFaultAndAReplacementIs(t *testing.T) {
 	}
 	if rows := daemonSocketResults(states); len(rows) != 1 || rows[0].ok {
 		t.Errorf("doctor must fail for a replaced socket: %+v", rows)
+	}
+}
+
+// TestSocketPathState_ThreeWayClassification is the tri-state, written to the
+// CLASSIFICATION rather than to any message: for each of the three cases the
+// reader can see, which of fault/note is set, whether the command exits non-zero,
+// and what shape of doctor row comes out.
+//
+// The three cases, and why each is what it is:
+//
+//  1. device, inode AND change time match — the daemon's own file, untouched.
+//  2. device and inode match, the change time moved, and the census found the
+//     publishing daemon still holding the path open — a chmod or a backup tool on
+//     the daemon's own socket. SOFT: the mirror case this code exists for, and the
+//     one that must never fail a healthy daemon.
+//  3. device and inode match, the change time moved, and the daemon does NOT hold
+//     the path open — the inode was handed back out after that socket went away.
+//     HARD: this is a genuine replacement wearing the old numbers, and it is
+//     exactly what the change time was added to catch (a different inode is the
+//     other form of the same case).
+//
+// The one case that is deliberately soft is 2 without an ownership answer: the
+// census could not tell, and an absence of evidence is never turned into an
+// accusation. That residual is stated here so it is not mistaken for case 3.
+func TestSocketPathState_ThreeWayClassification(t *testing.T) {
+	const pid = 4242
+	tests := []struct {
+		name            string
+		state           socketPathState
+		wantFault       bool
+		wantNote        bool
+		wantMetadata    bool
+		wantExitFailure bool
+		wantDoctor      string // "", "warn" or "fail"
+	}{
+		{
+			name: "1. the daemon's own socket, metadata untouched",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Exists: true, Publisher: pid,
+				IdentityKnown: true, InodeMatches: true, IdentityMatches: true,
+				Answered: true, OwnedBy: []int{pid},
+			},
+		},
+		{
+			name: "2. metadata moved, the holder still holds the socket open",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Exists: true, Publisher: pid,
+				IdentityKnown: true, InodeMatches: true, IdentityMatches: false,
+				Answered: true, OwnedBy: []int{pid},
+			},
+			wantNote: true, wantMetadata: true, wantDoctor: "warn",
+		},
+		{
+			name: "3a. inode reused: the holder no longer holds the path open",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Exists: true, Publisher: pid,
+				IdentityKnown: true, InodeMatches: true, IdentityMatches: false,
+				Answered: true, OwnedBy: []int{999},
+			},
+			wantFault: true, wantMetadata: true, wantExitFailure: true, wantDoctor: "fail",
+		},
+		{
+			name: "3b. a different inode is somebody else's socket",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Exists: true, Publisher: pid,
+				IdentityKnown: true, InodeMatches: false, IdentityMatches: false,
+				Answered: true, OwnedBy: []int{999},
+			},
+			wantFault: true, wantExitFailure: true, wantDoctor: "fail",
+		},
+		{
+			name: "3c. inode reused, ownership unanswered: reported, not assumed",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Exists: true, Publisher: pid,
+				IdentityKnown: true, InodeMatches: true, IdentityMatches: false,
+				Answered: false,
+			},
+			wantNote: true, wantMetadata: true, wantDoctor: "warn",
+		},
+		{
+			name: "the daemon is gone and the path with it",
+			state: socketPathState{
+				Path: "/p/plumb.sock", Publisher: pid,
+				IdentityKnown: true, Answered: true,
+			},
+			wantFault: true, wantExitFailure: true, wantDoctor: "fail",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.state.fault() != ""; got != tt.wantFault {
+				t.Errorf("fault() set = %v, want %v (fault=%q note=%q)", got, tt.wantFault, tt.state.fault(), tt.state.note())
+			}
+			if got := tt.state.note() != ""; got != tt.wantNote {
+				t.Errorf("note() set = %v, want %v (note=%q)", got, tt.wantNote, tt.state.note())
+			}
+			if got := tt.state.MetadataChanged(); got != tt.wantMetadata {
+				t.Errorf("MetadataChanged() = %v, want %v", got, tt.wantMetadata)
+			}
+			err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, []socketPathState{tt.state})
+			if got := err != nil; got != tt.wantExitFailure {
+				t.Errorf("exit failure = %v, want %v", got, tt.wantExitFailure)
+			}
+			rows := daemonSocketResults([]socketPathState{tt.state})
+			switch tt.wantDoctor {
+			case "":
+				if len(rows) != 0 {
+					t.Errorf("doctor rows = %+v, want none", rows)
+				}
+			case "warn":
+				if len(rows) != 1 || !rows[0].ok || !rows[0].warn || rows[0].fix != "" {
+					t.Errorf("doctor rows = %+v, want one warning with no fix", rows)
+				}
+			case "fail":
+				if len(rows) != 1 || rows[0].ok || rows[0].fix == "" {
+					t.Errorf("doctor rows = %+v, want one failure with a fix", rows)
+				}
+			}
+		})
 	}
 }
 

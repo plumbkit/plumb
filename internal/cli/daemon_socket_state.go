@@ -149,7 +149,7 @@ func (s socketPathState) fault() string {
 		// published this record does not have the path open: the inode was
 		// recycled after that daemon's socket went away, so this is a
 		// replacement wearing the old numbers, not a metadata change.
-		return fmt.Sprintf("the file at the path carries the device and inode plumb daemon %d published, but that daemon does not hold it open — the socket is gone and its inode was reused", s.Publisher)
+		return fmt.Sprintf("replaced — the file at the path carries the device and inode plumb daemon %d published, but that daemon does not hold it open, so the socket is gone and its inode was reused", s.Publisher)
 	default:
 		return ""
 	}
