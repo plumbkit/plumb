@@ -50,9 +50,19 @@ read the process table exits non-zero too, because "cannot tell" is not "fine".`
 // so the CLI, doctor and the daemon_info tool cannot drift apart about which
 // lock is the authority or which sockets belong to plumb.
 //
-// Until PLAN-527 lands, the lifetime lock IS the launch authority: a launcher
-// takes it before starting a daemon and a daemon holds it for its whole life, so
-// the daemon holding it is exactly the one clients reach.
+// The VERDICT still asks about the RUNTIME LIFETIME lock: that is the file an
+// older binary's launcher contends for, which is what this census was written
+// against. PLAN-527 then made the ACCOUNT authority the launch authority, and a
+// daemon of this build holds both, so for any daemon this binary started the two
+// answers agree. They part company in exactly two places, both known and both
+// somebody else's work: a pre-527 daemon holds the lifetime lock alone (and would
+// read as the authority holder here), and after a runtime directory is deleted
+// the lifetime lock's FILE goes with it while the flock lives on the unlinked
+// inode — this census can then attribute the authority to nobody and reports a
+// violation for a daemon that does hold the account authority. Naming the account
+// authority, with a legacy lifetime lock as evidence rather than a verdict, is
+// PLAN-530's and the default flip's job. The socket state added by PLAN-529 is
+// already checked against the account authority's record, not this lock.
 func daemonCensusOptions() daemons.Options {
 	opts := daemons.Options{Authority: daemonLockPath()}
 	opts.Sockets = append(opts.Sockets, daemonSocketPath())

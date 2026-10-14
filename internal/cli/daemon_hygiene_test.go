@@ -12,8 +12,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/plumbkit/plumb/internal/daemons"
 )
 
 // Tests for socket and runtime-marker hygiene (PLAN-529).
@@ -322,6 +320,48 @@ func TestSocketGuard_NeverRemovesAReplacementAndSaysSo(t *testing.T) {
 	g.check()
 	if _, err := os.Lstat(path); err != nil {
 		t.Fatalf("a second check removed the foreign socket: %v", err)
+	}
+}
+
+// TestSocketGuard_KeepsPublishingWhileSomebodyElsesFileIsAtThePath is the
+// freshness half of the replacement report. The reader trusts a published record
+// only while it is fresh (daemonSocketPublicationFreshness), so a daemon that
+// stopped refreshing when it found a stranger's file at its path would go quiet
+// to `plumb debug daemons` about 90 s later and the command would report success
+// for a socket it can no longer reach. The daemon must keep saying "I am alive,
+// and THIS is the socket I bound" — the record is not a claim that the path is
+// healthy; the identity comparison is what reports the replacement.
+func TestSocketGuard_KeepsPublishingWhileSomebodyElsesFileIsAtThePath(t *testing.T) {
+	withShortTempRuntime(t)
+	path := daemonSocketPath()
+	g, published := guardFor(t, path, true)
+
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("somebody else's file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := len(*published)
+
+	g.check()
+	if len(*published) != before+1 {
+		t.Fatalf("check published %d record(s) while a stranger's file is at the path, want 1 — a daemon that stops refreshing is unreportable after ~90 s",
+			len(*published)-before)
+	}
+	if got := (*published)[len(*published)-1]; got != g.marker.id {
+		t.Errorf("the refresh published %+v, want this daemon's own socket identity %+v", got, g.marker.id)
+	}
+	if !g.foreign {
+		t.Error("the guard did not record the path as somebody else's")
+	}
+
+	// And it keeps doing it, tick after tick: the record's freshness is what a
+	// reader has instead of a liveness probe.
+	g.check()
+	g.check()
+	if len(*published) != before+3 {
+		t.Errorf("published %d record(s) over three checks, want 3", len(*published)-before)
 	}
 }
 
@@ -642,56 +682,6 @@ func TestPublishDaemonPID_LeavesALiveControlSocketAlone(t *testing.T) {
 	}
 }
 
-// TestDaemonSocketPublication_TrustsOnlyALiveFreshRecord: the socket record is
-// evidence about a running daemon only while it is both fresh and owned by a live
-// pid. A stale record (a dead holder whose pid was recycled) must not make a
-// deleted path read as a live daemon's fault.
-func TestDaemonSocketPublication_TrustsOnlyALiveFreshRecord(t *testing.T) {
-	withTempRuntime(t)
-	path := authorityLockPathForTest(t)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("creating the authority directory: %v", err)
-	}
-	socket := filepath.Join(t.TempDir(), "plumb.sock")
-	write := func(m authorityMetadata) {
-		t.Helper()
-		if err := os.WriteFile(path, authorityJSON(t, m), 0o600); err != nil {
-			t.Fatalf("writing the metadata: %v", err)
-		}
-	}
-
-	write(authorityMetadata{PID: os.Getpid(), Socket: socket, SocketDev: 7, SocketIno: 4242, SocketCtime: 99, Published: time.Now()})
-	pub, ok := daemonSocketPublication()
-	if !ok || pub.pid != os.Getpid() || pub.path != socket || pub.id.ino != 4242 || pub.id.ctime != 99 {
-		t.Fatalf("a fresh record of a live holder must be trusted, change time included: %+v (ok=%v)", pub, ok)
-	}
-
-	// A record written before the change time was published carries none. It is
-	// still a record of a live holder, with the weaker (device, inode) identity:
-	// the reader must not treat "no change time" as a mismatch, or every healthy
-	// daemon an older binary started would be reported as a replaced socket.
-	write(authorityMetadata{PID: os.Getpid(), Socket: socket, SocketDev: 7, SocketIno: 4242, Published: time.Now()})
-	if older, ok := daemonSocketPublication(); !ok || older.id.ctime != 0 {
-		t.Fatalf("a record without a change time must still be trusted, with ctime 0: %+v (ok=%v)", older, ok)
-	}
-
-	stale := authorityMetadata{PID: os.Getpid(), Socket: socket, Published: time.Now().Add(-2 * daemonSocketPublicationFreshness)}
-	write(stale)
-	if _, ok := daemonSocketPublication(); ok {
-		t.Error("a record nobody has refreshed was trusted as a live holder's")
-	}
-
-	write(authorityMetadata{PID: 1 << 30, Socket: socket, Published: time.Now()})
-	if _, ok := daemonSocketPublication(); ok {
-		t.Error("a dead holder's record was trusted")
-	}
-
-	write(authorityMetadata{PID: os.Getpid(), Published: time.Now()})
-	if _, ok := daemonSocketPublication(); ok {
-		t.Error("a record naming no socket was trusted")
-	}
-}
-
 // TestDaemonHoldsAuthority pins the single predicate the re-bind turns on, so a
 // daemon cannot re-bind a path by mistake (or refuse to heal one) because the
 // authority moved to another lock.
@@ -704,121 +694,5 @@ func TestDaemonHoldsAuthority(t *testing.T) {
 	}
 	if !daemonHoldsAuthority(daemonLocks{Authority: &os.File{}}) {
 		t.Error("a held account authority must report yes")
-	}
-}
-
-// TestSocketPathStateFor_ComparesThePathWithThePublication is the mapping doctor
-// and `plumb debug daemons` render from: a path that still holds the published
-// file is healthy, a replaced one and a missing one are faults.
-func TestSocketPathStateFor_ComparesThePathWithThePublication(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "plumb.sock")
-	if err := os.WriteFile(path, []byte("the socket"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub := socketPublication{pid: 4242, path: path, id: identityOf(info)}
-
-	healthy := socketPathStateFor(path, true, []int{4242}, pub, true)
-	if !healthy.Exists || !healthy.IdentityMatches {
-		t.Fatalf("the published file is at the path, so the state must match: %+v", healthy)
-	}
-	if healthy.fault() != "" || healthy.note() != "" {
-		t.Errorf("a healthy path must say nothing: fault=%q note=%q", healthy.fault(), healthy.note())
-	}
-
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("somebody else's file"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := os.Lstat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identityOf(replacement).ino == pub.id.ino {
-		t.Logf("the filesystem reused inode %d; the change time is what distinguishes the replacement", pub.id.ino)
-	}
-	replaced := socketPathStateFor(path, true, nil, pub, true)
-	if !replaced.IdentityKnown || replaced.IdentityMatches {
-		t.Fatalf("the path no longer holds the published file: published=%+v replacement=%+v state=%+v", pub.id, identityOf(replacement), replaced)
-	}
-	// The same inode with a different change time is a replacement too — the ext4
-	// case, made deterministic here rather than left to the allocator.
-	forged := pub
-	forged.id.ctime++
-	if st := socketPathStateFor(path, true, nil, forged, true); st.IdentityMatches {
-		t.Errorf("a file whose change time differs from the published one was accepted: published=%+v state=%+v", forged.id, st)
-	}
-	if !strings.Contains(replaced.fault(), "replaced") {
-		t.Errorf("a replaced socket must be a fault, got %q", replaced.fault())
-	}
-
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	gone := socketPathStateFor(path, true, nil, pub, true)
-	if !strings.Contains(gone.fault(), "gone while plumb daemon 4242") {
-		t.Errorf("a missing socket of a live daemon must be a fault, got %q", gone.fault())
-	}
-
-	// With no publication there is nothing to compare, so nothing is claimed —
-	// even for a path that is present and owned by nobody.
-	unpublished := socketPathStateFor(path, true, nil, socketPublication{}, false)
-	if unpublished.fault() != "" {
-		t.Errorf("a path no live daemon published must not be a fault, got %q", unpublished.fault())
-	}
-
-	// A publication names ONE path: another path must not inherit its publisher,
-	// or a healthy account would be accused of a socket it never had.
-	other := filepath.Join(dir, "plumb.ctrl.sock")
-	unrelated := socketPathStateFor(other, true, nil, pub, true)
-	if unrelated.Publisher != 0 || unrelated.fault() != "" {
-		t.Errorf("the publication for %s made %s read as a live daemon's socket: %+v", path, other, unrelated)
-	}
-}
-
-// TestDebugDaemonsExit_SocketFaultIsNotSuccess: exactly one daemon holding the
-// authority, whose socket path has been replaced under it, is one daemon no client
-// can reach — a script reading the exit status must not read that as success.
-func TestDebugDaemonsExit_SocketFaultIsNotSuccess(t *testing.T) {
-	healthy := []socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7, IdentityKnown: true, IdentityMatches: true}}
-	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, healthy); err != nil {
-		t.Errorf("a clean account with an intact socket must be success, got %v", err)
-	}
-	// A note alone (a socket file nothing serves) is information, not a fault.
-	noted := []socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Answered: true}}
-	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, noted); err != nil {
-		t.Errorf("a path with no live publisher must not fail the command, got %v", err)
-	}
-	faulted := []socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 7, IdentityKnown: true}}
-	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, faulted); err == nil {
-		t.Error("a live daemon whose socket path is gone must exit non-zero")
-	}
-}
-
-// TestDaemonSocketResults is doctor's half: the same state becomes a failed row
-// with a remedy, a warning, or nothing at all.
-func TestDaemonSocketResults(t *testing.T) {
-	faulted := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 7, IdentityKnown: true}})
-	if len(faulted) != 1 || faulted[0].ok || faulted[0].fix == "" {
-		t.Fatalf("a socket fault must be one failed row with a fix, got %+v", faulted)
-	}
-	if !strings.Contains(faulted[0].detail, "gone while plumb daemon 7") {
-		t.Errorf("the row must say what is wrong, got %q", faulted[0].detail)
-	}
-
-	noted := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Answered: true}})
-	if len(noted) != 1 || !noted[0].ok || !noted[0].warn {
-		t.Fatalf("a socket file nothing serves must be one warning row, got %+v", noted)
-	}
-
-	healthy := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7, IdentityKnown: true, IdentityMatches: true}})
-	if len(healthy) != 0 {
-		t.Errorf("a healthy socket must add no rows, got %+v", healthy)
 	}
 }

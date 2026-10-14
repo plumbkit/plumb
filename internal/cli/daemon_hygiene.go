@@ -307,17 +307,28 @@ func (g *socketGuard) run(ctx context.Context) {
 
 // check re-examines the path and repairs what it may. It reports whether it
 // installed a new listener, which is what Accept needs to know to retry.
+//
+// Whatever the path holds, the authority record is rewritten on every check —
+// including while SOMEBODY ELSE'S file is at the path. The record says which
+// socket this daemon bound and that the daemon is alive; freshness is how a
+// reader tells a live holder from a stale record whose pid the kernel has since
+// reused (daemonSocketPublicationFreshness), so a daemon that stopped refreshing
+// while a replacement sat at its path would go quiet to `plumb debug daemons`
+// after ~90 s and the replaced socket would stop being reported at all. The
+// record is NOT a claim that the path is healthy: the comparison of the record's
+// identity with the file at the path is what reports a replacement, and that is
+// what this daemon publishes here.
 func (g *socketGuard) check() bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.closed {
 		return false
 	}
+	defer g.refreshPublication()
 	info, err := os.Lstat(g.path)
 	switch {
 	case err == nil && g.marker.namesInfo(info):
 		g.clearForeign()
-		g.refreshPublication()
 		return false
 	case err == nil && g.marker.id.known():
 		g.reportForeign(info)
@@ -351,9 +362,6 @@ func (g *socketGuard) check() bool {
 	g.marker = markRuntimeFile(g.path)
 	g.foreign = false
 	slog.Warn("daemon: re-bound the socket after its path disappeared (deleted or replaced runtime directory)", "path", g.path)
-	if g.publish != nil {
-		g.publish(g.path, g.marker.id)
-	}
 	if old != nil {
 		// The superseded listener has no path any more — its file went with the
 		// runtime directory — so closing it cannot disturb the new one, and its
@@ -388,12 +396,13 @@ func (g *socketGuard) clearForeign() {
 	slog.Warn("daemon: the socket path names this daemon's socket again", "path", g.path)
 }
 
-// refreshPublication re-writes the authority record through the held fd while the
-// socket is where this daemon put it. The record is then never older than one
-// hygiene interval while its holder lives, which is what lets a reader (doctor,
+// refreshPublication re-writes the authority record through the held fd. Every
+// check does it, whatever the path holds, so the record is never older than one
+// hygiene interval while its holder lives — which is what lets a reader (doctor,
 // `plumb debug daemons`) tell a live holder from a stale record whose pid the
-// kernel has since recycled — see daemonSocketPublicationFreshness. It rewrites
-// the file the lock is on and never replaces it.
+// kernel has since recycled (see daemonSocketPublicationFreshness) and what keeps
+// a replaced socket reportable for as long as the daemon is up. It rewrites the
+// file the lock is on and never replaces it.
 func (g *socketGuard) refreshPublication() {
 	if g.publish != nil {
 		g.publish(g.path, g.marker.id)

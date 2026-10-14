@@ -26,13 +26,30 @@ your binary.
 
 If the runtime directory (sockets, pid, version file) is deleted while a daemon
 is running, the daemon re-binds its socket within 30 s and clients reconnect on
-their own — nothing to do. If something else has taken the socket path, the
-daemon deliberately leaves it alone rather than unlinking a file it did not
-create, so it stays up but unreachable at that path. `plumb doctor` and
-`plumb debug daemons` both report it (`debug daemons` exits non-zero). Move the
-foreign file aside and run `plumb restart`; the daemon never removes it for you.
-`plumb daemon` also refuses to start when a *live* socket already occupies the
-path, and says which path it found.
+their own — nothing to do.
+
+If something else is *at* the socket path, a running daemon leaves it exactly
+where it is: it never unlinks a file it did not create, and it keeps serving the
+connections it already has, so it stays reachable to them and unreachable to
+everyone else. `plumb doctor` and `plumb debug daemons` report it (`debug daemons`
+exits non-zero and names the path), and the daemon's log says so once. The daemon
+will not take the path back, so a live occupant has to go before a successor can
+serve, and the successor refuses to start while it is there — the refusal, naming
+the path, is in the daemon log (`plumb restart` then reports only that the daemon
+did not come back up).
+
+The exception is a path that nothing is listening on. When a daemon *binds* the
+path — at startup, or re-binding after the path disappeared — it clears a stale
+entry first: a leftover socket file from a daemon that was killed, or a regular
+file somebody dropped there. That is deliberate crash recovery: it is why a
+`plumb restart` after a `kill -9` needs no tidying up. What it never displaces is
+a path something is answering on: there the bind fails closed and the daemon
+refuses to start rather than stealing the socket. Between the check that found the
+path gone and the bind that replaces it there is a window of microseconds in
+which a new file can appear at the path; the bind clears it only if nothing
+answers on it, and refuses — logged, retried on the next tick — if something does.
+So the file you must move aside by hand is the one that is alive; a dead one goes
+by itself.
 
 ## "… has not been read in this session"
 

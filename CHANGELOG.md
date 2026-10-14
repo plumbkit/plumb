@@ -532,9 +532,11 @@
   been deleted is re-bound (the daemon holds the account authority, so nobody else
   may be serving this account), while a path that now holds a different file is
   never removed and is reported in the daemon log. Each socket's identity is
-  published in the authority record, so `plumb debug daemons` and `plumb doctor`
-  say when a live daemon's socket is gone or has been replaced instead of calling
-  it healthy, and `plumb debug daemons` exits non-zero for it. Binding a socket
+  published in the authority record and re-published on every check — including
+  while somebody else's file is at the path, so the report cannot go quiet while
+  the daemon is up — so `plumb debug daemons` and `plumb doctor` say when a live
+  daemon's socket is gone or has been replaced instead of calling it healthy, and
+  `plumb debug daemons` exits non-zero for it. Binding a socket
   also refuses a live occupant — a stale socket left by a daemon that died is
   still cleared, so ordinary crash recovery is unchanged.
 
