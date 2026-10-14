@@ -531,7 +531,11 @@
   re-checks its socket paths every 30 s and on any accept error: a path that has
   been deleted is re-bound (the daemon holds the account authority, so nobody else
   may be serving this account), while a path that now holds a different file is
-  never removed and is reported in the daemon log. Each socket's identity is
+  never removed and is reported in the daemon log. A socket whose *metadata*
+  moves instead — a chmod, a backup tool touching the path — is not mistaken for
+  a replacement: the daemon's own listener holds the bound inode open, so an
+  inode with a live reference cannot be handed out again and a genuine
+  replacement always has a different one. Each socket's identity is
   published in the authority record and re-published on every check — including
   while somebody else's file is at the path, so the report cannot go quiet while
   the daemon is up — so `plumb debug daemons` and `plumb doctor` say when a live

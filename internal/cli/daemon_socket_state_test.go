@@ -208,18 +208,149 @@ func TestSocketPathStateFor_ComparesThePathWithThePublication(t *testing.T) {
 // authority, whose socket path has been replaced under it, is one daemon no client
 // can reach — a script reading the exit status must not read that as success.
 func TestDebugDaemonsExit_SocketFaultIsNotSuccess(t *testing.T) {
-	healthy := []socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7, IdentityKnown: true, IdentityMatches: true}}
+	// An intact socket: the file is the published one in the strongest sense.
+	healthy := []socketPathState{{
+		Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7,
+		IdentityKnown: true, InodeMatches: true, IdentityMatches: true,
+	}}
 	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, healthy); err != nil {
 		t.Errorf("a clean account with an intact socket must be success, got %v", err)
+	}
+	// A metadata change (same inode, moved change time) is a note: the daemon is
+	// serving, and accusing it would have a user restart a working daemon.
+	metadataMoved := []socketPathState{{
+		Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7,
+		IdentityKnown: true, InodeMatches: true,
+	}}
+	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, metadataMoved); err != nil {
+		t.Errorf("a moved change time must not fail the command, got %v", err)
 	}
 	// A note alone (a socket file nothing serves) is information, not a fault.
 	noted := []socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Answered: true}}
 	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, noted); err != nil {
 		t.Errorf("a path with no live publisher must not fail the command, got %v", err)
 	}
-	faulted := []socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 7, IdentityKnown: true}}
-	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, faulted); err == nil {
+	// Gone, and replaced (a different inode): both are the daemon being
+	// unreachable, and both must exit non-zero.
+	gone := []socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 7, IdentityKnown: true}}
+	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, gone); err == nil {
 		t.Error("a live daemon whose socket path is gone must exit non-zero")
+	}
+	replaced := []socketPathState{{
+		Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7,
+		IdentityKnown: true, InodeMatches: false,
+	}}
+	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, replaced); err == nil {
+		t.Error("a replaced socket must exit non-zero")
+	}
+}
+
+// TestMetadataChangeIsNotAFaultAndAReplacementIs pins the reader's discrimination
+// from both sides, and the exit code each one earns: a moved change time on the
+// publisher's own inode is a note (doctor warns, `plumb debug daemons` exits 0),
+// while a different inode is a replacement (a failed row and a non-zero exit).
+//
+// This pair is the reviewer's finding, both ways round: the first version keyed
+// the fault on the change time, so an unrelated chmod on the daemon's own socket
+// made a healthy, serving daemon read as unreachable.
+func TestMetadataChangeIsNotAFaultAndAReplacementIs(t *testing.T) {
+	withTempRuntime(t)
+	path := filepath.Join(t.TempDir(), "plumb.sock")
+	if err := os.WriteFile(path, []byte("the socket"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authPath := authorityLockPathForTest(t)
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(id fileIdentity) {
+		t.Helper()
+		m := authorityMetadata{
+			PID: os.Getpid(), Socket: path, SocketDev: id.dev, SocketIno: id.ino,
+			SocketCtime: id.ctime, Published: time.Now(),
+		}
+		if err := os.WriteFile(authPath, authorityJSON(t, m), 0o600); err != nil {
+			t.Fatalf("writing the authority record: %v", err)
+		}
+	}
+	// The realistic Direction-1 shape: the census answered AND the publishing
+	// daemon (this process, for the record's pid) is the one holding the path open
+	// — a live daemon whose socket's metadata moved.
+	report := daemons.Report{Sockets: []daemons.SocketReading{
+		{Path: path, Answered: true, Owners: []int{os.Getpid()}},
+	}}
+	okVerdict := daemons.Verdict{State: daemons.StateOK}
+
+	// Direction 1: the metadata moved on the publisher's own inode.
+	moved := identityOf(info)
+	moved.ctime--
+	write(moved)
+	states := daemonSocketStates(report)
+	if len(states) != 1 || !states[0].MetadataChanged() {
+		t.Fatalf("a moved change time must read as a metadata change, got %+v", states)
+	}
+	if states[0].fault() != "" {
+		t.Errorf("a metadata change is not a fault: %q", states[0].fault())
+	}
+	if err := debugDaemonsExit(okVerdict, states); err != nil {
+		t.Error("plumb debug daemons must not fail for a healthy daemon whose socket's metadata moved")
+	}
+	if rows := daemonSocketResults(states); len(rows) != 1 || !rows[0].ok || !rows[0].warn {
+		t.Errorf("doctor must warn, not fail, for a metadata change: %+v", rows)
+	}
+
+	// The liveness cross-check, three ways, all with the same device and inode
+	// and a moved change time:
+	//  - the census did not answer, so nothing is assumed: a note;
+	//  - the census answered and the holder has the path open: the change time
+	//    moved on the holder's own socket, a note;
+	//  - the census answered and the holder does NOT have it open: the inode was
+	//    recycled after that daemon's socket went away, which is a replacement.
+	movedStates := func(answered bool, owners []int) []socketPathState {
+		return daemonSocketStates(daemons.Report{Sockets: []daemons.SocketReading{
+			{Path: path, Answered: answered, Owners: owners},
+		}})
+	}
+	write(moved) // the record names the same inode with the older change time
+	unanswered := movedStates(false, nil)
+	if unanswered[0].fault() != "" || !unanswered[0].MetadataChanged() {
+		t.Errorf("an unanswered ownership question must leave a metadata change as a note: %+v", unanswered[0])
+	}
+	if err := debugDaemonsExit(okVerdict, unanswered); err != nil {
+		t.Errorf("an unanswered ownership question must not fail the command: %v", err)
+	}
+	owned := movedStates(true, []int{os.Getpid()})
+	if owned[0].fault() != "" || !owned[0].MetadataChanged() {
+		t.Errorf("the holder still holding the path open must leave it a note: %+v", owned[0])
+	}
+	disowned := movedStates(true, []int{4242})
+	if disowned[0].fault() == "" {
+		t.Errorf("a holder that no longer has the path open must be a fault: %+v", disowned[0])
+	}
+	if err := debugDaemonsExit(okVerdict, disowned); err == nil {
+		t.Error("a recycled inode under a live record must exit non-zero")
+	}
+
+	// Direction 2: a different inode is somebody else's socket. The inode is
+	// forged so this does not depend on the allocator; the real replacement case
+	// is TestSocketGuard_NeverRemovesAReplacementAndSaysSo, and
+	// TestDaemonSocketStates_ReportsAReplacementWhileTheRecordIsFresh above.
+	forged := identityOf(info)
+	forged.ino++
+	write(forged)
+	states = daemonSocketStates(report)
+	if len(states) != 1 || states[0].fault() == "" {
+		t.Fatalf("a different inode must be a fault, got %+v", states)
+	}
+	if err := debugDaemonsExit(okVerdict, states); err == nil {
+		t.Error("plumb debug daemons must exit non-zero for a replaced socket")
+	}
+	if rows := daemonSocketResults(states); len(rows) != 1 || rows[0].ok {
+		t.Errorf("doctor must fail for a replaced socket: %+v", rows)
 	}
 }
 
@@ -239,8 +370,24 @@ func TestDaemonSocketResults(t *testing.T) {
 		t.Fatalf("a socket file nothing serves must be one warning row, got %+v", noted)
 	}
 
-	healthy := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7, IdentityKnown: true, IdentityMatches: true}})
+	healthy := daemonSocketResults([]socketPathState{{
+		Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7,
+		IdentityKnown: true, InodeMatches: true, IdentityMatches: true,
+	}})
 	if len(healthy) != 0 {
 		t.Errorf("a healthy socket must add no rows, got %+v", healthy)
+	}
+
+	// A metadata change is a WARNING row, never a failure with the "move it
+	// aside and restart" remedy: the daemon is alive and serving.
+	moved := daemonSocketResults([]socketPathState{{
+		Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 7,
+		IdentityKnown: true, InodeMatches: true,
+	}})
+	if len(moved) != 1 || !moved[0].ok || !moved[0].warn {
+		t.Fatalf("a moved change time must be one warning row, got %+v", moved)
+	}
+	if moved[0].fix != "" {
+		t.Errorf("a warning must not carry a fix that restarts a healthy daemon, got %q", moved[0].fix)
 	}
 }

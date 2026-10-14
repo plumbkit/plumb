@@ -365,43 +365,117 @@ func TestSocketGuard_KeepsPublishingWhileSomebodyElsesFileIsAtThePath(t *testing
 	}
 }
 
-// TestSocketGuard_TreatsAReusedInodeAsSomebodyElses makes the ext4 case
-// deterministic: the marker's device and inode are the live socket's and only the
-// change time differs, which is exactly the state a filesystem that hands the
-// freed inode straight back creates. The guard must see a stranger's socket —
-// not rebind over it, not remove it, and say so.
-func TestSocketGuard_TreatsAReusedInodeAsSomebodyElses(t *testing.T) {
+// TestSocketGuard_AMetadataChangeIsStillThisDaemonsSocket is one half of the
+// discrimination the guard needs, and the half the first version of this code got
+// wrong: a chmod — or any other tool that writes metadata — bumps the change time
+// of the daemon's OWN socket while device and inode stay put. The daemon must go
+// on treating it as its own socket: not foreign, not re-bound, not removed, and
+// nothing false in the log.
+//
+// The other half is TestSocketGuard_ADifferentInodeIsSomebodyElses: a genuine
+// replacement has a different inode, because the daemon's own listener holds the
+// bound inode open and an inode with a live reference cannot be handed out again.
+func TestSocketGuard_AMetadataChangeIsStillThisDaemonsSocket(t *testing.T) {
 	withShortTempRuntime(t)
 	logs := captureLogs(t)
 	path := daemonSocketPath()
 	g, _ := guardFor(t, path, true)
-	if g.marker.id.ctime == 0 {
+	before := g.marker.id
+	if before.ctime == 0 {
 		if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-			t.Fatalf("identityOf read no change time on %s: %+v", runtime.GOOS, g.marker.id)
+			t.Fatalf("identityOf read no change time on %s: %+v", runtime.GOOS, before)
 		}
 		t.Skipf("this platform (%s) has no change time in its identity", runtime.GOOS)
 	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatalf("chmod on the daemon's own socket: %v", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identityOf(after).ctime == before.ctime {
+		// No vacuity: without a moved change time this test would pass for the
+		// wrong reason, so say so rather than assert nothing.
+		t.Fatalf("chmod did not move the change time (still %d); this test cannot distinguish anything here", before.ctime)
+	}
+	if !identityOf(after).sameInode(before) {
+		t.Fatalf("chmod changed the inode: %+v -> %+v", before, identityOf(after))
+	}
+
+	if g.check() {
+		t.Error("the guard re-bound a path that still holds the socket it bound")
+	}
+	if g.foreign {
+		t.Error("a metadata change made the daemon disown its own socket — the false-replacement direction")
+	}
+	if now, err := os.Lstat(path); err != nil {
+		t.Fatalf("the daemon removed its own socket after a metadata change: %v", err)
+	} else if !identityOf(now).sameInode(before) {
+		t.Errorf("the file at the path changed: %+v -> %+v", before, identityOf(now))
+	}
+	if strings.Contains(logs.String(), "no longer names this daemon's socket") {
+		t.Errorf("the daemon logged a replacement for its own socket; log:\n%s", logs.String())
+	}
+}
+
+// TestSocketGuard_ADifferentInodeIsSomebodyElses is the other half: a file with a
+// different inode at the socket path is a replacement, and the guard must report
+// it, never re-bind over it, and never remove it. The inode is forged here so the
+// test does not depend on the filesystem's allocator; the real case (binding a
+// foreign socket at the path) is TestSocketGuard_NeverRemovesAReplacementAndSaysSo.
+func TestSocketGuard_ADifferentInodeIsSomebodyElses(t *testing.T) {
+	withShortTempRuntime(t)
+	logs := captureLogs(t)
+	path := daemonSocketPath()
+	g, _ := guardFor(t, path, true)
 	own, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.marker.id.ctime++ // same device and inode, a different change time
+	g.marker.id.ino++ // same everything else; a different inode cannot be this socket
 
 	if g.check() {
 		t.Error("the guard re-bound a path that holds a file it did not create")
 	}
 	if !g.foreign {
-		t.Error("the guard accepted a socket whose change time is not the one it recorded")
+		t.Error("the guard accepted a socket whose inode is not the one it bound")
 	}
 	now, err := os.Lstat(path)
 	if err != nil {
-		t.Fatalf("the daemon removed a file whose change time does not match: %v", err)
+		t.Fatalf("the daemon removed a file whose inode does not match: %v", err)
 	}
 	if identityOf(now) != identityOf(own) {
 		t.Errorf("the file at the path changed: %+v -> %+v", identityOf(own), identityOf(now))
 	}
 	if !strings.Contains(logs.String(), "no longer names this daemon's socket") {
-		t.Errorf("the daemon never reported the mismatched change time; log:\n%s", logs.String())
+		t.Errorf("the daemon never reported the replacement; log:\n%s", logs.String())
+	}
+}
+
+// TestFileMarker_NamesBoundSocketRequiresASocket pins the one difference between
+// the two questions a marker answers: namesBoundSocket (is the path still mine,
+// asked by the running guard, where the listener pins the inode) also requires the
+// file to BE a socket, while namesInfo (may I remove this, asked at shutdown) does
+// not. Without the mode check a path that is not a socket at all could be accepted
+// as this daemon's bound socket if it ever carried the same inode.
+func TestFileMarker_NamesBoundSocketRequiresASocket(t *testing.T) {
+	dir := t.TempDir()
+	regular := filepath.Join(dir, "plumb.pid")
+	if err := os.WriteFile(regular, []byte("1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(regular)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := markRuntimeFile(regular)
+	if !marker.namesInfo(info) {
+		t.Fatal("precondition: the marker must match the file it was taken from")
+	}
+	if marker.namesBoundSocket(info) {
+		t.Error("a regular file was accepted as the daemon's bound socket")
 	}
 }
 

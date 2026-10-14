@@ -90,6 +90,30 @@ func (id fileIdentity) matches(other fileIdentity) bool {
 	return other.ctime == 0 || id.ctime == other.ctime
 }
 
+// sameInode reports whether this identity and the other name the same inode,
+// whatever their change times say.
+//
+// It is the comparison for a file whose inode this process holds OPEN, and the
+// open reference is what makes it sound: an inode cannot be freed and handed out
+// again while a descriptor still refers to it, so a same-inode file at a bound
+// socket's path is that socket, never a reincarnation of it. Measured on ext4
+// with a bound unix listener: the path's inode was 13, a regular file recreated
+// there got 14 and a foreign socket bound there got 14, and only after the
+// listener closed did a new file get 13 back.
+//
+// The change time is deliberately NOT part of this claim, because it moves for
+// reasons that have nothing to do with ownership: a chmod, a backup tool or any
+// other metadata write bumps it on the daemon's OWN socket. Treating that as a
+// replacement would make the daemon disown a socket it is serving and report a
+// healthy daemon as unreachable (the reviewer's finding against the first
+// version of this code). Where the inode is NOT pinned — the removal path, which
+// runs after the listener is closed, and the pid and version files, which this
+// process never holds open — the change time is exactly the evidence that a
+// recreated file inherited the freed inode, and matches() still requires it.
+func (id fileIdentity) sameInode(other fileIdentity) bool {
+	return id.known() && other.known() && id.dev == other.dev && id.ino == other.ino
+}
+
 // fileMarker is one runtime path, remembered as the file this daemon created
 // there. It answers the only question the exit path may ask before removing
 // anything: does this path still name my file?
@@ -109,9 +133,24 @@ func markRuntimeFile(path string) fileMarker {
 }
 
 // namesInfo reports whether info is the file this marker recorded: same device
-// and inode, and the same change time (see fileIdentity.matches).
+// and inode, and the same change time (see fileIdentity.matches). It is the claim
+// the REMOVAL path asks, because removing destroys something and the listener is
+// already closed by then.
 func (m fileMarker) namesInfo(info os.FileInfo) bool {
 	return identityOf(info).matches(m.id)
+}
+
+// namesBoundSocket reports whether info is the socket this marker recorded, for
+// the question the running daemon asks on every check: is the path still mine?
+//
+// Same device and inode, and still a socket — the change time is not required
+// here, because the daemon's own listener holds that inode open for as long as
+// the guard is running (sameInode). A file that genuinely replaced the socket
+// has a different inode, and that is what this catches. A metadata-only change
+// (chmod, a backup tool touching the path) bumps the change time on the daemon's
+// own socket and must NOT read as a replacement.
+func (m fileMarker) namesBoundSocket(info os.FileInfo) bool {
+	return info.Mode()&os.ModeSocket != 0 && identityOf(info).sameInode(m.id)
 }
 
 // removeIfOurs removes the path only while it still names the file this daemon
@@ -327,7 +366,7 @@ func (g *socketGuard) check() bool {
 	defer g.refreshPublication()
 	info, err := os.Lstat(g.path)
 	switch {
-	case err == nil && g.marker.namesInfo(info):
+	case err == nil && g.marker.namesBoundSocket(info):
 		g.clearForeign()
 		return false
 	case err == nil && g.marker.id.known():

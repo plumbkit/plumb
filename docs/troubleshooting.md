@@ -32,7 +32,11 @@ If something else is *at* the socket path, a running daemon leaves it exactly
 where it is: it never unlinks a file it did not create, and it keeps serving the
 connections it already has, so it stays reachable to them and unreachable to
 everyone else. `plumb doctor` and `plumb debug daemons` report it (`debug daemons`
-exits non-zero and names the path), and the daemon's log says so once. The daemon
+exits non-zero and names the path), and the daemon's log says so once. What is
+*not* a replacement: a chmod or a backup tool that rewrites the metadata of the
+daemon's own socket. That moves the file's change time without changing its
+inode, and the daemon goes on serving — doctor warns rather than fails, and
+`debug daemons` still exits 0. The daemon
 will not take the path back, so a live occupant has to go before a successor can
 serve, and the successor refuses to start while it is there — the refusal, naming
 the path, is in the daemon log (`plumb restart` then reports only that the daemon

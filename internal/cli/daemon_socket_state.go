@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/daemons"
@@ -87,7 +88,12 @@ type socketPathState struct {
 	Publisher int
 	// IdentityKnown reports that the publisher recorded which file it bound.
 	IdentityKnown bool
-	// IdentityMatches reports that the file at Path is still that one.
+	// InodeMatches reports that the file at Path has the device and inode the
+	// publisher recorded: the socket that daemon bound, or something that
+	// inherited its inode.
+	InodeMatches bool
+	// IdentityMatches reports that the file at Path is still that one in the
+	// strongest sense: same device and inode, AND the same change time.
 	IdentityMatches bool
 	// OwnedBy lists the daemons the census found holding the path open.
 	OwnedBy []int
@@ -96,10 +102,39 @@ type socketPathState struct {
 	Answered bool
 }
 
+// MetadataChanged reports that the file at Path is the one the publisher named —
+// same device and inode — but its change time has moved since the publisher bound
+// it. A chmod, a backup tool or any other metadata write does that to the
+// daemon's OWN socket, and the daemon does not treat it as a replacement (its
+// listener holds that inode open, so nothing else can have it). The reader
+// cannot hold the inode open and therefore cannot prove it; it reports what it
+// knows as a note rather than a fault, because accusing a healthy daemon is the
+// worse error, and it stays silent about nothing.
+func (s socketPathState) MetadataChanged() bool {
+	return s.Publisher != 0 && s.IdentityKnown && s.InodeMatches && !s.IdentityMatches
+}
+
+// holderStillHolds reports that the census POSITIVELY found the publishing daemon
+// holding this path open. It is the closest thing to a liveness check a read-only
+// census has (it never dials), and it is what separates a metadata change on the
+// holder's own socket from a coincidence: if the holder no longer has the path
+// open, the device and inode matching is the recycled-inode case, not the owner's
+// file. An unanswered ownership question is NOT this (see Answered).
+func (s socketPathState) holderStillHolds() bool {
+	return s.Answered && slices.Contains(s.OwnedBy, s.Publisher)
+}
+
 // fault is the state that must not read as healthy: a path a live daemon
 // published that no longer holds the socket it bound. It is empty when the path
-// is fine or when this process has no evidence either way — an absence of
-// evidence is never turned into an accusation.
+// is fine, when only its metadata moved (MetadataChanged), or when this process
+// has no evidence either way — an absence of evidence is never turned into an
+// accusation.
+//
+// The discriminator is the INODE, not the change time: a daemon that is alive
+// and publishing holds its socket's inode open, and an inode with a live
+// reference cannot be handed out again, so a different inode is the one thing
+// that proves the socket there is somebody else's — while a moved change time on
+// the same inode proves nothing of the kind.
 func (s socketPathState) fault() string {
 	if s.Unreadable || s.Publisher == 0 {
 		return ""
@@ -107,8 +142,14 @@ func (s socketPathState) fault() string {
 	switch {
 	case !s.Exists:
 		return fmt.Sprintf("gone while plumb daemon %d is alive and serving it", s.Publisher)
-	case s.IdentityKnown && !s.IdentityMatches:
+	case s.IdentityKnown && !s.InodeMatches:
 		return fmt.Sprintf("replaced — the file there is not the socket plumb daemon %d bound, and that daemon deliberately will not remove it", s.Publisher)
+	case s.MetadataChanged() && s.Answered && !s.holderStillHolds():
+		// Same device and inode, but the census looked and the daemon that
+		// published this record does not have the path open: the inode was
+		// recycled after that daemon's socket went away, so this is a
+		// replacement wearing the old numbers, not a metadata change.
+		return fmt.Sprintf("the file at the path carries the device and inode plumb daemon %d published, but that daemon does not hold it open — the socket is gone and its inode was reused", s.Publisher)
 	default:
 		return ""
 	}
@@ -125,6 +166,12 @@ func (s socketPathState) note() string {
 	switch {
 	case s.Unreadable:
 		return "cannot be inspected"
+	case s.MetadataChanged():
+		detail := fmt.Sprintf("the socket's change time moved after plumb daemon %d bound it (a chmod, or a tool that rewrites metadata); the device and inode are unchanged, so this is not a replacement and the daemon keeps serving", s.Publisher)
+		if !s.Answered {
+			detail += " (the census could not confirm that daemon still holds the path open, so this is reported rather than assumed)"
+		}
+		return detail
 	case s.Publisher != 0:
 		return "" // a live daemon published it and the file is the one it bound
 	case !s.Exists:
@@ -172,6 +219,7 @@ func socketPathStateFor(path string, answered bool, owners []int, pub socketPubl
 		// matches, not equality: a record written before the change time was
 		// published compares on (device, inode) alone (see fileIdentity.matches).
 		st.IdentityMatches = st.IdentityKnown && identityOf(info).matches(pub.id)
+		st.InodeMatches = st.IdentityKnown && identityOf(info).sameInode(pub.id)
 	case errors.Is(err, fs.ErrNotExist):
 	default:
 		st.Unreadable = true
