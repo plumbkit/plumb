@@ -99,6 +99,16 @@ func rootsFromClient(ctx context.Context, request mcp.RequestFn, logger *slog.Lo
 // resolve it against the daemon's cwd, which belongs to no caller. With no base
 // a relative seed attributes nothing.
 func workspaceFromArgs(pool *workspacePool, args json.RawMessage, base string) string {
+	dir := detectStartDir(args, base)
+	if dir == "" {
+		return ""
+	}
+	return detectedRoot(pool, dir)
+}
+
+// detectStartDir is the directory workspaceFromArgs detects from: the seed when
+// it is a directory, else its parent. "" when args name no usable seed.
+func detectStartDir(args json.RawMessage, base string) string {
 	seed := seedPathFromArgs(args)
 	if seed == "" {
 		seed = repoFromArgs(args)
@@ -114,11 +124,15 @@ func workspaceFromArgs(pool *workspacePool, args json.RawMessage, base string) s
 	}
 	// If seed is already a directory, use it directly — filepath.Dir would
 	// strip the last component and miss the project root marker.
-	startDir := seed
 	if info, err := os.Stat(seed); err != nil || !info.IsDir() {
-		startDir = filepath.Dir(seed)
+		return filepath.Dir(seed)
 	}
-	root, _, err := pool.Detect(startDir)
+	return seed
+}
+
+// detectedRoot is the project root Detect finds from dir, or "" when none.
+func detectedRoot(pool *workspacePool, dir string) string {
+	root, _, err := pool.Detect(dir)
 	if err != nil {
 		return ""
 	}

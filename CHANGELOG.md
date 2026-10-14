@@ -300,6 +300,15 @@
 
 ### Fixed
 
+- **`context_for_task` detects each directory's project once per call.** After
+  the per-file memo below, a pack still resolved the project of each of its 100
+  to 250 files on disk, and the slowest arm R pack ran at 1.7–1.9 s of its 2 s
+  graph deadline. The files of one directory resolve alike, so within a call
+  the detection is now remembered per directory. The memo lives on the call's
+  context: it is fresh for every call, a marker created between two calls is
+  seen by the second, and writes (which never carry one) detect on every ask as
+  before. The sensitive-path decision itself is unchanged (PLAN-548).
+
 - **`context_for_task` asks each file's sensitivity once per call, so live packs
   keep their affected tests.** The walk asks whether every node it reaches is in a
   sensitive file, 600 to 2,000 times per pack over a hundred or two files, and
