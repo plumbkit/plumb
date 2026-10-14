@@ -351,6 +351,15 @@ func isPlumbDaemonProcess(pid int) bool {
 // platform can pin it without starting a daemon — a real `plumb daemon` cannot
 // be started outside a container (PLAN-518 §2), and the cases that matter are
 // the false positives.
+//
+// `daemon` must be argv[1], and that is not an approximation (PLAN-552, which
+// asked whether `plumb --log-level debug daemon` should match): plumb's root
+// command has no flags of its own — `plumb --log-level debug version` exits
+// "unknown flag" — so no running daemon can have anything before its
+// subcommand. Scanning past leading words would only add false positives, and
+// on darwin, where `ps` flattens argv on whitespace, `plumb --msg "hello daemon"`
+// would then read as a daemon and be signalled. The census
+// (internal/daemons.isPlumbDaemonArgv) applies the same rule.
 func processIsPlumbDaemon(argv []string) bool {
 	if len(argv) < 2 {
 		return false

@@ -32,21 +32,25 @@ func init() {
 	restartCmd.Flags().BoolVar(&restartFlagForce, "force", false, "restart without asking for confirmation")
 }
 
+// restartConfirm and restartRespawn are the two steps of a restart that a test
+// cannot run for real — one blocks on a human, the other starts a daemon — so the
+// suite substitutes them to pin WHEN the restart's deadline starts.
+var (
+	restartConfirm = confirmDaemonActionWithActiveSessions
+	restartRespawn = respawnDaemon
+)
+
 func runRestart(_ *cobra.Command, _ []string) error {
 	PrintLogo()
-	// ONE deadline for the whole stop-and-confirm phase, and it is the launcher
-	// deadline: how long a plumb launch waits for a daemon before giving up.
-	// Nothing here waits without a bound.
-	deadline := time.Now().Add(daemonStartWait())
 	pids := restartDaemonPIDs()
 	if len(pids) == 0 {
 		fmt.Println("Daemon is not running.")
-		return respawnDaemon(nil, deadline)
+		return restartRespawn(nil, time.Now().Add(daemonStartWait()))
 	}
 
 	prompted := false
 	if !restartFlagForce {
-		ok, shown, err := confirmDaemonActionWithActiveSessions(restartActionPrompt)
+		ok, shown, err := restartConfirm(restartActionPrompt)
 		if err != nil {
 			return err
 		}
@@ -55,6 +59,13 @@ func runRestart(_ *cobra.Command, _ []string) error {
 			return nil
 		}
 		prompted = shown
+		// The prompt waits on a human, and a pid named before it may since have
+		// exited and been handed to somebody else. Re-identify now, so what is
+		// signalled is what is a daemon of ours at the moment of the signal.
+		if pids = restartDaemonPIDs(); len(pids) == 0 {
+			fmt.Println("Daemon is not running.")
+			return restartRespawn(nil, time.Now().Add(daemonStartWait()))
+		}
 	}
 
 	if len(pids) > 1 {
@@ -66,6 +77,12 @@ func runRestart(_ *cobra.Command, _ []string) error {
 		}
 		forceKillIfAlive(pid) // a daemon that ignored SIGTERM must still go, so respawn is real
 	}
+	// ONE deadline for the exit check and the successor's start, and it is the
+	// launcher deadline: how long a plumb launch waits for a daemon before giving
+	// up. It starts HERE, after the confirmation and the stop — both bounded on
+	// their own (or by a human) — so a slow answer to the prompt cannot spend it and
+	// leave the account with no daemon at all (PLAN-552 MINOR-4).
+	deadline := time.Now().Add(daemonStartWait())
 	// Invariant 4, and the reason this is not folded into respawnDaemon: the
 	// successor starts only after the old daemon's EXIT is confirmed. A pid that
 	// is still there after SIGTERM and SIGKILL is a daemon that may still be
@@ -74,7 +91,7 @@ func runRestart(_ *cobra.Command, _ []string) error {
 	if err := waitForDaemonExit(pids, deadline); err != nil {
 		return err
 	}
-	return respawnDaemon(pids, deadline)
+	return restartRespawn(pids, deadline)
 }
 
 // daemonIdentityCheck reports whether a pid is a `plumb daemon` process: the

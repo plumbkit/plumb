@@ -419,6 +419,21 @@
 
 ### Fixed
 
+- **`plumb restart` and the legacy-daemon checks close the gaps the PLAN-530
+  review left open.** The restart's launcher deadline started before the
+  confirmation prompt, so a slow answer spent it and a daemon still exiting
+  then left the account with none; it now starts after the stop. A legacy
+  daemon is called compatible only when the version file was published by the
+  daemon alive there now (its pid file names a live `plumb daemon` and is no
+  newer than the version file), not on a file a SIGKILL left behind. A restart
+  re-identifies the daemons it will stop after the confirmation prompt, so a pid
+  that changed hands while the prompt waited is not signalled. On darwin a
+  process's argv is now read from the kernel (`kern.procargs2`) rather than
+  `ps`, so a binary under a path with a space, or a sandbox that denies `ps`,
+  no longer hides a running daemon from `plumb restart`/`stop`. And the
+  daemon's refusal to start beside a legacy daemon, the symlink-spelling dedup
+  of a held legacy lock and the stale-authority-record rule are now each pinned
+  by a test that fails without them.
 - **`context_for_task` says when its index is still on its first pass.** An
   agent's first call in a fresh worktree reached an index holding a few dozen of
   a few thousand files, and the pack read like a complete answer: "no indexed

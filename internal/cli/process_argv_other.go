@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package cli
 
@@ -8,16 +8,15 @@ import (
 	"strings"
 )
 
-// processArgv reads a process's argument vector on the platforms that are not
-// Linux — in practice darwin and the BSDs, where /proc does not exist and `ps`
-// always does.
+// processArgv reads a process's argument vector on the platforms that are
+// neither Linux nor darwin — in practice the BSDs, where /proc may not exist and
+// `ps` does.
 //
 // The command line is split on whitespace, as `plumb stop`'s pgrep verification
 // always has: a path containing a space would defeat this split, which is
 // acceptable for the question it answers (is this process OURS) and is recorded
-// here rather than hidden. Linux — where plumb is most often deployed into
-// images that may carry no procps at all — reads /proc instead
-// (process_argv_linux.go, PLAN-553).
+// here rather than hidden. Linux reads /proc (process_argv_linux.go, PLAN-553)
+// and darwin asks the kernel (process_argv_darwin.go, PLAN-552).
 func processArgv(pid int) ([]string, bool) {
 	if pid <= 0 {
 		return nil, false

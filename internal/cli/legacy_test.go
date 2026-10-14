@@ -128,7 +128,7 @@ func TestProbeLegacyDaemons_TakesNoLockAndCreatesNothing(t *testing.T) {
 	withAccountAuthority(t)
 	loc := legacyLocationForTest(t)
 	countingListener(t, loc.Socket)
-	writeRuntimeFile(t, loc.Version, Version)
+	publishLegacyDaemon(t, loc, Version)
 
 	before := dirEntries(t, loc.Dir)
 	got := probeLegacyDaemons()
@@ -181,7 +181,7 @@ func TestAttachLegacyDaemon_CompatibleDaemonIsReused(t *testing.T) {
 	// directory in use is given a version file of its own that does NOT match, so a
 	// probe reading the wrong one refuses a daemon it should reuse.
 	writeRuntimeFile(t, daemonVersionPath(), "another-build")
-	writeRuntimeFile(t, loc.Version, Version)
+	publishLegacyDaemon(t, loc, Version)
 
 	conn, err := attachLegacyDaemon()
 	if err != nil {

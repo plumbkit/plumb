@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -111,5 +112,68 @@ func TestHoldLegacyLocks_HoldsTheDaemonsOwnEnvironmentToo(t *testing.T) {
 	if ctrl, err := acquireLegacyLock(ownLock); err == nil {
 		_ = ctrl.File.Close()
 		t.Fatalf("positive control failed: %s was free even without a handover", ownLock)
+	}
+}
+
+// TestDaemonStartLocks_RefusesBesideALegacyDaemon pins the daemon's half of the
+// fence at its WIRING, not at the helper (PLAN-552 MINOR-3(a)): deleting the
+// refuseBesideLegacyDaemon call from daemonStartLocks left every PLAN-530 test
+// green, so a direct `plumb daemon` could have started beside a daemon an older
+// binary left serving. The refusal must also release every lock it took, or the
+// daemon that exits over it sits on the account's authority while it does.
+func TestDaemonStartLocks_RefusesBesideALegacyDaemon(t *testing.T) {
+	withShortTempRuntime(t)
+	withAccountAuthority(t)
+	loc := legacyLocationForTest(t)
+	ln := countingListener(t, loc.Socket) // an older binary's daemon, answering
+
+	locks, err := daemonStartLocks()
+	if err == nil {
+		locks.closeAll()
+		t.Fatalf("daemonStartLocks started beside the legacy daemon answering at %s", loc.Socket)
+	}
+	if !strings.Contains(err.Error(), loc.Socket) {
+		t.Fatalf("the refusal %q must name the legacy socket %s", err, loc.Socket)
+	}
+	freeLaunchLocks(t) // the refusal released everything it took
+
+	// Positive control: with nobody answering there, the same call holds the locks.
+	_ = ln.Close()
+	_ = os.Remove(loc.Socket)
+	locks, err = daemonStartLocks()
+	if err != nil {
+		t.Fatalf("nothing is serving at %s any more, yet daemonStartLocks refused: %v", loc.Socket, err)
+	}
+	locks.closeAll()
+}
+
+// TestHeldLegacyLockAt_DedupsASymlinkedSpelling pins heldLegacyLockAt's inode
+// dedup (PLAN-552 MINOR-B). flock is per open file description, so acquiring one
+// lock file a second time through another spelling returns EWOULDBLOCK and the
+// daemon refuses to start against its own fence — on macOS, where /tmp is a
+// symlink to /private/tmp, that is every start. Made portable with a symlink the
+// test creates itself.
+func TestHeldLegacyLockAt_DedupsASymlinkedSpelling(t *testing.T) {
+	realDir := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Fatalf("symlinking %s: %v", realDir, err)
+	}
+	lock := filepath.Join(realDir, "plumb.daemon.lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatalf("creating %s: %v", lock, err)
+	}
+	spelled := filepath.Join(link, "plumb.daemon.lock")
+	if !heldLegacyLockAt([]heldLegacyLock{{Path: lock}}, spelled) {
+		t.Errorf("heldLegacyLockAt does not see %s and %s as one file: the union would acquire it twice and refuse to start", lock, spelled)
+	}
+
+	// Negative control: a different file is not deduped, however it is spelled.
+	other := filepath.Join(t.TempDir(), "plumb.daemon.lock")
+	if err := os.WriteFile(other, nil, 0o600); err != nil {
+		t.Fatalf("creating %s: %v", other, err)
+	}
+	if heldLegacyLockAt([]heldLegacyLock{{Path: lock}}, other) {
+		t.Errorf("heldLegacyLockAt deduped two different files (%s, %s)", lock, other)
 	}
 }
