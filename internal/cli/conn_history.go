@@ -9,6 +9,7 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/mcp"
+	"github.com/plumbkit/plumb/internal/tools"
 	"github.com/plumbkit/plumb/internal/tools/txlog"
 )
 
@@ -59,6 +60,11 @@ func (s *connSession) historyOnFor(ctx context.Context, path string) bool {
 // agent's root, then the project the path itself lies in (onAfterTool's
 // resolution, so history and stats file a call under the same project), else
 // the path's directory.
+//
+// Inside a context_for_task call the project detection is remembered per
+// directory for that call (tools.CallMemo): the pack asks about every file it
+// reaches, and detection globs for markers on disk each time. Outside one, as
+// for every write, it runs on each ask.
 func (s *connSession) historyRootFor(ctx context.Context, path string) string {
 	root := s.view().acquiredRoot
 	if w := s.recordedRootFor(mcp.LogicalAgentFromCtx(ctx)); w != "" {
@@ -67,8 +73,11 @@ func (s *connSession) historyRootFor(ctx context.Context, path string) string {
 	// No pool (a session not yet attached to the daemon's, as tests build them)
 	// has no project to resolve the path against; the agent's root stands.
 	if s.pool != nil {
-		if w := workspaceFromArgs(s.pool, pathArg(path), root); w != "" {
-			root = w
+		if dir := detectStartDir(pathArg(path), root); dir != "" {
+			w := tools.CallMemoFrom(ctx).Once(dir, func() string { return detectedRoot(s.pool, dir) })
+			if w != "" {
+				root = w
+			}
 		}
 	}
 	if root == "" {

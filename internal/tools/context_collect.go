@@ -238,6 +238,9 @@ func (r *contextRequest) seedInputs() []seedInput {
 // pack. Everything it reads is keyed by the agent's canonical root, never the
 // connection's.
 func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (contextPack, error) {
+	// Every ask this call makes of the sensitive-path decision carries one memo,
+	// fresh per call (see CallMemo).
+	ctx = WithCallMemo(ctx)
 	root, err := c.agentRoot(ctx)
 	if err != nil {
 		return contextPack{}, err
