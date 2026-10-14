@@ -6,6 +6,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -330,11 +331,28 @@ func (c *ContextCollector) walk(ctx, graphCtx context.Context, pack *contextPack
 
 // sensitiveFor adapts the injected decision to the index's root-relative paths.
 // It is nil when no decision is wired, which withholds nothing.
+//
+// The answer is remembered per path for the one call: a walk asks about every
+// node it reaches, 600 to 2,000 times over a hundred or two files, and the
+// daemon's decision resolves the path's project each time (workspace detection
+// on disk), which made a live pack overrun its graph deadline. A path's
+// sensitivity cannot change within the call that asks.
 func (c *ContextCollector) sensitiveFor(ctx context.Context, root string) func(string) bool {
 	if c.sensitive == nil {
 		return nil
 	}
-	return func(rel string) bool { return c.sensitive(ctx, absUnder(root, rel), "") }
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	return func(rel string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if v, ok := seen[rel]; ok {
+			return v
+		}
+		v := c.sensitive(ctx, absUnder(root, rel), "")
+		seen[rel] = v
+		return v
+	}
 }
 
 // markStale marks the relationships that come from a file whose bytes changed
