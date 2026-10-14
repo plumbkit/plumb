@@ -43,8 +43,28 @@ func seamRoot() string {
 // the flip is produced from an UNTAGGED build, which is the build users get; a
 // harness that wants the canonical resolution asks for it explicitly, exactly as
 // it does today.
-func authorityEnabled() bool {
-	if !testing.Testing() && separateenv.Current() == "" {
+func authorityEnabled() bool { return authorityEnabledFor(testing.Testing()) }
+
+// authorityEnabledFor is authorityEnabled with the build fact that selects the
+// in-process rule passed in. It exists so this file and seam_off.go present the
+// SAME shape: a test shared by both variants compiles against either, and the
+// tagged rule below is reachable by a test rather than only by a container suite.
+func authorityEnabledFor(inTestBinary bool) bool {
+	return taggedAuthorityFor(inTestBinary, separateenv.Current() != "")
+}
+
+// taggedAuthorityFor is the tagged rule with BOTH of its inputs passed in: is
+// this process the test binary, and is there separateenv evidence (CI, a
+// container marker, a declared VM)?
+//
+// The evidence is an argument rather than a direct call so the rule can be
+// asserted in every direction from any environment. A container always has
+// evidence and a developer's laptop never does, so a test that read
+// separateenv.Current() itself would silently stop covering one half of the rule
+// depending on where it ran — the same "compiles but never runs" trap that left
+// this file's helpers missing while only the untagged variant was ever built.
+func taggedAuthorityFor(inTestBinary, haveSeparateEnvEvidence bool) bool {
+	if !inTestBinary && !haveSeparateEnvEvidence {
 		return false
 	}
 	return authorityFromEnv()
@@ -57,4 +77,9 @@ func authorityEnabled() bool {
 // account-directory rule a released build follows (the config file never moves;
 // see seam_off.go) does not apply here, because there is no user configuration
 // to keep readable — the harness says which directories it wants.
-func configAuthorityEnabled() bool { return authorityEnabled() }
+func configAuthorityEnabled() bool { return configAuthorityEnabledFor(testing.Testing()) }
+
+// configAuthorityEnabledFor is configAuthorityEnabled with the build fact passed
+// in. In the tagged build the config-directory answer IS the authority answer,
+// and the tagged tests pin that agreement rather than restating the rule.
+func configAuthorityEnabledFor(inTestBinary bool) bool { return authorityEnabledFor(inTestBinary) }
