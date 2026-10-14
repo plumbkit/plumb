@@ -22,7 +22,9 @@ import (
 // (temp file → rename) and external editors (rename-replace) swap the inode;
 // the Remove or Rename that raises on the old inode detaches the watch and the
 // debounce fire re-attaches it to the new file before reloading. A config file
-// created where there was none is attached by a one-second stat tick. Bursts
+// created where there was none is attached by a one-second stat tick, and one
+// already there when Run starts is reloaded once, because it may have changed
+// after the store loaded it and before the watch existed. Bursts
 // coalesce over a short debounce window so a single save reloads once.
 //
 // Self-trigger safety: Reload only reads the file and swaps the store's pointer;
@@ -79,13 +81,13 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 	cfg := configFileWatch{path: filepath.Join(w.dir, w.base), newWatcher: w.newWatcher, watcher: watcher}
 	// A closure, not a plain defer: onError swaps the watcher.
 	defer func() { closeFSWatcher(cfg.watcher) }()
-	cfg.attach()
+	attachedAtStart := cfg.attach()
 	slog.Info("daemon: watching global config for changes", "dir", w.dir, "file", w.base)
 
-	timer := time.NewTimer(w.debounce)
-	if !timer.Stop() {
-		<-timer.C
-	}
+	// The store was loaded before this watch existed, so a write in between
+	// raised no event here and leaves the same inode for the tick to compare:
+	// reload once to catch it, as onError does after a blind recreate.
+	timer := newDebounceTimer(w.debounce, attachedAtStart)
 	defer timer.Stop()
 	tick := time.NewTicker(configFileTick)
 	defer tick.Stop()
@@ -117,6 +119,16 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 			w.onSettled(&cfg)
 		}
 	}
+}
+
+// newDebounceTimer returns a debounce timer that fires after d when armed, and
+// is stopped and drained otherwise.
+func newDebounceTimer(d time.Duration, armed bool) *time.Timer {
+	timer := time.NewTimer(d)
+	if !armed && !timer.Stop() {
+		<-timer.C
+	}
+	return timer
 }
 
 // onError handles one watcher error. A lost watcher is recreated
