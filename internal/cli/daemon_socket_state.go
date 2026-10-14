@@ -172,6 +172,16 @@ func (s socketPathState) note() string {
 			detail += " (the census could not confirm that daemon still holds the path open, so this is reported rather than assumed)"
 		}
 		return detail
+	case s.Publisher != 0 && !s.IdentityKnown && s.Exists:
+		// A record with a socket and no identity is what a daemon from before
+		// PLAN-529 writes. Silence here would discard what the census CAN say
+		// (PLAN-551): whether that daemon holds the path open. Not an accusation —
+		// the file may well be its socket — but never nothing.
+		detail := fmt.Sprintf("plumb daemon %d published this path without recording which file it bound (an older build), so whether the file there is still its socket cannot be checked; `plumb restart` replaces it with a build that records it", s.Publisher)
+		if s.Answered && !s.holderStillHolds() {
+			detail += fmt.Sprintf(" — and the census found plumb daemon %d does not hold it open", s.Publisher)
+		}
+		return detail
 	case s.Publisher != 0:
 		return "" // a live daemon published it and the file is the one it bound
 	case !s.Exists:

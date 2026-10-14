@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -182,7 +183,7 @@ func findAllDaemonPIDs() []int {
 	}
 	// Clean up stale PID file if the recorded process is gone.
 	if filePID > 0 && !seen[filePID] {
-		_ = os.Remove(daemonPIDPath())
+		removeStalePIDFile(daemonPIDPath(), filePID)
 	}
 
 	// 2. lsof on the socket.
@@ -256,12 +257,20 @@ func findAllDaemonByArgs() []int {
 // `plumb stop` answer "Daemon is not running." while one is demonstrably alive —
 // and `plumb restart` would then spawn a duplicate beside it. Fixing an
 // over-broad sweep must not create an under-broad one.
+//
+// Every legacy location counts, not only the cache-directory one: in canonical
+// mode the environment-derived runtime directory ($XDG_RUNTIME_DIR/plumb) is a
+// legacy location too, and a daemon an older binary started there is ours to
+// stop (PLAN-552's note, carried to PLAN-551).
 func ownedRuntimeDirs() []string {
-	legacy := ""
+	var legacy []string
 	if p := legacyDaemonSocketPath(); p != "" {
-		legacy = filepath.Dir(p)
+		legacy = append(legacy, filepath.Dir(p))
 	}
-	return ownedDirsFrom(filepath.Dir(daemonSocketPath()), legacy)
+	for _, loc := range legacyLocations() {
+		legacy = append(legacy, loc.Dir)
+	}
+	return ownedDirsFrom(filepath.Dir(daemonSocketPath()), legacy...)
 }
 
 // ownedDirsFrom is ownedRuntimeDirs's rule, separated from the environment that
@@ -271,10 +280,12 @@ func ownedRuntimeDirs() []string {
 // current and legacy locations happen to coincide it asserts nothing, and
 // deleting the legacy arm outright goes unnoticed — which is exactly what a
 // mutation run showed.
-func ownedDirsFrom(current, legacy string) []string {
+func ownedDirsFrom(current string, legacy ...string) []string {
 	dirs := []string{current}
-	if legacy != "" && legacy != current {
-		dirs = append(dirs, legacy)
+	for _, dir := range legacy {
+		if dir != "" && !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
 	}
 	return dirs
 }
@@ -414,6 +425,22 @@ func findPIDViaSocket(socketPath string) int {
 	return 0
 }
 
+// removeStalePIDFile unlinks a pid file only while it is still the file that
+// named stalePID (PLAN-551). `plumb stop` used to unlink the path outright, and
+// between reading a dead daemon's pid and removing the file a new daemon may
+// have published its own: removing that is the defect class PLAN-529 closed for
+// the daemon's four runtime files, one path over. So the file is marked by
+// identity BEFORE it is read, must still name the stale pid, and is removed
+// through the same identity check (fileMarker.removeIfOurs): a file that changed
+// in between is left alone.
+func removeStalePIDFile(path string, stalePID int) {
+	marker := markRuntimeFile(path)
+	if readPIDFileAt(path) != stalePID {
+		return
+	}
+	marker.removeIfOurs("pid file")
+}
+
 // daemonStopWait must stay longer than shutdownHardDeadline so the daemon's
 // own watchdog wins the race before the CLI warns about a slow graceful stop.
 const daemonStopWait = shutdownHardDeadline + time.Second
@@ -423,7 +450,7 @@ func stopByPID(pid int, leadingBlank bool) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil || proc.Signal(syscall.Signal(0)) != nil {
 		fmt.Println("Daemon is not running (stale reference cleaned up).")
-		_ = os.Remove(daemonPIDPath())
+		removeStalePIDFile(daemonPIDPath(), pid)
 		return nil
 	}
 

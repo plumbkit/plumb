@@ -497,12 +497,14 @@ func TestSocketPathState_ThreeWayClassification(t *testing.T) {
 // TestDaemonSocketResults is doctor's half: the same state becomes a failed row
 // with a remedy, a warning, or nothing at all.
 func TestDaemonSocketResults(t *testing.T) {
-	faulted := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 7, IdentityKnown: true}})
+	faulted := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Publisher: 4242, IdentityKnown: true}})
 	if len(faulted) != 1 || faulted[0].ok || faulted[0].fix == "" {
 		t.Fatalf("a socket fault must be one failed row with a fix, got %+v", faulted)
 	}
-	if !strings.Contains(faulted[0].detail, "gone while plumb daemon 7") {
-		t.Errorf("the row must say what is wrong, got %q", faulted[0].detail)
+	// The facts, not the sentence (PLAN-551): the row names the daemon that
+	// published the path, and the path itself is the row.
+	if !strings.Contains(faulted[0].detail, "4242") {
+		t.Errorf("the row must name the publishing daemon (4242), got %q", faulted[0].detail)
 	}
 
 	noted := daemonSocketResults([]socketPathState{{Path: "/run/plumb/plumb.sock", Exists: true, Answered: true}})
@@ -529,5 +531,42 @@ func TestDaemonSocketResults(t *testing.T) {
 	}
 	if moved[0].fix != "" {
 		t.Errorf("a warning must not carry a fix that restarts a healthy daemon, got %q", moved[0].fix)
+	}
+}
+
+// TestSocketPathState_NotesAnIdentityLessRecord pins PLAN-551 MINOR-2: a record
+// with a socket and no identity — what a pre-529 daemon writes — must not silence
+// the reader. It is a note, never a fault (the file may well be that daemon's
+// socket), and it says so when the census found the publisher does NOT hold it.
+func TestSocketPathState_NotesAnIdentityLessRecord(t *testing.T) {
+	held := socketPathState{Path: "/run/plumb/plumb.sock", Exists: true, Publisher: 4242, Answered: true, OwnedBy: []int{4242}}
+	notHeld := held
+	notHeld.OwnedBy = []int{99}
+	unanswered := held
+	unanswered.Answered, unanswered.OwnedBy = false, nil
+
+	for name, s := range map[string]socketPathState{"held": held, "not held": notHeld, "unanswered": unanswered} {
+		if f := s.fault(); f != "" {
+			t.Errorf("%s: an identity-less record is not evidence of a fault, got %q", name, f)
+		}
+		if !strings.Contains(s.note(), "4242") {
+			t.Errorf("%s: the reader must say something about daemon 4242's identity-less record, got %q", name, s.note())
+		}
+	}
+	if !strings.Contains(notHeld.note(), "does not hold it open") {
+		t.Errorf("the census answered that 4242 does not hold the path; the note must say so: %q", notHeld.note())
+	}
+	if strings.Contains(held.note(), "does not hold it open") {
+		t.Errorf("4242 does hold the path; the note must not claim otherwise: %q", held.note())
+	}
+	// Control: the same record WITH an identity, matching, is silent.
+	known := held
+	known.IdentityKnown, known.InodeMatches, known.IdentityMatches = true, true, true
+	if n := known.note(); n != "" {
+		t.Errorf("a record with a matching identity must be silent, got %q", n)
+	}
+	rows := daemonSocketResults([]socketPathState{notHeld})
+	if len(rows) != 1 || !rows[0].warn {
+		t.Errorf("doctor must show the identity-less record as one warning row, got %+v", rows)
 	}
 }
