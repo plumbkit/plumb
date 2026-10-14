@@ -282,10 +282,27 @@ func TestConnectOrStartDaemon_IncompatibleLegacyDaemonSpawnsNothing(t *testing.T
 
 // sleepScript is a stand-in for the daemon child: it ignores the "daemon"
 // argument daemonCommand passes and sleeps long enough for the assertions below.
+//
+// The `exec` is load-bearing, and this helper is the ONE place in this test file
+// where the handover fds are relied upon to die with a process. The handed-over
+// descriptors are deliberately NOT close-on-exec — that is what the handover IS — so a
+// stand-in that FORKS its command leaves a grandchild holding them, and killing the
+// process the test started releases nothing.
+//
+// Measured, in the container the gate runs in (dash is /bin/sh there): the shell forked
+// `sleep 30`, which then held the authority on fd 3, the runtime lifetime lock on fd 4
+// and the legacy lock on fd 5 as an orphan with ppid 1, and
+// TestLaunchHandsOverEveryLockAndReleasesNone failed with "… is still held after the
+// holder exited: resource temporarily unavailable". Whether the fork beat the test's kill
+// decided the outcome, so it was green on a fast unloaded host and red under the gate's
+// load — the classic shape of a test that asserts a timing coincidence. `exec` removes the
+// second process instead of racing it: the child the test kills IS the only holder, and
+// the locks are released by the kernel before Wait returns, so nothing here polls or
+// sleeps.
 func sleepScript(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fakedaemon")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nsleep 30\n"), 0o755); err != nil { //nolint:gosec // a test's own script, mode 0755 is the point
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil { //nolint:gosec // a test's own script, mode 0755 is the point
 		t.Fatalf("writing the stand-in child: %v", err)
 	}
 	return path
