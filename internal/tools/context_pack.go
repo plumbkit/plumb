@@ -30,6 +30,7 @@ const (
 	prioDetail
 	prioBody
 	prioRelTop
+	prioUses
 	prioAffected
 	prioConstraint
 	prioNext
@@ -77,6 +78,9 @@ type packLine struct {
 	heading bool
 	class   packClass
 	body    *bodyUnit
+	// needs is the body a record is about (a uses record): it is shown only if
+	// that body is delivered complete, and counted as omitted otherwise.
+	needs *bodyUnit
 }
 
 // bodyUnit is the renderings of one symbol seed's body. full is the complete body
@@ -175,17 +179,26 @@ func packLines(lines []packLine, budget int) packResult {
 func fitEverything(lines []packLine, budget int) (chosen []string, delivered []int) {
 	chosen = make([]string, len(lines))
 	guardDone := map[int]bool{}
-	total := 0
+	whole := map[*bodyUnit]bool{}
+	total, dropped := 0, false
 	for i, l := range lines {
+		if l.needs != nil && !whole[l.needs] {
+			dropped = true // its body is a status line, not the body: dropped and counted
+			continue
+		}
 		texts, complete := l.tiers(guardDone)
 		chosen[i] = texts[0]
 		if complete {
+			whole[l.body] = true
 			delivered = noteDelivered(delivered, guardDone, l.body.file)
 		}
 		total += len(texts[0])
 		if i > 0 {
 			total++ // the newline before it
 		}
+	}
+	if dropped {
+		total += footerCeiling() // the footer that counts what was dropped
 	}
 	if total > budget {
 		return nil, nil
@@ -209,7 +222,11 @@ func fitByPriority(lines []packLine, budget int) (chosen []string, delivered []i
 	used := len(lines[0].text)
 	avail := budget - footerCeiling()
 	guardDone := map[int]bool{}
+	whole := map[*bodyUnit]bool{}
 	for _, i := range priorityOrder(lines) {
+		if n := lines[i].needs; n != nil && !whole[n] {
+			continue // the body it is about was not delivered: dropped and counted, not a budget stop
+		}
 		texts, complete := lines[i].tiers(guardDone)
 		tier := firstThatFits(texts, avail-used)
 		if tier < 0 {
@@ -218,6 +235,7 @@ func fitByPriority(lines []packLine, budget int) (chosen []string, delivered []i
 		chosen[i] = texts[tier]
 		used += len(texts[tier]) + 1
 		if complete && tier == 0 {
+			whole[lines[i].body] = true
 			delivered = noteDelivered(delivered, guardDone, lines[i].body.file)
 		}
 	}

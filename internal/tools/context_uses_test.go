@@ -73,12 +73,32 @@ func ShadowVar() int {
 	var seq = 3
 	return seq
 }
+
+func Assign() (int, error) {
+	var n int
+	var err error
+	n, err = seq, nil
+	return n, err
+}
+
+func Multi() int {
+	a, seq := 1, 2
+	return a + seq
+}
+
+func Multi2() int {
+	seq, err := 2, error(nil)
+	_ = err
+	return seq
+}
 `,
 	"store/other.go": "package store\n\nconst elsewhere = 5\n",
 	"store/many.go": "package store\n\nvar _ = m1\n\nconst (\n\tm1 = 1\n\tm2 = 2\n\tm3 = 3\n\tm4 = 4\n\tm5 = 5\n\tm6 = 6\n\tm7 = 7\n\tm8 = 8\n\tm9 = 9\n\tm10 = 10\n)\n\n" +
 		"func Many() int { _ = m1; return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10 }\n",
 	"store/caller.go": "package store\n\nfunc Caller() string { return List(T{}, 1) }\n",
-	"py/mod.py":       "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
+	// A declaration that is not valid UTF-8 is not offered, as a body is not.
+	"store/bad.go": "package store\n\nconst bad = 1 // \xff\n\nconst good = 2\n\nfunc UsesBad() int { return bad + good }\n",
+	"py/mod.py":    "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
 }
 
 func newUsesTool(t *testing.T) shopTool {
@@ -93,7 +113,7 @@ func newUsesTool(t *testing.T) shopTool {
 			t.Fatal(err)
 		}
 	}
-	return newShopTool(t, openContextStore(t, root, 5), root)
+	return newShopTool(t, openContextStore(t, root, 6), root)
 }
 
 // usesBlock is the uses record that follows the body of the seed or related
@@ -168,6 +188,20 @@ func TestContextForTask_UsesSkipsANameTheBodyDeclaresItself(t *testing.T) {
 	if got := usesBlock(t, vout, "ShadowVar"); got != "" {
 		t.Errorf("ShadowVar declares var seq, so it uses no package name, got:\n%s", got)
 	}
+	// := with more names declares seq wherever it stands; a plain assignment
+	// (n, err = seq, nil) declares nothing, so Assign uses the package's seq.
+	mout, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#Multi", "store/store.go#Multi2", "store/store.go#Assign"}, "max_bytes": 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fn := range []string{"Multi", "Multi2"} {
+		if got := usesBlock(t, mout, fn); got != "" {
+			t.Errorf("%s declares seq with :=, so it uses no package name, got:\n%s", fn, got)
+		}
+	}
+	if !strings.Contains(usesBlock(t, mout, "Assign"), "seq (constant, line 20)") {
+		t.Errorf("Assign only assigns, so it uses the package's seq:\n%s", mout)
+	}
 	// Positive control: in the same pack, List's record is there.
 	if usesBlock(t, out, "List") == "" {
 		t.Fatalf("List's uses record is missing, so the absence above proves nothing:\n%s", out)
@@ -233,6 +267,49 @@ func TestContextForTask_UsesListsAtMostEightPerBody(t *testing.T) {
 	if !strings.Contains(got, "m8 (constant") || strings.Contains(got, "m9 (constant") {
 		t.Errorf("want m1..m8 in file order, got:\n%s", got)
 	}
+	if !strings.Contains(strings.SplitN(got, "\n", 2)[0], ", and 2 more not listed") {
+		t.Errorf("the two beyond the cap must be counted, got:\n%s", got)
+	}
+}
+
+func TestContextForTask_UsesSkipsADeclarationThatIsNotUTF8(t *testing.T) {
+	s := newUsesTool(t)
+	out, err := s.run(t, map[string]any{"symbols": []string{"store/bad.go#UsesBad"}, "max_bytes": 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := usesBlock(t, out, "UsesBad")
+	if !strings.HasPrefix(got, "    uses, declared in this file: good (constant, line 5)") || strings.Contains(got, "bad (") {
+		t.Errorf("want good listed and bad (invalid UTF-8) left out, got:\n%s", got)
+	}
+}
+
+// A uses record needs its body delivered whole, and ranks below every seed body
+// and best-ranked related declaration: at no budget does it show beside a body
+// that is only a status line, or while another seed's body is cut.
+func TestContextForTask_UsesNeverOutlivesItsBodyNorOutranksAnother(t *testing.T) {
+	s := newUsesTool(t)
+	var seen, cut bool
+	for mb := contextMinMaxBytes; mb <= 6000; mb += 25 {
+		out, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#List", "store/store.go#Big"}, "max_bytes": mb})
+		if err != nil {
+			t.Fatal(err)
+		}
+		listBody := strings.Contains(out, "\n24\tfunc List(t T, n int) string {")
+		bigBody := strings.Contains(out, "\n50\tfunc Big() int { return len(big) }")
+		if strings.Contains(out, "uses, declared in this file: maxRows") {
+			seen = true
+			if !listBody || !bigBody {
+				t.Errorf("max_bytes %d: List's uses record shown with List's body %v and Big's body %v:\n%s", mb, listBody, bigBody, out)
+			}
+		}
+		if !listBody && strings.Contains(out, "body omitted for budget") {
+			cut = true
+		}
+	}
+	if !seen || !cut {
+		t.Fatalf("the sweep must reach both a pack with List's record (%v) and one with a body cut (%v)", seen, cut)
+	}
 }
 
 func TestContextForTask_UsesIsGoOnly(t *testing.T) {
@@ -283,25 +360,52 @@ func TestContextForTask_UsesFollowsOnlyADeliveredBody(t *testing.T) {
 	}
 }
 
-// Under a tight budget the record degrades to names and lines, and when even that
-// does not fit it is counted in the omission footer as "uses".
-func TestContextForTask_UsesDegradesThenIsCounted(t *testing.T) {
+// A record that does not fit is counted in the omission footer as "uses".
+func TestContextForTask_UsesIsCountedWhenDropped(t *testing.T) {
 	s := newUsesTool(t)
-	var lean, counted bool
-	for mb := contextMinMaxBytes; mb <= 6000 && (!lean || !counted); mb += 25 {
+	for mb := contextMinMaxBytes; mb <= 6000; mb += 25 {
 		out, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#List"}, "max_bytes": mb})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(out, "\n10\tWHERE n < ?`") && strings.Contains(out, "    uses, declared in this file: maxRows (constant, line 5)") {
-			lean = true
-		}
 		if regexp.MustCompile(`omitted: \d+ item\(s\) \([^)]*\b1 uses\b`).MatchString(out) {
-			counted = true
+			return
 		}
 	}
-	if !lean || !counted {
-		t.Fatalf("no budget showed the names-only record (%v) or counted a dropped one (%v)", lean, counted)
+	t.Fatal("no budget counted a dropped uses record")
+}
+
+// The packer's side, on hand-built records: a uses record shows whole when it
+// fits, as its names-only line when only that fits, and not at all, counted,
+// when its body was not delivered whole, even with room to spare for it.
+func TestPackLines_UsesDegradesAndNeedsItsWholeBody(t *testing.T) {
+	body := &bodyUnit{file: 0, full: strings.Repeat("B", 200), noGuard: strings.Repeat("B", 200), lean: []string{"body omitted"}}
+	lines := []packLine{
+		{text: "header", prio: prioHeader, section: secHeader},
+		{prio: prioBody, section: secSeeds, class: classBody, body: body},
+		{text: strings.Repeat("U", 300), alts: []string{"uses-lean"}, prio: prioUses, section: secSeeds, class: classUses, needs: body},
+	}
+	base := len("header") + 1 + 200
+	for _, c := range []struct {
+		budget                   int
+		wantBody, wantUses, note string
+	}{
+		{base + 1 + 300, strings.Repeat("B", 200), strings.Repeat("U", 300), "everything fits"},
+		{footerCeiling() + base + 1 + len("uses-lean") + 5, strings.Repeat("B", 200), "uses-lean", "only the names-only line fits"},
+		{footerCeiling() + len("header") + 1 + 100, "body omitted", "", "the body is a status line: no record, though it would fit"},
+	} {
+		out := packLines(lines, c.budget).Text
+		if !strings.Contains(out, c.wantBody) {
+			t.Errorf("%s: want the body as %.12q, got %q", c.note, c.wantBody, out)
+		}
+		gotUses := strings.Contains(out, "uses-lean") || strings.Contains(out, "UUU")
+		if c.wantUses == "" {
+			if gotUses || !strings.Contains(out, "1 uses") {
+				t.Errorf("%s: want no record and a counted one, got %q", c.note, out)
+			}
+		} else if !strings.Contains(out, c.wantUses) {
+			t.Errorf("%s: want the record as %.12q, got %q", c.note, c.wantUses, out)
+		}
 	}
 }
 
@@ -324,27 +428,26 @@ func TestDeclLines_TheLineLimitIsInclusive(t *testing.T) {
 	}
 }
 
-func TestScanOpen(t *testing.T) {
+func TestDeclEnd(t *testing.T) {
 	for _, c := range []struct {
-		line      string
-		depth     int
-		raw       bool
-		wantDepth int
-		wantRaw   bool
+		src  string // the spec's lines, the first holding the name
+		end  int    // the line it ends on, 0 when it does not end in the window
+		note string
 	}{
-		{"x = map[string]int{", 0, false, 1, false},
-		{`x = "({["`, 0, false, 0, false},
-		{`x = '('`, 0, false, 0, false},
-		{`x = "a\"(" + f(`, 0, false, 1, false},
-		{"x = 1 // (", 0, false, 0, false},
-		{"x = `SELECT (", 0, false, 0, true},
-		{"FROM t)`", 0, true, 0, false},
-		{"FROM t`)", 1, true, 0, false},
-		{"}", 1, false, 0, false},
+		{"const a = 1\nconst b = 2", 1, "one line"},
+		{"\ttable = map[string]int{\n\t\t\"a\": 1,\n\t}\n\tnext = 2", 3, "a composite literal"},
+		{"const q = \"a\" +\n\t\"b\" +\n\t\"c\"\nconst r = 1", 3, "a trailing operator continues the spec"},
+		{"var ok = a ||\n\tb", 2, "so does a trailing ||"},
+		{"const s = `SELECT (\nFROM t)`\nconst r = 1", 2, "a raw string, brackets inside it ignored"},
+		{"var c = 1 /* ( */\nvar d = 2", 1, "a block comment's bracket is not one"},
+		{"var r = '`'\nvar d = 2", 1, "a rune holding a backtick"},
+		{"var x = \"({[\" // (\nvar d = 2", 1, "a string's and a comment's brackets"},
+		{"\tm10 = 10)", 1, "the enclosing block closes on the spec's own line"},
+		{"const s = `never\nclosed", 0, "a raw string that does not end in the window"},
 	} {
-		d, r := scanOpen(c.line, c.depth, c.raw)
-		if d != c.wantDepth || r != c.wantRaw {
-			t.Errorf("scanOpen(%q, %d, %v) = %d, %v; want %d, %v", c.line, c.depth, c.raw, d, r, c.wantDepth, c.wantRaw)
+		end, ok := declEnd(strings.Split(c.src, "\n"), 1)
+		if (c.end == 0) == ok || (ok && end != c.end) {
+			t.Errorf("%s: declEnd = %d, %v; want %d", c.note, end, ok, c.end)
 		}
 	}
 }

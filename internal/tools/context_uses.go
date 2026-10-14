@@ -3,8 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -21,7 +24,8 @@ import (
 // of some other function.
 
 const (
-	// contextUsesMax bounds the declarations listed under one body.
+	// contextUsesMax bounds the declarations listed under one body; the rest are
+	// counted.
 	contextUsesMax = 8
 	// contextUsesLines bounds the lines one declaration may span. A longer one
 	// (a large table, a long query) is shown by its first line and a handoff.
@@ -50,42 +54,41 @@ func bareNames(text string) map[string]bool {
 	return names
 }
 
-// shadows reports whether text declares name itself (name := …, a, name := …,
-// var name), so its uses there are of the local and not the package's name.
+// shadows reports whether text declares name itself with := (name := …,
+// a, name := …, name, b := …) or var, so its uses there are of the local and
+// not the package's name. Parameters and named results are not detected.
 func shadows(text, name string) bool {
 	q := regexp.QuoteMeta(name)
 	return regexp.MustCompile(`\b` + q + `\s*(,\s*\w+\s*)*:=|\bvar\s+` + q + `\b`).MatchString(text)
 }
 
-// uses lists, in file order, the package-level constants and variables of the
-// snapshot that body b names, other than those declared inside the body's own
-// span (a constant seed is not its own use).
-func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) []usedDecl {
+// uses lists, in file order, at most contextUsesMax package-level constants and
+// variables of the snapshot that body b names, other than those declared inside
+// the body's own span (a constant seed is not its own use), and counts the rest.
+func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) (out []usedDecl, more int) {
 	if seed.Language != "go" || b.State != bodyReady {
-		return nil
+		return nil, 0
 	}
 	nodes, ok := s.freshNodes(ctx)
 	if !ok {
-		return nil
+		return nil, 0
 	}
 	named := bareNames(b.Text)
 	// One file declares a package-level name once (the blank _ aside, which
 	// usedBy excludes), so no name can be listed twice.
-	var out []usedDecl
 	for _, n := range nodes {
 		if !usedBy(n, b, named) {
 			continue
 		}
-		d, ok := s.declLines(n)
-		if !ok {
+		if len(out) == contextUsesMax {
+			more++
 			continue
 		}
-		out = append(out, d)
-		if len(out) == contextUsesMax {
-			break
+		if d, ok := s.declLines(n); ok {
+			out = append(out, d)
 		}
 	}
-	return out
+	return out, more
 }
 
 // usedBy reports whether n is a package-level constant or variable body b names
@@ -104,80 +107,72 @@ func usedBy(n topology.Node, b contextBody, named map[string]bool) bool {
 	return !shadows(b.Text, n.Name)
 }
 
-// declLines takes n's declaration from its name's line on: one line, or as many
-// as it takes to close what that line opens (a raw string, a bracket), up to
-// contextUsesLines. The index records a value spec's name line only, so the end
-// is found in the snapshot itself.
+// declLines takes n's declaration from its name's line to the end of its spec
+// (declEnd). The index records a value spec's name line only, so the end is
+// found in the snapshot itself. A spec longer than contextUsesLines is its first
+// line, marked Cut; one that is not valid UTF-8 is not offered at all, as a body
+// is not.
 func (s *bodySource) declLines(n topology.Node) (usedDecl, bool) {
 	d := usedDecl{Name: n.Name, Kind: n.Kind, Start: n.StartLine, End: n.StartLine}
-	first, ok := sliceLines(s.lines, n.StartLine, n.StartLine)
-	if !ok {
+	if end, ok := declEnd(s.lines, n.StartLine); ok {
+		d.End = end
+	} else {
+		d.Cut = true
+	}
+	text, ok := sliceLines(s.lines, d.Start, d.End)
+	if !ok || !utf8.ValidString(text) {
 		return usedDecl{}, false
 	}
-	depth, raw := 0, false
-	for ln := n.StartLine; ; ln++ {
-		line, ok := sliceLines(s.lines, ln, ln)
-		if !ok {
-			d.Cut = true
-			break
-		}
-		depth, raw = scanOpen(line, depth, raw)
-		if depth <= 0 && !raw {
-			d.End = ln
-			break
-		}
-		if ln-n.StartLine+1 >= contextUsesLines {
-			d.Cut = true
-			break
-		}
-	}
-	if d.Cut {
-		d.End, d.Text = n.StartLine, first
-		return d, true
-	}
-	d.Text, _ = sliceLines(s.lines, d.Start, d.End)
+	d.Text = text
 	return d, true
 }
 
-// scanOpen carries the bracket depth and raw-string state across one line of Go.
-// Interpreted strings, runes and line comments are skipped so their brackets do
-// not count.
-func scanOpen(line string, depth int, raw bool) (int, bool) {
-	for i := 0; i < len(line); i++ {
-		c := line[i]
-		if raw {
-			if c == '`' {
-				raw = false
-			}
-			continue
+// declEnd is the line on which the Go value spec that starts on line start ends:
+// the first statement end (an explicit or inserted semicolon) outside brackets,
+// as Go's own scanner finds it, so a continuation (a trailing operator or comma),
+// a raw string, a rune and a comment are all read as Go reads them. ok is false
+// when the spec does not end within contextUsesLines lines.
+func declEnd(lines []string, start int) (int, bool) {
+	if start < 1 || start > len(lines) {
+		return 0, false
+	}
+	stop := min(len(lines), start-1+contextUsesLines)
+	src := []byte(strings.Join(lines[start-1:stop], "\n") + "\n")
+	file := token.NewFileSet().AddFile("", -1, len(src))
+	var sc scanner.Scanner
+	broken := false // e.g. a raw string the window cuts: the scanner still ends it with a semicolon
+	sc.Init(file, src, func(token.Position, string) { broken = true }, 0)
+	depth := 0
+	for {
+		pos, tok, _ := sc.Scan()
+		if broken {
+			return 0, false
 		}
-		switch c {
-		case '`':
-			raw = true
-		case '"', '\'':
-			for i++; i < len(line) && line[i] != c; i++ {
-				if line[i] == '\\' {
-					i++
-				}
-			}
-		case '/':
-			if i+1 < len(line) && line[i+1] == '/' {
-				return depth, raw
-			}
-		case '(', '[', '{':
+		switch tok {
+		case token.EOF:
+			return 0, false
+		case token.LPAREN, token.LBRACK, token.LBRACE:
 			depth++
-		case ')', ']', '}':
-			depth--
+		case token.RPAREN, token.RBRACK, token.RBRACE:
+			if depth--; depth < 0 {
+				// The spec's enclosing block closes on its own line: `x = 1)`.
+				return start - 1 + file.Line(pos), true
+			}
+		case token.SEMICOLON:
+			if depth == 0 {
+				return start - 1 + file.Line(pos), true
+			}
 		}
 	}
-	return depth, raw
 }
 
 // usesLine is the record that follows a delivered body: the declarations it
 // uses, in their own lines when that fits the budget, else their names and line
-// numbers. A body the caller holds (have), or one that is not here, gets none.
-func (p *contextPack) usesLine(b contextBody, prio, section int) (packLine, bool) {
-	if b.State != bodyReady || b.Held || len(b.Uses) == 0 {
+// numbers. It ranks below every best-ranked related declaration, and it needs
+// its body (body): the packer drops it unless that body is delivered complete.
+// A body the caller holds (have), or one that is not here, gets none.
+func (p *contextPack) usesLine(b contextBody, body *bodyUnit, section int) (packLine, bool) {
+	if b.State != bodyReady || b.Held || len(b.Uses) == 0 || body == nil {
 		return packLine{}, false
 	}
 	names := make([]string, len(b.Uses))
@@ -195,8 +190,10 @@ func (p *contextPack) usesLine(b contextBody, prio, section int) (packLine, bool
 		}
 		blocks = append(blocks, block)
 	}
-	head := "    uses, declared in this file: "
-	full := head + strings.Join(names, ", ") + "\n" + strings.Join(blocks, "\n")
-	lean := head + strings.Join(names, ", ")
-	return packLine{text: full, alts: []string{lean}, prio: prio, section: section, class: classUses}, true
+	head := "    uses, declared in this file: " + strings.Join(names, ", ")
+	if b.UsesMore > 0 {
+		head += fmt.Sprintf(", and %d more not listed", b.UsesMore)
+	}
+	full := head + "\n" + strings.Join(blocks, "\n")
+	return packLine{text: full, alts: []string{head}, prio: prioUses, section: section, class: classUses, needs: body}, true
 }

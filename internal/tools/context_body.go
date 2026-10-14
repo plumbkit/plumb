@@ -72,8 +72,10 @@ type contextBody struct {
 	// span was re-validated, and as the index has it otherwise.
 	Signature, Doc string
 	// Uses are the same-file package-level constants and variables Text names
-	// (context_uses.go), from the same snapshot.
-	Uses []usedDecl
+	// (context_uses.go), from the same snapshot; UsesMore counts those beyond
+	// contextUsesMax.
+	Uses     []usedDecl
+	UsesMore int
 }
 
 // fileGroup is the symbol seeds that share one file.
@@ -171,7 +173,7 @@ func (c *ContextCollector) collectBodies(ctx context.Context, pack *contextPack,
 		})
 		for _, i := range g.seeds {
 			b := src.slice(ctx, seeds[i], i, fileIdx)
-			b.Uses = src.uses(ctx, b, seeds[i])
+			b.Uses, b.UsesMore = src.uses(ctx, b, seeds[i])
 			*targets[i].slot = b
 		}
 		if changed {

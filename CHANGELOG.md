@@ -81,16 +81,21 @@
   golang.org/x/tools: no "complete" claim missed a caller.
 - **`context_for_task` shows the constants and variables a body uses.** A body
   such as `r.db.Prepare(prevStateSQL)` gave the use but not the value, so a
-  reader went looking for it. Each delivered Go body, of a seed or of a related
-  declaration, is now followed by a `uses` record: the package-level constants
-  and variables of the same file that the body names, with their declaration
-  lines from the same snapshot the body came from (no second read). A
-  declaration that runs past 12 lines is shown by its first line and a
-  `read_symbol` handoff, a name the body declares itself (`x :=`, `var x`) or
-  reaches through a selector is not listed, and at most 8 are listed per body.
-  Under a tight budget the record shrinks to names and line numbers, and a
-  dropped one is counted as `uses` in the omission footer. A body the caller
-  already holds (`have`) gets no record.
+  reader went looking for it. A Go body the pack delivers whole, of a seed or of
+  a related declaration, is now followed by a `uses` record: the package-level
+  constants and variables of the same file that the body names, with their
+  declaration lines from the same snapshot the body came from (no second read).
+  A declaration's end is found with Go's own scanner, so a value continued over
+  several lines (a trailing `+`, a raw string, a composite literal) is shown
+  whole; one that runs past 12 lines is shown by its first line and a
+  `read_symbol` handoff. A name reached through a selector, or one the body
+  declares itself with `:=` or `var`, is not listed (a parameter of the same
+  name is not detected); at most 8 are listed per body and the rest are
+  counted. The record ranks below every seed body and best-ranked related
+  declaration, shrinks to names and line numbers under a tight budget, is never
+  shown when its body is cut to a status line, and a dropped one is counted as
+  `uses` in the omission footer. A body the caller already holds (`have`) gets
+  no record, and a declaration that is not valid UTF-8 is not offered.
 - **The Go call graph resolves method calls on local variables of evident type.**
   `x.M()` now links to the method of `x`'s type when the enclosing function
   declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or
