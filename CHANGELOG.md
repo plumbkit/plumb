@@ -300,6 +300,14 @@
 
 ### Fixed
 
+- **`context_for_task` asks each file's sensitivity once per call, so live packs
+  keep their affected tests.** The walk asks whether every node it reaches is in a
+  sensitive file, 600 to 2,000 times per pack over a hundred or two files, and
+  the daemon answers each by resolving the path's project on disk. A live pack
+  overran its 2 s graph deadline even on a warm index, losing the affected-tests
+  section and its run-first line in three of five real tasks. The answer is now
+  remembered per path for the call.
+
 - **An edit to the global `config.toml` made while the daemon starts is no
   longer missed.** The daemon loads the file, then starts watching it; a write
   in between raised no event the watch could see, so the daemon kept the older
