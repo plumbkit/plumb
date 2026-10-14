@@ -245,6 +245,16 @@ func ClientEnvDivergence() []Divergence {
 // The runtime directory is the one global location that is not a [dirs] entry:
 // it is derived, and its override is the XDG variable that names it, so a client
 // and the daemon it talks to resolve the same socket.
+//
+// The recorded base is re-checked here, on every read, against the XDG spec's
+// own terms (a directory this uid owns, mode 0700) — the check both writers
+// already make (install's adoption and set-xdg), because the daemon binds its
+// MCP and control sockets under it and a hand-edited profile must not be trusted
+// because one writer was correct (PLAN-550). A base that fails is REFUSED, never
+// used: the answer is the account's own runtime directory, which every reader of
+// the same file reaches the same way, so no two clients disagree about the socket
+// path; and the warning names the remedy. The rest of the profile still holds —
+// a bad runtime base must not move the config or data directories too.
 func accountRuntimeDir() (string, bool) {
 	if !account.AuthorityEnabled() {
 		return "", false
@@ -254,7 +264,17 @@ func accountRuntimeDir() (string, bool) {
 		return "", false
 	}
 	if p, err := service.Load(); err == nil && p.XDG.RuntimeDir != "" {
-		return filepath.Join(p.XDG.RuntimeDir, appDir), true
+		if account.UsableRuntimeBase(p.XDG.RuntimeDir, u.UID) {
+			return filepath.Join(p.XDG.RuntimeDir, appDir), true
+		}
+		runtimeBaseWarn.Do(func() {
+			slog.Warn("plumb: the service profile's XDG_RUNTIME_DIR is not a usable runtime directory; "+
+				"using the account's own runtime directory",
+				"recorded", p.XDG.RuntimeDir, "using", u.RuntimeDir(),
+				"remedy", "make it a 0700 directory you own, or drop it: plumb service set-xdg --runtime-dir=")
+		})
 	}
 	return u.RuntimeDir(), true
 }
+
+var runtimeBaseWarn sync.Once

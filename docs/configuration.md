@@ -164,7 +164,8 @@ ignored entirely and directories resolve from `XDG_*` as they always did.
 MCP and control sockets, the pid and version files, the daemon's lifetime lock),
 the data, state, log and cache directories, and the executable a managed launch
 starts all come from the account database and the service profile rather than
-from `HOME`, `XDG_*` or `PATH`. `plumb serve` and `plumb restart` therefore start
+from `HOME`, `XDG_*` or `PATH`. `plumb serve`, `plumb restart` and `plumb web`
+therefore start
 the *installed* binary, whatever client asked and whatever environment it had;
 `plumb service install`, `plumb setup` and `make install` are what record that
 profile. A client whose environment would have resolved a global directory

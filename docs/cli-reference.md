@@ -161,7 +161,7 @@ It takes two exclusive `flock`s, in this order, for its lifetime: the
 removable runtime directory) and then the **runtime lifetime lock**
 (`plumb.daemon.lock`). A second `plumb daemon` invocation sees either held and
 exits immediately, enforcing the one-daemon-per-account invariant. Managed
-launches — `plumb serve` and `plumb restart` — take both
+launches — `plumb serve`, `plumb restart` and `plumb web` — take both
 *before* starting a child and hand them over on fds 3 and 4, so the locks are
 held from the moment the daemon exists; a launcher that finds either held waits
 and re-dials instead of starting a second candidate. A direct `plumb daemon`
@@ -239,8 +239,8 @@ Manage the account-wide service's **launch profile**
 (`<account data dir>/service.toml`) — the record of which binary is *the*
 daemon, the PATH its language servers inherit, and the global directories it
 serves from, and the environment a launched daemon is given. The profile is what
-a **managed launch** obeys — `plumb serve` and `plumb restart`, the two commands
-that start a daemon — so that no client's `HOME`, `XDG_*` or `PATH` can decide
+a **managed launch** obeys — `plumb serve`, `plumb restart` and `plumb web`, the
+three commands that start a daemon — so that no client's `HOME`, `XDG_*` or `PATH` can decide
 what runs or where it keeps its files. `plumb service install` does not start
 anything: it only writes the profile.
 

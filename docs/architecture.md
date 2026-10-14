@@ -217,14 +217,15 @@ Key design properties:
   one daemon process ever binds the socket. Without them, two `plumb serve`
   processes racing from a cold start could each spawn a daemon and the second
   would `os.Remove(socketPath); net.Listen(...)`, quietly stealing the path from
-  the first. The two daemon locks are also the right to launch: `plumb serve`
-  and `plumb restart` take them — the authority first, then the runtime
+  the first. The two daemon locks are also the right to launch: `plumb serve`,
+  `plumb restart` and `plumb web` take them — the authority first, then the runtime
   lifetime lock — before starting a daemon, and hand them to the child on fds 3
   and 4, so they are held from the moment the daemon exists, and a launcher that
   finds either held (a daemon running or still starting) never starts another;
   it keeps dialling for up to 30 s (`PLUMB_DAEMON_START_TIMEOUT`) and then
-  fails. What those two launches start, and the directories, `PATH` and
-  recorded `[service.env]` variables the child inherits, come from the account's service launch profile
+  fails. What those three launches start, and the directories, `PATH` and
+  recorded `[service.env]` variables the child inherits, come from the
+  account's service launch profile
   (`<account data dir>/service.toml`, written by `plumb service install` and
   changed through `plumb service set-*`): a launch never infers an executable,
   a `PATH` or a global directory from the calling client's environment.

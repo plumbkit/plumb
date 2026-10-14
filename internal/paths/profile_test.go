@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -38,6 +39,14 @@ func withServiceProfile(t *testing.T, canonical bool) (account.User, service.Pro
 		CacheHome:  filepath.Join(root, "adopted", "cache"),
 		RuntimeDir: filepath.Join(root, "adopted", "run"),
 	})
+	// The adopted runtime base must pass the reader's own XDG checks (a directory
+	// this uid owns, mode 0700), as a real adopted one does (PLAN-550).
+	if err := os.MkdirAll(p.XDG.RuntimeDir, 0o700); err != nil {
+		t.Fatalf("creating the adopted runtime base: %v", err)
+	}
+	if err := os.Chmod(p.XDG.RuntimeDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	path, err := service.Path()
 	if err != nil {
 		t.Fatalf("service.Path: %v", err)
@@ -46,6 +55,44 @@ func withServiceProfile(t *testing.T, canonical bool) (account.User, service.Pro
 		t.Fatalf("writing the test profile: %v", err)
 	}
 	return u, p
+}
+
+// TestRuntimeDir_RefusesAnUnusableRecordedBase pins the reader's re-check of a
+// recorded XDG_RUNTIME_DIR (PLAN-550). The writers refuse such a base; a profile
+// edited by hand must not get one past every reader, because the daemon binds its
+// sockets under it. A base another user could write (0777), and one that does
+// not exist, are both refused: the runtime directory is the account's own, and
+// the REST of the profile still holds — a bad runtime base does not move the
+// config directory too.
+func TestRuntimeDir_RefusesAnUnusableRecordedBase(t *testing.T) {
+	for name, spoil := range map[string]func(t *testing.T, base string){
+		"world-writable": func(t *testing.T, base string) {
+			t.Helper()
+			if err := os.Chmod(base, 0o777); err != nil { //nolint:gosec // G302: the unsafe mode IS the case under test
+				t.Fatal(err)
+			}
+		},
+		"missing": func(t *testing.T, base string) {
+			t.Helper()
+			if err := os.RemoveAll(base); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			u, p := withServiceProfile(t, true)
+			if got, want := RuntimeDir(), service.DirUnder(p.XDG.RuntimeDir); got != want {
+				t.Fatalf("control: a usable recorded base must be used: runtime dir = %q, want %q", got, want)
+			}
+			spoil(t, p.XDG.RuntimeDir)
+			if got := RuntimeDir(); got != u.RuntimeDir() {
+				t.Errorf("runtime dir = %q, want the account's own %q: the recorded base %s is not usable", got, u.RuntimeDir(), p.XDG.RuntimeDir)
+			}
+			if got := ConfigDir(); got != p.Dirs.Config {
+				t.Errorf("config dir = %q, want the profile's %q: a bad runtime base must not move the rest", got, p.Dirs.Config)
+			}
+		})
+	}
 }
 
 // Legacy mode is every shipped build until the flip: the profile is IGNORED
