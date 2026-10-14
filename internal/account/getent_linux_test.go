@@ -129,7 +129,7 @@ func TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold(t *testing.T) {
 	}
 }
 
-// TestPlatformHome_ResolvesThisAccount is the guard on the body that SHIPS.
+// TestPlatformAccount_ResolvesThisAccount is the guard on the body that SHIPS.
 //
 // runGetent's tests prove the exec works; this proves the release build's own
 // entry point reaches the account database and returns what account.go's
@@ -143,14 +143,15 @@ func TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold(t *testing.T) {
 // requires a seam root in a test binary by design (seam_off.go); the account
 // lookup is what is under test here, not the seam.
 //
-// The test NAMES keep the old PlatformHome spelling deliberately. PLAN-528
-// renamed the function to platformAccount because it now resolves the account's
-// name as well as its home, but the names are cited verbatim in the merge
-// receipts that killed mutants against this test (the CGO_ENABLED=0 gate's
-// positive control and the independent review's M-R1), so renaming them would
-// break the chain of evidence back to what was actually run. The subject is
-// unchanged: the platform's own account lookup, whichever cgo mode built it.
-func TestPlatformHome_ResolvesThisAccount(t *testing.T) {
+// The test NAMES follow the function: PLAN-528 renamed it to platformAccount
+// because it now resolves the account's name as well as its home, and the tests
+// were renamed with it to match what they exercise. The receipts that killed
+// mutants against these tests (the CGO_ENABLED=0 gate's positive control, and
+// the independent review's M-R1) cite the OLD TestPlatformHome_* names — those
+// are pinned to the merged head 441e9023, where the old names existed verbatim,
+// and git history plus the PLAN-528 card log preserve that chain. A receipt is a
+// historical record, not a contract on future names.
+func TestPlatformAccount_ResolvesThisAccount(t *testing.T) {
 	uid := os.Getuid()
 	_, home, ok := platformAccount(uid)
 	if !ok {
@@ -171,12 +172,12 @@ func TestPlatformHome_ResolvesThisAccount(t *testing.T) {
 	}
 }
 
-// TestPlatformHome_RefusesAKeyNoSourceHolds pins the fail-closed half for the
+// TestPlatformAccount_RefusesAKeyNoSourceHolds pins the fail-closed half for the
 // shipped body: an account no database holds has no home, and the lookup must
 // refuse rather than fall back to the environment. The uid is the one
 // TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold already establishes that no
 // source on this host serves.
-func TestPlatformHome_RefusesAKeyNoSourceHolds(t *testing.T) {
+func TestPlatformAccount_RefusesAKeyNoSourceHolds(t *testing.T) {
 	const unassigned = 1<<31 - 1
 	if uid := os.Getuid(); uid == unassigned {
 		t.Fatalf("this test is running as uid %d, the one it assumes is unassigned", unassigned)
