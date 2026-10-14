@@ -481,8 +481,8 @@
   socket record with no file identity (what a daemon from an older build writes)
   instead of saying nothing, and say when that daemon does not hold the path
   open; such a record is honoured for as long as its pid is still a
-  `plumb daemon`, since an older daemon publishes once and never refreshes it
-  (PLAN-551).
+  `plumb daemon`, since an older daemon publishes once and never refreshes it,
+  and its socket path going missing is reported as the fault it is (PLAN-551).
 - **`context_for_task` says when its index is still on its first pass.** An
   agent's first call in a fresh worktree reached an index holding a few dozen of
   a few thousand files, and the pack read like a complete answer: "no indexed

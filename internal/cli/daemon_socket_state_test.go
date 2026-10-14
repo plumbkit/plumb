@@ -614,3 +614,17 @@ func TestDaemonSocketPublication_KeepsALongLivedIdentityLessRecord(t *testing.T)
 		t.Fatal("a stale record WITH an identity was kept: a current daemon refreshes, so it is gone")
 	}
 }
+
+// TestSocketPathState_AnIdentityLessRecordOverAMissingSocketIsAFault: the one new
+// fault the long-lived identity-less record brings (PLAN-551 review) — an older
+// daemon whose socket path is gone is unreachable, which is PLAN-529's original
+// defect, now visible past the freshness window.
+func TestSocketPathState_AnIdentityLessRecordOverAMissingSocketIsAFault(t *testing.T) {
+	gone := socketPathState{Path: "/run/plumb/plumb.sock", Publisher: 4242, Answered: true, OwnedBy: []int{4242}}
+	if gone.fault() == "" {
+		t.Fatalf("an older daemon's published path with no socket at it must be a fault: %+v", gone)
+	}
+	if err := debugDaemonsExit(daemons.Verdict{State: daemons.StateOK}, []socketPathState{gone}); err == nil {
+		t.Error("plumb debug daemons exited 0 for an older daemon whose socket path is gone")
+	}
+}
