@@ -7,8 +7,8 @@ import (
 	"os"
 )
 
-// platformHome reads uid's home directory from the OS account database: the
-// passwd file first, then getent.
+// platformAccount reads uid's entry from the OS account database: the passwd
+// file first, then getent.
 //
 // This build cannot ask os/user: without cgo, its linux implementation is a stub
 // that answers from $USER and $HOME (go/src/os/user/lookup_stubs.go), so a
@@ -26,12 +26,12 @@ import (
 // The getent half — runGetent and the exec it drives — is in getent_linux.go,
 // which every Linux build compiles rather than only this one, so a test can run
 // the real binary on a host where it is not the production path.
-func platformHome(uid int) (string, bool) {
+func platformAccount(uid int) (name, home string, ok bool) {
 	// A read that fails is not an answer: the file is then treated as one holding
 	// no entry for uid, so the NSS source can still speak for it.
 	data, err := os.ReadFile("/etc/passwd")
 	if err != nil {
 		data = nil
 	}
-	return lookupHome(context.Background(), string(data), uid, runGetent)
+	return lookupAccount(context.Background(), string(data), uid, runGetent)
 }

@@ -31,7 +31,7 @@ import (
 
 // TestRunGetent_ResolvesThisAccount runs the real getent for THIS uid and
 // requires a non-empty absolute home out of it: the assertion the release build's
-// platformHome depends on and that nothing else executes.
+// platformAccount depends on and that nothing else executes.
 func TestRunGetent_ResolvesThisAccount(t *testing.T) {
 	ctx := t.Context()
 	uid := os.Getuid()
@@ -50,7 +50,7 @@ func TestRunGetent_ResolvesThisAccount(t *testing.T) {
 			path, exit, uid, out, getentKeyNotFound)
 	}
 
-	// The production entry point, called exactly as platformHome calls it.
+	// The production entry point, called exactly as platformAccount calls it.
 	got, ok := runGetent(ctx, uid)
 
 	if exit == getentKeyNotFound {
@@ -77,9 +77,13 @@ func TestRunGetent_ResolvesThisAccount(t *testing.T) {
 		t.Fatalf("runGetent(%d) refused although %s exited 0 for it: queryGetent must return the answer "+
 			"a status of 0 carries", uid, path)
 	}
-	home, parsed := parsePasswdHome(got, uid)
+	// parsePasswdEntry returns the whole entry (name, home, ok) since PLAN-528
+	// needed the account NAME as well as its home; this test only cares about
+	// the home, and discarding the name here keeps it asserting what it always
+	// asserted rather than quietly widening its claim.
+	_, home, parsed := parsePasswdEntry(got, uid)
 	if !parsed || home == "" {
-		t.Fatalf("parsePasswdHome(%q, %d) = %q, %v: getent's own output for this uid must yield its home",
+		t.Fatalf("parsePasswdEntry(%q, %d) = %q, %v: getent's own output for this uid must yield its home",
 			got, uid, home, parsed)
 	}
 	if !filepath.IsAbs(home) {
@@ -125,7 +129,7 @@ func TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold(t *testing.T) {
 	}
 }
 
-// TestPlatformHome_ResolvesThisAccount is the guard on the body that SHIPS.
+// TestPlatformAccount_ResolvesThisAccount is the guard on the body that SHIPS.
 //
 // runGetent's tests prove the exec works; this proves the release build's own
 // entry point reaches the account database and returns what account.go's
@@ -135,42 +139,51 @@ func TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold(t *testing.T) {
 // mode, so the body that Linux releases actually execute is EXECUTED by a gate
 // rather than only compiled by one. Before that target existed, neither happened.
 //
-// It calls platformHome directly rather than account.Current() because Current
+// It calls platformAccount directly rather than account.Current() because Current
 // requires a seam root in a test binary by design (seam_off.go); the account
 // lookup is what is under test here, not the seam.
-func TestPlatformHome_ResolvesThisAccount(t *testing.T) {
+//
+// The test NAMES follow the function: PLAN-528 renamed it to platformAccount
+// because it now resolves the account's name as well as its home, and the tests
+// were renamed with it to match what they exercise. The receipts that killed
+// mutants against these tests (the CGO_ENABLED=0 gate's positive control, and
+// the independent review's M-R1) cite the OLD TestPlatformHome_* names — those
+// are pinned to the merged head 441e9023, where the old names existed verbatim,
+// and git history plus the PLAN-528 card log preserve that chain. A receipt is a
+// historical record, not a contract on future names.
+func TestPlatformAccount_ResolvesThisAccount(t *testing.T) {
 	uid := os.Getuid()
-	home, ok := platformHome(uid)
+	_, home, ok := platformAccount(uid)
 	if !ok {
 		// A refusal is a real failure for the account this test is already
 		// running as: the file source holds it, or getent asks the same name
 		// service that authenticated this very process.
-		t.Fatalf("platformHome(%d) refused: this account cannot resolve its own home, so no "+
+		t.Fatalf("platformAccount(%d) refused: this account cannot resolve its own home, so no "+
 			"daemon could start for it", uid)
 	}
 	if home == "" || !filepath.IsAbs(home) {
-		t.Fatalf("platformHome(%d) = %q: want a non-empty absolute path", uid, home)
+		t.Fatalf("platformAccount(%d) = %q: want a non-empty absolute path", uid, home)
 	}
 	// Whichever source answered must agree with /etc/passwd when the file holds
 	// this uid: a disagreement means the body read the wrong field, or asked
 	// about an account other than the one it was given.
 	if fileHome, inFile := passwdFileHome(t, uid); inFile && fileHome != home {
-		t.Errorf("platformHome(%d) = %q, but /etc/passwd holds %q for it", uid, home, fileHome)
+		t.Errorf("platformAccount(%d) = %q, but /etc/passwd holds %q for it", uid, home, fileHome)
 	}
 }
 
-// TestPlatformHome_RefusesAKeyNoSourceHolds pins the fail-closed half for the
+// TestPlatformAccount_RefusesAKeyNoSourceHolds pins the fail-closed half for the
 // shipped body: an account no database holds has no home, and the lookup must
 // refuse rather than fall back to the environment. The uid is the one
 // TestRunGetent_RefusesAKeyTheNameServiceDoesNotHold already establishes that no
 // source on this host serves.
-func TestPlatformHome_RefusesAKeyNoSourceHolds(t *testing.T) {
+func TestPlatformAccount_RefusesAKeyNoSourceHolds(t *testing.T) {
 	const unassigned = 1<<31 - 1
 	if uid := os.Getuid(); uid == unassigned {
 		t.Fatalf("this test is running as uid %d, the one it assumes is unassigned", unassigned)
 	}
-	if home, ok := platformHome(unassigned); ok {
-		t.Errorf("platformHome(%d) = %q, true; want a refusal: no account database holds this uid",
+	if _, home, ok := platformAccount(unassigned); ok {
+		t.Errorf("platformAccount(%d) = %q, true; want a refusal: no account database holds this uid",
 			unassigned, home)
 	}
 }
@@ -191,7 +204,7 @@ func getentOnDisk(t *testing.T) string {
 }
 
 // passwdFileHome reports the home /etc/passwd holds for uid, and whether the file
-// holds uid at all. It parses the file here rather than through parsePasswdHome so
+// holds uid at all. It parses the file here rather than through parsePasswdEntry so
 // that the test's cross-check does not rest on the parser under test.
 func passwdFileHome(t *testing.T, uid int) (string, bool) {
 	t.Helper()

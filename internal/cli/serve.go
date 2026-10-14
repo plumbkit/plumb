@@ -25,6 +25,7 @@ var (
 	serveFlagNoReconnect bool
 	serveFlagAllowDirs   []string
 	serveFlagWorkspace   string
+	serveFlagAttachOnly  bool
 )
 
 var serveCmd = &cobra.Command{
@@ -39,6 +40,8 @@ func init() {
 		"disable transparent daemon reconnect; exit on daemon failure (legacy byte-pump proxy)")
 	serveCmd.Flags().StringArrayVar(&serveFlagAllowDirs, "allow-dir", nil,
 		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the pinned workspace and config extra_roots; inert until a workspace is pinned — never a workspace source on an unattached serve.")
+	serveCmd.Flags().BoolVar(&serveFlagAttachOnly, "attach-only", false,
+		"dial the running daemon and never start one; fail if none is running (for scripts and harnesses)")
 	serveCmd.Flags().StringVar(&serveFlagWorkspace, "workspace", "",
 		"pre-pin this connection's workspace to a path (also PLUMB_WORKSPACE) for clients that report no roots. Without it serve starts unattached and session_start pins the workspace; never overrides an explicit session_start pin.")
 }
@@ -52,7 +55,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	defer stop()
 
 	socketPath := daemonSocketPath()
-	conn, err := connectOrStartDaemon(ctx, socketPath)
+	logClientEnvDivergence()
+	conn, err := dialOrAttach(ctx, socketPath, serveFlagAttachOnly)
 	if err != nil {
 		return fmt.Errorf("plumb serve: %w", err)
 	}
@@ -87,11 +91,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		slog.Info("serve: no --workspace/PLUMB_WORKSPACE — starting unattached; the caller pins the workspace with session_start", "cwd", cwd)
 	}
 
-	p := newReconnectingProxy(proxyDeps{
+	p := newReconnectingProxy(serveProxyDeps(socketPath, serveFlagAttachOnly, allowDirs, workspace, conn))
+	return p.run(ctx)
+}
+
+// serveProxyDeps builds the resilient proxy's dependencies for this serve.
+//
+// It is a named constructor because of ONE field: the redial closure. A proxy
+// that reconnects is the normal case (a replaced daemon, a dropped socket), so
+// `--attach-only` has to hold on the redial exactly as it does on the first dial
+// — otherwise a script that forbade spawning gets a daemon started for it the
+// moment the first connection drops. That is a wiring fact, invisible to a
+// reader of the struct literal and untestable through runServe's stdio, so it
+// lives here and is pinned by a test that drives this very closure.
+func serveProxyDeps(socketPath string, attachOnly bool, allowDirs []string, workspace string, initial net.Conn) proxyDeps {
+	return proxyDeps{
 		in:                os.Stdin,
 		out:               os.Stdout,
-		initial:           conn,
-		dial:              func(ctx context.Context) (net.Conn, error) { return connectOrStartDaemon(ctx, socketPath) },
+		initial:           initial,
+		dial:              func(ctx context.Context) (net.Conn, error) { return dialOrAttach(ctx, socketPath, attachOnly) },
 		killDaemon:        killHungDaemon,
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
@@ -99,8 +117,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		workspace:         workspace,
 		resumeStore:       openDefaultResumeStore(),
 		resumeProofKey:    loadResumeProofKey,
-	})
-	return p.run(ctx)
+	}
 }
 
 // resolveAllowDirs normalises the client-granted extra read-write roots from the
@@ -197,6 +214,18 @@ func proxyHeartbeatInterval() time.Duration {
 		return defaultHeartbeatInterval
 	}
 	return d
+}
+
+// dialOrAttach dials the daemon for a serve client: connectOrStartDaemon
+// normally, or attachOnly under --attach-only, which never starts one. It is one
+// function so the RESILIENT PROXY's redial takes the same path as the first
+// dial: a proxy that reconnects after --attach-only must not quietly start a
+// daemon the flag forbade.
+func dialOrAttach(ctx context.Context, socketPath string, attachOnlyOnly bool) (net.Conn, error) {
+	if attachOnlyOnly {
+		return attachOnly(ctx, socketPath)
+	}
+	return connectOrStartDaemon(ctx, socketPath)
 }
 
 // connectOrStartDaemon dials the daemon socket. If no daemon accepts, it starts

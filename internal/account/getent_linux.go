@@ -10,7 +10,7 @@ import (
 )
 
 // The getent(1) exec path lives here, tagged for linux ALONE rather than
-// `linux && !cgo` like the platformHome that calls it in the release build.
+// `linux && !cgo` like the platformAccount that calls it in the release build.
 //
 // The looser tag is what makes the exec reachable at all. `!cgo` is the shape
 // goreleaser builds (.goreleaser.yml sets CGO_ENABLED=0), and it is the shape no
@@ -20,7 +20,7 @@ import (
 // never having run. Under `linux` it compiles wherever Linux does, which is what
 // lets getent_linux_test.go execute the real binary on every Linux PR.
 //
-// Production behaviour is identical either way: with cgo, platformHome comes from
+// Production behaviour is identical either way: with cgo, platformAccount comes from
 // home_linux_cgo.go (os/user, through getpwuid_r) and never calls in here, and
 // without cgo the call is the one it always was.
 

@@ -86,6 +86,7 @@ var Layers = map[string]Layer{
 	// ── Foundation ──
 	"internal/arch":                 LayerFoundation, // this package: the rules themselves
 	"internal/account":              LayerFoundation, // who this process runs as, from the account database
+	"internal/service":              LayerFoundation, // the service launch profile: what to start, and where it serves from
 	"internal/paths":                LayerFoundation,
 	"internal/ignore":               LayerFoundation, // gitignore matching, shared by every walk
 	"internal/fsync":                LayerFoundation,

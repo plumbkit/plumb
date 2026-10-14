@@ -42,7 +42,7 @@ import (
 
 	"github.com/adrg/xdg"
 
-	"github.com/plumbkit/plumb/internal/account"
+	"github.com/plumbkit/plumb/internal/service"
 )
 
 // appDir is the per-application subdirectory placed under each base directory.
@@ -109,30 +109,31 @@ func base(envVar string, pick func() string) string {
 // ConfigDir returns plumb's config directory (e.g. ~/.config/plumb on Linux,
 // ~/Library/Application Support/plumb on macOS).
 //
-// With the account authority enabled it comes from the OS account database
-// instead of the environment — see authority.go.
+// With the account authority enabled it comes from the service profile, and
+// failing that from the OS account database, instead of the environment — see
+// authority.go.
 func ConfigDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.ConfigDir() }); ok {
+	if dir, ok := accountDir(service.RoleConfig); ok {
 		return dir
 	}
-	return appPath("XDG_CONFIG_HOME", func() string { return xdg.ConfigHome })
+	return envDir(service.RoleConfig)
 }
 
 // DataDir returns plumb's persistent-data directory (sessions, stats).
 func DataDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.DataDir() }); ok {
+	if dir, ok := accountDir(service.RoleData); ok {
 		return dir
 	}
-	return appPath("XDG_DATA_HOME", func() string { return xdg.DataHome })
+	return envDir(service.RoleData)
 }
 
 // StateDir returns plumb's state directory (regenerable state). For logs use
 // LogDir, which diverges from this on macOS.
 func StateDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.StateDir() }); ok {
+	if dir, ok := accountDir(service.RoleState); ok {
 		return dir
 	}
-	return appPath("XDG_STATE_HOME", func() string { return xdg.StateHome })
+	return envDir(service.RoleState)
 }
 
 // LogDir returns plumb's log directory. Logs are the single role where the macOS
@@ -145,25 +146,47 @@ func StateDir() string {
 //   - Linux  : $XDG_STATE_HOME/plumb  (fallback ~/.local/state/plumb)
 //   - Windows: %LocalAppData%\plumb
 func LogDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.LogDir() }); ok {
+	if dir, ok := accountDir(service.RoleLog); ok {
 		return dir
 	}
-	if runtime.GOOS == "darwin" {
-		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Logs", appDir)
-		}
-		// Degenerate (no HOME): fall back to the state dir.
-	}
-	return StateDir()
+	return envDir(service.RoleLog)
 }
 
 // CacheDir returns plumb's cache directory (heap profiles, and the runtime
 // files on any platform where RuntimeDir falls back to it).
 func CacheDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.CacheDir() }); ok {
+	if dir, ok := accountDir(service.RoleCache); ok {
 		return dir
 	}
-	return appPath("XDG_CACHE_HOME", func() string { return xdg.CacheHome })
+	return envDir(service.RoleCache)
+}
+
+// envDir is the directory a role resolves to from the ENVIRONMENT alone: the
+// answer every plumb before the service profile gave, and the one a client's
+// HOME or XDG override would have produced. It is deliberately kept: it is what
+// the divergence report compares the service's own answer against, and what the
+// installer adopts an XDG override from.
+func envDir(role service.Role) string {
+	switch role {
+	case service.RoleConfig:
+		return appPath("XDG_CONFIG_HOME", func() string { return xdg.ConfigHome })
+	case service.RoleData:
+		return appPath("XDG_DATA_HOME", func() string { return xdg.DataHome })
+	case service.RoleState:
+		return appPath("XDG_STATE_HOME", func() string { return xdg.StateHome })
+	case service.RoleLog:
+		if runtime.GOOS == "darwin" {
+			if home, err := os.UserHomeDir(); err == nil {
+				return filepath.Join(home, "Library", "Logs", appDir)
+			}
+			// Degenerate (no HOME): fall back to the state dir.
+		}
+		return envDir(service.RoleState)
+	case service.RoleCache:
+		return appPath("XDG_CACHE_HOME", func() string { return xdg.CacheHome })
+	default:
+		return ""
+	}
 }
 
 // RuntimeDir returns the directory for the daemon's runtime files: the MCP and
@@ -183,12 +206,18 @@ func CacheDir() string {
 // os.UserCacheDir, deliberately, NOT os.TempDir: on macOS $TMPDIR differs
 // between a GUI-app launch and a terminal launch, so a socket there would move
 // depending on how the client started plumb.
+//
+// With the account authority enabled it comes from the account, or from an
+// explicitly adopted XDG_RUNTIME_DIR in the service profile (see authority.go):
+// the socket is the account's, so a client's own runtime directory can never
+// point the daemon somewhere else.
+//
 // RuntimeDir only resolves; it creates nothing. The TUI's liveness check and
 // the sandboxes ask for this path without wanting to bring it into existence,
 // so the one caller that needs the directory (the CLI, before binding the
 // socket or taking a lock) does the MkdirAll itself.
 func RuntimeDir() string {
-	if dir, ok := accountDir(func(u account.User) string { return u.RuntimeDir() }); ok {
+	if dir, ok := accountRuntimeDir(); ok {
 		return dir
 	}
 	return filepath.Join(runtimeBase(), appDir)

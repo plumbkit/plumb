@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/paths"
@@ -80,6 +78,26 @@ const maxUnixSocketPath = 103
 // at a setting that cannot move the socket.
 func socketPathShortenLever() string { return paths.RuntimeDirLever() }
 
+// socketPathShortenRemedy says what would actually move the runtime directory on
+// this process.
+//
+// Legacy mode names the environment variable, because there the answer depends
+// on which base RuntimeDir resolved — $XDG_RUNTIME_DIR, $HOME on macOS, or
+// XDG_CACHE_HOME — and naming the wrong one points the user at a setting that
+// cannot move the socket.
+//
+// With the account authority enabled, NO environment variable can move it: the
+// runtime directory comes from the service profile (or the account database), so
+// telling the user to point $HOME somewhere shorter would send them to a setting
+// that provably changes nothing. The remedy is the profile.
+func socketPathShortenRemedy() string {
+	if paths.AuthorityEnabled() {
+		return "adopt a shorter base with `plumb service set-xdg --runtime-dir <dir>`; the service profile records " +
+			"the runtime directory, so no environment variable can move the socket"
+	}
+	return fmt.Sprintf("point %s at a shorter directory", socketPathShortenLever())
+}
+
 // legacyDaemonSocketPath is the socket under the cache-dir runtime location,
 // or "" when that is the same directory in use now.
 //
@@ -125,8 +143,8 @@ func socketPathLengthHint(path string) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — point %s at a shorter directory)",
-		len(path), maxUnixSocketPath, socketPathShortenLever())
+		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — %s)",
+		len(path), maxUnixSocketPath, socketPathShortenRemedy())
 }
 
 // daemonStartTimeoutError is what the caller sees when the socket never
@@ -147,44 +165,21 @@ func daemonStartTimeoutError(action, socketPath string, wait time.Duration) erro
 // closes its own copies afterwards. Logs are written to daemonLogPath(); the
 // process is detached with Setsid so it outlives the calling plumb serve
 // process.
+//
+// WHAT it starts and the environment it starts it in come from daemonLaunchSpec
+// (service_launch.go): in canonical mode that is the service profile's
+// executable with a clean environment, and a missing profile refuses here rather
+// than guessing. In legacy mode it is this binary with this environment, exactly
+// as before.
 func startDaemonProcess(locks launchLocks) error {
-	files := locks.files()
-	if len(files) != 2 {
-		// Unreachable through acquireLaunchLocks, which returns both locks or
-		// none. Guarded because a nil *os.File in ExtraFiles panics os/exec, and
-		// because a daemon handed half the pair would be a second authority in
-		// waiting.
-		return errors.New("starting daemon: both launch locks must be held to hand them over")
-	}
-	exe, err := os.Executable()
+	spec, err := resolveLaunchSpec()
 	if err != nil {
-		return fmt.Errorf("resolving executable path: %w", err)
+		return err
 	}
-
-	logPath := daemonLogPath()
-	_ = os.MkdirAll(filepath.Dir(logPath), 0o755)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	cmd, logFile, err := daemonCommand(spec, locks)
 	if err != nil {
-		logFile, _ = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		return err
 	}
-
-	cmd := exec.Command(exe, "daemon")
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	// fd 3 in the child is the authority and fd 4 the lifetime lock: the order
-	// the daemon adopts them in, and the order it holds them in.
-	cmd.ExtraFiles = files
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("%s=%d", authorityLockFDEnv, inheritedAuthorityLockFD),
-		fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD),
-	)
-	// Never let the daemon inherit this serve proxy's working directory. The daemon
-	// is a singleton shared across every connection, so an inherited cwd belongs to
-	// one arbitrary client's project — and any stray relative path would resolve
-	// there. Root has no project to damage. runDaemon chdirs as well, covering a
-	// daemon started by any other means.
-	cmd.Dir = "/"
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
 		return err
