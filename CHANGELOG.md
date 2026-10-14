@@ -306,11 +306,16 @@
   should run `plumb service install` once after installing. An upgrade can also
   leave a `plumb serve` proxy from the PREVIOUS build running: when the daemon it
   started is gone it respawns the binary at its own path — now the new one — with
-  the old lock handover and no account-authority value, and the new daemon
-  **refuses** that handover instead of starting anywhere unexpected. Nothing is
-  started beside anything, which is the property this release exists for; but that
-  client is left without a daemon until it restarts, so restart the client, or set
-  `PLUMB_ACCOUNT_AUTHORITY=false` on the old proxy's environment as a stopgap.
+  the old lock handover and no account-authority value. Where that proxy's
+  environment resolves a DIFFERENT runtime directory than the account's — a
+  spoofed `HOME`/`XDG_*`, or a Linux client with no usable `XDG_RUNTIME_DIR` — the
+  new daemon **refuses** that handover instead of starting anywhere unexpected;
+  where the two resolve the same file, which is the ordinary unspoofed upgrade,
+  the handover matches and the daemon starts canonically as usual. Nothing is ever
+  started beside anything, which is the property this release exists for. In the
+  refusing case that client is left without a daemon until it restarts, so restart
+  the client — a running process's environment cannot be changed, so setting
+  `PLUMB_ACCOUNT_AUTHORITY=false` on the old proxy takes effect when it restarts.
 
 - **A daemon left running by an older binary is reused when it is the same
   build, and refused with an instruction when it is not — never migrated behind

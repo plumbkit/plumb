@@ -30,7 +30,7 @@ func TestConfigAuthorityEnabled_ReleasedBuildsNeverMoveTheConfigFile(t *testing.
 	freshAuthority(t)
 	// An EXPLICIT environment opt-out, the strongest form: even then the config
 	// file must stay the account's, or the file that records the opt-out would
-	// move out from under itself and `plumb config set` would write a file the
+	// move out from under itself and a config write would land in a file the
 	// next start never reads.
 	t.Setenv(AuthorityEnvVar, "false")
 	if !configAuthorityEnabledFor(false) {
