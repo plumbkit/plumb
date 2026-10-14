@@ -16,6 +16,10 @@ import (
 // marker created between two calls is seen by the second. A nil *CallMemo (a
 // context no collect made) remembers nothing and runs every lookup.
 //
+// It holds one kind of answer only: a directory's project root, keyed by the
+// directory (cli's historyRootFor). A second kind of lookup would share that key
+// space, so it needs a memo of its own rather than this one.
+//
 // Concurrency: safe for concurrent use; a lookup runs under the memo's lock, so
 // two askers of one key run it once.
 type CallMemo struct {
