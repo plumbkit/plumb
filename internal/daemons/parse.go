@@ -110,15 +110,25 @@ func parseProcNetUnix(data, path string) (uint64, bool) {
 	return 0, false
 }
 
-// parseProcArgs decodes one process's KERN_PROCARGS2 payload: a 4-byte argc, the
-// exec path, padding NULs, then argc NUL-terminated arguments. The padding is
-// why the argument scan resumes at the first non-NUL byte rather than straight
-// after the path.
+// ParseProcArgs decodes one process's KERN_PROCARGS2 payload: a 4-byte argc, the
+// exec path, padding NULs, then argc NUL-terminated arguments. It is the one
+// decoder of that buffer: the census reads it here, and `plumb stop`/`restart`
+// (internal/cli's darwin processArgv) read it through it, so the two can never
+// disagree about a process's argv.
+//
+// The padding is exact, not "every NUL": the kernel pads the exec path so that
+// path, terminator and padding fill a multiple of 8 bytes (measured on darwin
+// arm64 for 40 consecutive path lengths). Skipping exactly that much matters
+// because an EMPTY leading argument (`exec -a` with an empty name) is also a NUL there: skipping
+// every NUL would read argv shifted by one, with the environment's first entry as
+// the last argument — `["", "plumb", "daemon"]` read as `plumb daemon`. When fewer
+// NULs than that are present (a layout this rule does not describe), every
+// leading NUL is padding, as before.
 //
 // Anything that does not parse is an error, never a partial answer: a caller
 // that cannot read a daemon's argv must say so rather than report a daemon with
 // no arguments.
-func parseProcArgs(raw []byte) (exe string, args []string, err error) {
+func ParseProcArgs(raw []byte) (exe string, args []string, err error) {
 	if len(raw) < 4 {
 		return "", nil, errors.New("shorter than its own argc field")
 	}
@@ -133,8 +143,14 @@ func parseProcArgs(raw []byte) (exe string, args []string, err error) {
 	}
 	exe = string(rest[:end])
 	rest = rest[end:]
-	for len(rest) > 0 && rest[0] == 0 {
-		rest = rest[1:]
+	nuls := 0
+	for nuls < len(rest) && rest[nuls] == 0 {
+		nuls++
+	}
+	if pad := 8 - len(exe)%8; nuls >= pad {
+		rest = rest[pad:]
+	} else {
+		rest = rest[nuls:]
 	}
 	for range argc {
 		end := indexByte(rest, 0)
@@ -147,6 +163,9 @@ func parseProcArgs(raw []byte) (exe string, args []string, err error) {
 			break
 		}
 		rest = rest[end+1:]
+	}
+	if len(args) < int(argc) {
+		return "", nil, fmt.Errorf("argc %d but only %d arguments", argc, len(args))
 	}
 	return exe, args, nil
 }

@@ -21,5 +21,5 @@ func processArgv(pid int) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return parseProcArgs2(buf)
+	return argvFromProcArgs(buf)
 }

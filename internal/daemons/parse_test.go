@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -243,7 +244,7 @@ func TestParseProcArgs(t *testing.T) {
 		return b
 	}
 
-	exe, args, err := parseProcArgs(build(2, "/opt/plumb/bin/plumb", "", "plumb", "daemon"))
+	exe, args, err := ParseProcArgs(build(2, "/opt/plumb/bin/plumb", "", "plumb", "daemon"))
 	if err != nil {
 		t.Fatalf("parseProcArgs: %v", err)
 	}
@@ -255,7 +256,7 @@ func TestParseProcArgs(t *testing.T) {
 	}
 
 	// The last argument is not promised a trailing NUL.
-	if _, args, err := parseProcArgs(build(1, "/bin/plumb", "plumb")); err != nil {
+	if _, args, err := ParseProcArgs(build(1, "/bin/plumb", "plumb")); err != nil {
 		t.Errorf("parseProcArgs without a trailing NUL: %v", err)
 	} else if len(args) != 1 || args[0] != "plumb" {
 		t.Errorf("args = %q, want [plumb]", args)
@@ -269,12 +270,30 @@ func TestParseProcArgs(t *testing.T) {
 		{"argc zero", build(0, "/bin/plumb")},
 		{"argc implausible", build(99999, "/bin/plumb")},
 		{"no NUL-terminated path", binary.LittleEndian.AppendUint32(nil, 1)},
+		{"argc beyond the arguments", build(3, "/bin/plumb", "plumb")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := parseProcArgs(tt.raw); err == nil {
-				t.Errorf("parseProcArgs(%v) = nil error, want a refusal", tt.raw)
+			if _, _, err := ParseProcArgs(tt.raw); err == nil {
+				t.Errorf("ParseProcArgs(%v) = nil error, want a refusal", tt.raw)
 			}
 		})
+	}
+}
+
+// TestParseProcArgs_AnEmptyArgv0IsNotPadding: the exec path's padding is exact, so
+// a NUL beyond it is an empty argv[0] (`exec -a ”`), not more padding.
+func TestParseProcArgs_AnEmptyArgv0IsNotPadding(t *testing.T) {
+	exe := "/x/plumbd" // 9 bytes: padding is 7 NULs
+	raw := binary.LittleEndian.AppendUint32(nil, 3)
+	raw = append(raw, exe...)
+	raw = append(raw, 0, 0, 0, 0, 0, 0, 0)
+	raw = append(raw, "\x00plumb\x00daemon\x00PATH=/usr/bin\x00"...)
+	_, args, err := ParseProcArgs(raw)
+	if err != nil {
+		t.Fatalf("ParseProcArgs: %v", err)
+	}
+	if want := []string{"", "plumb", "daemon"}; !slices.Equal(args, want) {
+		t.Fatalf("args = %q, want %q", args, want)
 	}
 }
