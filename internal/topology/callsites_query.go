@@ -345,7 +345,7 @@ func (s *Store) UnreadFiles(ctx context.Context, ext string) (int, error) {
 // dotImportFiles is the set of files that dot-import a package, read once per
 // census. Asked per call site instead, the planner reaches for the import-kind
 // index and scans every import node of the workspace for each site: on this
-// repository a common method name's census took seconds (PLAN-544).
+// repository a common method name's census took seconds (PLAN-542).
 func (s *Store) dotImportFiles(ctx context.Context) (map[int64]bool, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT file_id FROM topology_nodes WHERE name = '.' AND kind = ?`, string(KindImport))
 	if err != nil {
