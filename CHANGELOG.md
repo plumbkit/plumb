@@ -470,6 +470,19 @@
   as the third command that starts a daemon (they said two), and the
   `--attach-only` rule "takes no lock, not even briefly" is pinned by a test
   (PLAN-550).
+- **`plumb stop` removes only its own stale pid file, and finds a legacy daemon
+  in every legacy location.** It unlinked the pid file whenever the pid it had
+  read was gone, so a daemon that published its own pid file in between lost
+  it; the file is now removed only while it still names the stale pid, through
+  the same identity check the daemon's runtime files use. Its sweep also claims
+  the environment-derived legacy runtime directory, not only the cache one, so
+  in canonical mode it no longer answers "Daemon is not running." beside a
+  legacy daemon there. `plumb doctor` and `plumb debug daemons` now note a
+  socket record with no file identity (what a daemon from an older build writes)
+  instead of saying nothing, and say when that daemon does not hold the path
+  open; such a record is honoured for as long as its pid is still a
+  `plumb daemon`, since an older daemon publishes once and never refreshes it,
+  and its socket path going missing is reported as the fault it is (PLAN-551).
 - **`context_for_task` says when its index is still on its first pass.** An
   agent's first call in a fresh worktree reached an index holding a few dozen of
   a few thousand files, and the pack read like a complete answer: "no indexed
