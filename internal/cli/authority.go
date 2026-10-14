@@ -114,6 +114,24 @@ func acquireAuthority() (*os.File, error) {
 	return f, nil
 }
 
+// authorityHeld reports whether somebody currently holds the account authority,
+// without keeping it: the probe takes the lock and releases it at once.
+//
+// It is what tells a RECORD from a HOLDER. The authority file is never unlinked,
+// so it still carries the last holder's metadata after that holder is gone; only
+// the lock says whether anybody is there now. Taking it for the length of this
+// call is deliberate: the alternative is trusting a record whose pid the kernel
+// has since handed to somebody else, and `plumb restart` SIGTERMs and SIGKILLs
+// what it is told to stop.
+func authorityHeld() bool {
+	f, err := acquireAuthority()
+	if err != nil {
+		return errors.Is(err, errDaemonAlreadyRunning)
+	}
+	_ = f.Close()
+	return false
+}
+
 // publishAuthority writes the holder's metadata through the held fd, then leaves
 // the offset at the start so a later writer overwrites rather than appends.
 func publishAuthority(f *os.File, m authorityMetadata) error {

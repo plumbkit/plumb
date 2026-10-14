@@ -77,6 +77,17 @@ func runRestart(_ *cobra.Command, _ []string) error {
 	return respawnDaemon(pids, deadline)
 }
 
+// daemonIdentityCheck reports whether a pid is a `plumb daemon` process: the
+// check every pid a restart read from a FILE must pass before it is signalled.
+//
+// It is a variable so the suite can pin the policy. A real `plumb daemon` cannot
+// be started outside a container (PLAN-518 §2: exactly one daemon runs on the
+// owner's host, and it is not a test's to start), and the stand-ins the tests use
+// are ordinary processes — so a test that needs the POSITIVE direction, a claimed
+// pid that IS named, substitutes this, while the negative direction is pinned
+// against the real function itself.
+var daemonIdentityCheck = isPlumbDaemonProcess
+
 // restartDaemonPIDs names the daemons a restart must stop, by IDENTITY — never
 // by a process scan (PLAN-530, and the reason `plumb stop`'s third strategy is
 // scoped so carefully: an unscoped `pgrep -f "plumb daemon"` sweep once SIGTERMed
@@ -105,21 +116,37 @@ func restartDaemonPIDs() []int {
 			pids = append(pids, pid)
 		}
 	}
+	// A pid read from a FILE is a CLAIM, not an observation. The file outlives the
+	// process that wrote it — nothing unlinks the authority lock, and a pid file
+	// survives a crash — while the kernel hands a freed number to somebody else.
+	// Every claim is verified against the process it names before restart will
+	// signal it. The harm is asymmetric: a daemon a restart failed to stop is
+	// visible and recoverable; killing an unrelated process is neither.
+	addClaim := func(pid int) {
+		if pid > 0 && !seen[pid] && daemonIdentityCheck(pid) {
+			add(pid)
+		}
+	}
 
-	// 1. The authority's holder, as it published itself. An unreadable record is
-	//    not a failure here: the identities below still name the daemon, and the
-	//    bounded lock acquisition in respawnDaemon refuses to start a successor
-	//    while the authority is held by anybody at all.
+	// 1. The authority's holder, as it published itself — and ONLY while somebody
+	//    actually holds the authority. The record is written through the held fd
+	//    and the file is never unlinked, so after a crash, a `plumb stop` or a
+	//    reboot it still names the pid of a daemon that is gone while the lock
+	//    itself is free; and a free lock means the pid it records may since have
+	//    belonged to somebody else. An unreadable record is not a failure here:
+	//    the identities below still name the daemon, and the bounded lock
+	//    acquisition in respawnDaemon refuses to start a successor while the
+	//    authority is held by anybody at all.
 	if path, err := authorityPath(); err == nil {
-		if m, ok := readAuthority(path); ok {
-			add(m.PID)
+		if m, ok := readAuthority(path); ok && authorityHeld() {
+			addClaim(m.PID)
 		}
 	}
 
 	// 2. Every runtime directory this process could belong to, current first: the
 	//    pid file each daemon writes, and the sockets each one binds.
 	for _, loc := range append([]legacyLocation{currentLocation()}, legacyLocations()...) {
-		add(readPIDFileAt(loc.PID))
+		addClaim(readPIDFileAt(loc.PID))
 		add(findPIDViaSocket(loc.Socket))
 		add(findPIDViaSocket(loc.Ctrl))
 	}

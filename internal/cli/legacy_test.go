@@ -544,6 +544,13 @@ func TestRestartDaemonPIDs_NamesIdentityNeverAScan(t *testing.T) {
 	named := startSleep(t)
 	unnamed := startSleep(t) // live, and named by nothing at all
 	writeRuntimeFile(t, loc.PID, fmt.Sprintf("%d\n", named))
+	// The pid file names a stand-in, not a daemon: a real `plumb daemon` cannot be
+	// started here (PLAN-518 §2 says exactly one runs on the owner's host, and it is
+	// not a test's to start). The claim IS trusted once verified, and what is
+	// substituted here is the verification itself;
+	// TestRestartDaemonPIDs_RefusesAPIDFileThatIsNotADaemon pins the same path with
+	// the real check.
+	stubDaemonIdentity(t, func(pid int) bool { return pid == named })
 
 	got := restartDaemonPIDs()
 	if !slices.Contains(got, named) {
@@ -572,6 +579,9 @@ func TestRestartDaemonPIDs_NamesTheAuthorityHolder(t *testing.T) {
 	withShortTempRuntime(t)
 	withAccountAuthority(t)
 	holder := startSleep(t)
+	// Same substitution as TestRestartDaemonPIDs_NamesIdentityNeverAScan, and the
+	// HOLDING is real: the authority is taken below and stays held for the call.
+	stubDaemonIdentity(t, func(pid int) bool { return pid == holder })
 	authority, err := acquireAuthority()
 	if err != nil {
 		t.Fatalf("acquireAuthority: %v", err)

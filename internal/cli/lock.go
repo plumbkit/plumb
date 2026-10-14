@@ -305,7 +305,48 @@ func holdLegacyLocks() ([]heldLegacyLock, error) {
 		}
 		out = append(out, heldLegacyLock{Path: h.Path, File: f})
 	}
+
+	// The handed set is the LAUNCHER's, and in canonical mode the launcher is the
+	// client while this daemon runs with the service profile's environment, so the
+	// two name different runtime locations. Holding only the handed ones would
+	// leave THIS daemon's own legacy location free — and that is where an ordinary
+	// pre-527 proxy dials and respawns: an old binary knows nothing of the account
+	// authority, so the legacy lifetime lock is the only thing that stops it
+	// starting a successor beside this daemon. Hold the union, which is what the
+	// probe (refuseBesideLegacyDaemon) and the census already reason about.
+	for _, loc := range legacyLocations() {
+		if heldLegacyLockAt(out, loc.Lock) {
+			continue
+		}
+		held, err := acquireLegacyLock(loc.Lock)
+		if err != nil {
+			closeHeldLegacyLocks(out)
+			return nil, err
+		}
+		out = append(out, held)
+	}
 	return out, nil
+}
+
+// heldLegacyLockAt reports whether locks already covers path. Two names for one
+// file — a symlinked /tmp on darwin, a relative spelling — must not be acquired
+// twice: flock is per open file description, so a second acquisition on the same
+// file returns EWOULDBLOCK and the daemon would refuse to start against its own
+// fence.
+func heldLegacyLockAt(locks []heldLegacyLock, path string) bool {
+	for _, l := range locks {
+		if l.Path == path || filepath.Clean(l.Path) == filepath.Clean(path) {
+			return true
+		}
+		a, err := os.Stat(l.Path)
+		if err != nil {
+			continue
+		}
+		if b, err := os.Stat(path); err == nil && os.SameFile(a, b) {
+			return true
+		}
+	}
+	return false
 }
 
 // encodeLegacyHandover renders the held legacy locks as the JSON handover a

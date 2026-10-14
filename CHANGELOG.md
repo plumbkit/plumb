@@ -319,7 +319,10 @@
   daemon of an older binary's runtime directory, and the census no longer reports
   a healthy daemon as a violation after its runtime directory — and with it the
   lifetime lock's *file*, though not the flock on the unlinked inode — has been
-  removed. All of it is inert until the account-authority mode becomes the
+  removed. Every pid `plumb restart` reads from a **file** is verified before it is
+  signalled: a record whose lock is free belongs to a daemon that is gone, and one
+  that names a process which is not a `plumb daemon` is a reused pid, so neither is
+  stopped. All of it is inert until the account-authority mode becomes the
   default: with it off, the environment's runtime directory *is* the one in use,
   so there is no legacy location to probe and the behaviour is exactly as before.
 
