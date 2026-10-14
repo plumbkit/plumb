@@ -78,6 +78,26 @@ const maxUnixSocketPath = 103
 // at a setting that cannot move the socket.
 func socketPathShortenLever() string { return paths.RuntimeDirLever() }
 
+// socketPathShortenRemedy says what would actually move the runtime directory on
+// this process.
+//
+// Legacy mode names the environment variable, because there the answer depends
+// on which base RuntimeDir resolved — $XDG_RUNTIME_DIR, $HOME on macOS, or
+// XDG_CACHE_HOME — and naming the wrong one points the user at a setting that
+// cannot move the socket.
+//
+// With the account authority enabled, NO environment variable can move it: the
+// runtime directory comes from the service profile (or the account database), so
+// telling the user to point $HOME somewhere shorter would send them to a setting
+// that provably changes nothing. The remedy is the profile.
+func socketPathShortenRemedy() string {
+	if paths.AuthorityEnabled() {
+		return "adopt a shorter base with `plumb service set-xdg --runtime-dir <dir>`; the service profile records " +
+			"the runtime directory, so no environment variable can move the socket"
+	}
+	return fmt.Sprintf("point %s at a shorter directory", socketPathShortenLever())
+}
+
 // legacyDaemonSocketPath is the socket under the cache-dir runtime location,
 // or "" when that is the same directory in use now.
 //
@@ -123,8 +143,8 @@ func socketPathLengthHint(path string) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — point %s at a shorter directory)",
-		len(path), maxUnixSocketPath, socketPathShortenLever())
+		" (the path is %d bytes; a Unix socket path must fit in sun_path, at most %d — %s)",
+		len(path), maxUnixSocketPath, socketPathShortenRemedy())
 }
 
 // daemonStartTimeoutError is what the caller sees when the socket never

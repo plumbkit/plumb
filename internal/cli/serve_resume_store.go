@@ -156,6 +156,7 @@ func (s *resumeStore) load(conversation string) (resumeEntry, bool) {
 	if s == nil || conversation == "" {
 		return resumeEntry{}, false
 	}
+	//nolint:gosec // G703: path() joins a hex sha256 digest of scope+conversation, so no input can traverse
 	data, err := os.ReadFile(s.path(conversation))
 	if err != nil {
 		return resumeEntry{}, false
@@ -197,7 +198,9 @@ func (s *resumeStore) put(conversation, secret string) (resumeEntry, error) {
 	path := s.path(conversation)
 	// AtomicWrite keeps an existing file's mode, which is right for config and wrong for
 	// a secret: tighten a file someone else made looser before the secret goes in it.
+	//nolint:gosec // G703: path is a hex sha256 digest under this store's own private directory, never user input
 	if _, statErr := os.Stat(path); statErr == nil {
+		//nolint:gosec // G703: same path, same reason — it cannot name a directory outside the store
 		_ = os.Chmod(path, 0o600)
 	}
 	if err := fsync.AtomicWrite(path, data, fsync.Options{Mode: 0o600, Label: "serve-resume"}); err != nil {

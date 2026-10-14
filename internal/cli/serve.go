@@ -91,11 +91,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		slog.Info("serve: no --workspace/PLUMB_WORKSPACE — starting unattached; the caller pins the workspace with session_start", "cwd", cwd)
 	}
 
-	p := newReconnectingProxy(proxyDeps{
+	p := newReconnectingProxy(serveProxyDeps(socketPath, serveFlagAttachOnly, allowDirs, workspace, conn))
+	return p.run(ctx)
+}
+
+// serveProxyDeps builds the resilient proxy's dependencies for this serve.
+//
+// It is a named constructor because of ONE field: the redial closure. A proxy
+// that reconnects is the normal case (a replaced daemon, a dropped socket), so
+// `--attach-only` has to hold on the redial exactly as it does on the first dial
+// — otherwise a script that forbade spawning gets a daemon started for it the
+// moment the first connection drops. That is a wiring fact, invisible to a
+// reader of the struct literal and untestable through runServe's stdio, so it
+// lives here and is pinned by a test that drives this very closure.
+func serveProxyDeps(socketPath string, attachOnly bool, allowDirs []string, workspace string, initial net.Conn) proxyDeps {
+	return proxyDeps{
 		in:                os.Stdin,
 		out:               os.Stdout,
-		initial:           conn,
-		dial:              func(ctx context.Context) (net.Conn, error) { return dialOrAttach(ctx, socketPath, serveFlagAttachOnly) },
+		initial:           initial,
+		dial:              func(ctx context.Context) (net.Conn, error) { return dialOrAttach(ctx, socketPath, attachOnly) },
 		killDaemon:        killHungDaemon,
 		heartbeatInterval: proxyHeartbeatInterval(),
 		allowDirs:         allowDirs,
@@ -103,8 +117,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		workspace:         workspace,
 		resumeStore:       openDefaultResumeStore(),
 		resumeProofKey:    loadResumeProofKey,
-	})
-	return p.run(ctx)
+	}
 }
 
 // resolveAllowDirs normalises the client-granted extra read-write roots from the

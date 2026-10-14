@@ -24,8 +24,9 @@
   `plumb service install` (idempotent, and it never resets a user's recorded
   directories, PATH or XDG overrides) and changed only through
   `plumb service set-executable` / `set-path` / `set-xdg`. A managed launch —
-  `plumb serve`, `plumb restart`, `plumb service install` — starts the profile's
-  executable with an environment built from the profile and the account database
+  `plumb serve` and `plumb restart`, the two commands that start a daemon —
+  starts the profile's executable with an environment built from the profile and
+  the account database
   (`HOME` and `USER` from the account database, `PATH` from the profile, `XDG_*`
   only as recorded, plus the launching session's locale), and a client whose
   environment would have resolved elsewhere is told once, with the

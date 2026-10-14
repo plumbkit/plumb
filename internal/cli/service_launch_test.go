@@ -3,14 +3,18 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/account"
+	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/service"
 )
 
@@ -428,4 +432,263 @@ func TestStartDaemonProcess_ExecsTheProfileExecutableWithTheCleanEnvironment(t *
 	if got["fd3"] != "open" || got["fd4"] != "open" {
 		t.Errorf("handover fds: fd3=%s fd4=%s, want both open (authority on 3, lifetime on 4)", got["fd3"], got["fd4"])
 	}
+}
+
+// F1: `set-xdg --runtime-dir` must refuse a base the install path refuses. The
+// daemon binds its sockets there, so a base this uid does not privately own would
+// expose them — and a set-* must not be the way around the install-time rule.
+func TestServiceSetXDG_RefusesAnUnusableRuntimeBase(t *testing.T) {
+	serviceInstallEnv(t)
+	if err := runServiceInstall(nil, nil); err != nil {
+		t.Fatalf("runServiceInstall: %v", err)
+	}
+	path, err := service.Path()
+	if err != nil {
+		t.Fatalf("service.Path: %v", err)
+	}
+	before, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+
+	exposed := t.TempDir()
+	if err := os.Chmod(exposed, 0o755); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	u, err := account.Current()
+	if err != nil {
+		t.Fatalf("account.Current: %v", err)
+	}
+	if account.UsableRuntimeBase(exposed, u.UID) {
+		t.Fatalf("%s is usable as a runtime base; the test cannot tell the two cases apart", exposed)
+	}
+	err = setXDGProfile(map[string]string{"XDG_RUNTIME_DIR": exposed})
+	if err == nil {
+		t.Fatal("set-xdg accepted a world-readable runtime base")
+	}
+	if !strings.Contains(err.Error(), "0700") {
+		t.Errorf("the refusal does not say what a runtime base must be: %v", err)
+	}
+	after, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if after != before {
+		t.Errorf("a refused set-xdg changed the profile:\n got %+v\nwant %+v", after, before)
+	}
+
+	private := t.TempDir()
+	if err := os.Chmod(private, 0o700); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	if err := setXDGProfile(map[string]string{"XDG_RUNTIME_DIR": private}); err != nil {
+		t.Fatalf("set-xdg refused a private runtime base: %v", err)
+	}
+	recorded, err := service.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if recorded.XDG.RuntimeDir != private {
+		t.Errorf("XDG_RUNTIME_DIR = %q, want %q", recorded.XDG.RuntimeDir, private)
+	}
+	if got, want := paths.RuntimeDir(), service.DirUnder(private); got != want {
+		t.Errorf("RuntimeDir() = %q, want the adopted %q", got, want)
+	}
+}
+
+// F2: a daemon that is STARTING is not an absent daemon. The launcher records
+// what it is starting through the held authority fd, and `--attach-only` waits on
+// that record instead of failing at once — without taking the lock, which would
+// make every concurrent launcher wait out its whole deadline.
+func TestAttachOnly_WaitsWhileADaemonIsStarting(t *testing.T) {
+	withCanonicalService(t)
+	t.Setenv("PLUMB_DAEMON_START_TIMEOUT", "5s")
+
+	socket := shortSocketPath(t)
+	authority, err := authorityPath()
+	if err != nil {
+		t.Fatalf("authorityPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	f, err := os.OpenFile(authority, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("opening the authority lock: %v", err)
+	}
+	// The record a launcher publishes while its child is coming up: THIS live
+	// pid, and the socket the daemon will bind.
+	if err := publishAuthority(f, authorityMetadata{PID: os.Getpid(), Version: "test", Socket: socket}); err != nil {
+		t.Fatalf("publishAuthority: %v", err)
+	}
+	_ = f.Close()
+
+	// The socket appears only after the client has been waiting: exactly the
+	// window the metadata now covers.
+	ready := make(chan struct{})
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		ln, lerr := net.Listen("unix", socket)
+		if lerr == nil {
+			close(ready)
+			<-time.After(5 * time.Second)
+			_ = ln.Close()
+		}
+	}()
+
+	conn, err := attachOnly(context.Background(), socket)
+	if err != nil {
+		t.Fatalf("attachOnly gave up while a daemon was starting: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	select {
+	case <-ready:
+	default:
+		t.Fatal("attachOnly returned before the socket existed: it did not wait for the starting daemon")
+	}
+}
+
+// The other half of F2: a record that names a process which is NOT alive (a
+// daemon that exited) must not make --attach-only wait. Otherwise every scripted
+// client would hang for the whole budget after a clean stop.
+func TestAttachOnly_DoesNotWaitForADeadHoldersRecord(t *testing.T) {
+	withCanonicalService(t)
+	t.Setenv("PLUMB_DAEMON_START_TIMEOUT", "5s")
+
+	authority, err := authorityPath()
+	if err != nil {
+		t.Fatalf("authorityPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(authority), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	f, err := os.OpenFile(authority, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatalf("opening the authority lock: %v", err)
+	}
+	// A pid that cannot be alive: nothing is running under it on any supported OS.
+	if err := publishAuthority(f, authorityMetadata{PID: 1 << 30, Version: "test", Socket: filepath.Join(t.TempDir(), "plumb.sock")}); err != nil {
+		t.Fatalf("publishAuthority: %v", err)
+	}
+	_ = f.Close()
+
+	start := time.Now()
+	_, err = attachOnly(context.Background(), shortSocketPath(t))
+	if !errors.Is(err, errNoDaemonToAttach) {
+		t.Fatalf("err = %v, want errNoDaemonToAttach", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("attachOnly waited %s on a dead holder's record; it must fail at once", elapsed)
+	}
+}
+
+// F2, the writer's half: the launcher must actually publish the starting record,
+// or the reader above is testing a record nothing produces.
+func TestDaemonLauncher_PublishesAStartingRecord(t *testing.T) {
+	withCanonicalService(t)
+	auth := lockFile(t, "authority")
+	if err := syscall.Flock(int(auth.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatalf("taking the authority lock: %v", err)
+	}
+	lifetime := lockFile(t, "lifetime")
+	socket := shortSocketPath(t)
+	l := newDaemonLauncher(socket)
+	var seen authorityMetadata
+	l.start = func(launchLocks) error {
+		// Read the record from the lock file the launcher holds — the same bytes
+		// another process reads through the path — mid-launch, before any child
+		// exists: this is the state a starting daemon leaves behind.
+		m, ok := readAuthority(auth.Name())
+		if !ok {
+			t.Error("no authority record was published while the launch was in progress")
+			return errors.New("stop")
+		}
+		seen = m
+		return errors.New("stop") // never start a daemon from a test
+	}
+	var st launchState
+	if err := l.launch(context.Background(), launchLocks{Authority: auth, Lifetime: lifetime}, &st); err == nil {
+		t.Fatal("the fake start refused, so launch should have reported an error")
+	}
+	if seen.PID != os.Getpid() {
+		t.Errorf("the starting record names pid %d, want this live process (%d)", seen.PID, os.Getpid())
+	}
+	if seen.Socket != socket {
+		t.Errorf("the starting record names socket %q, want %q", seen.Socket, socket)
+	}
+	if n, ok := readAuthority(auth.Name()); ok {
+		t.Errorf("a failed launch left a record behind: %+v", n)
+	}
+}
+
+// F3: the over-long-socket hint must name a setting that can actually move the
+// runtime directory. In canonical mode no environment variable can — the profile
+// records it — so telling the user to point $HOME somewhere shorter is a remedy
+// that provably changes nothing.
+func TestSocketPathLengthHint_NamesTheLeverThatCanMoveTheSocket(t *testing.T) {
+	long := filepath.Join(t.TempDir(), strings.Repeat("d/", maxUnixSocketPath), "plumb.sock")
+
+	withTempRuntime(t)
+	t.Setenv("PLUMB_ACCOUNT_AUTHORITY", "")
+	legacy := socketPathLengthHint(long)
+	if !strings.Contains(legacy, socketPathShortenLever()) {
+		t.Errorf("legacy hint does not name the environment lever %q: %s", socketPathShortenLever(), legacy)
+	}
+
+	t.Setenv("PLUMB_ACCOUNT_AUTHORITY", "1")
+	canonical := socketPathLengthHint(long)
+	if !strings.Contains(canonical, "plumb service set-xdg --runtime-dir") {
+		t.Errorf("canonical hint does not name the profile remedy: %s", canonical)
+	}
+	if strings.Contains(canonical, "$HOME") || strings.Contains(canonical, socketPathShortenLever()) {
+		t.Errorf("canonical hint points at an environment variable that cannot move the socket: %s", canonical)
+	}
+	if strings.Contains(legacy, "plumb service set-xdg") {
+		t.Errorf("legacy hint offers a remedy from the other mode: %s", legacy)
+	}
+}
+
+// F5: the resilient proxy's redial closure is what makes `--attach-only` hold
+// after a reconnect. Driving the very deps the proxy is built with is the only
+// way to pin that wiring: a stub that reconnects must not start a daemon the
+// flag forbade.
+func TestServeProxyDeps_RedialNeverSpawnsUnderAttachOnly(t *testing.T) {
+	p := withCanonicalService(t)
+	marker := spawnMarker(t, p)
+	socket := filepath.Join(t.TempDir(), "plumb.sock")
+
+	deps := serveProxyDeps(socket, true, []string{"/tmp"}, "", nil)
+	if deps.dial == nil {
+		t.Fatal("the proxy has no redial closure")
+	}
+	conn, err := deps.dial(context.Background())
+	if conn != nil {
+		_ = conn.Close()
+		t.Fatal("the redial connected to a socket that does not exist")
+	}
+	if !errors.Is(err, errNoDaemonToAttach) {
+		t.Errorf("redial err = %v, want errNoDaemonToAttach: the closure must never spawn under --attach-only", err)
+	}
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the proxy's redial STARTED a daemon under --attach-only")
+	}
+	if deps.proxySessionID == "" || deps.heartbeatInterval <= 0 {
+		t.Error("the deps are not the complete set the proxy runs with")
+	}
+}
+
+// shortSocketPath returns a socket path short enough for sun_path. t.TempDir()
+// on darwin is far too long for one, and a test whose listener silently fails to
+// bind proves nothing about waiting.
+func shortSocketPath(t *testing.T) string {
+	t.Helper()
+	// /tmp directly, not t.TempDir(): on darwin t.TempDir() lives under
+	// /var/folders/… and a socket path there exceeds sun_path (103 bytes), so the
+	// listener silently fails to bind and the test proves nothing.
+	path := filepath.Join("/tmp", fmt.Sprintf("p528-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
+	t.Cleanup(func() { _ = os.Remove(path) })
+	if len(path) > maxUnixSocketPath {
+		t.Fatalf("the test's socket path is %d bytes, over sun_path's %d", len(path), maxUnixSocketPath)
+	}
+	return path
 }

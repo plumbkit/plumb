@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -130,6 +131,10 @@ type daemonLauncher struct {
 	// held, so a launcher that loses the race holds nothing at all.
 	acquire func() (launchLocks, error)
 	start   func(launchLocks) error
+	// socket is the MCP socket this launcher is starting a daemon for. It is
+	// recorded in the authority metadata for the length of the launch, so a
+	// reader that cannot see the child yet still learns a daemon is coming.
+	socket string
 	// dialHeld, when set, dials the MCP socket the current holder of the
 	// authority recorded in its metadata, and reports whether it connected.
 	// It is how a client whose environment resolved elsewhere reaches the one
@@ -147,6 +152,7 @@ type daemonLauncher struct {
 
 func newDaemonLauncher(socketPath string) daemonLauncher {
 	return daemonLauncher{
+		socket:   socketPath,
 		dial:     func() (net.Conn, error) { return net.DialTimeout("unix", socketPath, time.Second) },
 		acquire:  acquireLaunchLocks,
 		start:    startDaemonProcess,
@@ -295,7 +301,11 @@ func (l daemonLauncher) launch(ctx context.Context, locks launchLocks, st *launc
 		locks.closeAll()
 		return err
 	}
+	l.publishStarting(locks.Authority)
 	if err := l.start(locks); err != nil {
+		// The launch is over and there is no child: leave the record empty rather
+		// than naming a process that is still alive but about to stop waiting.
+		_ = locks.Authority.Truncate(0)
 		locks.closeAll()
 		return fmt.Errorf("starting daemon: %w", err)
 	}
@@ -303,6 +313,37 @@ func (l daemonLauncher) launch(ctx context.Context, locks launchLocks, st *launc
 	st.launched = true
 	l.decide(st)
 	return nil
+}
+
+// publishStarting records, through the held authority fd, that a launch is in
+// progress and which socket it is about to serve.
+//
+// The daemon publishes its own record once it LISTENS, and the gap in between —
+// child started, config loading, socket not bound — is exactly when a client
+// most needs to know a daemon is coming rather than absent. `plumb serve
+// --attach-only` reads this record to decide whether to wait or to fail at once,
+// and a launcher must not answer that question by taking the lock itself (a
+// momentary hold makes every concurrent launcher wait out its whole deadline).
+// The daemon overwrites the record with its own pid and version when it listens.
+//
+// A failure is a warning: the record is an optimisation for other clients, and
+// the launch it describes proceeds either way.
+func (l daemonLauncher) publishStarting(authority *os.File) {
+	if authority == nil || l.socket == "" {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		exe = "" // best effort: the record still names the pid and the socket
+	}
+	if err := publishAuthority(authority, authorityMetadata{
+		PID:        os.Getpid(),
+		Version:    Version,
+		Executable: exe,
+		Socket:     l.socket,
+	}); err != nil {
+		slog.Warn("launcher: could not record that a daemon is starting", "err", err)
+	}
 }
 
 func (l daemonLauncher) decide(st *launchState) {

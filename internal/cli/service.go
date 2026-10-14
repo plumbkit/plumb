@@ -266,6 +266,15 @@ func setXDGProfile(changed map[string]string) error {
 		}
 	}
 	return mutateProfile("xdg", func(p *service.Profile, u account.User) error {
+		// The runtime directory is held to the XDG spec's own checks here too, not
+		// only at install: the daemon binds plumb.sock and plumb.ctrl.sock there, so
+		// a base this uid does not privately own would expose them. Installing
+		// refuses such a base (adoptXDG); a set-* must not be the way around that.
+		if v := changed["XDG_RUNTIME_DIR"]; v != "" && !account.UsableRuntimeBase(v, u.UID) {
+			return fmt.Errorf("XDG_RUNTIME_DIR %q is not a usable runtime directory: it must already exist, "+
+				"be a directory, be owned by uid %d and be mode 0700 — the daemon's sockets are bound there, "+
+				"so a wider mode would expose them to every user on this machine", v, u.UID)
+		}
 		for name, v := range changed {
 			p.XDG = p.XDG.With(name, v)
 		}
