@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"os/exec"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -61,6 +62,20 @@ func TestStopByPID_LeavesAnotherDaemonsPIDFile(t *testing.T) {
 func TestOwnedRuntimeDirs_ClaimsEveryLegacyLocation(t *testing.T) {
 	withShortTempRuntime(t)
 	withAccountAuthority(t)
+	if runtime.GOOS == "linux" {
+		// A real $XDG_RUNTIME_DIR, so the environment-derived location differs
+		// from the cache one (on darwin the environment's runtime directory IS the
+		// cache directory, and the two are one location).
+		xdg, err := os.MkdirTemp("/tmp", "plumb-xdg-") //nolint:usetesting // a short path keeps sockets under sun_path
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(xdg) })
+		if err := os.Chmod(xdg, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("XDG_RUNTIME_DIR", xdg)
+	}
 	locs := legacyLocations()
 	if len(locs) == 0 {
 		t.Fatal("this isolated account names no legacy location: the test proves nothing")

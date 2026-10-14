@@ -261,13 +261,12 @@ func findAllDaemonByArgs() []int {
 // Every legacy location counts, not only the cache-directory one: in canonical
 // mode the environment-derived runtime directory ($XDG_RUNTIME_DIR/plumb) is a
 // legacy location too, and a daemon an older binary started there is ours to
-// stop (PLAN-552's note, carried to PLAN-551).
+// stop (PLAN-552's note, carried to PLAN-551). legacyLocations is the one list
+// of both — the same one restart and the launch fence use.
 func ownedRuntimeDirs() []string {
-	var legacy []string
-	if p := legacyDaemonSocketPath(); p != "" {
-		legacy = append(legacy, filepath.Dir(p))
-	}
-	for _, loc := range legacyLocations() {
+	locs := legacyLocations()
+	legacy := make([]string, 0, len(locs))
+	for _, loc := range locs {
 		legacy = append(legacy, loc.Dir)
 	}
 	return ownedDirsFrom(filepath.Dir(daemonSocketPath()), legacy...)
