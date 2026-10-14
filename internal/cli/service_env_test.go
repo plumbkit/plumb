@@ -473,3 +473,36 @@ func TestServiceInstall_SetupSaysWhatItCaptured(t *testing.T) {
 		t.Fatalf("the quiet install printed a captured value:\n%s", out)
 	}
 }
+
+// TestServiceInstall_SurvivesANonUTF8ShellVariable: install is the remedy every
+// launch error names, so a seeded variable that is not valid UTF-8 is skipped
+// (and said), never a failure.
+func TestServiceInstall_SurvivesANonUTF8ShellVariable(t *testing.T) {
+	serviceInstallEnv(t)
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/ssh-\xe9")
+	if err := installServiceProfile(false); err != nil {
+		t.Fatalf("install failed on a non-UTF-8 shell variable: %v", err)
+	}
+	if e, _ := loadTestProfile(t).Env.Lookup("SSH_AUTH_SOCK"); e.Captured {
+		t.Fatalf("a non-UTF-8 value was captured: %+v", e)
+	}
+}
+
+// TestServiceInstall_ReplacesAProfileItCannotRead: a profile install cannot even
+// read holds nothing to keep, and the remedy must still work.
+func TestServiceInstall_ReplacesAProfileItCannotRead(t *testing.T) {
+	path := installClean(t)
+	if err := os.WriteFile(path, []byte("not = [toml"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	if err := installServiceProfile(false); err != nil {
+		t.Fatalf("install refused to replace an unreadable profile: %v", err)
+	}
+	if _, err := service.LoadFile(path); err != nil {
+		t.Fatalf("install did not leave a usable profile: %v", err)
+	}
+}

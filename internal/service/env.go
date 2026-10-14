@@ -297,7 +297,14 @@ func tomlString(s string) (string, error) {
 // Capture returns the inherited-symbol entry for name, captured from lookup —
 // the configuring shell's environment. It is the ONE place a symbol's value is
 // read, and it runs at configuration time only.
+//
+// A value that is not valid UTF-8 is not captured: the profile is TOML, which
+// cannot record it faithfully, and refusing it here rather than at Write keeps
+// one odd variable in a shell from failing `plumb service install` outright.
 func Capture(name string, lookup func(string) (string, bool)) EnvEntry {
 	v, ok := lookup(name)
-	return EnvEntry{Name: name, Inherit: true, Value: v, Captured: ok && v != ""}
+	if !ok || v == "" || !utf8.ValidString(v) {
+		return EnvEntry{Name: name, Inherit: true}
+	}
+	return EnvEntry{Name: name, Inherit: true, Value: v, Captured: true}
 }

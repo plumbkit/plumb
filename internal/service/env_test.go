@@ -234,3 +234,28 @@ func TestWrite_RefusesInvalidUTF8(t *testing.T) {
 		t.Fatal("Write recorded a value that is not valid UTF-8: TOML would rewrite it silently")
 	}
 }
+
+// TestCapture_SkipsInvalidUTF8: one odd variable in the shell must not fail
+// `plumb service install`; it is recorded as uncaptured instead.
+func TestCapture_SkipsInvalidUTF8(t *testing.T) {
+	e := Capture("SSH_AUTH_SOCK", func(string) (string, bool) { return "/tmp/ssh-\xe9", true })
+	if e.Captured || e.Value != "" || !e.Inherit {
+		t.Fatalf("Capture recorded a value that is not valid UTF-8: %+v", e)
+	}
+}
+
+// TestWrite_MakesAnExistingProfilePrivate: the atomic write keeps an existing
+// file's mode, so Write sets 0600 itself — a profile can carry credentials.
+func TestWrite_MakesAnExistingProfilePrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "service.toml")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil { //nolint:gosec // G306: the loose mode IS the case under test
+		t.Fatal(err)
+	}
+	if err := envProfile().Write(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("profile mode after Write = %v (err %v), want 0600", info.Mode().Perm(), err)
+	}
+}

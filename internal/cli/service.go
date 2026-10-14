@@ -192,13 +192,16 @@ func installServiceProfile(verbose bool) error {
 		// [service.env] must not cost the user every recorded setting.
 		backup := path + ".bak"
 		if berr := copyProfileBackup(path, backup); berr != nil {
-			return fmt.Errorf("the profile at %s could not be read (%w), and keeping a copy before replacing it failed: %w", path, err, berr)
+			// A file that cannot even be read holds nothing install could keep;
+			// refusing here would leave the remedy itself broken.
+			fmt.Fprintf(os.Stderr, "plumb service: the profile at %s could not be read (%v) and could not be kept (%v); replacing it\n", path, err, berr)
+		} else {
+			fmt.Fprintf(os.Stderr, "plumb service: the profile at %s could not be read (%v); replacing it (the old file is kept at %s)\n", path, err, backup)
 		}
-		fmt.Fprintf(os.Stderr, "plumb service: the profile at %s could not be read (%v); replacing it (the old file is kept at %s)\n", path, err, backup)
 	}
 
 	p := freshProfile(u, exe)
-	p.Env = seedServiceEnv(p.Env, os.LookupEnv)
+	p.Env = seedServiceEnv(p.Env, shellLookup)
 	if err := p.Write(path); err != nil {
 		return err
 	}
@@ -222,7 +225,7 @@ func installServiceProfile(verbose bool) error {
 // time, repeatedly.
 func updateInstalledProfile(path string, existing service.Profile, exe string, verbose bool) error {
 	before := existing
-	existing.Env = seedServiceEnv(existing.Env, os.LookupEnv)
+	existing.Env = seedServiceEnv(existing.Env, shellLookup)
 	existing.Executable = exe
 	changes := describeChange(before, existing)
 	if changes == "" && before.Env.Seeded == existing.Env.Seeded {

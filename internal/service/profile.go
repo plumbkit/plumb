@@ -260,6 +260,13 @@ func (p Profile) Write(path string) error {
 	if err := fsync.AtomicWrite(path, data, fsync.Options{Mode: 0o600, Label: "service"}); err != nil {
 		return fmt.Errorf("writing the service profile %s: %w", path, err)
 	}
+	// AtomicWrite keeps an existing file's mode, and this file must be private
+	// whatever it was before: it can carry a proxy URL's credentials
+	// ([service.env]), and a profile left unreadable (0000) would brick every
+	// launch after the install meant to repair it.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("making the service profile %s private: %w", path, err)
+	}
 	return nil
 }
 

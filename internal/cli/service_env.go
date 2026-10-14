@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -63,7 +64,7 @@ var serviceEnvSetCmd = &cobra.Command{
 	Short: "Record a variable for the service (a literal, or captured from this shell)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
-		return setServiceEnv(args[0], os.LookupEnv)
+		return setServiceEnv(args[0], shellLookup)
 	},
 }
 
@@ -81,7 +82,7 @@ var serviceEnvRefreshCmd = &cobra.Command{
 	Short: "Re-capture every variable recorded from a shell",
 	Args:  cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		return refreshServiceEnv(os.LookupEnv)
+		return refreshServiceEnv(shellLookup)
 	},
 }
 
@@ -145,6 +146,16 @@ func seedServiceEnv(env service.Env, lookup func(string) (string, bool)) service
 	}
 	env.Seeded = true
 	return env
+}
+
+// shellLookup is os.LookupEnv for the capture paths, saying so when a value is
+// skipped because it is not valid UTF-8 (service.Capture does not record one).
+func shellLookup(name string) (string, bool) {
+	v, ok := os.LookupEnv(name)
+	if ok && !utf8.ValidString(v) {
+		fmt.Fprintf(os.Stderr, "plumb service: %s is not valid UTF-8 in this shell, so it was not captured\n", name)
+	}
+	return v, ok
 }
 
 func loadProfileForEnv() (service.Profile, error) {

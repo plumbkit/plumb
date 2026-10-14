@@ -34,7 +34,9 @@
   the locks or the service's directories. Values are never logged; the launcher
   logs the names it applied. `plumb setup` seeds the same way and prints what it
   captured, and an unreadable profile that `service install` replaces is kept as
-  `service.toml.bak` (PLAN-554).
+  `service.toml.bak`. A shell variable that is not valid UTF-8 is skipped (and
+  said) rather than failing the install, and the profile is made 0600 on every
+  write, whatever mode an older file had (PLAN-554).
 - **`plumb service install` records what the account's one daemon is.** A launch
   used to mean "whatever binary the client happened to be, with whatever
   environment it happened to have", so a branch build, a worktree checkout or a
