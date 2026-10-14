@@ -207,7 +207,7 @@ func TestCheckEnvName(t *testing.T) {
 			t.Errorf("CheckEnvName(%s) = %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "1X", "A-B", "A=B", "HOME", "PATH", "XDG_CACHE_HOME", "PLUMB_DEBUG", "LOGNAME", "USER", "TSM_ORIG_XDG_CONFIG_HOME"} {
+	for _, bad := range []string{"", "1X", "A-B", "A=B", "HOME", "PATH", "XDG_CACHE_HOME", "PLUMB_DEBUG", "LOGNAME", "USER", "TSM_ORIG_XDG_CONFIG_HOME", "TSM_ORIG_FOO"} {
 		if err := CheckEnvName(bad); err == nil {
 			t.Errorf("CheckEnvName(%q) accepted it", bad)
 		}
