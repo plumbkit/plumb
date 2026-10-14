@@ -77,7 +77,8 @@ func ShadowVar() int {
 func Assign() (int, error) {
 	var n int
 	var err error
-	n, err = seq, nil
+	defaultName, err = "y", nil
+	n = seq
 	return n, err
 }
 
@@ -189,7 +190,8 @@ func TestContextForTask_UsesSkipsANameTheBodyDeclaresItself(t *testing.T) {
 		t.Errorf("ShadowVar declares var seq, so it uses no package name, got:\n%s", got)
 	}
 	// := with more names declares seq wherever it stands; a plain assignment
-	// (n, err = seq, nil) declares nothing, so Assign uses the package's seq.
+	// (defaultName, err = …) declares nothing, so Assign uses the package's
+	// defaultName and seq.
 	mout, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#Multi", "store/store.go#Multi2", "store/store.go#Assign"}, "max_bytes": 12000})
 	if err != nil {
 		t.Fatal(err)
@@ -199,8 +201,8 @@ func TestContextForTask_UsesSkipsANameTheBodyDeclaresItself(t *testing.T) {
 			t.Errorf("%s declares seq with :=, so it uses no package name, got:\n%s", fn, got)
 		}
 	}
-	if !strings.Contains(usesBlock(t, mout, "Assign"), "seq (constant, line 20)") {
-		t.Errorf("Assign only assigns, so it uses the package's seq:\n%s", mout)
+	if got := usesBlock(t, mout, "Assign"); !strings.Contains(got, "defaultName (variable, line 13)") || !strings.Contains(got, "seq (constant, line 20)") {
+		t.Errorf("Assign only assigns, so it uses the package's defaultName and seq:\n%s", mout)
 	}
 	// Positive control: in the same pack, List's record is there.
 	if usesBlock(t, out, "List") == "" {
@@ -358,6 +360,9 @@ func TestContextForTask_UsesFollowsOnlyADeliveredBody(t *testing.T) {
 	if got := usesBlock(t, out, "List"); got != "" {
 		t.Errorf("a held body gets no uses record, got:\n%s", got)
 	}
+	if strings.Contains(out, " uses)") || strings.Contains(out, ", 1 uses") || strings.Contains(out, "(1 uses") {
+		t.Errorf("a held body's record is not made at all, so none is counted as omitted:\n%s", out)
+	}
 }
 
 // A record that does not fit is counted in the omission footer as "uses".
@@ -393,8 +398,16 @@ func TestPackLines_UsesDegradesAndNeedsItsWholeBody(t *testing.T) {
 		{base + 1 + 300, strings.Repeat("B", 200), strings.Repeat("U", 300), "everything fits"},
 		{footerCeiling() + base + 1 + len("uses-lean") + 5, strings.Repeat("B", 200), "uses-lean", "only the names-only line fits"},
 		{footerCeiling() + len("header") + 1 + 100, "body omitted", "", "the body is a status line: no record, though it would fit"},
+		{100000, "too big", "", "a body with no complete form, with room for everything"},
 	} {
-		out := packLines(lines, c.budget).Text
+		ls := lines
+		if c.wantBody == "too big" {
+			// A body larger than the budget has status lines only, even when the rest fits.
+			big := &bodyUnit{file: 0, lean: []string{"too big"}}
+			ls = []packLine{lines[0], {prio: prioBody, section: secSeeds, class: classBody, body: big}, lines[2]}
+			ls[2].needs = big
+		}
+		out := packLines(ls, c.budget).Text
 		if !strings.Contains(out, c.wantBody) {
 			t.Errorf("%s: want the body as %.12q, got %q", c.note, c.wantBody, out)
 		}
@@ -406,6 +419,26 @@ func TestPackLines_UsesDegradesAndNeedsItsWholeBody(t *testing.T) {
 		} else if !strings.Contains(out, c.wantUses) {
 			t.Errorf("%s: want the record as %.12q, got %q", c.note, c.wantUses, out)
 		}
+	}
+}
+
+// The record's names-only form is exactly its first line: names, kinds and lines.
+func TestUsesLine_TheNamesOnlyFormIsTheHead(t *testing.T) {
+	p := &contextPack{Files: []bodyFile{{Abs: "/w/x.go"}}}
+	b := contextBody{State: bodyReady, File: 0, Uses: []usedDecl{
+		{Name: "a", Kind: topology.KindConstant, Start: 3, End: 3, Text: "const a = 1\n"},
+		{Name: "q", Kind: topology.KindConstant, Start: 5, End: 6, Text: "const q = \"x\" +\n\t\"y\"\n"},
+	}, UsesMore: 1}
+	l, ok := p.usesLine(b, &bodyUnit{}, secSeeds)
+	head := "    uses, declared in this file: a (constant, line 3), q (constant, lines 5–6), and 1 more not listed"
+	if !ok || len(l.alts) != 1 || l.alts[0] != head {
+		t.Fatalf("names-only form: %q, want %q", l.alts, head)
+	}
+	if l.text != head+"\n3\tconst a = 1\n5\tconst q = \"x\" +\n6\t\t\"y\"" {
+		t.Errorf("full form:\n%s", l.text)
+	}
+	if _, ok := p.usesLine(b, nil, secSeeds); ok {
+		t.Error("a record with no body to follow is not made")
 	}
 }
 
@@ -442,6 +475,7 @@ func TestDeclEnd(t *testing.T) {
 		{"var c = 1 /* ( */\nvar d = 2", 1, "a block comment's bracket is not one"},
 		{"var r = '`'\nvar d = 2", 1, "a rune holding a backtick"},
 		{"var x = \"({[\" // (\nvar d = 2", 1, "a string's and a comment's brackets"},
+		{"var f = func() {\n\tx := 1\n\t_ = x\n}\nvar d = 2", 4, "statements inside a function literal do not end the spec"},
 		{"\tm10 = 10)", 1, "the enclosing block closes on the spec's own line"},
 		{"const s = `never\nclosed", 0, "a raw string that does not end in the window"},
 	} {

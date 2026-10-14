@@ -180,11 +180,12 @@ func fitEverything(lines []packLine, budget int) (chosen []string, delivered []i
 	chosen = make([]string, len(lines))
 	guardDone := map[int]bool{}
 	whole := map[*bodyUnit]bool{}
-	total, dropped := 0, false
+	total := 0
 	for i, l := range lines {
 		if l.needs != nil && !whole[l.needs] {
-			dropped = true // its body is a status line, not the body: dropped and counted
-			continue
+			// Its body is a status line, not the body, so not everything is shown:
+			// the priority path drops it, counts it and reserves the footer.
+			return nil, nil
 		}
 		texts, complete := l.tiers(guardDone)
 		chosen[i] = texts[0]
@@ -196,9 +197,6 @@ func fitEverything(lines []packLine, budget int) (chosen []string, delivered []i
 		if i > 0 {
 			total++ // the newline before it
 		}
-	}
-	if dropped {
-		total += footerCeiling() // the footer that counts what was dropped
 	}
 	if total > budget {
 		return nil, nil
