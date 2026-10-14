@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -216,16 +215,17 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Acquire both launch locks before doing anything else — the account
-	// authority first, then the runtime lifetime lock (lock.go). If another
-	// daemon already holds either, exit immediately rather than stealing the
-	// socket path from it (which is what `os.Remove(socketPath);
+	// Acquire every launch lock before doing anything else — the account
+	// authority, the runtime lifetime lock, then every legacy lifetime lock
+	// (lock.go) — and refuse to serve beside a daemon an older binary left
+	// running. If another daemon already holds one, exit immediately rather than
+	// stealing the socket path from it (which is what `os.Remove(socketPath);
 	// net.Listen(...)` below would otherwise do, leaving two daemons running on
 	// the same path).
-	locks, err := daemonLaunchLocks()
+	locks, err := daemonStartLocks()
 	if err != nil {
-		if errors.Is(err, errDaemonAlreadyRunning) {
-			slog.Info("daemon: another plumb daemon is already running — exiting")
+		if isAlreadyRunning(err) {
+			slog.Info("daemon: another plumb daemon is already running — exiting", "err", err)
 			return nil
 		}
 		return err

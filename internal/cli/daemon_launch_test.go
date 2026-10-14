@@ -46,9 +46,11 @@ func testLauncher(t *testing.T, ready *atomic.Bool, starts *atomic.Int32, wait t
 	}
 }
 
-// freeLaunchLocks asserts that neither launch lock is held any more, naming the
-// one that is: a launcher that returns must not sit on a lock it did not hand
-// over.
+// freeLaunchLocks asserts that no launch lock is held any more, naming the one
+// that is: a launcher that returns must not sit on a lock it did not hand over.
+// The legacy lifetime locks are part of that set (PLAN-530): they are taken
+// before a launch and must be released with everything else when it does not
+// happen.
 func freeLaunchLocks(t *testing.T) {
 	t.Helper()
 	for name, acquire := range map[string]func() (*os.File, error){
@@ -60,6 +62,13 @@ func freeLaunchLocks(t *testing.T) {
 			t.Fatalf("the %s lock is still held: %v", name, err)
 		}
 		_ = f.Close()
+	}
+	for _, loc := range legacyLocations() {
+		held, err := acquireLegacyLock(loc.Lock)
+		if err != nil {
+			t.Fatalf("the legacy lifetime lock %s is still held: %v", loc.Lock, err)
+		}
+		_ = held.File.Close()
 	}
 }
 

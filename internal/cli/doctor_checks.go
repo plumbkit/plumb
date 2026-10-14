@@ -22,8 +22,14 @@ import (
 )
 
 // checkDaemon verifies the daemon is reachable and its version matches.
+//
+// It resolves the runtime paths READ-ONLY: doctor is a diagnosis, and a diagnosis
+// that creates the directory it is reporting on — daemonSocketPath goes through
+// plumbRuntimeDir, whose job is MkdirAll — answers "there is one" with the one it
+// just made. It is the same defect the census had, one command over.
 func checkDaemon() []checkResult {
-	socketPath := daemonSocketPath()
+	loc := currentLocationReadOnly()
+	socketPath := loc.Socket
 	conn, err := net.DialTimeout("unix", socketPath, time.Second)
 	if err != nil {
 		result := checkResult{
@@ -53,7 +59,7 @@ func checkDaemon() []checkResult {
 		detail: render.ContractPath(socketPath),
 	}}
 
-	data, err := os.ReadFile(daemonVersionPath())
+	data, err := os.ReadFile(loc.Version)
 	if err != nil {
 		results = append(results, checkResult{
 			name:   "version",

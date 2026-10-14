@@ -132,7 +132,7 @@ func TestRespawnDaemon_AnnouncesStartingWhenAnotherProcessWonTheRace(t *testing.
 	writeDaemonPIDFile(t, os.Getpid())
 
 	out := captureStdout(t, func() {
-		if err := respawnDaemon([]int{os.Getpid() + 1}); err != nil {
+		if err := respawnDaemon([]int{os.Getpid() + 1}, time.Now().Add(daemonStartWait())); err != nil {
 			t.Fatalf("respawnDaemon: %v", err)
 		}
 	})

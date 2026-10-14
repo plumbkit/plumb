@@ -286,6 +286,46 @@
 
 ### Changed
 
+- **A daemon left running by an older binary is reused when it is the same
+  build, and refused with an instruction when it is not — never migrated behind
+  your back, and never spawned beside.** An upgrade moves where the daemon lives
+  (the account authority and the canonical runtime directory, then the service
+  profile), but nothing moves the daemon an older binary already started: it is
+  still serving at the runtime directory *its* environment resolved. `plumb
+  serve`, `plumb serve --attach-only` and `plumb daemon` now ask that question
+  before anything else, resolving the socket, control socket, pid file and
+  version file of each legacy location **as a set** — a migration that redirects
+  only the socket is half-migrated, which the version file beside it then gets
+  wrong. A daemon that published this binary's build version is **reused**, and
+  the log says `migration pending; run plumb restart`; one from a different build
+  (or one that published no version at all, which cannot be confirmed) makes
+  serve **fail** naming `plumb restart` and `plumb service install`. Nothing is
+  started beside it, and nothing about it is silently migrated. The window a
+  restart or a crash opens — every lock released the instant the old daemon
+  exits, an old proxy's reconnect free to win a legacy lifetime lock and start a
+  legacy successor — is closed by the launcher taking the account authority, the
+  runtime lifetime lock **and every known legacy lifetime lock** before the
+  successor exists, and handing all of them to it over `ExtraFiles`; closing the
+  launcher's own copies releases nothing, because a `flock` belongs to the open
+  file description the two now share. A launcher that finds a legacy lifetime
+  lock already held has lost that race: it starts nothing and says so.
+  `plumb restart` stops by **authority or pid identity — never a process scan** —
+  and starts the successor only after the old daemon's exit *and* the release of
+  every lock are both confirmed, within the 30 s launcher deadline; if either
+  cannot be confirmed it fails closed and starts nothing, so there is no
+  two-daemon window, `plumb restart` included. `plumb debug daemons` and `plumb
+  doctor` name both locks correctly: the **account authority** decides "holds the
+  launch authority", a **legacy lifetime lock is evidence** that a survivor is a
+  daemon of an older binary's runtime directory, and the census no longer reports
+  a healthy daemon as a violation after its runtime directory — and with it the
+  lifetime lock's *file*, though not the flock on the unlinked inode — has been
+  removed. Every pid `plumb restart` reads from a **file** is verified before it is
+  signalled: a record whose lock is free belongs to a daemon that is gone, and one
+  that names a process which is not a `plumb daemon` is a reused pid, so neither is
+  stopped. All of it is inert until the account-authority mode becomes the
+  default: with it off, the environment's runtime directory *is* the one in use,
+  so there is no legacy location to probe and the behaviour is exactly as before.
+
 - **Mail between worktrees and submodules of one repository no longer needs
   `cross_project` (#635).** A session pinned to a nested worktree could not
   `leave_note` a peer pinned to the enclosing checkout: any two workspace roots

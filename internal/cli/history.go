@@ -38,8 +38,11 @@ var (
 )
 
 // daemonAlive reports whether the plumb daemon is running. Package-level var as a test seam.
+//
+// It resolves the socket path READ-ONLY: asking whether a daemon is up must not create
+// the runtime directory the answer is about (see currentLocationReadOnly).
 var daemonAlive = func() bool {
-	return socketAlive(daemonSocketPath())
+	return socketAlive(currentLocationReadOnly().Socket)
 }
 
 var historyCmd = &cobra.Command{

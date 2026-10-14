@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -136,5 +137,34 @@ func TestLegacyRuntimeDir(t *testing.T) {
 	}
 	if got, want := LegacyRuntimeDir(), filepath.Join(cache, appDir); got != want {
 		t.Fatalf("LegacyRuntimeDir() = %q, want %q", got, want)
+	}
+}
+
+// EnvRuntimeDir is RuntimeDir's LEGACY counterpart: the directory the
+// ENVIRONMENT resolves, which is where a daemon started by an older binary is.
+// With the account authority off the two are the same directory — the
+// environment IS the answer — which is why an upgraded client has a legacy
+// daemon to migrate from at all.
+func TestEnvRuntimeDir_IsTheEnvironmentsAnswer(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := EnvRuntimeDir(), filepath.Join(cache, appDir); got != want {
+		t.Fatalf("EnvRuntimeDir() = %q, want %q", got, want)
+	}
+	if got, want := EnvRuntimeDir(), RuntimeDir(); got != want {
+		t.Fatalf("with the authority off the environment IS where plumb serves: %q vs %q", got, want)
+	}
+	// It resolves only. A caller asking where a legacy daemon might be must not
+	// bring the place into existence — a probe that created it would be the
+	// side effect PLAN-530's probes are forbidden.
+	if _, err := os.Stat(EnvRuntimeDir()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("EnvRuntimeDir() created %s (stat err = %v)", EnvRuntimeDir(), err)
 	}
 }

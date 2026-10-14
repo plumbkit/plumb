@@ -110,8 +110,8 @@ func checkLaunchExecutable(path string) error {
 // anything.
 func daemonCommand(spec daemonLaunchSpec, locks launchLocks) (*exec.Cmd, *os.File, error) {
 	files := locks.files()
-	if len(files) != 2 {
-		// Unreachable through acquireLaunchLocks, which returns both locks or
+	if locks.Authority == nil || locks.Lifetime == nil {
+		// Unreachable through acquireLaunchLocks, which returns all of them or
 		// none. Guarded because a nil *os.File in ExtraFiles panics os/exec, and
 		// because a daemon handed half the pair would be a second authority in
 		// waiting.
@@ -131,12 +131,22 @@ func daemonCommand(spec daemonLaunchSpec, locks launchLocks) (*exec.Cmd, *os.Fil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	// fd 3 in the child is the authority and fd 4 the lifetime lock: the order
-	// the daemon adopts them in, and the order it holds them in.
+	// the daemon adopts them in, and the order it holds them in. The legacy
+	// lifetime locks follow on fd 5 onwards (PLAN-530).
 	cmd.ExtraFiles = files
-	cmd.Env = append(append([]string{}, spec.Env...),
+	env := append(append([]string{}, spec.Env...),
 		fmt.Sprintf("%s=%d", authorityLockFDEnv, inheritedAuthorityLockFD),
 		fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD),
 	)
+	if len(locks.Legacy) > 0 {
+		handover, err := encodeLegacyHandover(locks.Legacy)
+		if err != nil {
+			_ = logFile.Close()
+			return nil, nil, err
+		}
+		env = append(env, legacyLocksEnv+"="+handover)
+	}
+	cmd.Env = env
 	// Never let the daemon inherit this serve proxy's working directory. The daemon
 	// is a singleton shared across every connection, so an inherited cwd belongs to
 	// one arbitrary client's project — and any stray relative path would resolve
@@ -170,6 +180,14 @@ func attachOnly(ctx context.Context, socketPath string) (net.Conn, error) {
 		}
 		if conn := l.attachToHolder(); conn != nil {
 			return conn, nil
+		}
+		// An older binary's daemon is a running daemon too, and the flag forbids
+		// STARTING one rather than using one: --attach-only must not fail with "no
+		// plumb daemon is running" while one is demonstrably serving a directory
+		// over (PLAN-530). An incompatible one is refused exactly as it is
+		// elsewhere.
+		if conn, err := attachLegacyDaemon(); conn != nil || err != nil {
+			return conn, err
 		}
 		if !authorityRecorded() {
 			return nil, fmt.Errorf("%w (socket: %s); start one with `plumb serve` (without --attach-only) or `plumb restart`%s",

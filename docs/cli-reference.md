@@ -86,6 +86,31 @@ registers no tools and owns no language-server processes itself.
 If the running daemon's build version differs from this binary's, `serve`
 prints a warning to stderr suggesting `plumb restart` to refresh.
 
+**A daemon an older binary left running is found first.** An upgrade moves where
+the daemon lives, but not the daemon already started: it is still serving at the
+runtime directory *its* environment resolved. Before deciding to start anything,
+`serve` probes each of those legacy locations by dialling its MCP socket, and
+resolves the socket, control socket, pid file and version file of that location
+**as a set** — reading the version from one directory and dialling another is
+what makes a half-migrated process. A daemon that published *this* binary's build
+version is **reused**, and the log says `migration pending; run plumb restart`.
+One from a different build, or one that published no version at all (which cannot
+be confirmed compatible), makes `serve` **fail** and say what to do:
+
+```
+plumb: a plumb daemon from a different build is already running at <socket>
+(its version: <its build>; this binary is <yours>): this plumb will not start a
+second daemon beside it, and it is not migrated on its own — run `plumb restart`
+to replace it with this build, or `plumb service install` to record which binary
+the account service runs
+```
+
+Nothing is started beside it and nothing about it is migrated silently. A socket
+*file* nobody accepts on is not a daemon — that is what a crashed daemon leaves
+behind, and it does not block a launch. The probe takes no lock and creates no
+file: a probe that held the lifetime lock, even for an instant, would make a
+concurrent `serve` wait out its whole start deadline and fail.
+
 | Flag | Default | Effect |
 |---|---|---|
 | `--no-reconnect` | `false` | Disable the reconnecting proxy; fall back to a plain byte copy (legacy behaviour). |
@@ -173,7 +198,25 @@ plumb restart [--force]
 
 Stop the running daemon and bring a fresh one straight back up — the resilient
 proxy reconnects active clients. Use it after rebuilding so new code activates
-without manually stopping and waiting for the next `serve`.
+without manually stopping and waiting for the next `serve`. It is also how a
+daemon left behind by an older binary is **migrated**: `serve` reuses a
+compatible one and refuses an incompatible one, and `restart` is the command that
+replaces either with this build.
+
+It stops by **authority or pid identity, never by a process scan**: the pid the
+holder of the account authority published, the pid file of the runtime directory
+in use and of every legacy one, and the process owning any of their sockets. A
+process that merely *looks* like a plumb daemon is left alone — a stray daemon
+surviving a restart is visible and recoverable, and killing somebody else's is
+neither.
+
+The successor starts only after the old daemon's **exit** and the **release of
+every lock** are both confirmed, within the 30 s launcher deadline; if either
+cannot be confirmed, `restart` fails closed and starts nothing. There is no
+two-daemon window, `restart` included. The new daemon inherits the account
+authority, the runtime lifetime lock and the lifetime lock of every known legacy
+runtime location, so an old client's reconnect cannot win one and start a legacy
+successor in the gap.
 
 | Flag | Default | Effect |
 |---|---|---|

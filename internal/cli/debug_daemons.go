@@ -50,24 +50,33 @@ read the process table exits non-zero too, because "cannot tell" is not "fine".`
 // so the CLI, doctor and the daemon_info tool cannot drift apart about which
 // lock is the authority or which sockets belong to plumb.
 //
-// The VERDICT still asks about the RUNTIME LIFETIME lock: that is the file an
-// older binary's launcher contends for, which is what this census was written
-// against. PLAN-527 then made the ACCOUNT authority the launch authority, and a
-// daemon of this build holds both, so for any daemon this binary started the two
-// answers agree. They part company in exactly two places, both known and both
-// somebody else's work: a pre-527 daemon holds the lifetime lock alone (and would
-// read as the authority holder here), and after a runtime directory is deleted
-// the lifetime lock's FILE goes with it while the flock lives on the unlinked
-// inode — this census can then attribute the authority to nobody and reports a
-// violation for a daemon that does hold the account authority. Naming the account
-// authority, with a legacy lifetime lock as evidence rather than a verdict, is
-// PLAN-530's and the default flip's job. The socket state added by PLAN-529 is
-// already checked against the account authority's record, not this lock.
+// The AUTHORITY is the ACCOUNT lock, never the runtime lifetime lock it used to
+// name. PLAN-527 made the account authority the thing every launcher takes and
+// every daemon holds, so it is what "holds the launch authority" means; the
+// lifetime lock is a runtime file that can be deleted with its directory while
+// the flock lives on the unlinked inode (PLAN-529's self-heal does exactly that),
+// and reading it as the authority made a healthy daemon report as a violation.
+// The lifetime locks are still named — as LegacyLocks, where holding one is
+// evidence of a daemon of an older runtime directory — and the sockets of those
+// directories are named with them, so a survivor is found however it presents
+// itself.
+// PLAN-529's socket state is checked against the account authority's
+// record, not this lock.
+//
+// Every path here is resolved READ-ONLY (currentLocationReadOnly). The runtime
+// directory is one of the things this census reports on, and a census that created
+// it — daemonSocketPath goes through plumbRuntimeDir, whose job is MkdirAll — would
+// answer "there is a runtime directory" with the one it had just made, which is
+// exactly the state the plan forbids a probe from producing.
 func daemonCensusOptions() daemons.Options {
-	opts := daemons.Options{Authority: daemonLockPath()}
-	opts.Sockets = append(opts.Sockets, daemonSocketPath())
-	if legacy := legacyDaemonSocketPath(); legacy != "" {
-		opts.Sockets = append(opts.Sockets, legacy)
+	opts := daemons.Options{}
+	if path, err := authorityPath(); err == nil {
+		opts.Authority = path
+	}
+	opts.Sockets = append(opts.Sockets, currentLocationReadOnly().Socket)
+	for _, loc := range legacyLocations() {
+		opts.Sockets = append(opts.Sockets, loc.Socket)
+		opts.LegacyLocks = append(opts.LegacyLocks, loc.Lock)
 	}
 	return opts
 }

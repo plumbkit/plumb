@@ -57,7 +57,7 @@ func platformProbe(opts Options) probe {
 		// missing answers as unknown rather than as nobody.
 		return probe{processes: osProcesses}
 	}
-	listing := newLsofListing(append([]string{opts.Authority}, opts.Sockets...))
+	listing := newLsofListing(append(append([]string{opts.Authority}, opts.Sockets...), opts.LegacyLocks...))
 	return probe{
 		processes: osProcesses,
 		owners: func(path string, candidates []int) ([]int, error) {

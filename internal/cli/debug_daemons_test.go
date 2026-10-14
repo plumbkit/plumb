@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -192,12 +193,38 @@ func TestDebugDaemonsExit(t *testing.T) {
 func TestDaemonCensusOptions_NamesTheLockAndBothSockets(t *testing.T) {
 	// The options are one function so the CLI, doctor and daemon_info cannot
 	// disagree about which lock is the authority or which sockets are plumb's.
+	//
+	// The AUTHORITY is the ACCOUNT lock (PLAN-527). This test used to require the
+	// runtime lifetime lock, which was true before 527 and is exactly the defect
+	// PLAN-530's card records: the lifetime lock's FILE is deleted with its runtime
+	// directory while the flock lives on the unlinked inode (PLAN-529's self-heal),
+	// so a census reading it as the authority accused a healthy daemon of holding
+	// nothing. The lifetime locks are named separately now, as legacy evidence.
 	withTempRuntime(t)
+	withAccountAuthority(t)
 	opts := daemonCensusOptions()
-	if opts.Authority != daemonLockPath() {
-		t.Errorf("authority = %q, want the lifetime lock %q", opts.Authority, daemonLockPath())
+
+	wantAuthority, err := authorityPath()
+	if err != nil {
+		t.Fatalf("authorityPath: %v", err)
+	}
+	if opts.Authority != wantAuthority {
+		t.Errorf("authority = %q, want the account authority %q", opts.Authority, wantAuthority)
+	}
+	if opts.Authority == daemonLockPath() {
+		t.Errorf("the census names the runtime lifetime lock %q as the launch authority", daemonLockPath())
 	}
 	if len(opts.Sockets) == 0 || opts.Sockets[0] != daemonSocketPath() {
 		t.Errorf("sockets = %v, want the current socket first", opts.Sockets)
+	}
+
+	// The legacy runtime locations are named with their lifetime locks, so a
+	// survivor of an older binary's runtime directory is found and named as one.
+	loc := legacyLocationForTest(t)
+	if !slices.Contains(opts.Sockets, loc.Socket) {
+		t.Errorf("sockets = %v, want the legacy location's socket %s", opts.Sockets, loc.Socket)
+	}
+	if !slices.Contains(opts.LegacyLocks, loc.Lock) {
+		t.Errorf("legacy locks = %v, want %s", opts.LegacyLocks, loc.Lock)
 	}
 }

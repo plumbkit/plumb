@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/plumbkit/plumb/internal/paths"
 )
 
 var (
@@ -229,17 +227,32 @@ func dialOrAttach(ctx context.Context, socketPath string, attachOnlyOnly bool) (
 }
 
 // connectOrStartDaemon dials the daemon socket. If no daemon accepts, it starts
-// one, but only while holding the launch authority (daemon_launch.go): while
-// another daemon holds it, running or still starting, it only keeps dialling.
-// It waits up to daemonStartWait (30 s by default) in all.
+// one, but only while holding the launch locks (daemon_launch.go): while another
+// daemon holds one, running or still starting, it only keeps dialling. It waits
+// up to daemonStartWait (30 s by default) in all.
+//
+// A daemon an OLDER binary left running at a legacy runtime location is answered
+// FIRST, before any launch is considered (PLAN-530): one of the same build is
+// reused, and one of a different build refuses the launch with an instruction
+// rather than being migrated silently or spawned beside. Only when there is no
+// legacy daemon does this start one — and then under a fence, so an old launcher
+// cannot start a successor in the meantime.
 //
 // Concurrent serves are also serialised through plumb.spawn.lock, so only one
 // of them at a time makes the dial-or-launch decision.
 func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, error) {
 	if conn, err := net.DialTimeout("unix", socketPath, time.Second); err == nil {
 		slog.Info("serve: connected to existing daemon")
-		warnIfDaemonStale()
+		warnIfDaemonStale(daemonVersionPath())
 		return conn, nil
+	}
+
+	// No daemon of this process's own runtime directory. An older binary's may
+	// still be serving somewhere else, so ask before deciding to launch: one that
+	// cannot be reached is invisible to the dial above, and starting a second one
+	// beside it is the defect this whole plan exists to remove.
+	if conn, err := attachLegacyDaemon(); conn != nil || err != nil {
+		return conn, err
 	}
 
 	spawn, err := acquireSpawnLock(ctx)
@@ -255,7 +268,6 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 	l := newDaemonLauncher(socketPath)
 	start := l.start
 	l.start = func(locks launchLocks) error {
-		warnIfDaemonAtLegacyPath()
 		slog.Info("serve: daemon not running — starting", "socket", socketPath)
 		return start(locks)
 	}
@@ -271,17 +283,23 @@ func connectOrStartDaemon(ctx context.Context, socketPath string) (net.Conn, err
 		slog.Info("serve: connected to daemon")
 	} else {
 		slog.Info("serve: connected to a daemon another process started")
-		warnIfDaemonStale()
+		warnIfDaemonStale(daemonVersionPath())
 	}
 	return conn, nil
 }
 
-// warnIfDaemonStale compares the running daemon's published version against
-// our binary's build version. Mismatch usually means the user rebuilt without
-// restarting the daemon, so new tools/features won't be visible. We warn
-// rather than fail — the old daemon is still functional for the tools it has.
-func warnIfDaemonStale() {
-	data, err := os.ReadFile(daemonVersionPath())
+// warnIfDaemonStale compares a running daemon's published version against our
+// binary's build version. Mismatch usually means the user rebuilt without
+// restarting the daemon, so new tools/features won't be visible. We warn rather
+// than fail — the old daemon is still functional for the tools it has.
+//
+// versionPath is the daemon's OWN version file, resolved from the runtime
+// location the connection was made to — never this process's. Reading the
+// version file of a directory one over is exactly the half-migration this and
+// legacy.go exist to prevent: it reports a mismatch that is not there, or misses
+// one that is.
+func warnIfDaemonStale(versionPath string) {
+	data, err := os.ReadFile(versionPath) //nolint:gosec // G304: a runtime directory plumb resolved, or the one a legacy daemon published in
 	if err != nil {
 		return // older daemon predates the version file; can't tell.
 	}
@@ -292,44 +310,6 @@ func warnIfDaemonStale() {
 	fmt.Fprintf(os.Stderr,
 		"plumb: warning: connected daemon is %s but this binary is %s — run `plumb stop` to refresh.\n",
 		running, Version)
-}
-
-// warnIfDaemonAtLegacyPath reports a daemon listening at the cache-dir runtime
-// location when this process resolves $XDG_RUNTIME_DIR, right before we start a
-// second one beside it.
-//
-// It states the fact and stops there. An earlier version called it "a daemon
-// from an older version", which it cannot know — it never reads the version
-// file, and a CURRENT build lands at the cache path whenever $XDG_RUNTIME_DIR
-// is absent from the launching environment (cron, a systemd system unit,
-// docker exec, ssh without pam_systemd). Version skew is warnIfDaemonStale's
-// job, which reads the version file to decide.
-//
-// The warning is the whole remedy on purpose. Attaching to that daemon instead
-// was tried and reverted: the runtime directory determines the socket, the
-// control socket, the pid and the version file together, so a process that
-// connected to one directory's socket while resolving every other path in the
-// other got a half-migrated state — `plumb web` and `plumb log-level` dialling
-// a control socket that was not there, doctor reporting a version file as
-// missing when it existed one directory over, and `plumb restart` spawning the
-// duplicate this was supposed to prevent. One directory per process, and a
-// warning when the user has two.
-func warnIfDaemonAtLegacyPath() {
-	legacy := legacyDaemonSocketPath()
-	if legacy == "" {
-		return // the runtime dir does not move on this platform
-	}
-	conn, err := net.DialTimeout("unix", legacy, time.Second)
-	if err != nil {
-		return
-	}
-	_ = conn.Close()
-	fmt.Fprintf(os.Stderr,
-		"plumb: warning: a daemon is already running at %s, but this plumb uses %s.\n"+
-			"plumb: that happens after an upgrade, or when plumb is launched somewhere\n"+
-			"plumb: $XDG_RUNTIME_DIR is not set (cron, a systemd unit, docker exec, ssh).\n"+
-			"plumb: starting a second daemon; run `plumb stop` to consolidate on one.\n",
-		legacy, paths.RuntimeDir())
 }
 
 // proxyStdio copies stdin → conn and conn → stdout until ctx is cancelled or
