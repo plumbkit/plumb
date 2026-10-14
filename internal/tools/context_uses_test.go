@@ -422,6 +422,33 @@ func TestPackLines_UsesDegradesAndNeedsItsWholeBody(t *testing.T) {
 	}
 }
 
+// A uses record is an annotation: when it is dropped, whether it does not fit or
+// its body was cut, what ranks below it (the affected tests) is still offered.
+func TestPackLines_ADroppedUsesRecordDoesNotEndThePack(t *testing.T) {
+	affected := packLine{text: "affected-line", prio: prioAffected, section: secAffected, class: classAffected}
+	for _, c := range []struct {
+		body *bodyUnit
+		note string
+	}{
+		{&bodyUnit{full: strings.Repeat("B", 200), noGuard: strings.Repeat("B", 200), lean: []string{"body omitted"}}, "the record fits no tier"},
+		{&bodyUnit{lean: []string{"too big"}}, "the record's body is a status line"},
+	} {
+		lines := []packLine{
+			{text: "header", prio: prioHeader, section: secHeader},
+			{prio: prioBody, section: secSeeds, class: classBody, body: c.body},
+			{text: strings.Repeat("U", 300), alts: []string{strings.Repeat("u", 290)}, prio: prioUses, section: secSeeds, class: classUses, needs: c.body},
+			affected,
+		}
+		// Room for the header, the body (whole when it has a whole form), the affected
+		// line and the footer, but not for either form of the record.
+		budget := footerCeiling() + len("header") + 1 + 200 + 1 + len("affected-line") + 1 + 50
+		out := packLines(lines, budget).Text
+		if !strings.Contains(out, "affected-line") || strings.Contains(out, "uuu") || !strings.Contains(out, "1 uses") {
+			t.Errorf("%s: want the affected line kept and the record counted as omitted, got %q", c.note, out)
+		}
+	}
+}
+
 // The record's names-only form is exactly its first line: names, kinds and lines.
 func TestUsesLine_TheNamesOnlyFormIsTheHead(t *testing.T) {
 	p := &contextPack{Files: []bodyFile{{Abs: "/w/x.go"}}}

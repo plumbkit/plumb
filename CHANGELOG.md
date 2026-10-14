@@ -94,8 +94,9 @@
   counted. The record ranks below every seed body and best-ranked related
   declaration, shrinks to names and line numbers under a tight budget, is never
   shown when its body is cut to a status line, and a dropped one is counted as
-  `uses` in the omission footer. A body the caller already holds (`have`) gets
-  no record, and a declaration that is not valid UTF-8 is not offered.
+  `uses` in the omission footer without cutting off what ranks below it. A
+  body the caller already holds (`have`) gets no record, and a declaration that
+  is not valid UTF-8 is not offered.
 - **The Go call graph resolves method calls on local variables of evident type.**
   `x.M()` now links to the method of `x`'s type when the enclosing function
   declares `x` once as `x := T{}`, `&T{}`, `new(T)`, `var x T`, `x := y.(T)`, or

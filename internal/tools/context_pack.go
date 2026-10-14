@@ -228,6 +228,9 @@ func fitByPriority(lines []packLine, budget int) (chosen []string, delivered []i
 		texts, complete := lines[i].tiers(guardDone)
 		tier := firstThatFits(texts, avail-used)
 		if tier < 0 {
+			if lines[i].needs != nil {
+				continue // an annotation of a body: dropped and counted, never the cut-off for what ranks below it
+			}
 			break // strict priority: nothing below a record that did not fit is shown
 		}
 		chosen[i] = texts[tier]
