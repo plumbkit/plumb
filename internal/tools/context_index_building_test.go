@@ -16,16 +16,20 @@ import (
 // pass says so (PLAN-547), and one read from a complete index the daemon has just
 // reopened does not.
 
-// pausedConfig paces the first pass to one file and then a pause far longer than
-// any test, so a store opened with it stays on that pass, deterministically, until
-// it is closed (the pause gives way to Stop).
-var pausedConfig = config.TopologyConfig{MaxFileSizeBytes: 512 * 1024, ResyncBatch: 1, ResyncPauseMs: int(time.Hour / time.Millisecond)}
-
-// openPausedStore opens root's index under pausedConfig and waits until the paused
-// pass has indexed its first file and is running.
+// openPausedStore opens root's index with its first pass paced to one file and
+// then a pause far longer than any test, so it stays on that pass, deterministically,
+// until it is closed (the pause gives way to Stop). It returns once the pass has
+// indexed its first file and is running.
 func openPausedStore(t *testing.T, root string) *topology.Store {
 	t.Helper()
-	s, err := topology.Open(root, pausedConfig,
+	return openPacedStore(t, root, time.Hour)
+}
+
+// openPacedStore is openPausedStore with the pause between files set to pause.
+func openPacedStore(t *testing.T, root string, pause time.Duration) *topology.Store {
+	t.Helper()
+	cfg := config.TopologyConfig{MaxFileSizeBytes: 512 * 1024, ResyncBatch: 1, ResyncPauseMs: int(pause / time.Millisecond)}
+	s, err := topology.Open(root, cfg,
 		[]topology.Extractor{goext.New(), treesitter.NewPython(), treesitter.NewMarkdown()})
 	if err != nil {
 		t.Fatalf("topology.Open: %v", err)
@@ -80,6 +84,45 @@ func TestContextForTask_LabelsAPackFromAFirstBuild(t *testing.T) {
 	}
 	if out := renderContextPack(pack); !strings.Contains(out, "the topology index is still being built") {
 		t.Error("the rendered pack drops the first-build label")
+	}
+
+	// Only a seed the index found no declaration for is reworded: a miss for any
+	// other reason means the same whatever the index holds.
+	other := s.collect(t, map[string]any{"files": []string{"cart/missing.go"}, "intent": contextIntentChange})
+	if len(other.Misses) == 0 {
+		t.Fatal("control: a file seed that does not exist must be a miss")
+	}
+	for _, m := range other.Misses {
+		if m.NoMatch || strings.Contains(m.Reason, "still being built") {
+			t.Errorf("a miss for another reason was reworded as a first-build miss: %+v", m)
+		}
+	}
+}
+
+// TestTopology_AFailedFirstPassIsNotRecordedBuilt: the built marker is persisted,
+// so a first pass whose cycle fails must not set it. If it did, the next daemon,
+// whose failing flag starts clear, would read the half-built index as complete
+// during its startup pass: the false "complete" the label exists to prevent.
+func TestTopology_AFailedFirstPassIsNotRecordedBuilt(t *testing.T) {
+	root := copyShopFixture(t)
+	store := openPacedStore(t, root, 300*time.Millisecond)
+	// The pass is between its first and second file: fail every later write.
+	_ = injectPersistFault(t, root)
+	waitForHealth(t, store, "failing", func(h topology.Health) bool { return h.Failing })
+	if h := store.Health(); h.Built {
+		t.Fatalf("a first pass that failed is recorded as built: %+v", h)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openPausedStore(t, root)
+	if h := reopened.Health(); h.Built || h.Failing {
+		t.Fatalf("after a restart the half-built index must read as unbuilt (and not failing yet), got %+v", h)
+	}
+	s := newShopTool(t, reopened, root)
+	pack := s.collect(t, map[string]any{"files": []string{"cart/cart.go"}, "intent": contextIntentChange})
+	if len(pack.Gaps) == 0 || !strings.HasPrefix(pack.Gaps[0], "the topology index is still being built") {
+		t.Errorf("the reopened half-built index is not labelled: gaps = %q", pack.Gaps)
 	}
 }
 
