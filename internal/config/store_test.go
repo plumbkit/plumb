@@ -222,6 +222,16 @@ func TestRestartSensitiveEqual(t *testing.T) {
 	if RestartSensitiveEqual(a, lspChange) {
 		t.Error("LSP server change should be restart-sensitive")
 	}
+
+	// The account authority decides where the daemon's sockets, locks and state
+	// live, so a running daemon cannot apply a change to it: it is ReloadRestart,
+	// and it must be in this set or the daemon would hot-reload a setting that
+	// moved nothing.
+	authorityChange := Defaults()
+	authorityChange.Daemon.AccountAuthority = !a.Daemon.AccountAuthority
+	if RestartSensitiveEqual(a, authorityChange) {
+		t.Error("a daemon.account_authority change should be restart-sensitive")
+	}
 }
 
 // TestSave_AtomicLeavesNoTempFiles asserts the atomic write cleans up its

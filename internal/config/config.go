@@ -524,6 +524,9 @@ type HistoryConfig struct {
 // Config is the resolved configuration for a plumb process.
 // Concurrency: read-only after Load returns.
 type Config struct {
+	// Daemon governs the account-wide service: one daemon per account, and
+	// where it lives (PLAN-518 D3).
+	Daemon    DaemonConfig         `toml:"daemon"`
 	History   HistoryConfig        `toml:"history"`
 	LogLevel  string               `toml:"log_level"`
 	LogFormat string               `toml:"log_format"`

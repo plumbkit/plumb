@@ -34,6 +34,10 @@ func DefaultHistorySensitiveGlobs() []string {
 }
 
 var defaults = Config{
+	// The account authority is the default: one daemon per account, resolved
+	// from the OS account rather than from whichever environment a client
+	// happened to have (PLAN-518 D3, the flip).
+	Daemon: DaemonConfig{AccountAuthority: true},
 	History: HistoryConfig{
 		Enabled:         true,
 		SensitiveGlobs:  DefaultHistorySensitiveGlobs(),

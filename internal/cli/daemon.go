@@ -248,6 +248,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	if err := setupLogging(configLevel, cfg.LogFormat); err != nil {
 		slog.Warn("daemon: invalid log config; keeping defaults", "err", err)
 	}
+	logResolvedRuntimeLocation()
 	logRecoveredHijacks()
 	sweepKilledMutants()
 

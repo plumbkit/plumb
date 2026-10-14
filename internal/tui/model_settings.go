@@ -96,6 +96,8 @@ const (
 	skPathStyle
 	skWebPort
 	skAgentConfigWrites
+	// [daemon] row (the General tab, "Others" group): the account-wide service.
+	skDaemonAccountAuthority
 	// Per-language [lsp.<lang>] rows carry the language in settingItem.lspLang.
 	skLSPEnabled
 	skLSPCommand
@@ -373,6 +375,7 @@ func buildSettingItems(cfg config.Config) []settingItem {
 		{group: "Others", label: "Cache max size", kind: settingNumber, key: skCacheMaxSize, value: itoa(cfg.Cache.MaxSize)},
 		{group: "Others", label: "LSP query timeout", kind: settingCycle, key: skLSPTimeout, value: durValue(cfg.LSPQuery.Timeout, lspTimeoutOptions), options: lspTimeoutOptions},
 		{group: "Others", label: "Agent config writes", kind: settingToggle, key: skAgentConfigWrites, value: onOff(cfg.AgentConfigWrites)},
+		{group: "Others", label: "Account authority", kind: settingToggle, key: skDaemonAccountAuthority, value: onOff(cfg.Daemon.AccountAuthority)},
 	}, lspSettingItems(cfg)...), semanticsSettingItems(cfg)...))
 }
 

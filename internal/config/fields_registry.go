@@ -16,6 +16,12 @@ var minZero = int64(0)
 var maxWakeWindow = int64(maxCollabWakeWindowSeconds)
 
 var registryData = []Field{
+	// --- Daemon (the account-wide service) ---
+	{
+		Key: "daemon.account_authority", Type: FieldBool, ReloadTier: ReloadRestart,
+		Description: "One daemon per account: resolve the daemon, its sockets and its state from the OS account instead of this shell's HOME/XDG. Restart to apply. Off restores the environment-derived directories — the account launch lock is still taken.",
+	},
+
 	// --- Appearance / Logging ---
 	{
 		Key: "ui.theme", Type: FieldEnum, ReloadTier: ReloadLive,

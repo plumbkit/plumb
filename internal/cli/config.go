@@ -202,6 +202,14 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 		{"max_size", strconv.Itoa(projectCfg.Cache.MaxSize), sourceFor("max_size", defaultsCfg.Cache.MaxSize, globalCfg.Cache.MaxSize, projectCfg.Cache.MaxSize)},
 	})
 
+	// [daemon] is daemon-global: LoadProject forces the global value back, so
+	// sourceFor can only ever report the global layer, the environment or the
+	// default. It is shown anyway, because "which mode is my daemon in?" is the
+	// first question an operator asks when the socket is somewhere unexpected.
+	addConfigSection(cfgTable, "daemon", [][]string{
+		{"account_authority", strconv.FormatBool(projectCfg.Daemon.AccountAuthority), sourceFor("account_authority", defaultsCfg.Daemon.AccountAuthority, globalCfg.Daemon.AccountAuthority, projectCfg.Daemon.AccountAuthority)},
+	})
+
 	addConfigSection(cfgTable, "edits", [][]string{
 		{"strict", strconv.FormatBool(projectCfg.Edits.Strict), sourceFor("strict", defaultsCfg.Edits.Strict, globalCfg.Edits.Strict, projectCfg.Edits.Strict)},
 		{"block_dirty_writes", strconv.FormatBool(projectCfg.Edits.BlockDirtyWrites), sourceFor("block_dirty_writes", defaultsCfg.Edits.BlockDirtyWrites, globalCfg.Edits.BlockDirtyWrites, projectCfg.Edits.BlockDirtyWrites)},
@@ -320,7 +328,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	// takes effect on the next request, and telling them to restart the daemon
 	// invites them to conclude the setting does not work.
 	reloadTable.Row("lsp.* (project)", configShowOkStyle().Render("live on next request"))
-	reloadTable.Row("lsp.* (global), cache, log_format", configShowWarnStyle().Render("needs daemon restart (or `plumb enable-lsp`)"))
+	reloadTable.Row("lsp.* (global), cache, log_format, daemon.account_authority", configShowWarnStyle().Render("needs daemon restart (or `plumb enable-lsp`)"))
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 
@@ -550,6 +558,7 @@ var fieldEnvVars = map[string]string{
 	"log_file":                  "PLUMB_LOG_FILE",
 	"refuse_home_roots":         "PLUMB_REFUSE_HOME_ROOTS",
 	"log_format":                "PLUMB_LOG_FORMAT",
+	"account_authority":         "PLUMB_ACCOUNT_AUTHORITY",
 	"post_write_diagnostics_ms": "PLUMB_POST_WRITE_DIAG_MS",
 	"block_dirty_writes":        "PLUMB_BLOCK_DIRTY_WRITES",
 	"auto_attach":               "PLUMB_AUTO_ATTACH",

@@ -191,16 +191,21 @@ func TestDaemonCommand_UsesTheSpecAndHandsOverBothLocks(t *testing.T) {
 	for _, want := range []string{
 		"HOME=/home/tester", "PATH=/profile/bin",
 		"PLUMB_DAEMON_AUTHORITY_FD=3", "PLUMB_DAEMON_LOCK_FD=4",
+		// The third thing the launcher adds: the mode it resolved, so the daemon
+		// looks for the handed-over lifetime lock where the launcher took it
+		// (the PLAN-518 flip; see withAuthorityMode).
+		"PLUMB_ACCOUNT_AUTHORITY=false",
 	} {
 		if !slices.Contains(cmd.Env, want) {
 			t.Errorf("the child's environment is missing %q: %v", want, cmd.Env)
 		}
 	}
 	// The clean environment is the whole point: the child gets the spec's
-	// variables plus the two handovers, and NOT this process's environment.
-	if len(cmd.Env) != len(spec.Env)+2 {
-		t.Errorf("the child inherited %d variables, want %d (the spec's plus the handovers): %v",
-			len(cmd.Env), len(spec.Env)+2, cmd.Env)
+	// variables plus the two handovers and the resolved mode, and NOT this
+	// process's environment.
+	if len(cmd.Env) != len(spec.Env)+3 {
+		t.Errorf("the child inherited %d variables, want %d (the spec's plus the handovers and the resolved mode): %v",
+			len(cmd.Env), len(spec.Env)+3, cmd.Env)
 	}
 	if cmd.Dir != "/" {
 		t.Errorf("cmd.Dir = %q, want / so a client's cwd cannot be inherited", cmd.Dir)

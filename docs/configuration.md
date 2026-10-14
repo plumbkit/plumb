@@ -18,13 +18,19 @@ Configuration is built in layers. Each layer overrides only the fields it sets;
 everything else is inherited from the layer below.
 
 1. **Compiled defaults** — baked into the binary (`internal/config/config.go`).
-2. **Global config** — `$XDG_CONFIG_HOME/plumb/config.toml`, falling back to
-   `~/.config/plumb/config.toml`. Held in a live `config.Store` and
+2. **Global config** — the account's `config.toml`: `~/.config/plumb/config.toml`
+   on Linux, `~/Library/Application Support/plumb/config.toml` on macOS. It is
+   *not* moved by `$XDG_CONFIG_HOME` in the default mode; an XDG base that
+   already holds a plumb config is adopted into the service profile by
+   `plumb service install` (see [`[daemon]`](#daemon--the-account-wide-service-global-only)),
+   and with `[daemon] account_authority = false` it is
+   `$XDG_CONFIG_HOME/plumb/config.toml`, falling back to `~/.config/plumb`.
+   Held in a live `config.Store` and
    hot-reloaded: an fsnotify watch on the file, the `reload-config`
    control-socket command, and `plumb config reload` each trigger a re-read
    that propagates to every live session. Settings the daemon cannot apply
-   live (LSP servers, cache, log format) are flagged as restart-needed by
-   `plumb config show` and the `daemon_info` tool.
+   live (LSP servers, cache, log format, `[daemon]`) are flagged as
+   restart-needed by `plumb config show` and the `daemon_info` tool.
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
    file that sets one field inherits the rest. Hot-reloaded per workspace: the
@@ -49,14 +55,14 @@ peer_awareness) is also announced to the affected sessions on their next tool
 result or `session_start`. `[xcode]` is evaluated
 once per workspace on the next session, because enabling it may launch trusted
 project-sensitive tooling. The restart-bound exceptions are the `[lsp.*]`
-servers, `[cache]`, and `log_format`; `plumb config show` and `daemon_info` flag
-those as restart-needed.
+servers, `[cache]`, `log_format` and `[daemon]`; `plumb config show` and
+`daemon_info` flag those as restart-needed.
 
 ## File locations
 
 | Path | Scope | Notes |
 |---|---|---|
-| `~/.config/plumb/config.toml` | Global | Honours `$XDG_CONFIG_HOME`. Optional — defaults apply if absent. |
+| `~/.config/plumb/config.toml` (macOS: `~/Library/Application Support/plumb/config.toml`) | Global | The account's config file — not moved by `$XDG_CONFIG_HOME` in the default mode, and not moved by `[daemon] account_authority` either ([why](#daemon--the-account-wide-service-global-only)). Optional — defaults apply if absent. |
 | `<workspace>/.plumb/config.toml` | Project | Created next to `.plumb/`; overrides the global layer. |
 | `<account data dir>/service.toml` | Global, service-owned | The service **launch profile** — see below. Not a settings file: change it with `plumb service set-*`. |
 
@@ -66,9 +72,12 @@ those as restart-needed.
 service: the **executable** a managed launch starts, the **PATH** its language
 servers inherit, the resolved **config / data / state / log / cache**
 directories, and any XDG base directory the service has explicitly **adopted**.
-It is written by `plumb service install` (and by `plumb setup` once the
-account-authority mode is the default) and changed only through
-`plumb service set-*`.
+It is written by `plumb service install`, by `plumb setup` and by the `make
+install` target (and by Homebrew's `post_install`, which runs
+`plumb service install` on every upgrade), and changed only through
+`plumb service set-*`. All of them are idempotent and preserving: they update
+the recorded executable and leave your directories, PATH and adopted XDG
+settings alone.
 
 It exists because a launch used to mean "whatever binary the calling client
 happened to be, with whatever environment it happened to have". A managed launch
@@ -84,9 +93,61 @@ holds a real `config.toml`, the message names the
 **A missing profile is never inferred.** A cold start with no profile fails with
 the `plumb service install` instruction: plumb does not fall back to the calling
 binary, does not probe a login shell for a PATH, and does not derive directories
-from the environment. With the account-authority mode disabled — every build
-until the default flip — the profile is ignored entirely and directories resolve
-from `XDG_*` as they always did.
+from the environment. With `[daemon] account_authority = false` the profile is
+ignored entirely and directories resolve from `XDG_*` as they always did.
+
+---
+
+## `[daemon]` — the account-wide service (global only)
+
+| Field | Type | Default | Env | Effect |
+|---|---|---|---|---|
+| `account_authority` | bool | `true` | `PLUMB_ACCOUNT_AUTHORITY` | Resolve the daemon, its runtime, its state, its logs, its caches and a managed launch from the OS account (and the service profile) instead of this process's environment. **Restart the daemon to apply.** |
+
+**On (the default): one plumb service per account.** The runtime directory (the
+MCP and control sockets, the pid and version files, the daemon's lifetime lock),
+the data, state, log and cache directories, and the executable a managed launch
+starts all come from the account database and the service profile rather than
+from `HOME`, `XDG_*` or `PATH`. `plumb serve` and `plumb restart` therefore start
+the *installed* binary, whatever client asked and whatever environment it had;
+`plumb service install`, `plumb setup` and `make install` are what record that
+profile. A client whose environment would have resolved a global directory
+somewhere else is told so once, with the `plumb service set-xdg` remedy.
+
+**Off is an explicit opt-out, and it is narrow.** It changes exactly three
+things, and deliberately nothing else:
+
+- **It does** return the runtime, data, state, log and cache directories to the
+  environment-derived resolution they had before the account authority existed,
+  and it **does** return a launch to the pre-528 behaviour: this binary, this
+  environment, the profile ignored entirely.
+- **It does not** stop plumb taking the **account authority lock**
+  (`<account data dir>/daemon.authority.lock`) before it serves or starts
+  anything, and it **does not** stop a launcher refusing to start a daemon beside
+  one that holds that lock. One daemon per account is not configurable: an
+  opted-out plumb that finds the authority held attaches to the holder, and a
+  second `plumb daemon` started by hand exits instead of serving.
+- **It does not** move the config file. The account's `config.toml` stays the
+  file plumb reads whichever way the setting is set, because a config directory
+  that followed the setting would move out from under it: the next write of the
+  global config file — the TUI's settings screen, or your editor — would land in a
+  file the next start never read. To serve an existing XDG setup,
+  adopt its base into the service profile instead (`plumb service set-xdg`).
+
+`PLUMB_ACCOUNT_AUTHORITY` overrides the file for the process that reads it —
+exactly `0`, `false` or `no` (lowercase) turn the authority off, anything else turns
+it on — and a
+managed launch passes the value it resolved down to the daemon it starts, so a
+client and its daemon cannot disagree about where the daemon lives. One case
+takes the value from the environment only: a `plumb daemon` started **by hand**
+acquires its locks before it reads any configuration (by design — the lock is
+what keeps a second daemon from starting), so it uses the compiled default and
+the environment at that instant. Start the daemon the usual way (`plumb serve`,
+`plumb restart`) for the configured mode to apply.
+
+`[daemon]` is account-wide, so a project `.plumb/config.toml` cannot set it: the
+key is forced back to the global value, like `[web]`, `[ui]` and
+`agent_config_writes`. A cloned repository must not be able to move your daemon.
 
 ---
 

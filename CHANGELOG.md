@@ -286,6 +286,37 @@
 
 ### Changed
 
+- **The account-wide daemon is the default, and every install path records the
+  profile it needs.** `[daemon] account_authority` now defaults to **true**
+  (environment override `PLUMB_ACCOUNT_AUTHORITY`, restart to apply): a shipped
+  plumb resolves the daemon, its sockets, its runtime, its state, its logs and its
+  caches from the OS account instead of from whichever `HOME`/`XDG_*` the client
+  happened to have, and a managed launch starts the *installed* binary the
+  service profile records rather than the client's own. `false` is an explicit
+  opt-out, and it is deliberately narrow: it restores the environment-derived
+  directories and the pre-528 launch, while the account authority lock is still
+  taken, a launch still refuses to start a daemon beside one that holds it, and
+  the config file stays where it is — a config directory that moved with this
+  setting could hide the setting from the next start. Because a cold start with no
+  profile REFUSES rather than guessing which binary is the daemon, `plumb setup`,
+  the `make install` target and the Homebrew formula's `post_install` now run
+  `plumb service install`, which is idempotent and preserving: it updates the
+  recorded executable and leaves your directories, PATH and adopted XDG settings
+  exactly as they are. `go install` has no post_install hook, so those users
+  should run `plumb service install` once after installing. An upgrade can also
+  leave a `plumb serve` proxy from the PREVIOUS build running: when the daemon it
+  started is gone it respawns the binary at its own path — now the new one — with
+  the old lock handover and no account-authority value. Where that proxy's
+  environment resolves a DIFFERENT runtime directory than the account's — a
+  spoofed `HOME`/`XDG_*`, or a Linux client with no usable `XDG_RUNTIME_DIR` — the
+  new daemon **refuses** that handover instead of starting anywhere unexpected;
+  where the two resolve the same file, which is the ordinary unspoofed upgrade,
+  the handover matches and the daemon starts canonically as usual. Nothing is ever
+  started beside anything, which is the property this release exists for. In the
+  refusing case that client is left without a daemon until it restarts, so restart
+  the client — a running process's environment cannot be changed, so setting
+  `PLUMB_ACCOUNT_AUTHORITY=false` on the old proxy takes effect when it restarts.
+
 - **A daemon left running by an older binary is reused when it is the same
   build, and refused with an instruction when it is not — never migrated behind
   your back, and never spawned beside.** An upgrade moves where the daemon lives

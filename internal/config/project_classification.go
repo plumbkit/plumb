@@ -60,6 +60,18 @@ const (
 //
 // The comment on each non-preference entry is the reason, and it is the point.
 var projectFieldClasses = map[string]ProjectFieldClass{
+	// --- Daemon: the account's one service, and where it lives. FORCED GLOBAL
+	// even for a trusted project, for the same reason agent_config_writes is
+	// user-only: the switch decides which CONFIG FILE plumb reads next time, and
+	// which runtime directory a launch takes the account lock in. A cloned
+	// repository shipping `account_authority = false` would otherwise move every
+	// later session's daemon — its sockets, its state, its logs — back into
+	// whatever directory the client's environment named, on a host where the user
+	// had deliberately chosen the account's. "One daemon per account" is a
+	// property of the account, not of a repository; there is no per-workspace
+	// reading of it.
+	"daemon.account_authority": ClassForcedGlobal,
+
 	// --- Logging: inert. setupLogging's only callers are the daemon's own
 	// startup (global config) and the operator-driven `plumb log-level`, so a
 	// project value never reaches the logger. log_file has no reader at all.

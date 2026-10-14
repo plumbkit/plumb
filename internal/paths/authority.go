@@ -21,14 +21,21 @@ import (
 // and the SERVICE PROFILE (PLAN-528) records them once, at install, so that what
 // a client's environment says can never move them again.
 //
-// THE GATE IS NOT USER-SETTABLE YET. The account authority only reaches users as
-// one transition (PLAN-518 rollout invariant 1): until the legacy detection of
-// PLAN-530 is in, no release may contain a build where an upgraded serve can
-// start a second daemon beside an old-path one. So pre-flip,
-// account.AuthorityEnabled is true only for a test or a container harness, and
-// the user-facing switch lands with the default flip. In LEGACY mode the profile
-// is ignored entirely — not read, not consulted, not missed — which is what
-// makes this change inert in every shipped build.
+// THE GATE IS USER-SETTABLE NOW. It is `daemon.account_authority`, default TRUE,
+// resolved by internal/config and recorded in internal/account (PLAN-518 D3) —
+// the default flip, which PLAN-530's legacy detection made safe to ship. In
+// LEGACY mode the profile is ignored entirely — not read, not consulted, not
+// missed — and every directory comes from the environment again.
+//
+// ONE DIRECTORY DELIBERATELY DOES NOT FOLLOW IT. Read configDir below: the
+// config directory is the account's in every released build, whatever the switch
+// says, because the file that declares the switch must not move with it — a
+// `daemon.account_authority` living in a directory that depended on its own
+// value could hide itself from the next start.
+//
+// What the gate does NOT decide is whether the authority is taken: every managed
+// launch takes the account authority lock and refuses to start beside a holder
+// in every mode, opted out included (PLAN-518 D4).
 
 // AuthorityEnabled reports whether this process resolves its global directories
 // — and launches its daemon — through the account authority.
@@ -61,6 +68,43 @@ func accountDir(role service.Role) (string, bool) {
 		return dir, true
 	}
 	return accountDefaultDir(u, role), true
+}
+
+// configDir is accountDir for the CONFIG role, and it asks a different question
+// on purpose: whether the ACCOUNT's config directory may be the one this process
+// reads. In a released build the answer is always yes (see
+// account.ConfigAuthorityEnabled); only a test binary or a container harness,
+// which says which directories it wants and must never reach the developer's
+// real account directory, resolves the config directory from the environment.
+//
+// WHY THE CONFIG DIRECTORY IS NOT PART OF THE SWITCH. The file that declares
+// `daemon.account_authority` is the file this resolves, so a directory that moved
+// with the setting would move out from under its own declaration. Set
+// `daemon.account_authority = false` and a resolved-value rule would send the
+// NEXT start to the environment's file — a different file wherever
+// XDG_CONFIG_HOME differs from the account standard — so the opt-out would be
+// read exactly once, and the next write of the global config file (the TUI, or an
+// editor) would land in a file nothing ever read. An ENV opt-out rule has the same
+// defect from the other side: that write under PLUMB_ACCOUNT_AUTHORITY=false would
+// land in the environment's file, and the next start, seeded from an environment
+// without the variable, would read the account's. The config file therefore
+// follows neither the seed nor the resolved value: it stays the account's, both
+// routes stay readable, and the switch keeps working in both directions.
+//
+// Every other global directory follows the resolved value, and
+// docs/configuration.md states both halves for users.
+func configDir() (string, bool) {
+	if !account.ConfigAuthorityEnabled() {
+		return "", false
+	}
+	u, err := account.Current()
+	if err != nil {
+		return "", false
+	}
+	if dir, ok := profileDir(service.RoleConfig); ok {
+		return dir, true
+	}
+	return u.ConfigDir(), true
 }
 
 // profileDir returns the directory the service profile records for role.

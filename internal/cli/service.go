@@ -21,7 +21,10 @@ import (
 // It exists because a launch used to be "whatever binary the client was running,
 // with whatever environment it had". `install` is what a package manager runs
 // after an upgrade; `set-*` is how a person changes one recorded setting without
-// editing the file by hand. Nothing else writes the profile.
+// editing the file by hand. `plumb setup` writes it too, through the same
+// function, because a `make install` or `go install` binary that never ran a
+// package's post_install would otherwise have no profile at all — and a canonical
+// cold start without one refuses (PLAN-518 MUST-FIX 4). Nothing else writes it.
 
 func init() {
 	serviceCmd.AddCommand(serviceInstallCmd, serviceShowCmd, serviceSetExecutableCmd, serviceSetPathCmd, serviceSetXDXCmd)
@@ -117,6 +120,47 @@ the role goes back to the account standard path.`,
 }
 
 func runServiceInstall(_ *cobra.Command, _ []string) error {
+	return installServiceProfile(true)
+}
+
+// ensureServiceProfileForSetup records this binary in the account's launch
+// profile on the way through `plumb setup`.
+//
+// `plumb setup` is the one command every non-Homebrew install runs — `make
+// install` users, the ops reinstall loop, and `go install` (which has no
+// post_install hook at all) — so it is where a first-run profile has to come
+// from. Without it, the flip would leave those installs with the account
+// authority ON and no profile: the next cold start refuses with
+// `plumb service install`, which is the brick MUST-FIX 4 exists to prevent.
+//
+// It does nothing in legacy mode, where the profile is ignored entirely, so a
+// user who opted out is never handed a file that nothing reads and no setup test
+// grows a dependency on the account. It is deliberately NOT run by
+// `--uninstall`: removing a client registration must not touch the service.
+func ensureServiceProfileForSetup() error {
+	if !paths.AuthorityEnabled() {
+		return nil
+	}
+	if err := installServiceProfile(false); err != nil {
+		return fmt.Errorf("recording the plumb service profile, which the account-wide daemon needs (`plumb service install` retries it): %w", err)
+	}
+	return nil
+}
+
+// installServiceProfile writes the account's launch profile (PLAN-528) and is
+// the ONE writer of it, shared by `plumb service install`, whose remedy every
+// other error names, and by `plumb setup`, which is how a non-Homebrew install
+// comes to have one (PLAN-518 MUST-FIX 4: without it, `make install` and a
+// `go install` binary would brick on their next cold start, because a canonical
+// launch with no profile refuses rather than guessing which binary is THE
+// daemon).
+//
+// It is IDEMPOTENT and PRESERVING, which is what lets a package manager's
+// post_install run it on every upgrade: an existing profile keeps its
+// directories, its PATH and its XDG settings, and only the recorded executable
+// changes. verbose selects the long report `plumb service install` prints; the
+// setup path prints one line.
+func installServiceProfile(verbose bool) error {
 	path, err := service.Path()
 	if err != nil {
 		return err
@@ -133,7 +177,7 @@ func runServiceInstall(_ *cobra.Command, _ []string) error {
 	existing, err := service.LoadFile(path)
 	switch {
 	case err == nil:
-		return updateProfileExecutable(path, existing, exe)
+		return updateProfileExecutable(path, existing, exe, verbose)
 	case !errors.Is(err, service.ErrNoProfile):
 		// install is the remedy every other error names, so it has to work on a
 		// profile that cannot be read. Nothing can be preserved from a file that
@@ -145,8 +189,11 @@ func runServiceInstall(_ *cobra.Command, _ []string) error {
 	if err := p.Write(path); err != nil {
 		return err
 	}
-	fmt.Printf("plumb service: wrote %s\n\n", path)
-	fmt.Print(reportProfile(p))
+	fmt.Printf("plumb service: wrote %s\n", path)
+	if verbose {
+		fmt.Print("\n")
+		fmt.Print(reportProfile(p))
+	}
 	return nil
 }
 
@@ -154,9 +201,11 @@ func runServiceInstall(_ *cobra.Command, _ []string) error {
 // other recorded setting is left exactly as the user has it. A package's
 // post_install runs this on every upgrade, so it must be safe to run at any
 // time, repeatedly.
-func updateProfileExecutable(path string, existing service.Profile, exe string) error {
+func updateProfileExecutable(path string, existing service.Profile, exe string, verbose bool) error {
 	if existing.Executable == exe {
-		fmt.Printf("plumb service: %s is already current (executable %s)\n", path, exe)
+		if verbose {
+			fmt.Printf("plumb service: %s is already current (executable %s)\n", path, exe)
+		}
 		return nil
 	}
 	previous := existing.Executable
@@ -165,7 +214,9 @@ func updateProfileExecutable(path string, existing service.Profile, exe string) 
 		return err
 	}
 	fmt.Printf("plumb service: updated the executable in %s\n  was: %s\n  now: %s\n", path, previous, exe)
-	fmt.Print("  your directories, PATH and XDG settings were left alone\n")
+	if verbose {
+		fmt.Print("  your directories, PATH and XDG settings were left alone\n")
+	}
 	return nil
 }
 

@@ -402,10 +402,21 @@ tidy:
 # using `go install`, so macOS TCC consent stays stable across rebuilds. After
 # installing, restart the daemon (`plumb restart --force`) and re-run
 # `plumb setup <client>` so client configs point at the installed path.
+#
+# It also records the installed binary in the account's service launch profile
+# (`plumb service install`): an account-authority cold start launches the
+# PROFILE's executable and refuses rather than guessing when there is no profile,
+# so an install that skipped this would leave the next `plumb serve` unable to
+# start a daemon. The command is idempotent and preserving — it updates the
+# recorded executable and leaves a user's directories, PATH and XDG settings
+# alone — which is the same contract Homebrew's post_install relies on. This is
+# what `go install` users do NOT get, so the docs tell them to run
+# `plumb service install` once.
 install: build
 	@install -d "$(BINDIR)"
 	@install -m 0755 $(BINARY) "$(BINDIR)/$(BINARY)"
 	@echo "installed $$("$(BINDIR)/$(BINARY)" version 2>/dev/null | tail -1) -> $(BINDIR)/$(BINARY)"
+	@"$(BINDIR)/$(BINARY)" service install
 	@case ":$$PATH:" in \
 		*":$(PREFIX)/bin:"*) ;; \
 		*) printf 'note: %s is not on your PATH — add it (e.g. fish_add_path %s, or export PATH=\"%s:$$PATH\")\n' "$(PREFIX)/bin" "$(PREFIX)/bin" "$(PREFIX)/bin" ;; \

@@ -222,28 +222,28 @@ func (u User) ServiceProfilePath() string {
 }
 
 // AuthorityEnabled reports whether the account authority drives this process:
-// its global directories come from the OS account database, and its daemon
-// launches take the account authority lock before starting a child.
+// its global directories come from the OS account database (and, once
+// `plumb service install` has run, from the service profile), and its daemon
+// launches start the profile's executable with a clean environment.
 //
-// Until the default flip it is reachable only in a test or a container harness
-// — see the seam files for the two independent conditions that guard it. The
-// user-facing switch is a config key that lands with PLAN-530's legacy detection
-// and the default flip (PLAN-518 rollout invariant 1), because a build in which
-// an upgraded serve can start a second daemon beside an old-path one must never
-// reach a user.
+// It is now a real setting. `daemon.account_authority` defaults to TRUE for
+// every shipped build (PLAN-518 rollout invariant 1 is satisfied by PLAN-530's
+// legacy detection, which landed first), and a user turns it off explicitly. In
+// a test or container-harness process the seam decides instead — see the seam
+// files — so the existing suite keeps the legacy resolution it was written
+// against.
+//
+// It does NOT decide whether the authority is taken or probed: every managed
+// launch takes the account authority lock and refuses to start beside a holder
+// in EVERY mode, opted out included (PLAN-518 D4).
 func AuthorityEnabled() bool { return authorityEnabled() }
 
-// envTrue reports whether name is set to one of the values a boolean switch
-// accepts. Anything else — including unset — is false, which is the safe
-// reading for a gate: an unrecognised value must not turn it on.
-func envTrue(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
+// ConfigAuthorityEnabled reports whether plumb's CONFIG directory may be the
+// account's. In a released build it always may — the switch lives in that
+// directory and must not be able to move it — while a test binary or a container
+// harness keeps the environment's, so a suite still isolates through HOME/XDG.
+// See seam_off.go's configAuthorityEnabled for the argument in full.
+func ConfigAuthorityEnabled() bool { return configAuthorityEnabled() }
 
 // testRoot reports the directory a test has redirected account resolution to,
 // or "" when none applies. It is honoured ONLY where the seam exists — see
