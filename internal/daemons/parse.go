@@ -153,6 +153,11 @@ func ParseProcArgs(raw []byte) (exe string, args []string, err error) {
 		rest = rest[nuls:]
 	}
 	for range argc {
+		if len(rest) == 0 {
+			// Out of bytes with arguments still owed: a truncated buffer, never an
+			// invented empty argument.
+			return "", nil, fmt.Errorf("argc %d but only %d arguments", argc, len(args))
+		}
 		end := indexByte(rest, 0)
 		if end < 0 {
 			// The kernel does not promise a trailing NUL on the last argument.

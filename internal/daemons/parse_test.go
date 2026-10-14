@@ -297,3 +297,51 @@ func TestParseProcArgs_AnEmptyArgv0IsNotPadding(t *testing.T) {
 		t.Fatalf("args = %q, want %q", args, want)
 	}
 }
+
+// procArgsBuf lays a kern.procargs2 buffer out as darwin does: argc, the exec path
+// padded so path, terminator and padding fill a multiple of 8, then the arguments.
+func procArgsBuf(exe string, terminateLast bool, args ...string) []byte {
+	raw := binary.LittleEndian.AppendUint32(nil, uint32(len(args))) //nolint:gosec // G115: a test fixture's small argc
+	raw = append(raw, exe...)
+	for range 8 - len(exe)%8 {
+		raw = append(raw, 0)
+	}
+	for i, a := range args {
+		raw = append(raw, a...)
+		if i < len(args)-1 || terminateLast {
+			raw = append(raw, 0)
+		}
+	}
+	return raw
+}
+
+// TestParseProcArgs_PaddingAtEveryLength pins the padding rule across a full
+// period of exec-path lengths, with an empty argv[0] that only exact padding can
+// tell from padding: a rule off by any multiple of 8 reads the wrong argv here.
+func TestParseProcArgs_PaddingAtEveryLength(t *testing.T) {
+	for n := 1; n <= 24; n++ {
+		exe := "/" + strings.Repeat("p", n-1)
+		_, args, err := ParseProcArgs(procArgsBuf(exe, true, "", "plumb", "daemon"))
+		if err != nil || !slices.Equal(args, []string{"", "plumb", "daemon"}) {
+			t.Errorf("exec path of %d bytes: args = %q, err = %v", n, args, err)
+		}
+	}
+}
+
+func TestParseProcArgs_LastArgumentMayLackItsNUL(t *testing.T) {
+	_, args, err := ParseProcArgs(procArgsBuf("/bin/plumb", false, "plumb", "daemon"))
+	if err != nil || !slices.Equal(args, []string{"plumb", "daemon"}) {
+		t.Fatalf("args = %q, err = %v", args, err)
+	}
+}
+
+// TestParseProcArgs_RefusesMissingArguments: a buffer that ends exactly at an
+// argument's NUL with arguments still owed is truncated — never an invented
+// empty trailing argument.
+func TestParseProcArgs_RefusesMissingArguments(t *testing.T) {
+	raw := binary.LittleEndian.AppendUint32(nil, 3)
+	raw = append(raw, "/bin/plumb\x00\x00\x00\x00\x00\x00plumb\x00daemon\x00"...)
+	if _, args, err := ParseProcArgs(raw); err == nil {
+		t.Fatalf("a 3-argument buffer holding 2 was read as %q", args)
+	}
+}

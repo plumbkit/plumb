@@ -303,3 +303,26 @@ func TestProcArgsOverridesThePSLine(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// TestProcArgs_ConfirmsADaemonArgv is the census's positive control: a process
+// whose kernel argv is exactly `plumb daemon` is confirmed. A shell runs a script
+// named daemon under argv[0] "plumb", so the argv is ["plumb", "daemon"] while the
+// process stays alive.
+func TestProcArgs_ConfirmsADaemonArgv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "daemon"), []byte("sleep 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := &exec.Cmd{Path: "/bin/sh", Args: []string{"plumb", "daemon"}, Dir: dir}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the stand-in: %v", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() }()
+	_, args, err := procArgs(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("procArgs: %v", err)
+	}
+	if !isPlumbDaemonArgv(args) {
+		t.Fatalf("the kernel's argv %q was not confirmed as a daemon", args)
+	}
+}

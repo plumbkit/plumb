@@ -33,3 +33,21 @@ func TestShellLookup_SaysWhatItSkipsAndNeverItsValue(t *testing.T) {
 		t.Fatalf("the skip notice printed the value: %q", out)
 	}
 }
+
+// TestShellLookup_SaysNothingForAValidValue is the negative control: a valid
+// variable is captured silently.
+func TestShellLookup_SaysNothingForAValidValue(t *testing.T) {
+	t.Setenv("PLUMB_TEST_FINE_VAR", "/tmp/ok")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	_, _ = shellLookup("PLUMB_TEST_FINE_VAR")
+	os.Stderr = old
+	_ = w.Close()
+	if out, _ := io.ReadAll(r); len(out) != 0 {
+		t.Fatalf("a valid variable printed a notice: %q", out)
+	}
+}
