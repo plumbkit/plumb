@@ -303,7 +303,14 @@
   `plumb service install`, which is idempotent and preserving: it updates the
   recorded executable and leaves your directories, PATH and adopted XDG settings
   exactly as they are. `go install` has no post_install hook, so those users
-  should run `plumb service install` once after installing.
+  should run `plumb service install` once after installing. An upgrade can also
+  leave a `plumb serve` proxy from the PREVIOUS build running: when the daemon it
+  started is gone it respawns the binary at its own path — now the new one — with
+  the old lock handover and no account-authority value, and the new daemon
+  **refuses** that handover instead of starting anywhere unexpected. Nothing is
+  started beside anything, which is the property this release exists for; but that
+  client is left without a daemon until it restarts, so restart the client, or set
+  `PLUMB_ACCOUNT_AUTHORITY=false` on the old proxy's environment as a stopgap.
 
 - **A daemon left running by an older binary is reused when it is the same
   build, and refused with an instruction when it is not — never migrated behind

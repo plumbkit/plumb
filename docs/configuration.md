@@ -129,12 +129,14 @@ things, and deliberately nothing else:
   second `plumb daemon` started by hand exits instead of serving.
 - **It does not** move the config file. The account's `config.toml` stays the
   file plumb reads whichever way the setting is set, because a config directory
-  that followed the setting would move out from under it: `plumb config set`
-  would write a file the next start never read. To serve an existing XDG setup,
+  that followed the setting would move out from under it: the next write of the
+  global config file — the TUI's settings screen, or your editor — would land in a
+  file the next start never read. To serve an existing XDG setup,
   adopt its base into the service profile instead (`plumb service set-xdg`).
 
 `PLUMB_ACCOUNT_AUTHORITY` overrides the file for the process that reads it —
-`0`, `false` and `no` turn the authority off, anything else turns it on — and a
+exactly `0`, `false` or `no` (lowercase) turn the authority off, anything else turns
+it on — and a
 managed launch passes the value it resolved down to the daemon it starts, so a
 client and its daemon cannot disagree about where the daemon lives. One case
 takes the value from the environment only: a `plumb daemon` started **by hand**

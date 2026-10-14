@@ -26,7 +26,7 @@ type DaemonConfig struct {
 	// to start a daemon beside one that holds it, so an opted-out plumb can never
 	// run two daemons: the property PLAN-518 exists for is not configurable. It
 	// does not move the CONFIG file either — the directory that declares this
-	// setting must not depend on it, or `plumb config set` would write a file the
+	// setting must not depend on it, or a config write would land in a file the
 	// next start never reads (internal/paths/authority.go's configDir, and
 	// docs/configuration.md for the user-facing statement).
 	//

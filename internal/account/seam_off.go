@@ -52,7 +52,7 @@ func authorityEnabledFor(inTestBinary bool) bool {
 // configAuthorityEnabled reports whether plumb's CONFIG directory may be the
 // account's: the file that declares `daemon.account_authority` must not move
 // when the setting changes, or the setting hides itself from the next start
-// (`plumb config set` would write a file nothing reads).
+// (a config write would land in a file nothing reads).
 //
 // So the config directory follows NEITHER the seed nor the resolved value in a
 // released build — it is the account's, always. An environment opt-out

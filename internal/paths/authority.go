@@ -83,10 +83,10 @@ func accountDir(role service.Role) (string, bool) {
 // `daemon.account_authority = false` and a resolved-value rule would send the
 // NEXT start to the environment's file — a different file wherever
 // XDG_CONFIG_HOME differs from the account standard — so the opt-out would be
-// read exactly once, and `plumb config set daemon.account_authority true` would
-// write to a file nothing ever read. An ENV opt-out rule has the same defect from
-// the other side: `plumb config set` under PLUMB_ACCOUNT_AUTHORITY=false would
-// write the environment's file, and the next start, seeded from an environment
+// read exactly once, and the next write of the global config file (the TUI, or an
+// editor) would land in a file nothing ever read. An ENV opt-out rule has the same
+// defect from the other side: that write under PLUMB_ACCOUNT_AUTHORITY=false would
+// land in the environment's file, and the next start, seeded from an environment
 // without the variable, would read the account's. The config file therefore
 // follows neither the seed nor the resolved value: it stays the account's, both
 // routes stay readable, and the switch keeps working in both directions.
