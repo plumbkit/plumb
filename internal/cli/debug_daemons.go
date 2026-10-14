@@ -62,12 +62,18 @@ read the process table exits non-zero too, because "cannot tell" is not "fine".`
 // itself.
 // PLAN-529's socket state is checked against the account authority's
 // record, not this lock.
+//
+// Every path here is resolved READ-ONLY (currentLocationReadOnly). The runtime
+// directory is one of the things this census reports on, and a census that created
+// it — daemonSocketPath goes through plumbRuntimeDir, whose job is MkdirAll — would
+// answer "there is a runtime directory" with the one it had just made, which is
+// exactly the state the plan forbids a probe from producing.
 func daemonCensusOptions() daemons.Options {
 	opts := daemons.Options{}
 	if path, err := authorityPath(); err == nil {
 		opts.Authority = path
 	}
-	opts.Sockets = append(opts.Sockets, daemonSocketPath())
+	opts.Sockets = append(opts.Sockets, currentLocationReadOnly().Socket)
 	for _, loc := range legacyLocations() {
 		opts.Sockets = append(opts.Sockets, loc.Socket)
 		opts.LegacyLocks = append(opts.LegacyLocks, loc.Lock)

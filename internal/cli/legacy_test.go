@@ -788,3 +788,54 @@ func TestLegacyLocationAt_NamesOneDirectorysPaths(t *testing.T) {
 		t.Errorf("locationOfLock(%s) = %+v, want the location it belongs to", loc.Lock, got)
 	}
 }
+
+// TestReadOnlyChecks_CreateNoRuntimeDirectory is the 529 audit's finding, on this
+// card's path. daemonCensusOptions went through daemonSocketPath ->
+// plumbRuntimeDir -> os.MkdirAll, so `plumb debug daemons` and doctor's census
+// CREATED the runtime directory they were reporting on — proved with a seam root,
+// which is exactly how this test proves it. A check that brings its subject into
+// existence cannot answer "there is no runtime directory", and that is the answer
+// PLAN-529's self-heal case needs from it.
+//
+// Both authority modes are covered because the directory at stake differs: with the
+// authority off the runtime directory IS the environment's (the cache dir), and with
+// it on it is the account's.
+func TestReadOnlyChecks_CreateNoRuntimeDirectory(t *testing.T) {
+	for _, mode := range []struct {
+		name string
+		gate bool
+	}{
+		{"legacy mode", false},
+		{"account-authority mode", true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			withShortTempRuntime(t)
+			if mode.gate {
+				withAccountAuthority(t)
+			}
+			dir := paths.RuntimeDir()
+			if err := os.RemoveAll(dir); err != nil {
+				t.Fatalf("clearing %s: %v", dir, err)
+			}
+			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("precondition: %s still exists (%v)", dir, err)
+			}
+
+			// Every read-only entry point a person or an agent runs to ASK.
+			_ = daemonCensusOptions()
+			_ = checkDaemonCensus()
+			_ = checkDaemon()
+			_ = daemonAlive()
+			_ = runDiagnostics(nil, nil) // prints its banner, dials, and fails: the point is that it creates nothing
+			var report strings.Builder
+			_ = runDebugDaemons(&report)
+
+			if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a read-only check created the runtime directory %s:\n%s", dir, report.String())
+			}
+			if _, err := os.Stat(filepath.Dir(dir)); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("a read-only check created %s, the parent it has no business creating either", filepath.Dir(dir))
+			}
+		})
+	}
+}

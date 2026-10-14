@@ -44,7 +44,9 @@ so you can correlate with 'plumb sessions'.`,
 func runDiagnostics(_ *cobra.Command, args []string) error {
 	PrintLogo()
 
-	socket := daemonSocketPath()
+	// READ-ONLY: `plumb diagnostics` reports on a daemon, so it must not create the
+	// runtime directory it is asking about (see currentLocationReadOnly).
+	socket := currentLocationReadOnly().Socket
 	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
 	if err != nil {
 		return fmt.Errorf("daemon not running.\n\nStart Claude Desktop or run a tool first to bring it up.\nSocket: %s", socket)

@@ -75,7 +75,20 @@ func legacyLocationAt(dir string) legacyLocation {
 // resolved by the same function as a legacy one so the five paths can never be
 // mixed between two directories. It is the ONLY place the current socket, control
 // socket, pid, version and lifetime lock are named.
+//
+// It creates the runtime directory, which is what a caller about to bind a socket or
+// take a lock needs. A caller that only NAMES these paths — the daemon census, doctor —
+// must use currentLocationReadOnly instead: bringing into existence the thing you are
+// inspecting is a defect of its own, and this one was proved with a seam root, where
+// `plumb debug daemons` and doctor's census left the runtime directory on disk.
 func currentLocation() legacyLocation { return legacyLocationAt(plumbRuntimeDir()) }
+
+// currentLocationReadOnly is currentLocation without the side effect: the same five
+// paths, resolved from the environment and the account, created nowhere. The census
+// exists to report on a runtime directory that may be GONE (PLAN-529's self-heal case),
+// so "no runtime directory" is an answer it has to be able to give — never a state it
+// may repair by looking.
+func currentLocationReadOnly() legacyLocation { return legacyLocationAt(paths.RuntimeDir()) }
 
 // locationOfLock recovers the runtime location a lifetime lock belongs to. A
 // launcher hands its daemon lock PATHS (see legacyLocksEnv), and the daemon has
