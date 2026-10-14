@@ -333,8 +333,8 @@ func openFilesUnderDir(lsofOutput, dir string) bool {
 }
 
 // isPlumbDaemonProcess verifies a pgrep candidate really is a `plumb daemon`
-// process — its executable basename is "plumb" and its first argument is
-// "daemon" — so `plumb stop` never signals an unrelated process whose argv
+// process — its executable basename is "plumb" and its subcommand is "daemon"
+// (processIsPlumbDaemon) — so `plumb stop` never signals an unrelated process whose argv
 // merely contains the substring "plumb daemon" (e.g. `vim plumb daemon.go`).
 //
 // The argv comes from processArgv, which reads /proc on Linux. That matters
@@ -351,11 +351,33 @@ func isPlumbDaemonProcess(pid int) bool {
 // platform can pin it without starting a daemon — a real `plumb daemon` cannot
 // be started outside a container (PLAN-518 §2), and the cases that matter are
 // the false positives.
+//
+// The subcommand is found the way cobra finds it, not assumed at argv[1]: a
+// hand-started `plumb --log-level debug daemon` is a daemon too (PLAN-552, from
+// PLAN-553's review). Flags before it are skipped, and a bare word after a flag
+// with no `=` is that flag's value; any other bare word is a different
+// subcommand, so `plumb mail send daemon` is not a daemon, and nothing after a
+// `--` terminator is a subcommand at all.
 func processIsPlumbDaemon(argv []string) bool {
-	if len(argv) < 2 {
+	if len(argv) < 2 || filepath.Base(argv[0]) != "plumb" {
 		return false
 	}
-	return filepath.Base(argv[0]) == "plumb" && argv[1] == "daemon"
+	valueNext := false
+	for _, arg := range argv[1:] {
+		switch {
+		case arg == "--":
+			return false
+		case arg == "daemon":
+			return true
+		case strings.HasPrefix(arg, "-"):
+			valueNext = !strings.Contains(arg, "=")
+		case valueNext:
+			valueNext = false
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // processAlive returns true if a process with the given PID exists.

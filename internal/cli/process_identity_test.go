@@ -28,6 +28,14 @@ func TestProcessIsPlumbDaemon(t *testing.T) {
 		{"no arguments at all", []string{"/opt/homebrew/bin/plumb"}, false},
 		{"empty argv", nil, false},
 		{"an empty argv element", []string{"", "daemon"}, false},
+		// PLAN-552: the subcommand is found past leading flags, not assumed at argv[1].
+		{"a flag and its value before daemon", []string{"/opt/homebrew/bin/plumb", "--log-level", "debug", "daemon"}, true},
+		{"a flag=value before daemon", []string{"plumb", "--log-level=debug", "daemon"}, true},
+		{"daemon as another subcommand's argument", []string{"plumb", "mail", "send", "daemon"}, false},
+		{"daemon as a flag value of serve", []string{"plumb", "serve", "--name", "daemon"}, false},
+		{"daemon after the flag terminator", []string{"plumb", "--", "daemon"}, false},
+		{"a subcommand merely prefixed daemon", []string{"plumb", "daemonize"}, false},
+		{"an editor on the source, flags first", []string{"/usr/bin/vim", "-R", "plumb", "daemon.go"}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

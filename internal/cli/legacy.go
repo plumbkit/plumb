@@ -133,6 +133,9 @@ type legacyDaemon struct {
 	// an older build than the version file itself, which cannot be confirmed
 	// compatible and is therefore not.
 	running string
+	// current reports that the version file was published by the daemon alive
+	// there NOW (versionIsCurrent), not left behind by one a crash took.
+	current bool
 }
 
 // Compatible reports whether the daemon at this location is the same build as
@@ -143,9 +146,32 @@ type legacyDaemon struct {
 // here is a refusal, because attaching an upgraded client to a daemon of unknown
 // build is how a migration turns into a version skew nobody can see. An empty
 // file, a file that cannot be read, and a file naming another build all answer
-// the same way.
+// the same way — and so does a file the daemon serving there did not write
+// (PLAN-552 MINOR-5): a SIGKILL leaves the version file behind, and a daemon
+// started there afterwards from a build older than the version file itself would
+// not overwrite it.
 func (d legacyDaemon) Compatible() bool {
-	return d.running != "" && d.running == Version
+	return d.current && d.running != "" && d.running == Version
+}
+
+// versionIsCurrent reports whether the version file at loc was published by the
+// daemon that is alive there now. A daemon writes its pid file and THEN its
+// version file at listen, so the claim holds only when the pid file names a live
+// `plumb daemon` (the identity check restart applies to every recorded pid) and
+// the version file is no older than that pid file. A crashed daemon's leftovers
+// fail one or the other: its pid is gone, or a later daemon's pid file is newer
+// than the version file it never rewrote. Every "cannot tell" is false.
+func versionIsCurrent(loc legacyLocation) bool {
+	pid := readPIDFileAt(loc.PID)
+	if pid <= 0 || !processAlive(pid) || !daemonIdentityCheck(pid) {
+		return false
+	}
+	pidInfo, err := os.Stat(loc.PID)
+	if err != nil {
+		return false
+	}
+	versionInfo, err := os.Stat(loc.Version)
+	return err == nil && !versionInfo.ModTime().Before(pidInfo.ModTime())
 }
 
 // migrationError is the refusal for a legacy daemon this binary may not use. It
@@ -175,6 +201,9 @@ func (d legacyDaemon) daemonRefusalError() error {
 func (d legacyDaemon) versionNote() string {
 	if d.running == "" {
 		return "it published no version; this binary is " + Version
+	}
+	if !d.current {
+		return "its version file says " + d.running + " but was not published by the daemon serving there; this binary is " + Version
 	}
 	return "its version: " + d.running + "; this binary is " + Version
 }
@@ -253,7 +282,7 @@ func probeLegacyDaemonsAt(locs []legacyLocation) []legacyDaemon {
 			continue
 		}
 		_ = conn.Close()
-		out = append(out, legacyDaemon{loc: loc, running: readVersionFile(loc.Version)})
+		out = append(out, legacyDaemon{loc: loc, running: readVersionFile(loc.Version), current: versionIsCurrent(loc)})
 	}
 	return out
 }

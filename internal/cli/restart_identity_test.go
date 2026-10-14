@@ -65,11 +65,17 @@ func TestRestartDaemonPIDs_RefusesAPIDFileThatIsNotADaemon(t *testing.T) {
 // free and the kernel may already have handed that number to somebody else. A
 // restart that reads the record as an identity would SIGTERM and then SIGKILL that
 // stranger.
+//
+// The identity check is stubbed to call the stand-in a daemon, so the free lock is
+// the only thing that can refuse it: without the stub the `sleep` is refused by
+// identity and deleting `authorityHeld()` from restartDaemonPIDs survives this test
+// (PLAN-552 MINOR-A). _RefusesAnAuthorityRecordThatIsNotADaemon pins the other half.
 func TestRestartDaemonPIDs_IgnoresAStaleAuthorityRecord(t *testing.T) {
 	withShortTempRuntime(t)
 	withAccountAuthority(t)
 
 	innocent := startSleep(t)
+	stubDaemonIdentity(t, func(pid int) bool { return pid == innocent })
 	path, err := authorityPath()
 	if err != nil {
 		t.Fatalf("authorityPath: %v", err)
