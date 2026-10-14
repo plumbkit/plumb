@@ -2,6 +2,8 @@ package cli
 
 import (
 	"errors"
+	"io/fs"
+	"path/filepath"
 	"testing"
 )
 
@@ -16,7 +18,11 @@ import (
 // configuration, and one that does not goes on and returns something else.
 func TestSetupEntryPoints_RecordTheServiceProfile(t *testing.T) {
 	serviceInstallEnv(t)
-	t.Setenv("HOME", t.TempDir()) // where every client's config would resolve
+	// Every variable a client's config path resolves through, so an entry point
+	// that wrote before recording could only write under this test's own HOME.
+	for _, v := range []string{"CODEX_HOME", "KIMI_CODE_HOME", "DSH_HOME"} {
+		t.Setenv(v, "")
+	}
 	sentinel := errors.New("the service profile was recorded")
 
 	oldRecord := recordServiceProfileForSetup
@@ -42,6 +48,8 @@ func TestSetupEntryPoints_RecordTheServiceProfile(t *testing.T) {
 		{"plumb setup (interactive picker)", runSetupPicker},
 	} {
 		t.Run(entry.name, func(t *testing.T) {
+			home := t.TempDir() // where every client's config would resolve
+			t.Setenv("HOME", home)
 			calls := 0
 			recordServiceProfileForSetup = func() error {
 				calls++
@@ -52,6 +60,30 @@ func TestSetupEntryPoints_RecordTheServiceProfile(t *testing.T) {
 				t.Fatalf("%s did not record the service profile first (calls=%d, err=%v): a canonical cold start after it would refuse",
 					entry.name, calls, err)
 			}
+			// FIRST, not merely at all: nothing may have been written before the
+			// record, so a failed record leaves no client half-configured.
+			if written := regularFilesUnder(t, home); len(written) > 0 {
+				t.Fatalf("%s wrote %v before recording the service profile", entry.name, written)
+			}
 		})
 	}
+}
+
+// regularFilesUnder lists the regular files beneath dir.
+func regularFilesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+	var out []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Type().IsRegular() {
+			out = append(out, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walking %s: %v", dir, err)
+	}
+	return out
 }
