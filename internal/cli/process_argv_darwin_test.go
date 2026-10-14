@@ -3,7 +3,6 @@
 package cli
 
 import (
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,8 +18,12 @@ func TestProcessArgv_KeepsASpaceInTheExecutablePath(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// A symlink, not a copy: a copied system binary loses its code signature and
+	// macOS kills it at exec, leaving nothing to read. argv[0] is the path given.
 	exe := filepath.Join(dir, "sleep")
-	copyFile(t, "/bin/sleep", exe)
+	if err := os.Symlink("/bin/sleep", exe); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command(exe, "30")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting %s: %v", exe, err)
@@ -30,24 +33,5 @@ func TestProcessArgv_KeepsASpaceInTheExecutablePath(t *testing.T) {
 	argv, ok := processArgv(cmd.Process.Pid)
 	if !ok || !reflect.DeepEqual(argv, []string{exe, "30"}) {
 		t.Fatalf("processArgv = %q, %v; want [%q \"30\"]", argv, ok, exe)
-	}
-}
-
-func copyFile(t *testing.T, from, to string) {
-	t.Helper()
-	src, err := os.Open(from)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = src.Close() }()
-	dst, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY, 0o700) //nolint:gosec // G302: an executable test fixture
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.Copy(dst, src); err != nil {
-		t.Fatal(err)
-	}
-	if err := dst.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
