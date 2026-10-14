@@ -67,7 +67,9 @@ var big = []string{
 
 func Big() int { return len(big) }
 `,
-	"store/other.go":  "package store\n\nconst elsewhere = 5\n",
+	"store/other.go": "package store\n\nconst elsewhere = 5\n",
+	"store/many.go": "package store\n\nconst (\n\tm1 = 1\n\tm2 = 2\n\tm3 = 3\n\tm4 = 4\n\tm5 = 5\n\tm6 = 6\n\tm7 = 7\n\tm8 = 8\n\tm9 = 9\n\tm10 = 10\n)\n\n" +
+		"func Many() int { return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10 }\n",
 	"store/caller.go": "package store\n\nfunc Caller() string { return List(T{}, 1) }\n",
 	"py/mod.py":       "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
 }
@@ -84,7 +86,7 @@ func newUsesTool(t *testing.T) shopTool {
 			t.Fatal(err)
 		}
 	}
-	return newShopTool(t, openContextStore(t, root, 4), root)
+	return newShopTool(t, openContextStore(t, root, 5), root)
 }
 
 // usesBlock is the uses record that follows the body of the seed or related
@@ -186,6 +188,36 @@ func TestContextForTask_UsesFollowsARelatedBodyToo(t *testing.T) {
 	}
 	if !strings.Contains(got, "maxRows (constant, line 5)") {
 		t.Errorf("related uses record: %s", got)
+	}
+}
+
+// A constant seed's body is its own declaration: it is not listed as its own use.
+func TestContextForTask_UsesNeverListsTheBodysOwnDeclaration(t *testing.T) {
+	s := newUsesTool(t)
+	out, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#maxRows", "store/store.go#List"}, "max_bytes": 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usesBlock(t, out, "maxRows"); got != "" {
+		t.Errorf("a constant seed lists itself:\n%s", got)
+	}
+	if !strings.Contains(usesBlock(t, out, "List"), "maxRows (constant, line 5)") {
+		t.Fatalf("positive control: List, in the same pack, lists maxRows:\n%s", out)
+	}
+}
+
+func TestContextForTask_UsesListsAtMostEightPerBody(t *testing.T) {
+	s := newUsesTool(t)
+	out, err := s.run(t, map[string]any{"symbols": []string{"store/many.go#Many"}, "max_bytes": 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := usesBlock(t, out, "Many")
+	if n := strings.Count(strings.SplitN(got, "\n", 2)[0], "(constant, "); n != contextUsesMax {
+		t.Errorf("listed %d of the 10 constants Many names, want the first %d:\n%s", n, contextUsesMax, got)
+	}
+	if !strings.Contains(got, "m8 (constant") || strings.Contains(got, "m9 (constant") {
+		t.Errorf("want m1..m8 in file order, got:\n%s", got)
 	}
 }
 

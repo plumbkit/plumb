@@ -58,8 +58,8 @@ func shadows(text, name string) bool {
 }
 
 // uses lists, in file order, the package-level constants and variables of the
-// snapshot that body b names. self is the body's own declaration, never listed
-// as its own use; nor is anything declared inside the body's span.
+// snapshot that body b names, other than those declared inside the body's own
+// span (a constant seed is not its own use).
 func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) []usedDecl {
 	if seed.Language != "go" || b.State != bodyReady {
 		return nil
@@ -72,7 +72,7 @@ func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) 
 	var out []usedDecl
 	seen := map[string]bool{}
 	for _, n := range nodes {
-		if seen[n.Name] || !usedBy(n, b, seed.Name, named) {
+		if seen[n.Name] || !usedBy(n, b, named) {
 			continue
 		}
 		d, ok := s.declLines(n)
@@ -89,13 +89,13 @@ func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) 
 }
 
 // usedBy reports whether n is a package-level constant or variable body b names
-// on its own: not b's own declaration (self), not declared inside b's span, and
-// not shadowed by a declaration of the same name in b.
-func usedBy(n topology.Node, b contextBody, self string, named map[string]bool) bool {
+// on its own: not declared inside b's span, and not shadowed by a declaration of
+// the same name in b.
+func usedBy(n topology.Node, b contextBody, named map[string]bool) bool {
 	if n.Kind != topology.KindConstant && n.Kind != topology.KindVariable {
 		return false
 	}
-	if n.Name == "_" || n.Name == self || !named[n.Name] {
+	if n.Name == "_" || !named[n.Name] {
 		return false
 	}
 	if n.StartLine >= b.Start && n.StartLine <= b.End {
@@ -111,7 +111,7 @@ func usedBy(n topology.Node, b contextBody, self string, named map[string]bool) 
 func (s *bodySource) declLines(n topology.Node) (usedDecl, bool) {
 	d := usedDecl{Name: n.Name, Kind: n.Kind, Start: n.StartLine, End: n.StartLine}
 	first, ok := sliceLines(s.lines, n.StartLine, n.StartLine)
-	if !ok || !strings.Contains(first, n.Name) {
+	if !ok {
 		return usedDecl{}, false
 	}
 	depth, raw := 0, false
