@@ -69,17 +69,17 @@ func (s *bodySource) uses(ctx context.Context, b contextBody, seed contextSeed) 
 		return nil
 	}
 	named := bareNames(b.Text)
+	// One file declares a package-level name once (the blank _ aside, which
+	// usedBy excludes), so no name can be listed twice.
 	var out []usedDecl
-	seen := map[string]bool{}
 	for _, n := range nodes {
-		if seen[n.Name] || !usedBy(n, b, named) {
+		if !usedBy(n, b, named) {
 			continue
 		}
 		d, ok := s.declLines(n)
 		if !ok {
 			continue
 		}
-		seen[n.Name] = true
 		out = append(out, d)
 		if len(out) == contextUsesMax {
 			break

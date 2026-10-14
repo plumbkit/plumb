@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 // context_uses_test.go — a delivered body is followed by the same-file
@@ -66,10 +68,15 @@ var big = []string{
 }
 
 func Big() int { return len(big) }
+
+func ShadowVar() int {
+	var seq = 3
+	return seq
+}
 `,
 	"store/other.go": "package store\n\nconst elsewhere = 5\n",
-	"store/many.go": "package store\n\nconst (\n\tm1 = 1\n\tm2 = 2\n\tm3 = 3\n\tm4 = 4\n\tm5 = 5\n\tm6 = 6\n\tm7 = 7\n\tm8 = 8\n\tm9 = 9\n\tm10 = 10\n)\n\n" +
-		"func Many() int { return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10 }\n",
+	"store/many.go": "package store\n\nvar _ = m1\n\nconst (\n\tm1 = 1\n\tm2 = 2\n\tm3 = 3\n\tm4 = 4\n\tm5 = 5\n\tm6 = 6\n\tm7 = 7\n\tm8 = 8\n\tm9 = 9\n\tm10 = 10\n)\n\n" +
+		"func Many() int { _ = m1; return m1 + m2 + m3 + m4 + m5 + m6 + m7 + m8 + m9 + m10 }\n",
 	"store/caller.go": "package store\n\nfunc Caller() string { return List(T{}, 1) }\n",
 	"py/mod.py":       "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
 }
@@ -153,6 +160,13 @@ func TestContextForTask_UsesSkipsANameTheBodyDeclaresItself(t *testing.T) {
 	}
 	if got := usesBlock(t, out, "Shadow"); got != "" {
 		t.Errorf("Shadow declares its own seq, so it uses no package name, got:\n%s", got)
+	}
+	vout, err := s.run(t, map[string]any{"symbols": []string{"store/store.go#ShadowVar"}, "max_bytes": 12000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := usesBlock(t, vout, "ShadowVar"); got != "" {
+		t.Errorf("ShadowVar declares var seq, so it uses no package name, got:\n%s", got)
 	}
 	// Positive control: in the same pack, List's record is there.
 	if usesBlock(t, out, "List") == "" {
@@ -288,6 +302,25 @@ func TestContextForTask_UsesDegradesThenIsCounted(t *testing.T) {
 	}
 	if !lean || !counted {
 		t.Fatalf("no budget showed the names-only record (%v) or counted a dropped one (%v)", lean, counted)
+	}
+}
+
+// A declaration of exactly contextUsesLines lines is shown whole; one line more
+// and it is cut to its first line.
+func TestDeclLines_TheLineLimitIsInclusive(t *testing.T) {
+	for _, c := range []struct {
+		n   int
+		cut bool
+	}{{contextUsesLines, false}, {contextUsesLines + 1, true}} {
+		lines := []string{"var x = []int{"}
+		for len(lines) < c.n-1 {
+			lines = append(lines, "\t1,")
+		}
+		lines = append(lines, "}")
+		d, ok := (&bodySource{lines: lines}).declLines(topology.Node{Name: "x", Kind: topology.KindVariable, StartLine: 1})
+		if !ok || d.Cut != c.cut || (!c.cut && d.End != c.n) || (c.cut && d.Text != "var x = []int{\n") {
+			t.Errorf("%d lines: got %+v, %v; want cut=%v", c.n, d, ok, c.cut)
+		}
 	}
 }
 
