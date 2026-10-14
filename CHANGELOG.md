@@ -411,6 +411,14 @@
   the index (a new `topology_meta` row), so a complete index the daemon reopens
   after a restart is not labelled; an index built before this version is
   labelled until its first pass under it completes.
+- **`check_messages` no longer reports delivered mail as an incomplete mailbox
+  when a store is slow to open.** The 250 ms claim budget started before the
+  mail stores were opened, and opening takes no deadline, so a slow open (a cold
+  `collab.db`, a loaded machine) used up the budget and the claim then failed
+  with "context deadline exceeded"; a final deadline check could also mark a
+  claim that had succeeded as failed. The budget now covers only the claim and
+  the hooks' probe reads, and each claim reports its own deadline. Found as a
+  `-race` flake of `TestHookMailbox_InboxKeepsOneRootAcrossRepin` (PLAN-545).
 
 - **`context_for_task` detects each directory's project once per call.** After
   the per-file memo below, a pack still resolved the project of each of its 100
