@@ -395,17 +395,11 @@ func TestStartDaemonProcess_ExecsTheProfileExecutableWithTheCleanEnvironment(t *
 		t.Fatalf("startDaemonProcess: %v", err)
 	}
 
-	var lines []string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if data, err := os.ReadFile(report); err == nil && len(data) > 0 {
-			lines = strings.Split(strings.TrimSpace(string(data)), "\n")
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if len(lines) == 0 {
-		t.Fatal("the profile's executable was never run: no report file appeared")
+	lines := waitForReport(report, "fd4=", 5*time.Second)
+	if lines == nil {
+		partial, _ := os.ReadFile(report)
+		t.Fatalf("the profile's executable never finished its report (waiting for %q); what it wrote: %q",
+			"fd4=", partial)
 	}
 	got := map[string]string{}
 	for _, ln := range lines {
@@ -691,4 +685,55 @@ func shortSocketPath(t *testing.T) string {
 		t.Fatalf("the test's socket path is %d bytes, over sun_path's %d", len(path), maxUnixSocketPath)
 	}
 	return path
+}
+
+// waitForReport waits until the child's report file contains marker — the LAST
+// field a caller asserts on — and returns its lines; nil means the marker never
+// appeared within timeout.
+//
+// Waiting for a merely NON-EMPTY file is what made the exec test flaky under
+// load: the child writes the record line by line, so a reader that stops at the
+// first byte parses a PREFIX (argv and HOME present, the handover fds not yet
+// written) and then asserts on the whole of it. Waiting for the last field makes
+// the read atomic in the only sense the test needs.
+func waitForReport(path, marker string, timeout time.Duration) []string {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(data), marker) {
+			return strings.Split(strings.TrimSpace(string(data)), "\n")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil
+}
+
+// A partial record must be REFUSED, and by construction rather than by timing:
+// this is the property the exec test depends on, and it is asserted directly on
+// a file the test writes itself, so it can never depend on how fast a child ran.
+func TestWaitForReport_RefusesAPartialRecord(t *testing.T) {
+	dir := t.TempDir()
+	partial := "argv=/opt/installed/plumb daemon\nHOME=/home/tester\nPATH=/usr/bin:/bin\n"
+	path := filepath.Join(dir, "child.txt")
+	if err := os.WriteFile(path, []byte(partial), 0o600); err != nil {
+		t.Fatalf("writing the partial record: %v", err)
+	}
+	if got := waitForReport(path, "fd4=", 250*time.Millisecond); got != nil {
+		t.Errorf("a record without its last field was accepted as complete: %v", got)
+	}
+
+	// The completed record is accepted, whole.
+	full := partial + "fd3=open\nfd4=open\n"
+	if err := os.WriteFile(path, []byte(full), 0o600); err != nil {
+		t.Fatalf("writing the complete record: %v", err)
+	}
+	got := waitForReport(path, "fd4=", 2*time.Second)
+	if len(got) != 5 || !strings.HasPrefix(got[4], "fd4=") {
+		t.Errorf("waitForReport returned %q, want the complete five-line record", got)
+	}
+
+	// A report that does not exist yet is waited for, never treated as complete.
+	if got := waitForReport(filepath.Join(dir, "not-written.txt"), "fd4=", 150*time.Millisecond); got != nil {
+		t.Errorf("a missing report was accepted as complete: %v", got)
+	}
 }
