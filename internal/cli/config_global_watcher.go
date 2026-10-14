@@ -81,13 +81,14 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 	cfg := configFileWatch{path: filepath.Join(w.dir, w.base), newWatcher: w.newWatcher, watcher: watcher}
 	// A closure, not a plain defer: onError swaps the watcher.
 	defer func() { closeFSWatcher(cfg.watcher) }()
-	attachedAtStart := cfg.attach()
+	cfg.attach()
 	slog.Info("daemon: watching global config for changes", "dir", w.dir, "file", w.base)
 
-	// The store was loaded before this watch existed, so a write in between
-	// raised no event here and leaves the same inode for the tick to compare:
-	// reload once to catch it, as onError does after a blind recreate.
-	timer := newDebounceTimer(w.debounce, attachedAtStart)
+	// Armed from the start: the store was loaded before this watch existed, so
+	// a write in between raised no event here and leaves the same inode for the
+	// tick to compare. The first settle reloads to catch it, as onError does
+	// after a blind recreate; with no file, its attach fails and nothing reloads.
+	timer := time.NewTimer(w.debounce)
 	defer timer.Stop()
 	tick := time.NewTicker(configFileTick)
 	defer tick.Stop()
@@ -119,16 +120,6 @@ func (w *globalConfigWatcher) Run(ctx context.Context) error {
 			w.onSettled(&cfg)
 		}
 	}
-}
-
-// newDebounceTimer returns a debounce timer that fires after d when armed, and
-// is stopped and drained otherwise.
-func newDebounceTimer(d time.Duration, armed bool) *time.Timer {
-	timer := time.NewTimer(d)
-	if !armed && !timer.Stop() {
-		<-timer.C
-	}
-	return timer
 }
 
 // onError handles one watcher error. A lost watcher is recreated

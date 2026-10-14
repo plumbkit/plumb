@@ -280,14 +280,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// the control socket and the global-config file watcher drive store.Reload.
 	store := config.NewStore(cfg)
 
-	// Watch the global config file so external edits (vim, etc.) reload live; the
-	// TUI and `plumb config reload` push via the control socket instead.
-	go func() {
-		if err := newGlobalConfigWatcher(store).Run(ctx); err != nil {
-			slog.Warn("daemon: global config watcher unavailable", "err", err)
-		}
-	}()
-
 	socketPath := daemonSocketPath()
 	_ = os.Remove(socketPath)
 	_ = os.MkdirAll(filepath.Dir(socketPath), 0o700)
@@ -370,6 +362,17 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			slog.Warn("daemon: config change requires a restart to take effect (LSP servers, cache, or log format)")
 		}
 	})
+
+	// Watch the global config file so external edits (vim, etc.) reload live; the
+	// TUI and `plumb config reload` push via the control socket instead. Started
+	// only now, after the reconciling subscriber above: the watcher's first
+	// settle reloads a file edited since config.Load, and the pools built from
+	// that load must hear about it.
+	go func() {
+		if err := newGlobalConfigWatcher(store).Run(ctx); err != nil {
+			slog.Warn("daemon: global config watcher unavailable", "err", err)
+		}
+	}()
 
 	// The connection registry is created here (not in the accept loop) so the
 	// control socket can reach it for the reload-project command, which targets

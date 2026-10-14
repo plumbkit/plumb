@@ -303,10 +303,12 @@
 - **An edit to the global `config.toml` made while the daemon starts is no
   longer missed.** The daemon loads the file, then starts watching it; a write
   in between raised no event the watch could see, so the daemon kept the older
-  config until the next edit. The watcher now reloads once when it starts on an
-  existing file. The same window made
-  `TestGlobalConfigWatcher_DeleteKeepsLoadedConfig` and its siblings fail on a
-  loaded CI runner after 10 s (PLAN-544).
+  config until the next edit. The watcher now reloads once when it starts, and
+  starts only after the daemon's topology reconciler subscribes, so the reload
+  reaches the pools built from the first load. The same window made
+  `TestGlobalConfigWatcher_DeleteKeepsLoadedConfig` (and could make
+  `TestGlobalConfigWatcher_ReloadsOnFileChange`) fail on a loaded CI runner
+  after 10 s (PLAN-544).
 
 - **`plumb debug daemons` no longer reports a healthy daemon as a violation.**
   The macOS ownership query ran `lsof -b` — the flag for a machine whose mounts

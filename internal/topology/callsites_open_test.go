@@ -172,7 +172,8 @@ func TestOpenCallSites_CostDoesNotScaleWithImportsPerSite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Logged so a CI slowdown shows as a shrinking margin before it fails.
+	// Logged so the margin can be read with -v, and beside the error if the
+	// bound is ever crossed.
 	t.Logf("census of 2,000 calls over 20,000 imports took %v (bound 1.5 s)", took)
 	if total != 2000 {
 		t.Fatalf("control: %d open calls, want 2000", total)

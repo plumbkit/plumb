@@ -43,18 +43,28 @@ func TestGlobalConfigWatcher_ReloadsAFileWrittenBeforeTheWatch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- gw.Run(ctx) }()
+	stopped := false
 	defer func() {
 		cancel()
-		<-done
+		if !stopped {
+			<-done
+		}
 	}()
 
-	// Two stat ticks: a watcher that only reacts to events and ticks has had
-	// every chance, and still sees no change.
-	for deadline := time.Now().Add(2*configFileTick + 10*gw.debounce); !store.Current().Edits.Strict; {
-		if time.Now().After(deadline) {
+	// A watcher without the start reload never reloads here, so the deadline
+	// only bounds a failure; it is wide so a loaded runner cannot fail a correct
+	// one. A Run that ends early (no watcher could be built) fails with its own
+	// error instead of looking like a missed reload.
+	deadline := time.After(10 * time.Second)
+	for !store.Current().Edits.Strict {
+		select {
+		case err := <-done:
+			stopped = true
+			t.Fatalf("Run ended before reloading: %v", err)
+		case <-deadline:
 			t.Fatal("a config written before the watch started was never reloaded: the daemon would keep the config it loaded until the next edit")
+		case <-time.After(20 * time.Millisecond):
 		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }
 
