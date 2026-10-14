@@ -464,7 +464,9 @@
   environment's first entry as the last argument) and could look like a
   `plumb daemon`. One decoder now serves both, skips exactly the kernel's
   8-byte padding, and refuses a buffer with fewer arguments than its `argc`
-  (PLAN-552 review follow-up).
+  (PLAN-552 review follow-up). The service-environment notice for a skipped
+  non-UTF-8 variable is pinned to name it and never print its value (PLAN-554
+  review follow-up).
 - **`plumb restart` and the legacy-daemon checks close the gaps the PLAN-530
   review left open.** The restart's launcher deadline started before the
   confirmation prompt, so a slow answer spent it and a daemon still exiting
