@@ -408,6 +408,9 @@ func TestServiceEnvCmd_WiresTheShell(t *testing.T) {
 	if err := serviceEnvSetCmd.RunE(serviceEnvSetCmd, []string{"GOPRIVATE"}); err != nil {
 		t.Fatal(err)
 	}
+	if e, _ := loadTestProfile(t).Env.Lookup("GOPRIVATE"); e.Value != "github.com/first/*" || !e.Captured {
+		t.Fatalf("env set NAME did not capture from this shell: %+v", e)
+	}
 	t.Setenv("GOPRIVATE", "github.com/second/*")
 	if err := serviceEnvRefreshCmd.RunE(serviceEnvRefreshCmd, nil); err != nil {
 		t.Fatal(err)
@@ -446,5 +449,27 @@ func TestDescribeEnvChange_SaysALiteralWasReplaced(t *testing.T) {
 	after := before.With(service.EnvEntry{Name: "GOPROXY", Value: "https://shell", Inherit: true, Captured: true})
 	if got := describeEnvChange(before, after); !strings.Contains(got, "literal value was replaced") {
 		t.Fatalf("describeEnvChange = %q", got)
+	}
+}
+
+// TestServiceInstall_SetupSaysWhatItCaptured: `plumb setup` records the profile
+// through the quiet path, possibly in an agent's or a sandbox's shell, so the
+// names it captured must still be printed.
+func TestServiceInstall_SetupSaysWhatItCaptured(t *testing.T) {
+	serviceInstallEnv(t)
+	for _, name := range service.DefaultEnvNames() {
+		t.Setenv(name, "")
+	}
+	t.Setenv("GONOSUMDB", "github.com/acme")
+	out := captureStdout(t, func() {
+		if err := installServiceProfile(false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "captured GONOSUMDB") {
+		t.Fatalf("the quiet install did not say what it captured:\n%s", out)
+	}
+	if strings.Contains(out, "github.com/acme") {
+		t.Fatalf("the quiet install printed a captured value:\n%s", out)
 	}
 }
