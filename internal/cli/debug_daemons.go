@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,9 +71,6 @@ func daemonCensusOptions() daemons.Options {
 	for _, loc := range legacyLocations() {
 		opts.Sockets = append(opts.Sockets, loc.Socket)
 		opts.LegacyLocks = append(opts.LegacyLocks, loc.Lock)
-	}
-	if legacy := legacyDaemonSocketPath(); legacy != "" && !slices.Contains(opts.Sockets, legacy) {
-		opts.Sockets = append(opts.Sockets, legacy)
 	}
 	return opts
 }
