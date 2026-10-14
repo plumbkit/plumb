@@ -267,7 +267,7 @@ func (p *contextPack) addMatch(input, pathHint string, m symbolMatch, indexHash 
 		miss.Candidates, miss.More = boundedCandidates(m.nodes)
 		p.Misses = append(p.Misses, miss)
 	default:
-		miss := contextMiss{Input: input, Reason: noMatchReason(pathHint, m)}
+		miss := contextMiss{Input: input, Reason: noMatchReason(pathHint, m), NoMatch: true}
 		miss.Candidates, miss.More = boundedCandidates(m.nodes)
 		p.Misses = append(p.Misses, miss)
 	}
@@ -280,6 +280,18 @@ func referenceNodes(n int) string {
 		return "1 import/package/file node"
 	}
 	return fmt.Sprintf("%d import/package/file nodes", n)
+}
+
+// markMissesBuilding says, on every symbol seed the index found no declaration
+// for, that the index is still on its first pass: the declaration may exist and
+// not be indexed yet. Every other miss (ambiguous, outside the root, over the cap,
+// unreadable) means the same whatever the index holds, and is left alone.
+func (p *contextPack) markMissesBuilding() {
+	for i := range p.Misses {
+		if p.Misses[i].NoMatch {
+			p.Misses[i].Reason += "; the index is still being built, so the declaration may not be indexed yet"
+		}
+	}
 }
 
 // noMatchReason words a none outcome so it cannot be read as a suggestion: the
