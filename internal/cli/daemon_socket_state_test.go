@@ -556,6 +556,9 @@ func TestSocketPathState_NotesAnIdentityLessRecord(t *testing.T) {
 	if !strings.Contains(notHeld.note(), "does not hold it open") {
 		t.Errorf("the census answered that 4242 does not hold the path; the note must say so: %q", notHeld.note())
 	}
+	if strings.Contains(unanswered.note(), "does not hold it open") {
+		t.Errorf("the census did not answer; the note must not claim 4242 does not hold the path: %q", unanswered.note())
+	}
 	if strings.Contains(held.note(), "does not hold it open") {
 		t.Errorf("4242 does hold the path; the note must not claim otherwise: %q", held.note())
 	}
@@ -568,5 +571,46 @@ func TestSocketPathState_NotesAnIdentityLessRecord(t *testing.T) {
 	rows := daemonSocketResults([]socketPathState{notHeld})
 	if len(rows) != 1 || !rows[0].warn {
 		t.Errorf("doctor must show the identity-less record as one warning row, got %+v", rows)
+	}
+}
+
+// TestDaemonSocketPublication_KeepsALongLivedIdentityLessRecord pins the reach of
+// PLAN-551's note: a pre-529 daemon publishes once and never refreshes, so its
+// record ages past the freshness window within 90 s. While its pid is still a
+// `plumb daemon` the record stays a publication; once the pid is not one (it was
+// recycled), it does not. A record WITH an identity is unaffected: a current
+// daemon refreshes, so a stale one is still dropped.
+func TestDaemonSocketPublication_KeepsALongLivedIdentityLessRecord(t *testing.T) {
+	withTempRuntime(t)
+	path := filepath.Join(t.TempDir(), "plumb.sock")
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authPath := authorityLockPathForTest(t)
+	if err := os.MkdirAll(filepath.Dir(authPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	write := func(m authorityMetadata) {
+		t.Helper()
+		if err := os.WriteFile(authPath, authorityJSON(t, m), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	isDaemon := true
+	stubDaemonIdentity(t, func(pid int) bool { return pid == os.Getpid() && isDaemon })
+
+	write(authorityMetadata{PID: os.Getpid(), Socket: path, Published: old})
+	if pub, ok := daemonSocketPublication(); !ok || pub.pid != os.Getpid() {
+		t.Fatalf("a ten-minute-old identity-less record of a live plumb daemon was dropped: %+v %v", pub, ok)
+	}
+	isDaemon = false // the pid now names somebody else
+	if _, ok := daemonSocketPublication(); ok {
+		t.Fatal("a stale identity-less record whose pid is no longer a plumb daemon was kept")
+	}
+	isDaemon = true
+	write(authorityMetadata{PID: os.Getpid(), Socket: path, SocketDev: 1, SocketIno: 2, Published: old})
+	if _, ok := daemonSocketPublication(); ok {
+		t.Fatal("a stale record WITH an identity was kept: a current daemon refreshes, so it is gone")
 	}
 }

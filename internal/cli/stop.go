@@ -434,11 +434,17 @@ func findPIDViaSocket(socketPath string) int {
 // in between is left alone.
 func removeStalePIDFile(path string, stalePID int) {
 	marker := markRuntimeFile(path)
+	afterPIDFileMarked()
 	if readPIDFileAt(path) != stalePID {
 		return
 	}
 	marker.removeIfOurs("pid file")
 }
+
+// afterPIDFileMarked runs between removeStalePIDFile's mark and its read. It does
+// nothing; it is a variable so the suite can replace the file in exactly that
+// window and pin the order (mark first, then read, then remove by identity).
+var afterPIDFileMarked = func() {}
 
 // daemonStopWait must stay longer than shutdownHardDeadline so the daemon's
 // own watchdog wins the race before the CLI warns about a slow graceful stop.

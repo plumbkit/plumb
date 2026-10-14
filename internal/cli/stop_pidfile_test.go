@@ -94,3 +94,24 @@ func TestOwnedDirsFrom_DedupsEveryLegacyLocation(t *testing.T) {
 		t.Fatalf("ownedDirsFrom = %v, want %v", got, want)
 	}
 }
+
+// TestRemoveStalePIDFile_KeepsAFileReplacedAfterTheMark pins the order: the file
+// is marked BEFORE it is read, and removed only through that identity. A file
+// replaced in between — even one naming the same stale pid — is a different file
+// and is left alone. Reading first, or removing by path, would delete it.
+func TestRemoveStalePIDFile_KeepsAFileReplacedAfterTheMark(t *testing.T) {
+	withShortTempRuntime(t)
+	stale := deadPID(t)
+	writeDaemonPIDFile(t, stale)
+	path := daemonPIDPath()
+	old := afterPIDFileMarked
+	t.Cleanup(func() { afterPIDFileMarked = old })
+	afterPIDFileMarked = func() {
+		_ = os.Remove(path)
+		writeDaemonPIDFile(t, stale) // a new file (new inode) with the same contents
+	}
+	removeStalePIDFile(path, stale)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("a pid file replaced after the mark was removed: %v", err)
+	}
+}

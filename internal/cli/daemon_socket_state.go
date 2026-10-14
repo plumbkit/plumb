@@ -64,7 +64,19 @@ func daemonSocketPublication() (socketPublication, bool) {
 	if !ok || m.Socket == "" || m.PID <= 0 {
 		return socketPublication{}, false
 	}
-	if !processAlive(m.PID) || time.Since(m.Published) > daemonSocketPublicationFreshness {
+	if !processAlive(m.PID) {
+		return socketPublication{}, false
+	}
+	// A record older than the freshness window is normally a daemon that stopped
+	// refreshing — gone, its pid possibly recycled. Not so for a record with no
+	// socket identity, which is what a daemon from before PLAN-529 writes: it
+	// publishes once at start and never refreshes, so age says nothing about it.
+	// What a stale record risks is a recycled pid, and the identity check restart
+	// applies to every recorded pid answers that without taking any lock (this
+	// is a read-only census): if the pid is still a `plumb daemon`, the record is
+	// still that daemon's publication (PLAN-551).
+	stale := time.Since(m.Published) > daemonSocketPublicationFreshness
+	if stale && (m.SocketIno != 0 || !daemonIdentityCheck(m.PID)) {
 		return socketPublication{}, false
 	}
 	return socketPublication{
@@ -177,7 +189,7 @@ func (s socketPathState) note() string {
 		// PLAN-529 writes. Silence here would discard what the census CAN say
 		// (PLAN-551): whether that daemon holds the path open. Not an accusation —
 		// the file may well be its socket — but never nothing.
-		detail := fmt.Sprintf("plumb daemon %d published this path without recording which file it bound (an older build), so whether the file there is still its socket cannot be checked; `plumb restart` replaces it with a build that records it", s.Publisher)
+		detail := fmt.Sprintf("plumb daemon %d published this path without recording which file it bound (a daemon from an older build, or a launch still starting one), so whether the file there is still its socket cannot be checked; if it persists, `plumb restart` replaces the daemon with a build that records it", s.Publisher)
 		if s.Answered && !s.holderStillHolds() {
 			detail += fmt.Sprintf(" — and the census found plumb daemon %d does not hold it open", s.Publisher)
 		}

@@ -480,7 +480,9 @@
   legacy daemon there. `plumb doctor` and `plumb debug daemons` now note a
   socket record with no file identity (what a daemon from an older build writes)
   instead of saying nothing, and say when that daemon does not hold the path
-  open (PLAN-551).
+  open; such a record is honoured for as long as its pid is still a
+  `plumb daemon`, since an older daemon publishes once and never refreshes it
+  (PLAN-551).
 - **`context_for_task` says when its index is still on its first pass.** An
   agent's first call in a fresh worktree reached an index holding a few dozen of
   a few thousand files, and the pack read like a complete answer: "no indexed
