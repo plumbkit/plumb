@@ -740,6 +740,12 @@ func TestLegacyLocations_TheEnvironmentsDirectoryWhenTheAccountIsTheAnswer(t *te
 
 func TestCurrentLocation_IsOneDirectoryAndTheOneOlderBinariesKnow(t *testing.T) {
 	withShortTempRuntime(t)
+	// The account authority is ON, which is the only mode in which the environment's
+	// runtime directory and this one are different directories. With it off they are
+	// the same, and a "resolves every path together" assertion would hold for a
+	// function that resolved half of them from the legacy location — which is how the
+	// first version of this test let exactly that mutant through.
+	withAccountAuthority(t)
 	cur := currentLocation()
 	// Every accessor names a path of the ONE location, which is what makes the
 	// four-path resolution structural rather than a convention: a version file read
