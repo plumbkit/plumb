@@ -238,12 +238,11 @@ func (u User) ServiceProfilePath() string {
 // in EVERY mode, opted out included (PLAN-518 D4).
 func AuthorityEnabled() bool { return authorityEnabled() }
 
-// ConfigAuthorityEnabled reports whether plumb's CONFIG directory is the
-// account's. It is the same gate read at the SEED rather than at the resolved
-// value, and the difference is deliberate: the config file is where
-// `daemon.account_authority` is declared, so the file that turns the authority
-// off must stay the file that is read, or the setting would hide itself from the
-// next start. See seam_off.go's configAuthorityEnabled for the argument in full.
+// ConfigAuthorityEnabled reports whether plumb's CONFIG directory may be the
+// account's. In a released build it always may — the switch lives in that
+// directory and must not be able to move it — while a test binary or a container
+// harness keeps the environment's, so a suite still isolates through HOME/XDG.
+// See seam_off.go's configAuthorityEnabled for the argument in full.
 func ConfigAuthorityEnabled() bool { return configAuthorityEnabled() }
 
 // testRoot reports the directory a test has redirected account resolution to,

@@ -15,11 +15,20 @@ import (
 // default true — and this file is where its VALUE lives.
 //
 // It lives here rather than in internal/config, and that is not an accident of
-// taste. The gate decides which CONFIG FILE plumb reads (paths.ConfigDir
-// consults it), so it cannot be read from that file by the layer below: the
-// directory a setting is written to would depend on the setting. internal/config
-// — a higher layer, which may import this one — resolves the key and RECORDS the
-// answer with SetResolvedAuthority; everything at or below foundation reads it.
+// taste. The directories it governs are resolved by internal/paths, which is
+// foundation and may not import internal/config — and the config file itself is
+// read through that same resolver, so the key cannot be read from the file by
+// the layer that decides which file it is. internal/config — a higher layer,
+// which may import this one — resolves the key and RECORDS the answer with
+// SetResolvedAuthority; everything at or below foundation reads it.
+//
+// Two values, not one, and the difference is load-bearing:
+//
+//   - the SEED is the environment plus the compiled default. It is what a
+//     process knows before it has read anything, and it is what the launcher
+//     passes to the daemon it starts, so both resolve the same directories.
+//   - the RESOLVED value is what the configuration said, and it is what every
+//     other global directory follows.
 //
 // Concurrency: safe for concurrent use. The value is decided once, early, by the
 // first configuration resolution in the process, and only read afterwards.
@@ -73,9 +82,11 @@ var (
 
 // seedAuthorityValue is the gate as the ENVIRONMENT and the compiled default
 // state it, before any configuration file has been read. It is what a process
-// uses for the decisions that necessarily come first — above all which config
-// file to read, and the daemon's runtime lifetime lock, which it takes before it
-// reads any configuration at all.
+// uses for the decisions that necessarily come first — above all the daemon's
+// runtime lifetime lock, which it takes before it reads any configuration at
+// all. Every managed launch passes its own resolved value down in
+// PLUMB_ACCOUNT_AUTHORITY (internal/cli's daemonCommand), so a daemon's seed IS
+// the mode its launcher resolved and the two agree on where the daemon lives.
 func seedAuthorityValue() bool {
 	if v, ok := ParseAuthorityEnv(); ok {
 		return v
@@ -85,21 +96,42 @@ func seedAuthorityValue() bool {
 
 // resolvedAuthorityValue is the gate this process resolved, or the seed when
 // nothing has resolved one yet.
+//
+// A READ BEFORE THE FIRST RESOLUTION DOES NOT DECIDE. The seed is returned and
+// the process is left unresolved, so the configuration loaded later still
+// answers — which matters because the daemon resolves the runtime directory its
+// lifetime lock lives in BEFORE it reads any configuration (it takes its locks
+// first, by design), and latching the seed there would silently ignore a
+// `daemon.account_authority = false` the user had written down. A process that
+// reads the gate before it can know it uses the compiled answer until it does
+// know it.
 func resolvedAuthorityValue() bool {
 	authorityMu.Lock()
 	defer authorityMu.Unlock()
 	if !authoritySet {
-		authorityValue = seedAuthorityValue()
-		authoritySet = true
+		return seedAuthorityValue()
 	}
 	return authorityValue
 }
 
+// AuthorityResolved reports the value the CONFIGURATION resolved for
+// `daemon.account_authority`, and the compiled default before anything has
+// resolved it. It is the gate every global directory except the config
+// directory follows.
+//
+// It is not AuthorityEnabled, and the difference is the seam: AuthorityEnabled
+// is the gate THIS process uses — a test binary or a container harness reads it
+// from the environment, so the suite keeps the environment-derived resolution it
+// was written against — while this reports what the configuration decided. The
+// two agree in every released build. internal/config's tests use this to pin the
+// wiring that publishes the key, and `runDaemon` logs it.
+func AuthorityResolved() bool { return resolvedAuthorityValue() }
+
 // SetResolvedAuthority records the value the configuration resolved for
 // `daemon.account_authority`.
 //
-// The FIRST call wins. The gate decides where every global directory is — the
-// runtime directory the daemon's sockets and locks live in, its data, state,
+// The FIRST resolution wins. The gate decides where every global directory is —
+// the runtime directory the daemon's sockets and locks live in, its data, state,
 // logs and caches — and it is tier ReloadRestart precisely because that cannot
 // change under a process that is already running. A later reload therefore
 // cannot move them, and `plumb config show`'s restart-needed report is what

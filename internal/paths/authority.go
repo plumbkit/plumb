@@ -27,10 +27,11 @@ import (
 // LEGACY mode the profile is ignored entirely — not read, not consulted, not
 // missed — and every directory comes from the environment again.
 //
-// ONE DIRECTORY DELIBERATELY DOES NOT FOLLOW IT. Read ConfigDir below: the
-// config directory is resolved at the SEED, because the config file is where
-// this setting is declared, and a file that could move itself could hide its own
-// value from the next start.
+// ONE DIRECTORY DELIBERATELY DOES NOT FOLLOW IT. Read configDir below: the
+// config directory is the account's in every released build, whatever the switch
+// says, because the file that declares the switch must not move with it — a
+// `daemon.account_authority` living in a directory that depended on its own
+// value could hide itself from the next start.
 //
 // What the gate does NOT decide is whether the authority is taken: every managed
 // launch takes the account authority lock and refuses to start beside a holder
@@ -70,20 +71,28 @@ func accountDir(role service.Role) (string, bool) {
 }
 
 // configDir is accountDir for the CONFIG role, and it asks a different question
-// on purpose: whether the ACCOUNT's config directory is the one this process
-// reads, which is the gate as the ENVIRONMENT states it rather than as the
-// config file resolved it.
+// on purpose: whether the ACCOUNT's config directory may be the one this process
+// reads. In a released build the answer is always yes (see
+// account.ConfigAuthorityEnabled); only a test binary or a container harness,
+// which says which directories it wants and must never reach the developer's
+// real account directory, resolves the config directory from the environment.
 //
-// The file that turns the account authority off is the file this resolves, so a
-// config directory that followed the resolved value would move out from under
-// its own setting. Set `daemon.account_authority = false`, and from the next
-// start the resolved gate is OFF: a config directory that followed it would
-// resolve the environment's, which is a different file on any host where the
-// two differ — and the opt-out would then be read exactly once and lost. With
-// the seed in charge the location is stable, the opt-out is read from the file
-// it was written to, and `plumb config set` writes to the file that will be read
-// back. Every other global directory follows the resolved value; this one does
-// not, and docs/configuration.md says so.
+// WHY THE CONFIG DIRECTORY IS NOT PART OF THE SWITCH. The file that declares
+// `daemon.account_authority` is the file this resolves, so a directory that moved
+// with the setting would move out from under its own declaration. Set
+// `daemon.account_authority = false` and a resolved-value rule would send the
+// NEXT start to the environment's file — a different file wherever
+// XDG_CONFIG_HOME differs from the account standard — so the opt-out would be
+// read exactly once, and `plumb config set daemon.account_authority true` would
+// write to a file nothing ever read. An ENV opt-out rule has the same defect from
+// the other side: `plumb config set` under PLUMB_ACCOUNT_AUTHORITY=false would
+// write the environment's file, and the next start, seeded from an environment
+// without the variable, would read the account's. The config file therefore
+// follows neither the seed nor the resolved value: it stays the account's, both
+// routes stay readable, and the switch keeps working in both directions.
+//
+// Every other global directory follows the resolved value, and
+// docs/configuration.md states both halves for users.
 func configDir() (string, bool) {
 	if !account.ConfigAuthorityEnabled() {
 		return "", false

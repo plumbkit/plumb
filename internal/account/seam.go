@@ -50,8 +50,11 @@ func authorityEnabled() bool {
 	return authorityFromEnv()
 }
 
-// configAuthorityEnabled is the config-directory half of the gate. In a tagged
-// build it is the same reading as authorityEnabled, because the seed question
-// and the resolved one have the same answer there: a harness sets the variable
-// once, in the environment, and no config file is involved.
+// configAuthorityEnabled is the config-directory half of the gate. A TAGGED
+// build is a harness, not a user's plumb: it keeps the environment's config
+// directory whenever the harness has not asked for the canonical resolution, so
+// cmd/smoke's per-test HOME and XDG still isolate one test from the next. The
+// account-directory rule a released build follows (the config file never moves;
+// see seam_off.go) does not apply here, because there is no user configuration
+// to keep readable — the harness says which directories it wants.
 func configAuthorityEnabled() bool { return authorityEnabled() }

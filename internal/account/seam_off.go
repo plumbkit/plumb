@@ -42,19 +42,27 @@ func authorityEnabled() bool {
 	return resolvedAuthorityValue()
 }
 
-// configAuthorityEnabled is the gate for the CONFIG DIRECTORY alone, and it asks
-// the SEED question rather than the resolved one.
+// configAuthorityEnabled reports whether plumb's CONFIG directory may be the
+// account's: the file that declares `daemon.account_authority` must not move
+// when the setting changes, or the setting hides itself from the next start
+// (`plumb config set` would write a file nothing reads).
 //
-// The file that turns the account authority off lives in the config directory,
-// so a config directory that followed the RESOLVED value would move out from
-// under its own setting: `plumb config set daemon.account_authority false` would
-// write the account's file, and the next start — seeding from the environment,
-// where nothing was set — would read the environment's. With the seed in charge
-// the location is stable and the setting cannot hide itself. Every other global
-// directory follows the resolved value; see internal/paths/authority.go.
+// So the config directory follows NEITHER the seed nor the resolved value in a
+// released build — it is the account's, always. An environment opt-out
+// (PLUMB_ACCOUNT_AUTHORITY=false) moves the runtime directory, the sockets, the
+// data, the state and the logs, and deliberately NOT the config file: a
+// directory that moved with the switch would leave the switch unreadable, and
+// the two opt-out routes would then disagree about which file plumb reads. For
+// the same reason the location is not a function of the resolved value either,
+// which would move the file on the start AFTER the one that read it.
+//
+// In a test binary the seam decides, exactly as authorityEnabled does, so a test
+// still isolates its config through HOME/XDG and never touches the developer's
+// real account directory. internal/paths/authority.go's configDir is the only
+// reader; docs/configuration.md states the behaviour for users.
 func configAuthorityEnabled() bool {
 	if testing.Testing() {
 		return authorityFromEnv()
 	}
-	return seedAuthorityValue()
+	return true
 }

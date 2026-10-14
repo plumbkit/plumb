@@ -245,6 +245,9 @@ func registerTargetFlags(cmd *cobra.Command, t setupTarget) {
 // and codexTarget.
 func runSetupTarget(t setupTarget) error {
 	PrintLogo()
+	if err := ensureServiceProfileForSetup(); err != nil {
+		return err
+	}
 	cfgPath, err := t.pathFn()
 	if err != nil {
 		return fmt.Errorf("locating %s config: %w", t.name, err)

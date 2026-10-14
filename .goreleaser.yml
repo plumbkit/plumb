@@ -107,6 +107,20 @@ brews:
       email: hello@getplumb.sh
     install: |
       bin.install "plumb"
+    # The upgrade path (PLAN-518 MUST-FIX 4, PLAN-528). The account's daemon is
+    # ONE service per user, and its launch profile records which binary is that
+    # service: a cold start with no profile refuses — it never guesses which
+    # binary to start — so `brew upgrade` must refresh it or the user is left
+    # with a plumb that cannot start a daemon.
+    #
+    # `plumb service install` is the deliberate update path, and it is safe to
+    # run on every install, every upgrade and every reinstall of the same
+    # version: it is IDEMPOTENT, it changes ONLY the recorded executable, and it
+    # leaves an existing user's directories, PATH and adopted XDG settings
+    # exactly as they are. It starts nothing and signals nothing, so a
+    # post_install can never disturb a running daemon.
+    post_install: |
+      system "#{bin}/plumb", "service", "install"
     test: |
       system "#{bin}/plumb", "version"
 

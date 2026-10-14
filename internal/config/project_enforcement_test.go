@@ -82,6 +82,14 @@ var enforcementCases = map[string]struct {
 		"[edits]\nstrict = false\n",
 		func(c Config) bool { return !c.Edits.Strict },
 	},
+	// A cloned repository must not be able to move the account's daemon: this key
+	// decides which runtime directory a launch takes the account lock in. softened
+	// is "the project's false reached the merged config", so hardenedBase() must
+	// carry the account authority ON for the case to mean anything.
+	"daemon.account_authority": {
+		"[daemon]\naccount_authority = false\n",
+		func(c Config) bool { return !c.Daemon.AccountAuthority },
+	},
 	"edits.block_dirty_writes": {
 		"[edits]\nblock_dirty_writes = false\n",
 		func(c Config) bool { return !c.Edits.BlockDirtyWrites },

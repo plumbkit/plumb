@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -32,10 +34,12 @@ import (
 // profile is never inferred: no profile means no launch, with the
 // `plumb service install` instruction as the remedy.
 //
-// LEGACY MODE IS UNTOUCHED. Until the default flip (PLAN-518 rollout invariant
-// 1) `paths.AuthorityEnabled()` is true only in a test or a container harness,
-// so every shipped build takes the first branch below and behaves exactly as it
-// does today.
+// LEGACY MODE IS UNTOUCHED. `daemon.account_authority` defaults to ON from the
+// default flip (PLAN-518 rollout invariant 1, satisfied by PLAN-530's legacy
+// detection landing first), so a shipped build takes the profile branch below;
+// a user who turns the setting off gets exactly the pre-528 launch — this binary,
+// this environment — and every managed launch still takes the account authority
+// before starting anything, in EVERY mode (PLAN-518 D4).
 
 // daemonLaunchSpec is what to start and the environment to start it in.
 type daemonLaunchSpec struct {
@@ -138,6 +142,7 @@ func daemonCommand(spec daemonLaunchSpec, locks launchLocks) (*exec.Cmd, *os.Fil
 		fmt.Sprintf("%s=%d", authorityLockFDEnv, inheritedAuthorityLockFD),
 		fmt.Sprintf("%s=%d", daemonLockFDEnv, inheritedDaemonLockFD),
 	)
+	env = withAuthorityMode(env)
 	if len(locks.Legacy) > 0 {
 		handover, err := encodeLegacyHandover(locks.Legacy)
 		if err != nil {
@@ -161,6 +166,34 @@ func daemonCommand(spec daemonLaunchSpec, locks launchLocks) (*exec.Cmd, *os.Fil
 // is running. It is deliberately not a start: the flag exists for scripts that
 // must fail rather than launch.
 var errNoDaemonToAttach = errors.New("no plumb daemon is running and --attach-only never starts one")
+
+// withAuthorityMode stamps THIS launcher's resolved mode onto the daemon's
+// environment, replacing any value it would otherwise have inherited.
+//
+// The daemon resolves the runtime directory its lifetime lock lives in BEFORE it
+// reads any configuration — it takes its locks first, by design — so what decides
+// where it looks for the lock is its seed, which is the environment plus the
+// compiled default of ON. A user who opts out in config.toml rather than in the
+// environment would otherwise have a legacy launcher take a lock in the
+// environment's runtime directory and hand it to a daemon that had already
+// decided it lived in the account's: the handover checks the fd against that path
+// and fails closed, so every launch on that host would fail. Passing the decision
+// down is also what makes PLUMB_ACCOUNT_AUTHORITY mean the same thing to the
+// client and to the daemon it starts.
+//
+// In place, not appended: os.Getenv resolves the FIRST match, so an appended
+// variable would lose to the inherited one in the legacy branch, where the env is
+// this process's own.
+func withAuthorityMode(env []string) []string {
+	entry := account.AuthorityEnvVar + "=" + strconv.FormatBool(paths.AuthorityEnabled())
+	for i, v := range env {
+		if strings.HasPrefix(v, account.AuthorityEnvVar+"=") {
+			env[i] = entry
+			return env
+		}
+	}
+	return append(env, entry)
+}
 
 // attachOnly dials the daemon and never starts one: `plumb serve --attach-only`.
 //

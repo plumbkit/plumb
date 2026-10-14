@@ -48,14 +48,17 @@ func TestBuildSettingItems_ShapeAndFlags(t *testing.T) {
 
 // TestReloadTierFor pins each settings key to its reload tier. The reloadRestart
 // set must stay in lock-step with the fields config.RestartSensitiveEqual
-// compares (log format + cache) — anything else the daemon hot-reloads, so
-// marking it restart-needed would mislead the user (the bug this fixes).
+// compares (log format + cache + the account authority) — anything else the
+// daemon hot-reloads, so marking it restart-needed would mislead the user (the
+// bug this fixes).
 func TestReloadTierFor(t *testing.T) {
-	// The reloadRestart set must stay exactly {log format, log file, cache} — the
-	// only fields the daemon cannot hot-reload. Marking anything else restart-
-	// needed would mislead the user.
+	// The reloadRestart set must stay exactly {log format, log file, cache,
+	// daemon account authority} — the only fields the daemon cannot hot-reload,
+	// because they decide where it writes and where it listens rather than how it
+	// behaves. Marking anything else restart-needed would mislead the user.
 	restart := map[settingKey]bool{
 		skLogFormat: true, skLogFile: true, skCacheTTL: true, skCacheMaxSize: true,
+		skDaemonAccountAuthority: true,
 	}
 	for _, it := range buildSettingItems(config.Defaults()) {
 		tier := reloadTierFor(it.key)
@@ -66,7 +69,7 @@ func TestReloadTierFor(t *testing.T) {
 			continue
 		}
 		if tier == config.ReloadRestart {
-			t.Errorf("reloadTierFor(%v) = ReloadRestart, but only log format/file + cache may be restart-needed", it.key)
+			t.Errorf("reloadTierFor(%v) = ReloadRestart, but only log format/file, cache and the account authority may be restart-needed", it.key)
 		}
 	}
 	// Spot-check representative live and next-session keys.

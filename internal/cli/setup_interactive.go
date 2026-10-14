@@ -39,6 +39,9 @@ type pickerRow struct {
 
 func runSetupPicker() error {
 	PrintLogo()
+	if err := ensureServiceProfileForSetup(); err != nil {
+		return err
+	}
 
 	plumbBin, err := os.Executable()
 	if err != nil {

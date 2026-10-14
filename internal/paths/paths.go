@@ -111,9 +111,9 @@ func base(envVar string, pick func() string) string {
 //
 // With the account authority enabled it comes from the service profile, and
 // failing that from the OS account database, instead of the environment — see
-// authority.go. It is the ONE global directory the authority gate does not move
-// once resolved, and configDir there gives the reason: the config file is where
-// the gate itself is declared.
+// authority.go. It is the ONE global directory the authority switch does not
+// move, and configDir there gives the reason: the config file is where the
+// switch itself is declared, so its location must not depend on its value.
 func ConfigDir() string {
 	if dir, ok := configDir(); ok {
 		return dir

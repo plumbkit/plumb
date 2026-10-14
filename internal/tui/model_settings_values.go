@@ -327,6 +327,8 @@ func boolFieldMore(c *config.Config, key settingKey) *bool {
 		return &c.Workspace.DiscoverSiblings
 	case skAgentConfigWrites:
 		return &c.AgentConfigWrites
+	case skDaemonAccountAuthority:
+		return &c.Daemon.AccountAuthority
 	case skAutoAttach:
 		return &c.Workspace.AutoAttach
 	case skSemEnabled:
@@ -576,6 +578,8 @@ func toggleLabelRest(key settingKey) string {
 	switch key {
 	case skXcodeAutoBuildServer:
 		return "xcode auto build server"
+	case skDaemonAccountAuthority:
+		return "account authority"
 	default:
 		return ""
 	}

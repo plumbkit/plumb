@@ -100,4 +100,5 @@ var settingDottedKeys = map[settingKey]string{
 	skSemRerankCandidates:        "semantics.rerank_candidates",
 	skSemTimeout:                 "semantics.timeout",
 	skAgentConfigWrites:          "agent_config_writes",
+	skDaemonAccountAuthority:     "daemon.account_authority",
 }
