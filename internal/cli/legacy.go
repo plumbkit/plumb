@@ -282,6 +282,12 @@ func probeLegacyDaemonsAt(locs []legacyLocation) []legacyDaemon {
 			continue
 		}
 		_ = conn.Close()
+		// The account's own daemon answers here too when it holds this location's
+		// lock (the legacy bridge, PLAN-549): that is not a legacy daemon, and
+		// reading it as one would refuse a client the account's daemon is serving.
+		if ourBridgeAt(loc.Socket) {
+			continue
+		}
 		out = append(out, legacyDaemon{loc: loc, running: readVersionFile(loc.Version), current: versionIsCurrent(loc)})
 	}
 	return out

@@ -86,6 +86,7 @@ func runDebugDaemons(out io.Writer) error {
 	verdict := report.Verdict()
 	states := daemonSocketStates(report)
 	fmt.Fprint(out, renderDaemonCensus(report, verdict, states))
+	fmt.Fprint(out, renderLegacyBridges(liveLegacyBridges()))
 	return debugDaemonsExit(verdict, states)
 }
 
@@ -262,4 +263,43 @@ func dashIfZero(n int) string {
 		return "-"
 	}
 	return strconv.Itoa(n)
+}
+
+// liveLegacyBridges returns the legacy bridge sockets the account's live daemon
+// published (PLAN-549) whose file is still the one it bound — read-only, from the
+// authority record. A dead publisher's record, or a path somebody replaced, is
+// not reported as a bridge.
+func liveLegacyBridges() []bridgeRecord {
+	authority, err := authorityPath()
+	if err != nil {
+		return nil
+	}
+	m, ok := readAuthority(authority)
+	if !ok {
+		return nil
+	}
+	var out []bridgeRecord
+	for _, r := range m.Bridges {
+		if ourBridgeAt(r.Path) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// renderLegacyBridges says which legacy socket paths the account's daemon is also
+// answering on, and whether any old client still uses them — the evidence the
+// bridge's removal is decided on (docs/architecture.md).
+func renderLegacyBridges(bridges []bridgeRecord) string {
+	var b strings.Builder
+	for _, r := range bridges {
+		use := "no client has used it since the daemon started"
+		if !r.FirstClient.IsZero() {
+			use = "an old client first connected through it at " + r.FirstClient.Local().Format(time.DateTime) +
+				" — restart that client so it uses the account socket"
+		}
+		fmt.Fprintf(&b, "  %s legacy bridge %s: the account's daemon answers old clients here; %s\n",
+			tui.MutedStyle.Render("-"), r.Path, use)
+	}
+	return b.String()
 }
