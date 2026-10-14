@@ -196,12 +196,22 @@ func TestServiceInstall_SeedsAProfileFromBeforeTheSection(t *testing.T) {
 	if err := p.Write(path); err != nil {
 		t.Fatal(err)
 	}
+	// The user recorded one before the section was ever seeded: the seeding must
+	// preserve it, not replace it with the installing shell's value.
+	if err := setServiceEnv("GOPRIVATE=github.com/mine/*", fakeShell(nil)); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOPRIVATE", "github.com/upgrade/*")
 	t.Setenv("GONOSUMDB", "github.com/acme")
 	if err := installServiceProfile(false); err != nil {
 		t.Fatal(err)
 	}
-	if e, _ := loadTestProfile(t).Env.Lookup("GONOSUMDB"); e.Value != "github.com/acme" {
+	env := loadTestProfile(t).Env
+	if e, _ := env.Lookup("GONOSUMDB"); e.Value != "github.com/acme" {
 		t.Errorf("the upgrade did not seed a pre-[service.env] profile: %+v", e)
+	}
+	if e, _ := env.Lookup("GOPRIVATE"); e.Value != "github.com/mine/*" || e.Inherit {
+		t.Errorf("the first seeding replaced the user's GOPRIVATE: %+v", e)
 	}
 }
 

@@ -86,13 +86,11 @@ var serviceEnvRefreshCmd = &cobra.Command{
 }
 
 // setServiceEnv records one entry: `NAME=VALUE` is a literal, a bare `NAME` is an
-// inherited symbol captured from lookup now. A denied name is refused with the
-// reason, before anything is read or written.
+// inherited symbol captured from lookup now. A denied or malformed name is
+// refused with the reason by the profile's own Write (service.CheckEnvName), so
+// the rule lives in one place and the file is never touched.
 func setServiceEnv(arg string, lookup func(string) (string, bool)) error {
 	name, value, literal := strings.Cut(arg, "=")
-	if err := service.CheckEnvName(name); err != nil {
-		return err
-	}
 	entry := service.EnvEntry{Name: name, Value: value}
 	if !literal {
 		entry = service.Capture(name, lookup)
