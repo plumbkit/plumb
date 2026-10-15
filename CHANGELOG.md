@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.26.1 (unreleased)
+
+### Fixed
+
+- **The Claude Code and Codex hooks stay inside their session's namespace.**
+  `plumb hooks run-claude` and `run-codex` now send the session's
+  `PLUMB_NAMESPACE` with every daemon request, and the daemon answers the
+  Stop-hook mailbox probe, context hints and the `/clear` handover only from that
+  namespace's sessions. Before, a hook matched a conversation in any namespace,
+  so a default-namespace hook could see a namespaced session's unread count. A
+  released or expired token is answered by nobody, never by the default
+  namespace.
+
 ## 0.26.0 (2026-10-16)
 
 ### Fixed

@@ -475,6 +475,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			// The marker lives on the registry, beside the connections that consume it.
 			conversationCleared: registry.conversationClears().mark,
 			mailbox:             registry.mailboxProbe,
+			resolveNamespace:    registry.namespaceForToken,
 			contextHint:         contextHint,
 		})
 	}

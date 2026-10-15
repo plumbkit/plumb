@@ -55,14 +55,18 @@ const (
 // tokens the adapter lifted from the prompt — the prompt itself never leaves
 // the hook process.
 type contextHintRequest struct {
-	Host        string   `json:"host"`
-	HostVersion string   `json:"host_version,omitempty"`
-	Event       string   `json:"event"`
-	Source      string   `json:"source,omitempty"`
-	SessionID   string   `json:"session_id"`
-	AgentID     string   `json:"agent_id,omitempty"`
-	TurnID      string   `json:"turn_id,omitempty"`
-	Selectors   []string `json:"selectors,omitempty"`
+	Host        string `json:"host"`
+	HostVersion string `json:"host_version,omitempty"`
+	Event       string `json:"event"`
+	Source      string `json:"source,omitempty"`
+	SessionID   string `json:"session_id"`
+	// NamespaceToken is the hook's PLUMB_NAMESPACE; namespace is the id the
+	// daemon resolved it to (hooks_namespace.go).
+	NamespaceToken string `json:"namespace_token,omitempty"`
+	namespace      string
+	AgentID        string   `json:"agent_id,omitempty"`
+	TurnID         string   `json:"turn_id,omitempty"`
+	Selectors      []string `json:"selectors,omitempty"`
 	// Workspace is the plumb workspace root the hook's working directory sits in
 	// (the .plumb marker walk the hook already gates on). It is consulted only for
 	// an identity no live connection knows yet, and only if the daemon already
@@ -110,7 +114,7 @@ const cwdRootNote = "root: this session's working directory (no plumb call yet)\
 type contextHintService struct {
 	hinter  tools.ContextHinter
 	ledger  *contexthints.Store
-	resolve func(external, workspace string) (hintRoot, bool)
+	resolve func(external, workspace, namespace string) (hintRoot, bool)
 	enabled func() bool
 	now     func() time.Time
 	limits  contexthints.Limits
@@ -131,7 +135,7 @@ type hintAgentState struct {
 }
 
 func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Store,
-	resolve func(external, workspace string) (hintRoot, bool), enabled func() bool,
+	resolve func(external, workspace, namespace string) (hintRoot, bool), enabled func() bool,
 ) *contextHintService {
 	return &contextHintService{
 		hinter: hinter, ledger: ledger, resolve: resolve, enabled: enabled, now: time.Now,
@@ -232,7 +236,7 @@ func (c *contextHintService) ledgerRoot(req contextHintRequest) string {
 	if req.SessionID == "" || c.resolve == nil {
 		return ""
 	}
-	root, _ := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace)
+	root, _ := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace, req.namespace)
 	return root.Path
 }
 
@@ -287,7 +291,7 @@ func (c *contextHintService) admit(req contextHintRequest) (root hintRoot, refus
 	case c.resolve == nil:
 		return hintRoot{}, "no-root"
 	}
-	root, ok := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace)
+	root, ok := c.resolve(hintExternal(req.SessionID, req.AgentID), req.Workspace, req.namespace)
 	if !ok || root.Path == "" {
 		return hintRoot{}, "no-root"
 	}
@@ -558,6 +562,14 @@ func handleContextHintCommand(out io.Writer, line string, h ctrlHandlers) bool {
 	if len(payload) > maxContextHintRequest || json.Unmarshal([]byte(payload), &req) != nil || h.contextHint == nil {
 		fmt.Fprintln(out, "error: context hint unavailable")
 		return true
+	}
+	if h.resolveNamespace != nil {
+		ns, ok := h.resolveNamespace(req.NamespaceToken)
+		if !ok {
+			fmt.Fprintln(out, "error: context hint unavailable")
+			return true
+		}
+		req.namespace = ns
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), contextHintBudget)
 	defer cancel()

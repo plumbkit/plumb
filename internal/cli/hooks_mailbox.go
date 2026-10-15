@@ -23,6 +23,10 @@ const (
 type hookMailboxRequest struct {
 	SessionID string `json:"session_id"`
 	Stop      bool   `json:"stop,omitempty"`
+	// NamespaceToken is the hook's PLUMB_NAMESPACE (hooks_namespace.go);
+	// namespace is the id the daemon resolved it to, set by the handler.
+	NamespaceToken string `json:"namespace_token,omitempty"`
+	namespace      string
 }
 
 type hookMailboxReply struct {
@@ -36,7 +40,7 @@ func probeHookMailbox(sessionID string, stop bool) (hookMailboxReply, bool) {
 	if strings.TrimSpace(sessionID) == "" {
 		return hookMailboxReply{}, false
 	}
-	request, err := json.Marshal(hookMailboxRequest{SessionID: sessionID, Stop: stop})
+	request, err := json.Marshal(hookMailboxRequest{SessionID: sessionID, Stop: stop, NamespaceToken: hookNamespaceToken()})
 	if err != nil {
 		return hookMailboxReply{}, false
 	}
@@ -66,6 +70,14 @@ func handleMailboxCommand(out io.Writer, line string, h ctrlHandlers) bool {
 	if len(payload) > 4096 || json.Unmarshal([]byte(payload), &request) != nil || request.SessionID == "" || h.mailbox == nil {
 		fmt.Fprintln(out, "error: mailbox probe unavailable")
 		return true
+	}
+	if h.resolveNamespace != nil {
+		ns, ok := h.resolveNamespace(request.NamespaceToken)
+		if !ok {
+			fmt.Fprintln(out, "error: mailbox probe unavailable")
+			return true
+		}
+		request.namespace = ns
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hookMailboxBudget)
 	defer cancel()
@@ -114,7 +126,7 @@ func (r *connRegistry) mailboxProbe(ctx context.Context, request hookMailboxRequ
 	r.mu.Lock()
 	var resolvers []func(string) (tools.Inbox, bool)
 	for _, h := range r.conns {
-		if h.mailboxInbox != nil {
+		if h.mailboxInbox != nil && handleNamespace(h) == request.namespace {
 			resolvers = append(resolvers, h.mailboxInbox)
 		}
 	}

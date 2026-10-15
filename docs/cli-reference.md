@@ -824,6 +824,12 @@ memory and the per-path write locks stay shared: a namespace changes who can see
 whom, not what the daemon knows about the code. Session names stay unique across
 every namespace.
 
+The Claude Code and Codex hooks (`plumb hooks run-claude`, `run-codex`) inherit
+the session's `PLUMB_NAMESPACE` and send it with every daemon request they make:
+the Stop-hook mailbox probe, context hints and the `/clear` handover are answered
+only from that namespace's sessions. A hook without a token speaks for the
+default namespace; one whose token was released or expired is answered by nobody.
+
 | Command | Effect |
 |---|---|
 | `create` | Makes a namespace and prints its **token** (shown once) and public **id**. `--ttl` sets its lifetime (default 2 h, 1 m–7 d); every call made in it renews it. `--owner-pid` names the owning process (say, the test runner's own pid; default none): when it is gone — a runner killed before its exit trap — the namespace expires 5 minutes later. |

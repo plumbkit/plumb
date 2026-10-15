@@ -168,7 +168,7 @@ func pruneContextHints(ctx context.Context, ledger *contexthints.Store, every ti
 // mailbox probe uses to find a recipient: exactly one live connection must know
 // the caller. Zero or several means no root — a hint is never routed by a guess.
 func (r *connRegistry) hintRoot(external string) (hintRoot, bool) {
-	return r.hintRootFor(external, "")
+	return r.hintRootFor(external, "", "")
 }
 
 // hintRootFor is hintRoot with one fallback, for the first prompt of a session
@@ -177,11 +177,14 @@ func (r *connRegistry) hintRoot(external string) (hintRoot, bool) {
 // the workspace of a live connection. The fallback applies only when NO
 // connection knows the caller; two that do is still no root. It reads the
 // registry and nothing else: no index is opened, and no pin or shard is created.
-func (r *connRegistry) hintRootFor(external, workspace string) (hintRoot, bool) {
+func (r *connRegistry) hintRootFor(external, workspace, namespace string) (hintRoot, bool) {
 	r.mu.Lock()
 	var resolvers []func(string) (string, bool, bool)
 	var served []func() string
 	for _, h := range r.conns {
+		if handleNamespace(h) != namespace {
+			continue // a hook answers only from its own namespace (hooks_namespace.go)
+		}
 		if h.hintRoot != nil {
 			resolvers = append(resolvers, h.hintRoot)
 		}
