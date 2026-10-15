@@ -1062,6 +1062,25 @@ satisfies strict mode's read-before-edit check and nothing else does. A body in 
 file matching `[history] sensitive_globs` that the walk reached (rather than the
 caller named) is reduced to its location and a label.
 
+**Uses (Go).** A Go body delivered whole, of a seed or of a related declaration,
+is followed by a `uses, declared in this file:` record. It lists the
+package-level constants and variables of the same file that the body names, with
+their declaration lines from the same snapshot as the body, so no second read is
+needed.
+- **Long values.** A declaration's end is found with Go's own scanner, so a value
+  continued over several lines is shown whole. One that runs past 12 lines is
+  shown by its first line and a `read_symbol` handoff.
+- **Names matched.** Names are matched as text, so one in a comment, a string or
+  a struct-literal key is listed too. A name reached through a selector is not
+  listed, nor is one the body declares itself with `:=` or `var`. A parameter or
+  named result of the same name is not detected.
+- **Cap and budget.** At most 8 names are listed per body, and the rest are
+  counted. The record ranks below every seed body and best-ranked related
+  declaration, and shrinks to names and line numbers under a tight budget.
+- **When there is no record.** None is shown when the body is cut to a status
+  line, and a dropped record is counted as `uses` in the omission footer. A body
+  in `have` gets no record.
+
 **Evidence labels.** Every related declaration carries the class of the
 relationship that reached it, and the pack never presents a weaker class as a
 stronger one: `e4` a call the language server confirmed (call hierarchy); `e3` an
@@ -1092,15 +1111,23 @@ checker's static callers on this repository and on golang.org/x/tools, no
 "complete" claim missed a caller.
 
 **Same-package callers.** The Go call resolver links bare same-package calls,
-calls on a method's own receiver and calls on a typed parameter, so those callers
-arrive as resolved `e2` edges. A test caller is one of them, and at most 12 test
-callers are listed per declaration (the pack counts the rest; the affected-tests
-section counts their packages). A method called on a local variable or a field is
-still not an edge, so for each callable method seed, and each one one hop out, the
+calls on a method's own receiver, calls on a typed parameter, and calls on a local
+variable of evident type, so those callers arrive as resolved `e2` edges. A local
+has an evident type when the function declares it once, as `x := T{}`, `x := &T{}`,
+`new(T)`, `var x T`, `x := y.(T)` or from a function's declared result. A name
+the function declares more than once (a loop variable re-declaring a parameter,
+say) is resolved by none of these tiers. A test
+caller is one of them, and at most 12 test callers are listed per declaration.
+The pack counts the rest, and the affected-tests section counts their packages.
+A method called on a field, or on a local whose type is not evident, is still not
+an edge. Beside the resolved callers, for each callable method seed, and each one one hop out, the
 pack reads the call sites the index recorded in the files of the same directory
 and package clause, and lists the declaration holding a call of the seed's name as
 a caller at `e1`, labelled "same-package name match" (and "test" for a `_test.go`
-file) and never counted among the resolved callers. A function gets this search
+file) and never counted among the resolved callers. A resolved `e2` edge to the
+same declaration replaces its name match, so what stays at `e1` is a call the
+resolver left open and the caller's own declarations settle, such as a local
+declared more than once with one type. A function gets this search
 only on an index built before the resolver linked same-package calls; there its
 match is a bare call that no local declaration of the caller shadows. A method's
 match needs receiver evidence in the caller itself (its receiver, a parameter,
