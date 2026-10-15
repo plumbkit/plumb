@@ -44,8 +44,13 @@ func contextReportFixture(t *testing.T) (*DB, time.Time) {
 			errsSb36.WriteString(`{"file":"a.go","line":1,"severity":"error","message":"x"}`)
 		}
 		errs += errsSb36.String()
+		if errs != "" {
+			errs += ","
+		}
+		errs += `{"file":"a.go","line":9,"severity":"warning","message":"a warning is not an error"}`
 		return "applied 1 edit\n[diagnostics: authoritative post-write pass]\ndiagnostics delta: {\"fresh\":true,\"scopes\":{\"edited_file\":\"fresh\",\"cross_file\":\"incomplete\"},\"new_errors\":[" + errs + "],\"resolved\":[],\"pre_existing\":0}"
 	}
+	unconfirmed := "applied 1 edit\ndiagnostics delta: {\"fresh\":false,\"scopes\":{\"edited_file\":\"timeout\",\"cross_file\":\"not_checked\"},\"new_errors\":[{\"file\":\"x.go\",\"line\":1,\"severity\":\"error\",\"message\":\"stale\"}],\"resolved\":[],\"pre_existing\":0}"
 	// Stream s1: a prose pack, then the work it led to.
 	rec("/w", "s1", "", "context_for_task", `{"task":"the checkout charges twice"}`, contextFixturePack, true, week1)
 	rec("/w", "s1", "", "search_in_files", `{"pattern":"ledger"}`, "", true, week1)
@@ -54,14 +59,19 @@ func contextReportFixture(t *testing.T) (*DB, time.Time) {
 	rec("/w", "s1", "", "search_in_files", `{"pattern":"after the first edit"}`, "", true, week1)
 	rec("/w", "s1", "", "edit_file", `{"file_path":"store/ledger.go"}`, fresh(0), true, week1)
 	rec("/w", "s1", "", "edit_file", `{"file_path":"store/ledger.go"}`, "", false, week1)
+	rec("/w", "s1", "", "edit_file", `{"file_path":"never/written.go"}`, "", false, week1)
 	rec("/w", "s1", "", "undo_edit", `{}`, "", true, week1)
 	rec("/w", "s1", "", "run_task", `{"slot":"test"}`, "$ go test\nFAIL\n→ stopped: step 1/1 failed (exit 1)\n", true, week1)
 	rec("/w", "s1", "", "run_task", `{"slot":"test"}`, "$ go test\nok\n→ ok\n", true, week1)
 	rec("/w", "s1", "", "tool_feedback", `{"tool":"context_for_task","missing":"the ledger's callers"}`, "", true, week1)
 	// Stream s2/a1: edits without a pack.
-	rec("/w", "s2", "a1", "edit_file", `{"file_path":"x.go"}`, "", true, week1)
+	rec("/w", "s2", "a1", "edit_file", `{"file_path":"x.go"}`, unconfirmed, true, week1)
 	rec("/w", "s2", "a1", "edit_file", `{"file_path":"/w/x.go"}`, "", true, week1)
 	rec("/w", "s2", "a1", "run_task", `{"slot":"test"}`, "→ ok\n", true, week1)
+	// Stream s3: edits without a pack, its last test run red.
+	rec("/w", "s3", "", "edit_file", `{"file_path":"y.go"}`, "", true, week1)
+	rec("/w", "s3", "", "run_task", `{"slot":"test"}`, "→ ok\n", true, week1)
+	rec("/w", "s3", "", "run_task", `{"slot":"test"}`, "→ stopped: step 1/1 failed (exit 1)\n", true, week1)
 	// Stream s2/a2, a week later: reads only.
 	rec("/w", "s2", "a2", "read_file", `{"file_path":"x.go"}`, "", true, week1.Add(7*24*time.Hour))
 	// Another workspace: never counted.
@@ -83,7 +93,7 @@ func TestContextReport_ScoresPacksAndOutcomes(t *testing.T) {
 		name      string
 		got, want int
 	}{
-		{"streams", w.Streams, 2},
+		{"streams", w.Streams, 3},
 		{"streams with pack", w.StreamsWithPack, 1},
 		{"packs", w.Packs, 1},
 		{"prose packs", w.ProsePacks, 1},
@@ -98,8 +108,8 @@ func TestContextReport_ScoresPacksAndOutcomes(t *testing.T) {
 		{"seed rereads", w.SeedRereads, 1},
 		{"feedback", w.Feedback, 1},
 		{"with: streams", w.WithPack.Streams, 1},
-		{"with: edits", w.WithPack.Edits, 3},
-		{"with: failed edits", w.WithPack.EditFailures, 1},
+		{"with: edits", w.WithPack.Edits, 4},
+		{"with: failed edits", w.WithPack.EditFailures, 2},
 		{"with: diagnosed", w.WithPack.DiagnosedEdits, 2},
 		{"with: new-error edits", w.WithPack.NewErrorEdits, 1},
 		{"with: undos", w.WithPack.Undos, 1},
@@ -107,13 +117,15 @@ func TestContextReport_ScoresPacksAndOutcomes(t *testing.T) {
 		{"with: test failures", w.WithPack.TestFailures, 1},
 		{"with: ended green", w.WithPack.EndedGreen, 1},
 		{"with: files", w.WithPack.FilesEdited, 2},
-		{"without: streams", w.WithoutPack.Streams, 1},
-		{"without: edits", w.WithoutPack.Edits, 2},
-		{"without: files (one file, two spellings)", w.WithoutPack.FilesEdited, 1},
-		{"without: ended green", w.WithoutPack.EndedGreen, 1},
+		{"without: streams", w.WithoutPack.Streams, 2},
+		{"without: edits", w.WithoutPack.Edits, 3},
+		{"without: files (x.go in two spellings, y.go)", w.WithoutPack.FilesEdited, 2},
+		{"without: unconfirmed delta is no diagnosis", w.WithoutPack.DiagnosedEdits, 0},
+		{"without: tested streams", w.WithoutPack.StreamsWithTests, 2},
+		{"without: ended green (s3 ended red)", w.WithoutPack.EndedGreen, 1},
 		{"week 2 streams", r.Weeks[1].Streams, 1},
 		{"week 2 editing streams", r.Weeks[1].WithoutPack.Streams, 0},
-		{"total streams", r.Total.Streams, 3},
+		{"total streams", r.Total.Streams, 4},
 		{"total packs (other workspace excluded)", r.Total.Packs, 1},
 	}
 	for _, c := range checks {
@@ -185,5 +197,31 @@ func TestClampLeadKeepsRunesWhole(t *testing.T) {
 		if r == '�' {
 			t.Fatal("clampLead split a rune")
 		}
+	}
+}
+
+// A second pack closes the first one's window: what the agent did between them
+// is scored against the first pack, and the second starts empty.
+func TestContextReport_ANewPackClosesTheWindow(t *testing.T) {
+	db := openFailuresDB(t)
+	at := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	for i, c := range []Call{
+		{Tool: "context_for_task", InputJSON: `{"files":["api/checkout.go"]}`, OutputText: contextFixturePack, Success: true},
+		{Tool: "edit_file", InputJSON: `{"file_path":"cart/cart.go"}`, Success: true},
+		{Tool: "context_for_task", InputJSON: `{"files":["store/ledger.go"]}`, OutputText: "context_for_task root=/r\nseeds (1 resolved, 0 unresolved):\n  file store/ledger.go [go]\n", Success: true},
+	} {
+		c.Workspace, c.SessionID, c.CalledAt = "/w", "s", at.Add(time.Duration(i)*time.Second)
+		if err := db.Record(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := db.ContextReport(Filter{Workspace: "/w"}, at.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Total
+	if p.Packs != 2 || p.WindowsWithEdits != 1 || p.EditedFiles != 1 || p.EditedFilesInPack != 1 || p.PackFiles != 3 || p.PackFilesUsed != 1 {
+		t.Errorf("packs=%d windows=%d edited=%d inPack=%d packFiles=%d used=%d, want 2 1 1 1 3 1",
+			p.Packs, p.WindowsWithEdits, p.EditedFiles, p.EditedFilesInPack, p.PackFiles, p.PackFilesUsed)
 	}
 }
