@@ -204,23 +204,44 @@ const (
 	restartSwiftLeasePoll = 20 * time.Millisecond
 )
 
-func (p *workspacePool) restartSwift(root string) error {
-	e := p.lookup(root, "swift")
-	if e == nil {
-		return fmt.Errorf("restarting SourceKit-LSP: no Swift pool entry for %s", root)
+// shutdownCtx is the pool's daemon-lifetime context, or Background outside a
+// daemon (tests that build the pool directly).
+func (p *workspacePool) shutdownCtx() context.Context {
+	if p.baseCtx == nil {
+		return context.Background()
 	}
+	return p.baseCtx
+}
+
+// hibernateForRestart hibernates e for an explicit restart, waiting for calls in
+// progress to end. On success it returns with p.mu HELD and e hibernated.
+func (p *workspacePool) hibernateForRestart(e *poolEntry) error {
 	deadline := time.Now().Add(restartSwiftLeaseWait)
 	for {
 		p.hibernateEntry(e)
 		p.mu.Lock()
 		if e.state == poolHibernated {
-			break // still holding p.mu
+			return nil // still holding p.mu
 		}
 		p.mu.Unlock()
 		if e.proxy.inflight.Load() == 0 || !time.Now().Before(deadline) {
 			return errors.New("restarting SourceKit-LSP: entry did not hibernate")
 		}
-		time.Sleep(restartSwiftLeasePoll)
+		select {
+		case <-p.shutdownCtx().Done():
+			return errors.New("restarting SourceKit-LSP: the daemon is shutting down")
+		case <-time.After(restartSwiftLeasePoll):
+		}
+	}
+}
+
+func (p *workspacePool) restartSwift(root string) error {
+	e := p.lookup(root, "swift")
+	if e == nil {
+		return fmt.Errorf("restarting SourceKit-LSP: no Swift pool entry for %s", root)
+	}
+	if err := p.hibernateForRestart(e); err != nil {
+		return err
 	}
 	if e.cache != nil {
 		e.cache.Clear()

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -352,7 +353,7 @@ func TestPool_GraceCountsFromTheLastCall(t *testing.T) {
 
 func graceFromLastCall(t *testing.T, callFirst bool) {
 	t.Helper()
-	pool, ctx := fastWarmingPool(t, 300*time.Millisecond)
+	pool, ctx := fastWarmingPool(t, 600*time.Millisecond)
 	defer pool.close()
 	const root = "/tmp/plumb-lease-last-call"
 
@@ -374,9 +375,11 @@ func graceFromLastCall(t *testing.T, callFirst bool) {
 	if !callFirst {
 		call()
 	}
-	time.Sleep(200 * time.Millisecond)
-	done() // the call ends inside the release's grace
-	time.Sleep(time.Until(released.Add(pool.idleGrace + 150*time.Millisecond)))
+	time.Sleep(400 * time.Millisecond)
+	done() // the call ends inside the release's grace; its own runs to ~1000 ms
+	// Look between the two: the release's grace has expired (600 ms), the call's
+	// has not, with 200 ms of margin on each side.
+	time.Sleep(time.Until(released.Add(pool.idleGrace + 200*time.Millisecond)))
 	if pool.lookup(root, "go") == nil {
 		t.Fatal("reaped when the release's grace expired, although a call ended after the release")
 	}
@@ -546,5 +549,27 @@ func TestClientProxy_NotReadyBeginReArmsAnUnheldEntry(t *testing.T) {
 	p.begin()
 	if idle.Load() != 1 {
 		t.Fatal("onIdle ran for a held entry")
+	}
+}
+
+// TestRestartSwift_WaitStopsAtShutdown: the restart's wait for calls in
+// progress ends at once when the daemon shuts down, rather than sleeping out
+// its 30 s bound.
+func TestRestartSwift_WaitStopsAtShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	pool := &workspacePool{entries: make(map[poolKey]*poolEntry), baseCtx: ctx, cacheTTL: time.Minute, startGrace: 15 * time.Millisecond}
+	defer pool.close()
+	root := t.TempDir()
+	release := make(chan struct{})
+	close(release)
+	var outcome error
+	e := swiftEntryWithControllableStart(t, pool, root, nil, release, &outcome)
+	e.proxy.set(&stubClient{id: "swift"})
+	_, done := e.proxy.begin()
+	defer done()
+	cancel()
+	err := runRestartSwift(t, pool, root, 2*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "shutting down") {
+		t.Fatalf("restart during shutdown = %v, want the shutting-down error", err)
 	}
 }
