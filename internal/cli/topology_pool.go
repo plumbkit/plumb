@@ -34,6 +34,14 @@ type topologyPool struct {
 	stores map[string]*topology.Store
 	cfgs   map[string]config.TopologyConfig
 	cfg    config.TopologyConfig
+	// flight lets a root's store be opened or re-opened without p.mu: opening
+	// starts SQLite, a file watcher and the indexer (PLAN-536). closed marks the
+	// pool stopped, so an open that finishes afterwards closes its store.
+	flight keyedFlight
+	closed bool
+	// openStore opens a store; nil means topology.Open with every extractor. A
+	// test seam for a slow or probing open.
+	openStore func(root string, cfg config.TopologyConfig) (*topology.Store, error)
 }
 
 func newTopologyPool(cfg config.TopologyConfig) *topologyPool {
@@ -49,32 +57,67 @@ func newTopologyPool(cfg config.TopologyConfig) *topologyPool {
 // existing store was opened with a different config, it is closed and re-opened
 // so the new tuning (resync interval, excludes, size caps) takes effect.
 // Returns nil when root is empty or the store cannot be opened.
+//
+// The close and the open run WITHOUT p.mu (PLAN-536); a concurrent Acquire for
+// the same root waits for them, one for another root does not.
 func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology.Store {
 	if root == "" {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if s, ok := p.stores[root]; ok {
-		if reflect.DeepEqual(p.cfgs[root], cfg) {
+	for {
+		p.mu.Lock()
+		if s, ok := p.stores[root]; ok && reflect.DeepEqual(p.cfgs[root], cfg) {
+			p.mu.Unlock()
 			return s
 		}
-		// Config differs from what the store was opened with — a first attach
-		// carrying project tuning, or a post-reload re-acquire. Re-open so the
-		// new settings take effect.
-		if err := s.Close(); err != nil {
-			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
+		wait, leader := p.flight.begin(root)
+		if !leader {
+			p.mu.Unlock()
+			<-wait
+			continue
 		}
+		// Absent, or opened with a different config — a first attach carrying
+		// project tuning, or a post-reload re-acquire: (re-)open so the new
+		// settings take effect.
+		old := p.stores[root]
 		delete(p.stores, root)
 		delete(p.cfgs, root)
+		p.mu.Unlock()
+		return p.reopen(root, old, cfg)
 	}
-	s, err := topology.Open(root, cfg, buildExtractors())
+}
+
+// reopen closes old (when any) and opens root with cfg, both without p.mu, then
+// publishes the result and ends root's flight. Caller holds root's flight.
+func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.TopologyConfig) *topology.Store {
+	if old != nil {
+		if err := old.Close(); err != nil {
+			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
+		}
+	}
+	open := p.openStore
+	if open == nil {
+		open = func(root string, cfg config.TopologyConfig) (*topology.Store, error) {
+			return topology.Open(root, cfg, buildExtractors())
+		}
+	}
+	s, err := open(root, cfg)
+	p.mu.Lock()
+	p.flight.end(root)
+	closed := p.closed
+	if err == nil && !closed {
+		p.stores[root] = s
+		p.cfgs[root] = cfg
+	}
+	p.mu.Unlock()
 	if err != nil {
 		slog.Error("topology: failed to open store", "root", root, "err", err)
 		return nil
 	}
-	p.stores[root] = s
-	p.cfgs[root] = cfg
+	if closed {
+		_ = s.Close()
+		return nil
+	}
 	slog.Info("topology: store opened", "root", root)
 	return s
 }
@@ -144,26 +187,36 @@ func (p *topologyPool) healthFor(root string) (topology.Health, bool) {
 // This is safe to do live because the indexer is a background subsystem with no
 // synchronous request path — no in-flight tool call fails when a store is
 // closed and re-opened.
+//
+// The map is snapshotted under p.mu; every close and re-open runs without it
+// (PLAN-536), one root at a time through that root's flight.
 func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if reflect.DeepEqual(cfg, p.cfg) {
+		p.mu.Unlock()
 		return
 	}
 	prevEnabled := p.cfg.Enabled
 	p.cfg = cfg
 
 	if !cfg.Enabled {
+		closing := make(map[string]*topology.Store, len(p.stores))
 		for root, s := range p.stores {
+			closing[root] = s
+			delete(p.stores, root)
+			delete(p.cfgs, root)
+		}
+		p.mu.Unlock()
+		for root, s := range closing {
 			if err := s.Close(); err != nil {
 				slog.Warn("topology: close on disable", "root", root, "err", err)
 			}
-			delete(p.stores, root)
-			delete(p.cfgs, root)
 		}
 		slog.Info("topology: disabled via config reload; stores closed")
 		return
 	}
+	roots := slices.Collect(maps.Keys(p.stores))
+	p.mu.Unlock()
 
 	if !prevEnabled {
 		// Was disabled, now enabled: nothing open yet; new Acquires use the new
@@ -177,21 +230,10 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 	// session's reconcileTopologyStore (which re-acquires with the merged
 	// config); a root with no live session stays on the global config until its
 	// next attach.
-	for root, s := range p.stores {
-		if err := s.Close(); err != nil {
-			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
-		}
-		ns, err := topology.Open(root, cfg, buildExtractors())
-		if err != nil {
-			slog.Error("topology: reopen on reconcile failed", "root", root, "err", err)
-			delete(p.stores, root)
-			delete(p.cfgs, root)
-			continue
-		}
-		p.stores[root] = ns
-		p.cfgs[root] = cfg
+	for _, root := range roots {
+		p.Acquire(root, cfg)
 	}
-	slog.Info("topology: reconfigured via config reload", "roots", len(p.stores))
+	slog.Info("topology: reconfigured via config reload", "roots", len(roots))
 }
 
 // topoStopAllGrace bounds StopAll's aggregate wait for every topology store to
@@ -213,6 +255,7 @@ const topoStopAllGrace = 2 * time.Second
 // which must not be held under p.mu).
 func (p *topologyPool) StopAll() {
 	p.mu.Lock()
+	p.closed = true
 	stores := make([]*topology.Store, 0, len(p.stores))
 	for root, s := range p.stores {
 		stores = append(stores, s)

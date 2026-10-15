@@ -262,19 +262,16 @@ func (p *workspacePool) hibernateEntry(e *poolEntry) {
 // wakeLocked restarts a hibernated entry's language server, reusing the same
 // Supervisor (StartAsync re-runs the captured OnStart, re-publishing the adapter
 // into the entry's proxy) and the same warm cache. The file watcher is not
-// restartable, so it is rebuilt. Returns the first-start channel for awaitReady.
-// Caller holds p.mu and must have verified e.state == poolHibernated.
+// restartable; the caller rebuilds it after releasing p.mu (attachWatcher).
+// Returns the first-start channel for awaitReady. Caller holds p.mu and must
+// have verified e.state == poolHibernated.
 func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
 	readyCh, err := e.sup.StartAsync(p.baseCtx)
 	if err != nil {
 		return nil, fmt.Errorf("waking %s for %s: %w", e.language, e.root, err)
 	}
-	if watcher, err := newLSPFSWatcher(e.root, e.proxy); err != nil {
-		slog.Warn("lsp: file watcher unavailable on wake", "root", e.root, "language", e.language, "err", err)
-	} else {
-		e.watcher = watcher
-		watcher.Start()
-	}
+	// The file watcher is not rebuilt here: its initial walk must not run under
+	// p.mu, so the caller attaches it after the unlock (attachWatcher).
 	e.state = poolWaking
 	e.startedAt = time.Now()
 	e.proxy.touch()

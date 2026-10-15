@@ -24,6 +24,13 @@
 
 ### Changed
 
+- **One slow workspace no longer stalls every other** (PLAN-536). Starting or
+  waking a language server, opening a topology index, a memory index or a
+  collab mailbox now runs without the pool-wide lock: the per-workspace config
+  and language are resolved, the Go environment is read and the file watcher's
+  initial walk (up to a minute on Linux) runs unlocked, and a second request for
+  the same workspace waits for the first instead of opening twice. A global
+  topology retune re-opens each index the same way.
 - Update gotreesitter to v0.56.0, klauspost/compress to v1.20.3 and modernc libc
   to v1.78.0, and refresh the web UI's transitive dependency lockfile. The rebuilt
   web assets are unchanged. Invert the fixed Swift directive tripwire and retain

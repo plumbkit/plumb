@@ -258,6 +258,7 @@ func (p *workspacePool) restartSwift(root string) error {
 	if err != nil {
 		return fmt.Errorf("restarting SourceKit-LSP: %w", err)
 	}
+	p.attachWatcher(e)
 	ctx := p.baseCtx
 	if ctx == nil {
 		ctx = context.Background()
