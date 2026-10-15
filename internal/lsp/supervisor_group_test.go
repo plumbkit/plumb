@@ -338,8 +338,10 @@ func TestKillAllGroups_LatchesLaterSpawns(t *testing.T) {
 	t.Cleanup(ReopenGroups)
 	KillAllGroups()
 	before := liveGroups.count()
-	cmd, args := longLivedCommand(t)
-	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{BackoffBase: time.Hour})
+	// The refused server records its own pid, so the test can see it die rather
+	// than relying on the test's context to reap it.
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	sup := NewSupervisor("/bin/sh", []string{"-c", `echo $$ > "$0"; exec sleep 300`, pidFile}, nil, SupervisorOptions{BackoffBase: time.Hour})
 	readyCh, err := sup.StartAsync(t.Context())
 	if err != nil {
 		t.Fatalf("StartAsync: %v", err)
@@ -355,6 +357,14 @@ func TestKillAllGroups_LatchesLaterSpawns(t *testing.T) {
 	}
 	if got := liveGroups.count(); got != before {
 		t.Fatalf("registry holds %d groups after a refused spawn, want %d", got, before)
+	}
+	// Killed at once, the server usually dies before its shell writes the pid.
+	// One that lived long enough to write it must be gone; one left running
+	// (the spawner forgot to kill it) writes it and stays.
+	time.Sleep(500 * time.Millisecond)
+	if data, err := os.ReadFile(pidFile); err == nil {
+		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+		waitGone(t, "the server spawned after KillAllGroups", pid)
 	}
 }
 
