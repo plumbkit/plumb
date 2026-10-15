@@ -273,3 +273,21 @@ func TestApplyGlobalLSP_GivesUpOnATornDownEntry(t *testing.T) {
 	}
 	t.Fatal("the restart kept waiting on an entry that was torn down")
 }
+
+// TestRestartWithConfig_DoesNotReviveAfterClose: a restart that reaches its
+// swap after the pool closed installs no new server and wakes nothing.
+func TestRestartWithConfig_DoesNotReviveAfterClose(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	e, err := p.acquireLang(context.Background(), markedRoot(t, "go.mod"), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup, _, _ := entryNow(p, e)
+	p.close()
+	g := cfg.LSP["go"]
+	g.Args = []string{"35"}
+	p.restartWithConfig(e, g, true)
+	if now, c, state := entryNow(p, e); now != sup || slices.Equal(c.Args, []string{"35"}) || state.running() {
+		t.Fatalf("a closed pool's entry was restarted (new supervisor %v, args %v, state %s)", now != sup, c.Args, state)
+	}
+}
