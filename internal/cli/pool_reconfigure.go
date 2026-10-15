@@ -89,12 +89,9 @@ func (p *workspacePool) reconfigureEntries(selected func(*poolEntry) bool) int {
 	n := 0
 	for _, e := range cands {
 		want, enabled := p.cfgForWorkspace(e.root, e.language)
-		if enabled && reflect.DeepEqual(want, e.lspCfg) {
-			continue
-		}
 		if enabled && !serverChange(e.lspCfg, want) {
-			// Only the pool's own knobs moved (idle timeout, server cap): adopt
-			// them in place; the running server is exactly what it should be.
+			// Nothing moved, or only the pool's own knobs (idle timeout, server
+			// cap): adopt them in place; the running server is what it should be.
 			p.mu.Lock()
 			e.lspCfg = want
 			p.mu.Unlock()
