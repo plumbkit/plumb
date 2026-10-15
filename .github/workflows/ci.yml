@@ -226,7 +226,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: "26.12.0"
           cache: npm
           cache-dependency-path: internal/web/ui/package-lock.json
       # npm audit resolves the tree from package-lock.json — no npm ci needed.
@@ -297,7 +297,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: "26.12.0"
           cache: npm
           cache-dependency-path: internal/web/ui/package-lock.json
       - name: make web-ui
@@ -344,10 +344,9 @@ jobs:
         with:
           # Node is here only to install the npm-published language servers in
           # the step below. Kept in step with the other jobs in this file: Node
-          # 20 went end-of-life on 2026-04-30, so it stops receiving upstream
-          # security patches with no change on our side. Dependabot cannot catch
-          # this — it tracks the action version, not this input.
-          node-version: "22"
+          # 26.12.0 is the current stable release. Dependabot tracks the action
+          # version, not this input, so update the pin with the build toolchain.
+          node-version: "26.12.0"
 
       - name: Put GOPATH/bin on PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"

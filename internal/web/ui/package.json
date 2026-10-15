@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "allowScripts": {
+    "fsevents": false
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

@@ -14,9 +14,9 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/ebitengine/purego v0.11.1
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.3
 	github.com/muesli/reflow v0.3.0
-	github.com/odvcencio/gotreesitter v0.55.1
+	github.com/odvcencio/gotreesitter v0.56.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/sgtdi/fswatcher v1.3.0
 	github.com/spf13/cobra v1.10.2
@@ -48,7 +48,7 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/xo/terminfo v1.2.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	modernc.org/libc v1.77.1 // indirect
+	modernc.org/libc v1.78.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
