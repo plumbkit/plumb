@@ -27,6 +27,16 @@ type namespaceCreated struct {
 	} `json:"namespace"`
 }
 
+// rosterPart is workspace_sessions' output up to the caller's own outbox: the
+// outbox legitimately names a session the caller wrote to by name, which is not
+// that session appearing in the caller's roster.
+func rosterPart(out string) string {
+	if i := strings.Index(out, "your recent notes"); i >= 0 {
+		return out[:i]
+	}
+	return out
+}
+
 func createNamespace(t *testing.T, plumbBin, tmpHome string) namespaceCreated {
 	t.Helper()
 	out := runPlumb(t, plumbBin, tmpHome, "namespace", "create", "--ttl", "30m", "--json")
@@ -60,24 +70,42 @@ func TestSmoke_Namespace_IsolatesAnEndToEndRun(t *testing.T) {
 		t.Fatalf("sessions unnamed: default %q, namespaced %q", defName, nsName)
 	}
 
-	// Rosters: each sees itself, never the other.
-	if out := def.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(out, nsName) {
-		t.Fatalf("the default roster lists the namespaced session %s:\n%s", nsName, out)
+	// Rosters: each sees itself (the control), never the other.
+	if out := def.call(t, "workspace_sessions", map[string]any{}, toolTimeout); !strings.Contains(out, defName) || strings.Contains(rosterPart(out), nsName) {
+		t.Fatalf("the default roster must show %s and not %s:\n%s", defName, nsName, out)
 	}
-	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(out, defName) {
-		t.Fatalf("the namespaced roster lists the default session %s:\n%s", defName, out)
+	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); !strings.Contains(out, nsName) || strings.Contains(rosterPart(out), defName) {
+		t.Fatalf("the namespaced roster must show %s and not %s:\n%s", nsName, defName, out)
 	}
 
-	// Mail by name does not cross, in either direction; inside a namespace it
-	// would (the mailbox conformance tests cover delivery itself).
+	// The recent-writes feed: a default-namespace write shows in the default
+	// roster (the control) and not in the namespace's.
+	def.call(t, "write_file", map[string]any{"file_path": fixture + "/ns_smoke_default.txt", "content": "default\n"}, toolTimeout)
+	if out := def.call(t, "workspace_sessions", map[string]any{}, toolTimeout); !strings.Contains(out, "ns_smoke_default.txt") {
+		t.Fatalf("control: the default feed does not show its own write:\n%s", out)
+	}
+	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(out, "ns_smoke_default.txt") {
+		t.Fatalf("the namespaced feed shows a default-namespace write:\n%s", out)
+	}
+
+	// Mail by name does not cross, in either direction; inside the namespace it
+	// is delivered (the control: a second session in the same namespace).
 	const crossBody = "namespace-crossing note"
-	nsc.call(t, "leave_note", map[string]any{"to": defName, "body": crossBody + " ns->default"}, toolTimeout)
-	def.call(t, "leave_note", map[string]any{"to": nsName, "body": crossBody + " default->ns"}, toolTimeout)
+	assertContains(t, "ns->default leave_note", nsc.call(t, "leave_note", map[string]any{"to": defName, "body": crossBody + " ns->default"}, toolTimeout), "Message sent")
+	assertContains(t, "default->ns leave_note", def.call(t, "leave_note", map[string]any{"to": nsName, "body": crossBody + " default->ns"}, toolTimeout), "Message sent")
 	if got := def.call(t, "check_messages", map[string]any{}, toolTimeout); strings.Contains(got, crossBody) {
 		t.Fatalf("the default session received a namespaced session's note:\n%s", got)
 	}
 	if got := nsc.call(t, "check_messages", map[string]any{}, toolTimeout); strings.Contains(got, crossBody) {
 		t.Fatalf("the namespaced session received a default session's note:\n%s", got)
+	}
+	peer := newMCPClient(t, ctx, plumbBin, tmpHome, fixture, "PLUMB_NAMESPACE="+ns.Token)
+	peer.initialize(t, fixture)
+	peer.call(t, "session_start", map[string]any{"workspace": fixture, "session_id": "ns-smoke-peer"}, sessionStartTimeout)
+	const sameBody = "same-namespace note"
+	assertContains(t, "peer leave_note", peer.call(t, "leave_note", map[string]any{"to": nsName, "body": sameBody}, toolTimeout), "Message sent")
+	if got := nsc.call(t, "check_messages", map[string]any{}, toolTimeout); !strings.Contains(got, sameBody) {
+		t.Fatalf("control: a note inside the namespace was not delivered:\n%s", got)
 	}
 
 	// `plumb sessions` shows the default namespace unless asked.
@@ -98,12 +126,14 @@ func TestSmoke_Namespace_IsolatesAnEndToEndRun(t *testing.T) {
 	if out := runPlumb(t, plumbBin, tmpHome, "namespace", "list"); !strings.Contains(out, ns.Namespace.ID) || !strings.Contains(out, "active") {
 		t.Fatalf("the namespace did not survive the daemon restart:\n%s", out)
 	}
-	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(out, defName) {
+	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(rosterPart(out), defName) {
 		t.Fatalf("after the restart, the namespaced roster lists the default session:\n%s", out)
 	}
 
 	// Release: the token is refused at once for a new connection, with no fallback.
-	runPlumb(t, plumbBin, tmpHome, "namespace", "release", ns.Token)
+	if out := runPlumb(t, plumbBin, tmpHome, "namespace", "release", ns.Token); !strings.Contains(out, ns.Namespace.ID) || !strings.Contains(out, "revoked") {
+		t.Fatalf("plumb namespace release did not report the revoked namespace:\n%s", out)
+	}
 	late := newMCPClient(t, ctx, plumbBin, tmpHome, fixture, "PLUMB_NAMESPACE="+ns.Token)
 	id, err := late.send("initialize", map[string]any{
 		"protocolVersion": "2024-11-05", "capabilities": map[string]any{},

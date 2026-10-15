@@ -69,6 +69,7 @@ var (
 	mailFlagExternalID string
 	mailFlagWorkspace  string
 	mailFlagJSON       bool
+	mailFlagNamespace  string
 )
 
 var mailCmd = &cobra.Command{
@@ -118,6 +119,7 @@ func init() {
 	mailCmd.Flags().StringVar(&mailFlagExternalID, "external-id", "", "session_id the session passed to session_start")
 	mailCmd.Flags().StringVar(&mailFlagWorkspace, "workspace", "", "a directory inside a session's workspace; nearest enclosing root wins")
 	mailCmd.Flags().BoolVar(&mailFlagJSON, "json", false, "emit a JSON object instead of a sentence")
+	mailCmd.Flags().StringVar(&mailFlagNamespace, "namespace", "", "match sessions of this namespace instead of the default one")
 }
 
 // mailReport is the whole disclosure surface: the resolved session, its
@@ -203,7 +205,8 @@ func resolveMailSessionReading(selector, value string) (session.Info, bool, erro
 	if err != nil {
 		return session.Info{}, false, fmt.Errorf("listing sessions: %w", err)
 	}
-	matches := matchSessions(all, selector, value)
+	// One namespace's sessions only (PLAN-520): the default, or --namespace.
+	matches := matchSessions(session.InNamespace(all, mailFlagNamespace), selector, value)
 	switch len(matches) {
 	case 1:
 		return matches[0], locked, nil

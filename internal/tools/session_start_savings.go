@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/plumbkit/plumb/internal/clientcaps"
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -28,7 +29,11 @@ func (t *SessionStart) writeSessionStats(sb *strings.Builder, ws string) {
 	if err != nil || db == nil {
 		return
 	}
-	toolStats, err := db.Summary(stats.Filter{Workspace: ws})
+	// The caller's namespace only (PLAN-520): a namespaced run's session_start
+	// does not report the user's tool use, nor the other way round.
+	all, _ := session.List()
+	ns := t.callerNamespace(all)
+	toolStats, err := db.Summary(stats.Filter{Workspace: ws, Namespace: ns})
 	if err != nil || len(toolStats) == 0 {
 		return
 	}
@@ -54,13 +59,13 @@ func (t *SessionStart) writeSessionStats(sb *strings.Builder, ws string) {
 	// comment and the Filter field it names. Summing across versions would
 	// blend v4's honest exclusion with v3 rows that still credited a plain
 	// ranged read, quietly overstating the total.
-	axes := db.SavingsAxes(stats.Filter{Workspace: ws, SavingsModelVersion: clientcaps.ModelVersion})
+	axes := db.SavingsAxes(stats.Filter{Workspace: ws, Namespace: ns, SavingsModelVersion: clientcaps.ModelVersion})
 	if axes.Total() > 0 {
 		fmt.Fprintf(sb, "estimated read savings: ~%s tokens (heuristic, model v%d — ranged reads a native tool could also skip are EXCLUDED; since this version only)\n",
 			stats.FormatSavings(int(axes.Total())), clientcaps.ModelVersion)
 	}
 
-	if n := db.PreventedIncidents(stats.Filter{Workspace: ws}); n > 0 {
+	if n := db.PreventedIncidents(stats.Filter{Workspace: ws, Namespace: ns}); n > 0 {
 		fmt.Fprintf(sb, "guard refusals: %d (stale/unread-write and dirty-file guards that refused a call this workspace; a retried call counts once per refusal)\n", n)
 	}
 	sb.WriteString("\n")

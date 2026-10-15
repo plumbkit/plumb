@@ -115,3 +115,28 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+// TestStatsNamespace_FirstCallIsTheDefaults: the TUI's lifetime start is the
+// user's first call, not an earlier namespaced run's.
+func TestStatsNamespace_FirstCallIsTheDefaults(t *testing.T) {
+	db := openNSTestDB(t)
+	early := time.Now().Add(-time.Hour)
+	if err := db.Record(Call{Namespace: "ns-1", SessionID: "n", Workspace: "/w", Tool: "read_file", CalledAt: early, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	recordNS(t, db, "", "d", "read_file")
+	if got := db.FirstCallAt(); !got.After(early) {
+		t.Fatalf("FirstCallAt = %v, the namespaced call's time; want the default namespace's first call", got)
+	}
+}
+
+// TestStatsNamespace_SessionFilterFindsItsRows: a filter naming one session
+// finds that session's rows in whichever namespace it lives (daemon_info's
+// per-session latency for a namespaced session).
+func TestStatsNamespace_SessionFilterFindsItsRows(t *testing.T) {
+	db := openNSTestDB(t)
+	recordNS(t, db, "ns-1", "sid-n", "read_file")
+	if got := db.TotalCalls(Filter{SessionID: "sid-n"}); got != 1 {
+		t.Fatalf("a session filter found %d of its namespaced session's calls, want 1", got)
+	}
+}

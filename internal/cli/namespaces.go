@@ -43,8 +43,11 @@ type namespaceRegistry struct {
 
 	mu sync.Mutex
 	// renewedAt throttles renewal writes: a namespaced call renews in memory and
-	// persists at most once per namespaceRenewEvery.
+	// persists at most once per namespaceRenewEvery (or quarter TTL). ttls caches
+	// each namespace's TTL, so the throttle is decided without reading the store
+	// on every call.
 	renewedAt map[string]time.Time
+	ttls      map[string]time.Duration
 	// draining maps a revoked namespace to the moment its connections are
 	// cancelled. cancelledAt records when that first happened: the purge never
 	// runs in the same tick as the first cancel, and runs once no connection is
@@ -77,6 +80,7 @@ func newNamespaceRegistry(store *sessionstate.Store, conns *connRegistry) *names
 		drain:       namespaceDrain,
 		ownerGrace:  namespaceOwnerGrace,
 		renewedAt:   make(map[string]time.Time),
+		ttls:        make(map[string]time.Duration),
 		draining:    make(map[string]time.Time),
 		cancelledAt: make(map[string]time.Time),
 	}
@@ -198,14 +202,24 @@ func (r *namespaceRegistry) touch(id string) {
 		return
 	}
 	now := r.now()
-	ns, err := r.store.NamespaceByID(id)
-	if err != nil || ns.State != sessionstate.NamespaceActive {
-		return
+	r.mu.Lock()
+	ttl, cached := r.ttls[id]
+	r.mu.Unlock()
+	if !cached {
+		ns, err := r.store.NamespaceByID(id)
+		if err != nil || ns.State != sessionstate.NamespaceActive {
+			return
+		}
+		ttl = ns.TTL
+		r.mu.Lock()
+		r.ttls[id] = ttl
+		r.mu.Unlock()
 	}
 	// Persist at most once per namespaceRenewEvery — or per quarter TTL for a
 	// short one, so a namespace in continuous use never reaches its expiry
-	// between two persisted renewals.
-	every := min(namespaceRenewEvery, ns.TTL/4)
+	// between two persisted renewals. The write itself only moves an ACTIVE
+	// namespace's expiry, so a revoked one is never revived.
+	every := min(namespaceRenewEvery, ttl/4)
 	r.mu.Lock()
 	if now.Sub(r.renewedAt[id]) < every {
 		r.mu.Unlock()
@@ -213,7 +227,7 @@ func (r *namespaceRegistry) touch(id string) {
 	}
 	r.renewedAt[id] = now
 	r.mu.Unlock()
-	if err := r.store.SetNamespaceExpiry(id, now.Add(ns.TTL)); err != nil {
+	if err := r.store.SetNamespaceExpiry(id, now.Add(ttl)); err != nil {
 		slog.Warn("namespace: renew", "namespace", id, "err", err)
 	}
 }
@@ -396,6 +410,7 @@ func (r *namespaceRegistry) purge(id string) {
 	delete(r.draining, id)
 	delete(r.cancelledAt, id)
 	delete(r.renewedAt, id)
+	delete(r.ttls, id)
 	r.mu.Unlock()
 	slog.Info("namespace: purged", "namespace", id, "sessions", len(sessionIDs))
 }

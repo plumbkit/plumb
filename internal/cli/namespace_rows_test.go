@@ -62,6 +62,12 @@ func TestCollabViews_CarryTheConnectionsNamespaceAndRecordTheRoot(t *testing.T) 
 	if st, err := s.nsGlobalReader(); err != nil || st == nil || st.Namespace() != ns.ID {
 		t.Fatalf("global reader = %v, %v; want scoped to %s", st, err, ns.ID)
 	}
+	if st := s.collabGlobalIfExists(); st == nil || st.Namespace() != ns.ID {
+		t.Fatal("the existing global store (leave_note's cross-project path) is not scoped")
+	}
+	if st := s.collabStoreIfExistsForWorkspace(root); st == nil || st.Namespace() != ns.ID {
+		t.Fatal("the per-workspace existing store is not scoped")
+	}
 	in := s.resolvedInbox(context.Background(), false)
 	if st := in.Workspace(); st == nil || st.Namespace() != ns.ID {
 		t.Fatal("the inbox's workspace store is not scoped to the namespace")
@@ -178,6 +184,10 @@ func TestHookInbox_ReadersAreTheNamespaces(t *testing.T) {
 	st, err := inbox.WorkspaceReader()
 	if err != nil || st == nil || st.Namespace() != "ns-hook" {
 		t.Fatalf("hook workspace reader = %v, %v; want the namespace's view", st, err)
+	}
+	world.pool.acquireGlobal() // the probe reads only a pooled global store
+	if g, err := inbox.GlobalReader(); err != nil || g == nil || g.Namespace() != "ns-hook" {
+		t.Fatalf("hook global reader = %v, %v; want the namespace's view", g, err)
 	}
 }
 
@@ -300,5 +310,59 @@ func TestGeneratedSummary_CarriesTheNamespace(t *testing.T) {
 	}
 	if _, ok, _ := db.LatestEpisodic(root, ""); ok {
 		t.Fatal("a namespaced session's summary is visible to the default namespace")
+	}
+}
+
+// TestPlumbMail_SelectsWithinOneNamespace: `plumb mail --workspace` matches the
+// default namespace's session, or --namespace's, never both.
+func TestPlumbMail_SelectsWithinOneNamespace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := freshTempDir(t)
+	def, err := session.Register(session.Info{Folder: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nsd, err := session.Register(session.Info{Folder: ws, Namespace: "ns-mail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := mailFlagNamespace
+	t.Cleanup(func() { mailFlagNamespace = old })
+	for _, tc := range []struct {
+		ns   string
+		want string
+	}{{"", def.ID}, {"ns-mail", nsd.ID}} {
+		mailFlagNamespace = tc.ns
+		got, _, err := resolveMailSessionReading("workspace", ws)
+		if err != nil {
+			t.Fatalf("namespace %q: %v", tc.ns, err)
+		}
+		if got.ID != tc.want {
+			t.Fatalf("namespace %q matched %s, want %s", tc.ns, got.ID, tc.want)
+		}
+	}
+}
+
+// TestNamespaces_GateCachesTheTTL: joining caches the namespace's TTL, which
+// renewal's throttle reads instead of session_state.db on every call; the purge
+// drops it.
+func TestNamespaces_GateCachesTheTTL(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	if _, err := r.gate(token, "psid-cache"); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	ttl, cached := r.ttls[ns.ID]
+	r.mu.Unlock()
+	if !cached || ttl != time.Hour {
+		t.Fatalf("cached TTL = %s, %v; want 1h", ttl, cached)
+	}
+	r.purge(ns.ID)
+	r.mu.Lock()
+	_, cached = r.ttls[ns.ID]
+	r.mu.Unlock()
+	if cached {
+		t.Fatal("the purge left the namespace's TTL cached")
 	}
 }

@@ -32,9 +32,12 @@ type ActivitySummary struct {
 
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
-	// Namespace restricts to rows of one namespace (PLAN-520). It is ALWAYS
-	// applied: the zero value is the default namespace, so a namespaced run's
-	// calls never appear in the stats a default-namespace view shows.
+	// Namespace restricts to rows of one namespace (PLAN-520). It applies to
+	// every filter that does not name a session: the zero value is the default
+	// namespace, so a namespaced run's calls never appear in the stats a
+	// default-namespace view shows. A SessionID filter needs no namespace — a
+	// session belongs to exactly one — so it finds that session's rows wherever
+	// they are.
 	Namespace   string
 	SessionID   string
 	SessionName string    // when set, restricts to calls for this session name
@@ -52,8 +55,12 @@ type Filter struct {
 }
 
 func (f Filter) where() (string, []any) {
-	conds := []string{"namespace = ?"}
-	args := []any{f.Namespace}
+	var conds []string
+	var args []any
+	if f.SessionID == "" {
+		conds = append(conds, "namespace = ?")
+		args = append(args, f.Namespace)
+	}
 	if f.SessionID != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, f.SessionID)
@@ -78,6 +85,7 @@ func (f Filter) where() (string, []any) {
 		conds = append(conds, "savings_model_version = ?")
 		args = append(args, f.SavingsModelVersion)
 	}
+	// Never empty: a filter either names a session or carries the namespace.
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
@@ -162,11 +170,7 @@ func (d *DB) ActivityAt(now time.Time, window time.Duration, bucketCount int, fi
 	}
 
 	where, args := filter.where()
-	if where == "" {
-		where = " WHERE called_at >= ? AND called_at <= ?"
-	} else {
-		where += " AND called_at >= ? AND called_at <= ?"
-	}
+	where += " AND called_at >= ? AND called_at <= ?" // where() is never empty
 	args = append(args, start.UnixMilli(), now.UnixMilli())
 	// where is built by filter.where() using ? placeholders; no user values interpolated.
 	q := `SELECT called_at FROM tool_calls` + where + ` ORDER BY called_at` //nolint:gosec // G202: see comment above
@@ -567,11 +571,7 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 	}
 	where, args := filter.where()
 	if !since.IsZero() {
-		if where == "" {
-			where = " WHERE called_at >= ?"
-		} else {
-			where += " AND called_at >= ?"
-		}
+		where += " AND called_at >= ?" // where() is never empty
 		args = append(args, since.UnixMilli())
 	}
 	// where is built by filter.where() using ? placeholders; no user values interpolated.
