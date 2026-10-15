@@ -239,3 +239,37 @@ func TestGlobalConfigReconciler_ReachesThePool(t *testing.T) {
 		t.Fatalf("the pool did not adopt the new [lsp.go] config: args %v", got)
 	}
 }
+
+// TestApplyGlobalLSP_GivesUpOnATornDownEntry: a restart waiting for a call to
+// end stops waiting at once when the entry is torn down meanwhile, instead of
+// polling out its whole wait.
+func TestApplyGlobalLSP_GivesUpOnATornDownEntry(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	root := markedRoot(t, "go.mod")
+	e, done, err := p.acquireCall(context.Background(), root, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	next := cfg
+	g := cfg.LSP["go"]
+	g.Args = []string{"34"}
+	next.LSP = map[string]config.LSPConfig{"go": g, "python": cfg.LSP["python"]}
+	if n := p.applyGlobalLSP(next); n != 1 {
+		t.Fatalf("restarts started = %d, want 1", n)
+	}
+	p.mu.Lock()
+	delete(p.entries, poolKey{root, "go"})
+	p.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		busy := e.reconfiguring
+		p.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the restart kept waiting on an entry that was torn down")
+}
