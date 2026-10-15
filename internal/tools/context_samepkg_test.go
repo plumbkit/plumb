@@ -429,7 +429,7 @@ func makeIndexPredateSamePackageCalls(t *testing.T, root string) {
 }
 
 // makeIndexPredateLocalTier turns a freshly indexed workspace into the index the build
-// before the local-variable tier left (the 0.24.1 daemon's): the census of the
+// before the local-variable tier left (a pre-release development build's): the census of the
 // same-package tiers is there and so are the edges of the bare, receiver and parameter
 // tiers, but a call `x.M()` on a local variable drew no edge. It removes the
 // call-resolver edges whose call site carries a local receiver type (a type the
