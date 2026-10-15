@@ -360,10 +360,12 @@ func TestKillAllGroups_LatchesLaterSpawns(t *testing.T) {
 	}
 	// Killed at once, the server usually dies before its shell writes the pid.
 	// One that lived long enough to write it must be gone; one left running
-	// (the spawner forgot to kill it) writes it and stays.
-	time.Sleep(500 * time.Millisecond)
-	if data, err := os.ReadFile(pidFile); err == nil {
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	// (the spawner forgot to kill it) writes it and stays. An EMPTY file is a
+	// shell killed between the redirect's truncate and the echo — but a live,
+	// slow shell looks the same for a moment, so wait for a pid before deciding:
+	// one that appears is probed; none after the wait means the shell died
+	// before writing, the pass case.
+	if pid := waitForPID(pidFile, 3*time.Second); pid > 0 {
 		waitGone(t, "the server spawned after KillAllGroups", pid)
 	}
 }
@@ -397,5 +399,22 @@ func TestSupervisor_FailedOnStartLeavesNoGroup(t *testing.T) {
 	}
 	if got := liveGroups.count(); got != before {
 		t.Fatalf("registry holds %d groups after a failed OnStart, want %d", got, before)
+	}
+}
+
+// waitForPID polls file for a positive pid until it appears or within passes,
+// returning 0 when none does (a missing, empty or unparsable file).
+func waitForPID(file string, within time.Duration) int {
+	deadline := time.Now().Add(within)
+	for {
+		if data, err := os.ReadFile(file); err == nil {
+			if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && pid > 0 {
+				return pid
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return 0
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
