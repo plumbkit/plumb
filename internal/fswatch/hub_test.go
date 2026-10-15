@@ -396,3 +396,62 @@ func TestHub_APrivateSubscriptionFiltersAndClosesItsChannels(t *testing.T) {
 	}
 	t.Fatal("Lost still open after Close")
 }
+
+// TestHub_APrivateSubscriptionsEventsCloseWithIt: its Events is closed by the
+// time Close returns (drained of anything buffered).
+func TestHub_APrivateSubscriptionsEventsCloseWithIt(t *testing.T) {
+	var h *Hub
+	s, err := h.Subscribe(t.TempDir(), Options{}, "")
+	if err != nil {
+		t.Skipf("no watcher on this platform: %v", err)
+	}
+	s.Close()
+	for range eventBuffer + 1 {
+		select {
+		case _, ok := <-s.Events():
+			if !ok {
+				return
+			}
+		default:
+			t.Fatal("Close returned before closing Events")
+		}
+	}
+	t.Fatal("Events still open after Close")
+}
+
+// TestHub_AWatcherFailedBeforeItsFirstJoinIsNotOrphaned: an opener whose
+// watcher fails, and is replaced, before the opener joins it leaves a watcher
+// nobody holds; the failed join closes it (from #695's review).
+func TestHub_AWatcherFailedBeforeItsFirstJoinIsNotOrphaned(t *testing.T) {
+	h := newCountingHub()
+	key := hubKey{root: "/ws"}
+	sw := &sharedWatch{ready: make(chan struct{}), subs: make(map[*Subscription]struct{}), done: make(chan struct{})}
+	h.mu.Lock()
+	h.watches[key] = sw
+	h.mu.Unlock()
+	h.openShared(key, sw) // "opener A" is between ready and its join
+	first := h.last()
+	close(first.failed)
+	deadline := time.After(2 * time.Second)
+	for !sw.hasFailed() {
+		select {
+		case <-deadline:
+			t.Fatal("fanOut never recorded Failed")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	b, err := h.Subscribe("/ws", Options{}, "") // "B"
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if _, ok := h.join(key, sw, nil); ok {
+		t.Fatal("A joined the replaced watcher")
+	}
+	select {
+	case <-first.done:
+	case <-time.After(500 * time.Millisecond):
+		t.Error("ORPHAN: the replaced zero-subscriber watcher's OS watcher is never closed")
+	}
+}

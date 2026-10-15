@@ -165,10 +165,22 @@ func (sw *sharedWatch) hasFailed() bool {
 // was already closed by its last subscriber.
 func (h *Hub) join(key hubKey, sw *sharedWatch, re *regexp.Regexp) (*Subscription, bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.watches[key] != sw {
+		// Out of the map — its last subscriber left, or it failed and was
+		// replaced before its opener could join. Nobody can join it any more, so
+		// with no subscriber it is an orphan: close it here, or its OS watcher
+		// and fan-out outlive everyone.
+		sw.mu.Lock()
+		orphan := len(sw.subs) == 0
+		sw.mu.Unlock()
+		h.mu.Unlock()
+		if orphan && sw.w != nil {
+			sw.w.Close() // idempotent: a racing last Close may have done it
+			<-sw.done
+		}
 		return nil, false
 	}
+	defer h.mu.Unlock()
 	s := &Subscription{
 		hub: h, key: key, sw: sw, exclude: re,
 		events: make(chan Event, eventBuffer),
