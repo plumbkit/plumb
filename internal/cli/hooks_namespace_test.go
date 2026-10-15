@@ -348,3 +348,19 @@ func TestRegistryCtrlHandlers_ScopeHooksThroughTheRegistry(t *testing.T) {
 		t.Fatal("a registry-backed handler is unwired")
 	}
 }
+
+// TestNotifyConversationCleared_AMalformedTokenSendsNothing: a PLUMB_NAMESPACE
+// that is not one token sends no /clear notice at all — dropping it would speak
+// for the default namespace.
+func TestNotifyConversationCleared_AMalformedTokenSendsNothing(t *testing.T) {
+	probeTestEnv(t)
+	t.Setenv("PLUMB_NAMESPACE", "tok 1")
+	got := make(chan string, 2)
+	fakeCtrlDaemon(t, func(c net.Conn, line string) { got <- line; _, _ = c.Write([]byte("ok\n")) })
+	notifyConversationCleared("conv-1")
+	select {
+	case line := <-got:
+		t.Errorf("a malformed token still sent %q", line)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
