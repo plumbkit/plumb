@@ -29,9 +29,9 @@ func (p *workspacePool) reapEntry(e *poolEntry) {
 		p.mu.Unlock()
 		return
 	}
-	e.graceTimer = nil
 	// The same clear-then-check as hibernateEntry: a call holding a lease keeps
-	// the entry, and its end re-arms this teardown (clientProxy.end → onIdle).
+	// the entry, and its end re-arms this teardown (clientProxy.end → onIdle →
+	// scheduleIdleReap, which replaces the timer that just fired).
 	client := e.proxy.get()
 	e.proxy.clear()
 	if e.proxy.inflight.Load() > 0 {
