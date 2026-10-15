@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/paths"
 )
 
 // These tests pin PLAN-535: an idle, unheld root's topology, memory and collab
@@ -402,5 +403,39 @@ func TestConnSession_HeldRootsIncludesItsAgents(t *testing.T) {
 	got := s.heldRoots()
 	if !slices.Contains(got, "/conn/root") || !slices.Contains(got, "/agent/root") {
 		t.Fatalf("heldRoots = %v, want the connection's and the agent's roots", got)
+	}
+}
+
+// TestNewConnHandle_CarriesHeldRoots pins the registry wiring of the store
+// drain's held set.
+func TestNewConnHandle_CarriesHeldRoots(t *testing.T) {
+	s := &connSession{}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = "/conn/root" })
+	h := newConnHandle(s)
+	if h.heldRoots == nil || !slices.Contains(h.heldRoots(), "/conn/root") {
+		t.Fatal("the registry handle does not report the connection's held roots")
+	}
+}
+
+// TestTopologyStoreForRoot_SkipsAClosedHandle: the root-keyed accessor never
+// answers with the session's closed handle.
+func TestTopologyStoreForRoot_SkipsAClosedHandle(t *testing.T) {
+	base := config.Defaults()
+	base.Topology = topoCfg()
+	ws := t.TempDir()
+	s := &connSession{store: config.NewStore(base), topologyPool: newTopologyPool(base.Topology)}
+	defer s.topologyPool.StopAll()
+	s.reconcileTopologyStore(ws)
+	st := s.view().topologyStore
+	if st == nil {
+		t.Fatal("control: no topology store")
+	}
+	root := paths.Canonical(st.Root())
+	if s.topologyStoreForRoot(root) == nil {
+		t.Fatal("control: the accessor does not find the live store")
+	}
+	s.topologyPool.StopAll() // closes and unpublishes it; the view keeps the handle
+	if got := s.topologyStoreForRoot(root); got != nil {
+		t.Fatal("the root-keyed accessor answered with a closed store")
 	}
 }
