@@ -260,6 +260,7 @@ func TestSupervisor_Crash_SweepsOrphanedHelpers(t *testing.T) {
 // watchdog uses: it reaches servers it holds no Supervisor for, and leaves none
 // of them or their helpers alive.
 func TestKillAllGroups_LeavesNoDescendants(t *testing.T) {
+	t.Cleanup(ReopenGroups)
 	servers := []*fakeLSP{
 		startFakeLSP(t.Context(), t, fakeModePlain, time.Hour),
 		startFakeLSP(t.Context(), t, fakeModeIgnoreTerm, time.Hour),
@@ -327,5 +328,64 @@ func TestSupervisor_NewCommand_ProcessGroupPolicy(t *testing.T) {
 	}
 	if cmd.Stderr != nil {
 		t.Errorf("Stderr = %v, want nil (the null device) so no pipe outlives the server", cmd.Stderr)
+	}
+}
+
+// TestKillAllGroups_LatchesLaterSpawns: once KillAllGroups has run the daemon
+// is exiting, so a server spawned afterwards is killed by its spawner and the
+// start fails, rather than leaving a server to outlive the daemon.
+func TestKillAllGroups_LatchesLaterSpawns(t *testing.T) {
+	t.Cleanup(ReopenGroups)
+	KillAllGroups()
+	before := liveGroups.count()
+	cmd, args := longLivedCommand(t)
+	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{BackoffBase: time.Hour})
+	readyCh, err := sup.StartAsync(t.Context())
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	defer sup.Stop()
+	select {
+	case err := <-readyCh:
+		if err == nil || !strings.Contains(err.Error(), "shutting down") {
+			t.Fatalf("start after KillAllGroups = %v, want the shutting-down refusal", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("start after KillAllGroups never reported")
+	}
+	if got := liveGroups.count(); got != before {
+		t.Fatalf("registry holds %d groups after a refused spawn, want %d", got, before)
+	}
+}
+
+// TestSupervisor_FailedOnStartLeavesNoGroup: a server whose OnStart fails is
+// killed and reaped, and its group leaves the registry — a stale id there would
+// one day be signalled by KillAllGroups after the pid was recycled.
+func TestSupervisor_FailedOnStartLeavesNoGroup(t *testing.T) {
+	before := liveGroups.count()
+	cmd, args := longLivedCommand(t)
+	sup := NewSupervisor(cmd, args, nil, SupervisorOptions{
+		BackoffBase: time.Hour,
+		OnStart:     func(context.Context, *jsonrpc.Conn) error { return errors.New("initialize failed") },
+	})
+	readyCh, err := sup.StartAsync(t.Context())
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	defer sup.Stop()
+	select {
+	case err := <-readyCh:
+		if err == nil {
+			t.Fatal("a failing OnStart reported success")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the failed start never reported")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for liveGroups.count() != before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := liveGroups.count(); got != before {
+		t.Fatalf("registry holds %d groups after a failed OnStart, want %d", got, before)
 	}
 }

@@ -400,7 +400,13 @@ func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("starting %q: %w", s.command, err)
 	}
-	liveGroups.add(cmd.Process.Pid)
+	if !liveGroups.add(cmd.Process.Pid) {
+		// KillAllGroups already ran: the daemon is exiting, and this server
+		// must not outlive it.
+		_ = procgroup.Kill(cmd.Process.Pid)
+		_ = waitAndReap(cmd)
+		return nil, nil, errors.New("not starting a language server: the daemon is shutting down")
+	}
 
 	conn := jsonrpc.NewConn(stdout, stdin)
 	return conn, cmd, nil

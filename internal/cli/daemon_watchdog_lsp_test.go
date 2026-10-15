@@ -76,6 +76,7 @@ func TestArmShutdownWatchdog_KillsLanguageServersBeforeExit(t *testing.T) {
 	armShutdownWatchdog(ctx, 20*time.Millisecond, func(int) {
 		exited <- outcome{waitPIDGone(server, 5*time.Second), waitPIDGone(helper, 5*time.Second)}
 	}, killLSPGroups)
+	t.Cleanup(lsp.ReopenGroups)
 	cancel()
 
 	select {

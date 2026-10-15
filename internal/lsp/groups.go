@@ -23,6 +23,10 @@ import (
 type groupRegistry struct {
 	mu    sync.Mutex
 	pgids map[int]struct{}
+	// closed latches once KillAllGroups has run: the process is going away, so
+	// a server spawned after it is refused (add reports false) and its spawner
+	// kills it at once instead of leaving it to outlive the daemon.
+	closed bool
 }
 
 // liveGroups is process-wide on purpose, one of the few globals plumb allows:
@@ -31,13 +35,42 @@ type groupRegistry struct {
 // left every pool map), and the point of the call is to need none.
 var liveGroups groupRegistry
 
-func (r *groupRegistry) add(pgid int) {
+// add records a live group. It reports false once the registry is closed
+// (KillAllGroups ran), and the caller must then kill the group itself.
+func (r *groupRegistry) add(pgid int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return false
+	}
 	if r.pgids == nil {
 		r.pgids = make(map[int]struct{})
 	}
 	r.pgids[pgid] = struct{}{}
+	return true
+}
+
+// close latches the registry and returns the groups it held.
+func (r *groupRegistry) close() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+	ids := make([]int, 0, len(r.pgids))
+	for id := range r.pgids {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// ReopenGroups undoes KillAllGroups's latch, for a test that called it in a
+// process that goes on starting language servers. In production KillAllGroups
+// is the process's last act and nothing reopens it.
+func ReopenGroups() { liveGroups.reopen() }
+
+func (r *groupRegistry) reopen() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = false
 }
 
 func (r *groupRegistry) remove(pgid int) {
@@ -52,18 +85,6 @@ func (r *groupRegistry) count() int {
 	return len(r.pgids)
 }
 
-// snapshot returns the live group ids without holding the lock while the caller
-// signals them.
-func (r *groupRegistry) snapshot() []int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	ids := make([]int, 0, len(r.pgids))
-	for id := range r.pgids {
-		ids = append(ids, id)
-	}
-	return ids
-}
-
 // KillAllGroups SIGKILLs every language-server process group this process still
 // owns and returns how many it signalled. It is the daemon's last act before
 // exiting, from the shutdown watchdog and after the pools have closed, so a
@@ -72,12 +93,14 @@ func (r *groupRegistry) snapshot() []int {
 // There is no graceful phase: the caller is about to exit and has already spent
 // its grace. It does not stop the supervisors, which will see their servers
 // exit and schedule a restart, so call it only when the process is going away.
-// A server spawned concurrently with the call may miss it; on Linux the
-// parent-death signal then covers the direct child, and on every platform the
-// server sees its stdin close when the daemon exits.
+// It also latches the registry, so a server spawned after it is killed by its
+// own spawner (see Supervisor.newCommand's caller). One spawned at the same
+// instant may still slip between: on Linux the parent-death signal then covers
+// the direct child, and on every platform the server sees its stdin close when
+// the daemon exits.
 func KillAllGroups() int {
 	killed := 0
-	for _, pgid := range liveGroups.snapshot() {
+	for _, pgid := range liveGroups.close() {
 		err := procgroup.Kill(pgid)
 		if err == nil {
 			killed++
