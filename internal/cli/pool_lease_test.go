@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/cache"
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
@@ -334,5 +339,119 @@ func TestPool_EntryStates(t *testing.T) {
 	pool.markActive(e)
 	if got := entryState(pool, e); got != poolHibernated {
 		t.Fatalf("state = %v: markActive revived a hibernated entry", got)
+	}
+}
+
+// TestPool_GraceCountsFromTheLastCall: a call made during the grace that follows
+// the last release cancels that teardown, so the server stays for a full grace
+// after the call ends — not just until the grace armed by the release expires.
+func TestPool_GraceCountsFromTheLastCall(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, 300*time.Millisecond)
+	defer pool.close()
+	const root = "/tmp/plumb-lease-last-call"
+
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatalf("pinned acquire: %v", err)
+	}
+	released := time.Now()
+	pool.release(root, "go") // arms a teardown for released+grace
+	_, done, err := pool.acquireCall(ctx, root, "go")
+	if err != nil {
+		t.Fatalf("acquireCall: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	done() // the call ends inside the release's grace
+	time.Sleep(time.Until(released.Add(pool.idleGrace + 150*time.Millisecond)))
+	if pool.lookup(root, "go") == nil {
+		t.Fatal("reaped when the release's grace expired, although a call ended after the release")
+	}
+	waitEntryGone(t, pool, root, 2*time.Second)
+}
+
+// TestClientProxy_BeginOnANotReadyServerTakesNoLease: begin on a server that is
+// not ready returns nothing and leaves no call counted, so it cannot block a
+// later hibernation or reap.
+func TestClientProxy_BeginOnANotReadyServerTakesNoLease(t *testing.T) {
+	p := &clientProxy{}
+	if c, done := p.begin(); c != nil || done != nil {
+		t.Fatal("begin on a not-ready proxy returned a client")
+	}
+	if n := p.inflight.Load(); n != 0 {
+		t.Fatalf("inflight = %d after a not-ready begin, want 0", n)
+	}
+}
+
+// TestRoutingProxy_PrimaryFastPathHoldsACallLease: the primary's lock-free
+// path — both a URI-less call and a routed one landing on the primary — holds a
+// call lease until the caller's done, so hibernation waits for it.
+func TestRoutingProxy_PrimaryFastPathHoldsACallLease(t *testing.T) {
+	root := goModRoot(t)
+	for _, tc := range []struct {
+		name string
+		get  func(*routingProxy) (func(), error)
+	}{
+		{"primaryClient", func(rp *routingProxy) (func(), error) {
+			_, done, err := rp.primaryClient(context.Background())
+			return done, err
+		}},
+		{"route to the primary", func(rp *routingProxy) (func(), error) {
+			_, done, err := rp.route(context.Background(), protocol.FileURI(filepath.Join(root, "main.go")), true)
+			return done, err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool := newTestPool()
+			e := leasedEntry(t, pool, root, &shutdownProbe{})
+			rp := newRoutingProxy(pool)
+			rp.setPrimary(root, "go", e.proxy)
+
+			done, err := tc.get(rp)
+			if err != nil {
+				t.Fatalf("call: %v", err)
+			}
+			pool.hibernateEntry(e)
+			if got := entryState(pool, e); got != poolActive {
+				t.Fatalf("state = %v while the primary call held its lease, want active", got)
+			}
+			done()
+			pool.hibernateEntry(e)
+			if got := entryState(pool, e); got != poolHibernated {
+				t.Fatalf("state = %v after the call ended, want hibernated", got)
+			}
+		})
+	}
+}
+
+// TestPool_OnStartMarksTheEntryActive drives the pool's OnStart hook through a
+// real initialize handshake against an in-process fake server: a starting entry
+// becomes active once the handshake succeeds.
+func TestPool_OnStartMarksTheEntryActive(t *testing.T) {
+	pool := newTestPool()
+	const root = "/tmp/plumb-lease-onstart"
+	e := &poolEntry{root: root, language: "go", proxy: &clientProxy{}, inv: cache.NewInvalidator(cache.New(time.Minute, 100)), state: poolStarting}
+	pool.entries[poolKey{root, "go"}] = e
+
+	toServerR, toServerW := io.Pipe()
+	toClientR, toClientW := io.Pipe()
+	t.Cleanup(func() {
+		_ = toServerW.Close()
+		_ = toClientW.Close()
+	})
+	server := jsonrpc.NewConn(toServerR, toClientW)
+	server.SetRequestHandler(func(_ context.Context, method string, _ json.RawMessage) (any, error) {
+		if method == "initialize" {
+			return map[string]any{"capabilities": map[string]any{}}, nil
+		}
+		return nil, nil
+	})
+	client := jsonrpc.NewConn(toClientR, toServerW)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := pool.poolOnStart(e, protocol.FileURI(root), config.LSPConfig{})(ctx, client); err != nil {
+		t.Fatalf("OnStart: %v", err)
+	}
+	if got := entryState(pool, e); got != poolActive {
+		t.Fatalf("state = %v after a successful handshake, want active", got)
 	}
 }

@@ -158,7 +158,7 @@ func (p *workspacePool) hibernateIdle() {
 	var victims []*poolEntry
 	p.mu.Lock()
 	for _, e := range p.entries {
-		if !e.state.running() || e.proxy.inflight.Load() > 0 {
+		if !e.state.running() {
 			continue
 		}
 		cfg := e.lspCfg
