@@ -141,7 +141,7 @@ func TestClearCommand_MarksInTheTokensNamespace(t *testing.T) {
 		_, _ = bufio.NewReader(client).ReadString('\n')
 		client.Close()
 	}
-	want := []string{clearMarkerKey("ns-1", "conv-a"), "conv-b"}
+	want := []string{namespacedID("ns-1", "conv-a"), "conv-b"}
 	if len(marked) != 2 || marked[0] != want[0] || marked[1] != want[1] {
 		t.Fatalf("marked = %q, want %q (a refused token marks nothing)", marked, want)
 	}
@@ -182,11 +182,11 @@ func TestHooks_SendTheirNamespaceToken(t *testing.T) {
 // conversation in one namespace is not consumed by a connection in another.
 func TestClearMarkerKey_SeparatesNamespaces(t *testing.T) {
 	m := newClearMarkers()
-	m.mark(clearMarkerKey("ns-1", "conv"))
-	if m.take(clearMarkerKey("", "conv")) {
+	m.mark(namespacedID("ns-1", "conv"))
+	if m.take(namespacedID("", "conv")) {
 		t.Fatal("a default-namespace connection took another namespace's /clear marker")
 	}
-	if !m.take(clearMarkerKey("ns-1", "conv")) {
+	if !m.take(namespacedID("ns-1", "conv")) {
 		t.Fatal("control: the namespace's own connection could not take its marker")
 	}
 }
@@ -288,7 +288,7 @@ func TestHandOverOnClear_TakesOnlyItsOwnNamespacesMarker(t *testing.T) {
 			s.linkExternalID(stampedCtx(old), old)
 			s.recordLogicalAgentCall(old)
 			s.registry = newConnRegistry()
-			s.registry.clears.mark(clearMarkerKey(c.markNS, now))
+			s.registry.clears.mark(namespacedID(c.markNS, now))
 			s.handOverOnClear(now)
 			if moved := s.externalID() == now; moved != c.moves {
 				t.Fatalf("relinked = %v, want %v", moved, c.moves)
@@ -400,5 +400,40 @@ func TestContextHint_AReusedSessionIDIsSeparatePerNamespace(t *testing.T) {
 	f.svc.serve(context.Background(), in("ns-1", sub))
 	if len(f.hinter.calls) != 1 || len(f.hinter.calls[0].Seeds) == 0 {
 		t.Fatalf("control: the namespace's own subagent got calls %+v, want the parent's seeds", f.hinter.calls)
+	}
+}
+
+// TestContextHint_BudgetsAndWindowsArePerNamespace: one namespace exhausting
+// a reused session id's per-agent budget leaves another's untouched; a
+// namespace's own compact stays inside its own turn and recalls its own seeds.
+func TestContextHint_BudgetsAndWindowsArePerNamespace(t *testing.T) {
+	f := newHintFixture(t)
+	f.roots["conv-1"] = hintRepo(t)
+	long := strings.Repeat("z", 180)
+	f.hinter.lines = func(tools.HintRequest) []tools.HintLine {
+		return []tools.HintLine{{Selector: long}, {Selector: long}, {Selector: long}, {Selector: long}}
+	}
+	in := func(ns string, r contextHintRequest) contextHintRequest { r.namespace = ns; return r }
+	for range 20 {
+		f.svc.serve(context.Background(), in("ns-1", prompt("conv-1", "Seed.B")))
+	}
+	if r := f.svc.serve(context.Background(), in("ns-1", prompt("conv-1", "Seed.B"))); r.Outcome == contexthints.OutcomeEmitted {
+		t.Fatal("control: ns-1's per-agent budget was never exhausted")
+	}
+	if r := f.svc.serve(context.Background(), in("", prompt("conv-1", "Seed.A"))); r.Outcome != contexthints.OutcomeEmitted {
+		t.Fatalf("the default namespace's first prompt = %+v; another namespace spent its budget", r)
+	}
+	compact := contextHintRequest{Host: "claude-code", Event: "SessionStart", Source: "compact", SessionID: "conv-1"}
+	if r := f.svc.serve(context.Background(), in("", compact)); r.Outcome != contexthints.OutcomeThrottled {
+		t.Fatalf("a compact in the default namespace's spent turn = %+v, want throttled (its own window)", r)
+	}
+	f.hinter.calls = nil
+	f.svc.serve(context.Background(), in("ns-1", compact))
+	for _, c := range f.hinter.calls {
+		for _, s := range c.Seeds {
+			if s.Symbol != "Seed.B" {
+				t.Fatalf("ns-1's compact recalled %q, want only its own Seed.B", s.Symbol)
+			}
+		}
 	}
 }

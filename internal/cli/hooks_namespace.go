@@ -66,11 +66,14 @@ func handleNamespace(h connHandle) string {
 	return h.namespace()
 }
 
-// clearMarkerKey keys a /clear marker by namespace, so a hook in one namespace
-// cannot hand over a conversation in another. The default namespace keeps the
-// bare id. A conversation id never holds ':' (handleClearCommand drops one that
-// does), so a default-namespace id cannot spell another namespace's key.
-func clearMarkerKey(namespace, id string) string {
+// namespacedID qualifies a conversation id by its namespace wherever the daemon
+// keys per-conversation state a hook reaches — a /clear marker, so a hook in
+// one namespace cannot hand over a conversation in another, and the context
+// hints' allowance, so two namespaces reusing an id do not share a budget. The
+// default namespace keeps the bare id, so its existing keys are unchanged. A
+// /clear id never holds ':' (handleClearCommand drops one that does), so a
+// default-namespace id cannot spell another namespace's marker.
+func namespacedID(namespace, id string) string {
 	if namespace == "" {
 		return id
 	}

@@ -339,7 +339,7 @@ func (c *contextHintService) compose(ctx context.Context, req contextHintRequest
 // charge spends the hint's bytes from the caller's allowances, and emits it only
 // when both can take it.
 func (c *contextHintService) charge(req contextHintRequest, turn string, d hintDecision) hintDecision {
-	granted, err := c.ledger.Spend(req.SessionID, req.AgentID, turn, len(d.text), c.limits, c.now())
+	granted, err := c.ledger.Spend(namespacedID(req.namespace, req.SessionID), req.AgentID, turn, len(d.text), c.limits, c.now())
 	switch {
 	case err != nil:
 		return hintDecision{outcome: contexthints.OutcomeError, detail: "ledger", seeds: d.seeds}

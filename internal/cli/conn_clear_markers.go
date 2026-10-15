@@ -187,7 +187,7 @@ func handleClearCommand(conn net.Conn, line string, h ctrlHandlers) bool {
 		fmt.Fprint(conn, "ok\n") // advisory: a refused namespace marks nothing
 		return true
 	}
-	h.conversationCleared(clearMarkerKey(namespace, id))
+	h.conversationCleared(namespacedID(namespace, id))
 	slog.Debug("daemon: conversation started by /clear announced over the control socket", "conversation", logicalAgentLabel(id))
 	fmt.Fprint(conn, "ok\n")
 	return true
