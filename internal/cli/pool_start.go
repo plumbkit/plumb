@@ -112,7 +112,7 @@ func (p *workspacePool) newWatcher(root string, proxy *clientProxy) (*lspFSWatch
 	if p.watcherFactory != nil {
 		return p.watcherFactory(root, proxy)
 	}
-	return newLSPFSWatcher(root, proxy)
+	return newLSPFSWatcherVia(p.watchHub, root, proxy)
 }
 
 // attachWatcher creates e's file watcher WITHOUT p.mu — its initial walk is the

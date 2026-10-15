@@ -1065,6 +1065,17 @@ a resync that follows cannot finish inside an unwatched gap. A directory moved
 away is reported under its own name only, so deleting a path in the topology
 index also deletes every file indexed below it.
 
+A root's consumers share one OS watcher (`internal/fswatch/hub.go`, PLAN-503):
+the daemon's `fswatch.Hub` opens it on the first subscription for a root —
+with the topology index's cooldown and exclusions, the set every consumer
+excludes — and closes it on the last unsubscribe. Each subscription has its own
+buffer: a full one is `Lost` for that subscription only, so one slow consumer
+never blocks another, while the OS watcher's own `Lost` and `Failed` reach every
+subscription. Exclusions beyond the shared set (the language servers' `target/`
+and `out/`) are filtered on the subscription. A Go and TypeScript workspace used
+to run three OS watchers — three FSEvents streams, or three inotify watch sets
+against `fs.inotify.max_user_watches` — and now runs one.
+
 See [`docs/configuration.md`](configuration.md) for every section and field,
 and `plumb config show` for the resolved values with per-field provenance.
 

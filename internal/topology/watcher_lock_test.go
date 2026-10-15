@@ -162,7 +162,7 @@ func TestFSWatcher_StopKeepsSQLiteLocksInPlumbDir(t *testing.T) {
 	}
 
 	sink := &recordingSink{}
-	fw, err := newFSWatcher(ws, sink, nil)
+	fw, err := newFSWatcher(ws, sink, nil, nil)
 	if err != nil {
 		t.Fatalf("newFSWatcher: %v", err)
 	}

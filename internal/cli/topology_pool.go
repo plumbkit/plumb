@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/langsupport"
 	"github.com/plumbkit/plumb/internal/paths"
 	"github.com/plumbkit/plumb/internal/topology"
@@ -50,6 +51,9 @@ type topologyPool struct {
 	// openStore opens a store; nil means topology.Open with every extractor. A
 	// test seam for a slow or probing open.
 	openStore func(root string, cfg config.TopologyConfig) (*topology.Store, error)
+	// watchHub shares the root's OS file watcher with its language servers
+	// (PLAN-503); nil gives each store its own. Set by the daemon before use.
+	watchHub *fswatch.Hub
 }
 
 func newTopologyPool(cfg config.TopologyConfig) *topologyPool {
@@ -110,7 +114,7 @@ func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.Topol
 	open := p.openStore
 	if open == nil {
 		open = func(root string, cfg config.TopologyConfig) (*topology.Store, error) {
-			return topology.Open(root, cfg, buildExtractors())
+			return topology.OpenWith(root, cfg, buildExtractors(), p.watchHub)
 		}
 	}
 	s, err := open(root, cfg)

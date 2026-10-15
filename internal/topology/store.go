@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/paths"
 )
 
@@ -32,6 +33,13 @@ type Store struct {
 // Open opens or creates the topology index for workspace. It starts the
 // background indexer automatically. The caller must call Close when done.
 func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store, error) {
+	return OpenWith(workspace, cfg, exts, nil)
+}
+
+// OpenWith is Open with the daemon's shared file-watcher hub: the store's
+// watcher subscribes to the root's one OS watcher instead of opening its own
+// (PLAN-503). A nil hub opens a private watcher, as Open does.
+func OpenWith(workspace string, cfg config.TopologyConfig, exts []Extractor, hub *fswatch.Hub) (*Store, error) {
 	if workspace == "" {
 		return nil, errors.New("topology: workspace path is empty")
 	}
@@ -52,7 +60,7 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 
 	var watcher *fsWatcher
 	if cfg.Watch {
-		w, werr := newFSWatcher(workspace, s, excludes)
+		w, werr := newFSWatcher(workspace, s, excludes, hub)
 		switch {
 		case werr != nil && cfg.ResyncIntervalMinutes == 0:
 			// Both freshness paths are off: the index refreshes only at startup

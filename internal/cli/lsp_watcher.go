@@ -10,6 +10,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/lsp/protocol"
+	"github.com/plumbkit/plumb/internal/topology"
 )
 
 const lspWatchCooldown = 200 * time.Millisecond
@@ -23,6 +24,14 @@ const lspWatchCooldown = 200 * time.Millisecond
 // lspWatchShouldSkipPath stays the authoritative, workspace-relative filter.
 func lspWatchExcludeRegexFor(workspace string) string {
 	return fswatch.ExcludeDirsRegex(workspace, "vendor", "node_modules", "testdata", "dist", "build", "target", "out", "__pycache__")
+}
+
+// lspWatchExtraExcludeFor is what the language servers exclude beyond the
+// shared watcher's (topology's) exclusions: build-output directories the index
+// may still read. Applied on the LSP subscription, so together they are
+// lspWatchExcludeRegexFor.
+func lspWatchExtraExcludeFor(workspace string) string {
+	return fswatch.ExcludeDirsRegex(workspace, "target", "out")
 }
 
 // lspFSWatcher forwards file changes under one workspace to its language
@@ -47,10 +56,15 @@ type lspFSWatcher struct {
 }
 
 func newLSPFSWatcher(workspace string, client *clientProxy) (*lspFSWatcher, error) {
-	w, err := fswatch.New(workspace, fswatch.Options{
-		Cooldown:     lspWatchCooldown,
-		ExcludeRegex: lspWatchExcludeRegexFor(workspace),
-	})
+	return newLSPFSWatcherVia(nil, workspace, client)
+}
+
+// newLSPFSWatcherVia subscribes to hub's shared watcher for workspace (PLAN-503):
+// the root's one OS watcher, with the topology index's exclusions, filtered on
+// this subscription by what the language servers exclude beyond them. A nil hub
+// opens a private watcher with the same effective exclusions.
+func newLSPFSWatcherVia(hub *fswatch.Hub, workspace string, client *clientProxy) (*lspFSWatcher, error) {
+	w, err := hub.Subscribe(workspace, topology.SharedWatchOptions(workspace), lspWatchExtraExcludeFor(workspace))
 	if err != nil {
 		return nil, err
 	}

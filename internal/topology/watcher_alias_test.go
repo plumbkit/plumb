@@ -28,7 +28,7 @@ func TestFSWatcher_NewSymlinkIsEnqueuedUnderItsOwnName(t *testing.T) {
 		t.Fatal(err)
 	}
 	sink := &recordingSink{}
-	fw, err := newFSWatcher(ws, sink, nil)
+	fw, err := newFSWatcher(ws, sink, nil, nil)
 	if err != nil {
 		t.Fatalf("newFSWatcher: %v", err)
 	}
