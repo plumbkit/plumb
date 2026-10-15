@@ -33,7 +33,7 @@ const (
 // The labels the cases require. They are spelled once so the renderer, the tests
 // and the oracle cannot drift apart.
 const (
-	labelGoCallGraph  = "call graph is Go-only and syntactic; receiver-method callers may be absent"
+	labelGoCallGraph  = "Go call graph is syntactic; receiver-method callers may be absent"
 	labelNoProof      = "receiver-method call sites unresolved: an empty or short caller list is not proof of no callers"
 	labelMembers      = "struct fields are not graph members (disclosed, not claimed absent)"
 	labelIndexFailing = "index unavailable or failing: no relationship or test-impact claims; body from a disk snapshot"
@@ -333,11 +333,14 @@ func (p *contextPack) relationGaps() []string {
 	}
 	gaps := []string{p.LSP.gap()}
 	for _, l := range x.Languages {
-		if l.Admitted {
+		switch {
+		case l.Admitted && l.Language == "go":
 			gaps = append(gaps, labelGoCallGraph+"; "+labelNoProof)
-			continue
+		case l.Admitted:
+			gaps = append(gaps, moduleCallGraphLabel(l.Language))
+		default:
+			gaps = append(gaps, languageGap(l))
 		}
-		gaps = append(gaps, languageGap(l))
 	}
 	if slices.ContainsFunc(p.Files, func(f bodyFile) bool { return f.Changed }) {
 		gaps = append(gaps, labelStale)
@@ -357,6 +360,19 @@ func (p *contextPack) relationGaps() []string {
 		gaps = append(gaps, labelMembers)
 	}
 	return append(gaps, x.Stats.gaps()...)
+}
+
+// moduleCallGraphLabel words what the module resolver follows for lang (Python,
+// TypeScript, JavaScript), and what it does not, so a short caller list is read
+// as the floor it is.
+func moduleCallGraphLabel(lang string) string {
+	self := "this"
+	if lang == "python" {
+		self = "self/cls"
+	}
+	return fmt.Sprintf("%s call graph is import-resolved: calls through an import, %s or an imported class are followed; "+
+		"calls through other values, dynamic dispatch and re-exports are not, so an empty or short caller list is not proof of no callers",
+		lang, self)
 }
 
 func languageGap(l languageNote) string {

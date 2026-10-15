@@ -1092,18 +1092,21 @@ satisfies strict mode's read-before-edit check and nothing else does. A body in 
 file matching `[history] sensitive_globs` that the walk reached (rather than the
 caller named) is reduced to its location and a label.
 
-**Uses (Go).** A Go body delivered whole, of a seed or of a related declaration,
-is followed by a `uses, declared in this file:` record. It lists the
-package-level constants and variables of the same file that the body names, with
-their declaration lines from the same snapshot as the body, so no second read is
-needed.
-- **Long values.** A declaration's end is found with Go's own scanner, so a value
-  continued over several lines is shown whole. One that runs past 12 lines is
-  shown by its first line and a `read_symbol` handoff.
+**Uses (Go, Python, TypeScript, JavaScript).** A body delivered whole, of a seed
+or of a related declaration, is followed by a `uses, declared in this file:`
+record. It lists the file-level constants and variables of the same file that the
+body names, with their declaration lines from the same snapshot as the body, so no
+second read is needed. In Python and TypeScript/JavaScript a binding inside a class
+or enum (an attribute, a member) is not file-level and is not listed.
+- **Long values.** A Go declaration's end is found with Go's own scanner; the other
+  languages' extractors record the whole statement. Either way a value continued
+  over several lines is shown whole, and one that runs past 12 lines is shown by
+  its first line and a `read_symbol` handoff.
 - **Names matched.** Names are matched as text, so one in a comment, a string or
   a struct-literal key is listed too. A name reached through a selector is not
-  listed, nor is one the body declares itself with `:=` or `var`. A parameter or
-  named result of the same name is not detected.
+  listed, nor is one the body declares itself (Go `:=` or `var`; Python an
+  assignment or a `for` target; TypeScript and JavaScript `let`, `const` or
+  `var`). A parameter of the same name is not detected.
 - **Cap and budget.** At most 8 names are listed per body, and the rest are
   counted. The record ranks below every seed body and best-ranked related
   declaration, and shrinks to names and line numbers under a tight budget.
@@ -1115,9 +1118,11 @@ needed.
 relationship that reached it, and the pack never presents a weaker class as a
 stronger one: `e4` a call the language server confirmed (call hierarchy); `e3` an
 extractor edge (a containment, a same-file call, an import); `e2` a derived edge
-from the call or import resolver, followed only around a subject the call-graph
-admission rule accepts; `e1` a heuristic edge (Python's intra-file calls, with
-confidence 0.8) or a same-package name match (below); `e0` a gap candidate. The Go
+from the call or import resolver, followed only around a subject whose language a
+resolver serves (Go; Python, TypeScript and JavaScript through import-resolved
+edges, see [Topology](topology.md#import-resolved-call-edges-python-typescript-javascript));
+`e1` a heuristic edge (an intra-file call matched by name, with confidence 0.8) or a
+same-package name match (below); `e0` a gap candidate. The Go
 call graph is syntactic, so a method's callers are shown as the resolved callers
 plus gap candidates (the declarations of files that import the method's package),
 marked "not a resolved caller"; an empty, short or cut caller list is never

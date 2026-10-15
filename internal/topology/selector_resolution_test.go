@@ -111,8 +111,8 @@ func TestResolveSelector_NothingShadowedWithoutReferences(t *testing.T) {
 
 // DerivedCallsAdmitted is the admission rule on a node's own subject, failing
 // closed: a Go node in a workspace with a Go package is admitted; a Python node
-// is not (Python is not a supported call-graph language); an unknown node is
-// not.
+// is too (the module resolver's import-named edges may be followed); a Rust node
+// is not (no resolver serves Rust); an unknown node is not.
 func TestDerivedCallsAdmitted(t *testing.T) {
 	db := newLangIndex(t, "go", "python")
 	ctx := context.Background()
@@ -124,8 +124,13 @@ func TestDerivedCallsAdmitted(t *testing.T) {
 	if !DerivedCallsAdmitted(ctx, db, goFn) {
 		t.Error("a Go node in a workspace with a Go package was not admitted")
 	}
-	if DerivedCallsAdmitted(ctx, db, pyFn) {
-		t.Error("a Python node was admitted")
+	if !DerivedCallsAdmitted(ctx, db, pyFn) {
+		t.Error("a Python node was not admitted: the module resolver serves Python")
+	}
+	rsFile := insertLangFile(t, db, "src/rust/x.rs", "rust")
+	rsFn := insertTestNode(t, db, rsFile, "src/rust/x.rs", Node{Kind: KindFunction, Name: "r", Language: "rust"})
+	if DerivedCallsAdmitted(ctx, db, rsFn) {
+		t.Error("a Rust node was admitted")
 	}
 	if DerivedCallsAdmitted(ctx, db, 1<<40) {
 		t.Error("an unknown node was admitted")

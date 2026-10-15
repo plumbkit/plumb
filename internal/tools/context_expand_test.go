@@ -337,10 +337,11 @@ func TestContextForTask_GapCandidatesExcludeResolvedCallersAndTests(t *testing.T
 	}
 }
 
-// C10: a language with no cross-file call graph. The intra-file edge is heuristic
-// evidence (1) and the pack says the cross-file graph is unavailable; it does not
-// borrow Go's disclosure, and it does not conclude there are no callers.
-func TestContextForTask_C10_PythonRelationsAreHeuristicAndTheGapIsNamed(t *testing.T) {
+// C10: Python, whose cross-file graph is import-resolved (the module resolver).
+// The intra-file edge is still heuristic evidence (1), and the pack says what the
+// Python graph follows and what it does not; it does not borrow Go's disclosure,
+// and it does not conclude there are no callers.
+func TestContextForTask_C10_PythonRelationsAreLabelledAsImportResolved(t *testing.T) {
 	s := newShop(t)
 	c := oracle(t, "C10")
 	pack, out := runCase(t, s, c)
@@ -352,7 +353,7 @@ func TestContextForTask_C10_PythonRelationsAreHeuristicAndTheGapIsNamed(t *testi
 	if !strings.Contains(out, "[e1 heuristic] format_row") {
 		t.Errorf("the heuristic class is not rendered:\n%s", out)
 	}
-	if want := "cross-file call graph unavailable for python; intra-file heuristic call edges only (confidence 0.8)"; !strings.Contains(out, want) {
+	if want := moduleCallGraphLabel("python"); !strings.Contains(out, want) {
 		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 	if strings.Contains(out, labelGoCallGraph) {
@@ -506,5 +507,23 @@ func TestContextForTask_C09b_AnAbsentIndexClaimsNothingRelational(t *testing.T) 
 	}
 	if !strings.Contains(out, labelIndexFailing) || strings.Contains(out, "[e") || strings.Contains(out, "gap candidates") {
 		t.Errorf("an absent index must be labelled and must claim nothing relational:\n%s", out)
+	}
+}
+
+// A language no resolver serves keeps the unavailable wording; Go and the
+// module-resolved languages each get their own.
+func TestRelationGaps_LanguageWording(t *testing.T) {
+	p := contextPack{Expansion: contextExpansion{Ran: true, Languages: []languageNote{
+		{Language: "go", Admitted: true}, {Language: "typescript", Admitted: true}, {Language: "rust", Heuristic: true},
+	}}}
+	got := strings.Join(p.relationGaps(), "\n")
+	for _, want := range []string{
+		labelGoCallGraph + "; " + labelNoProof,
+		"typescript call graph is import-resolved: calls through an import, this or an imported class are followed",
+		"cross-file call graph unavailable for rust; intra-file heuristic call edges only (confidence 0.8)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("gaps lack %q:\n%s", want, got)
+		}
 	}
 }

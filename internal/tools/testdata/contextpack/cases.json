@@ -40,7 +40,7 @@
         ]
       },
       "required_labels": [
-        "call graph is Go-only and syntactic; receiver-method callers may be absent"
+        "Go call graph is syntactic; receiver-method callers may be absent"
       ],
       "forbidden": [
         "store/ledger.go::(*Ledger).Total as a seed"
@@ -361,7 +361,7 @@
     },
     {
       "id": "C10",
-      "category": "unsupported-graph-language",
+      "category": "module-resolved-graph-language",
       "mode": "known-seed",
       "split": "dev",
       "intent": "understand",
@@ -382,7 +382,7 @@
         ]
       },
       "required_labels": [
-        "cross-file call graph unavailable for python; intra-file heuristic call edges only (confidence 0.8)"
+        "python call graph is import-resolved: calls through an import, self/cls or an imported class are followed; calls through other values, dynamic dispatch and re-exports are not, so an empty or short caller list is not proof of no callers"
       ],
       "forbidden": [
         "'no callers' stated as fact"

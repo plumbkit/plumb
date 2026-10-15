@@ -59,16 +59,26 @@ func (e *TypeScriptExtractor) Extensions() []string { return e.exts }
 // (1.0/extractor); intra-file call edges are name-resolved heuristics (0.8).
 // Returns (nil, nil, nil) when src cannot be parsed.
 func (e *TypeScriptExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	nodes, edges, _, err := e.ExtractWithCallSites(ctx, relPath, src)
+	return nodes, edges, err
+}
+
+// ExtractWithCallSites is Extract plus every call inside a function and what each
+// import binds (js_calls.go), from the same parse, for the module resolver.
+func (e *TypeScriptExtractor) ExtractWithCallSites(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	lang := e.lang.get()
-	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
-		w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	var sites []topology.CallSite
+	nodes, edges, err := extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &tsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, js: newJSSites(lang, src)}
 		for _, n := range root.Children() {
 			w.dispatch(n)
 		}
 		w.scanTests(root)
 		w.callEdges(root)
+		sites = w.js.sites
 		return w.nodes, w.edges
 	})
+	return nodes, edges, sites, err
 }
 
 type tsWalk struct {
@@ -78,6 +88,7 @@ type tsWalk struct {
 	nodes   []topology.Node
 	edges   []topology.Edge
 	funcIdx map[string]int64
+	js      *jsSites // call sites and import bindings, scopes by position
 }
 
 // dispatch handles one top-level (or namespace-level / export-unwrapped) node.
@@ -142,6 +153,7 @@ func (w *tsWalk) appendFunc(name string, rng *tsg.Node, enclosing int64) {
 	}
 	idx := w.appendNode(kind, name, rng)
 	w.funcIdx[name] = idx
+	w.js.register(rng, idx)
 	if enclosing >= 0 {
 		w.containment(enclosing, idx)
 	}
@@ -268,9 +280,11 @@ func (w *tsWalk) handleDeclarator(d, decl *tsg.Node, isConst bool) {
 	switch {
 	case value != nil && jsFuncValues[value.Type(w.lang)]:
 		w.appendFunc(name, decl, -1)
+		w.js.register(d, int64(len(w.nodes)-1))
 	case value != nil && w.isRequire(value):
 		if target := w.callStringArg(value); target != "" {
 			w.appendImport(target, decl)
+			w.js.addRequireBinding(d, name, target)
 		}
 	case isConst:
 		w.appendNode(topology.KindConstant, name, decl)
@@ -290,6 +304,7 @@ func (w *tsWalk) isRequire(value *tsg.Node) bool {
 func (w *tsWalk) addImport(n *tsg.Node) {
 	if str := childByType(n, "string", w.lang); str != nil {
 		w.appendImport(w.stringText(str), n)
+		w.js.addImportBindings(n, w.stringText(str))
 	}
 }
 
@@ -445,35 +460,19 @@ func (w *tsWalk) maybeTest(call *tsg.Node) {
 // callEdges emits EdgeCalls between functions defined in the file (0.8/heuristic).
 func (w *tsWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
-	// As in JavaScript, a scope can be opened by an arrow function bound to a
-	// const, so enclosingFunc replaces scopeByType here.
-	walkCallSites(root, w.enclosingFunc,
+	// As in JavaScript, scopes are found by declaration position
+	// (jsSites.enclosing): an arrow function bound to a const opens one, and two
+	// classes may share a method name.
+	walkCallSites(root, w.js.enclosing,
 		func(n *tsg.Node, curFunc int64) {
-			if n.Type(w.lang) == "call_expression" {
+			switch n.Type(w.lang) {
+			case "call_expression":
 				w.maybeCallEdge(n, curFunc, seen)
+				w.js.addCall(n, curFunc)
+			case "new_expression":
+				w.js.addCall(n, curFunc)
 			}
 		})
-}
-
-func (w *tsWalk) enclosingFunc(n *tsg.Node, curFunc int64) int64 {
-	var name string
-	switch n.Type(w.lang) {
-	case "function_declaration", "generator_function_declaration":
-		name = w.nodeName(n)
-	case "method_definition":
-		name = w.memberName(n)
-	case "variable_declarator":
-		if v := n.ChildByFieldName("value", w.lang); v != nil && jsFuncValues[v.Type(w.lang)] {
-			name = w.declaratorName(n)
-		}
-	}
-	if name == "" {
-		return curFunc
-	}
-	if idx, ok := w.funcIdx[name]; ok {
-		return idx
-	}
-	return curFunc
 }
 
 func (w *tsWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

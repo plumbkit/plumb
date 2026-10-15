@@ -476,6 +476,43 @@ the symbol name is the honest tool and the refusal says so rather than implying 
 exists. Package-level reachability is **not** offered as the coarser answer, because it
 is gated to the same language set.
 
+## Import-resolved call edges (Python, TypeScript, JavaScript)
+
+For Python, TypeScript and JavaScript the extractors record every call inside a function
+and what each import binds (`site_kind = 'binding'` rows in `topology_call_sites`: the
+local name, the module as written, and the name imported from it). A second resolver,
+the **module resolver**, runs in the same transaction after the Go one and writes
+`call-resolver` edges for the calls an import names, and nothing else:
+
+- a name bound by an import: `from .util import helper as h` then `h()`;
+  `import { helper as h } from "./util"` then `h()`;
+- a member of an imported module: `import pkg.util` then `pkg.util.helper()`,
+  `from pkg import util` then `util.helper()`, `import * as u from "./util.js"` then
+  `u.helper()`, `const util = require("../src/util")` then `util.helper()`;
+- a method of an imported class: `from m import Store` then `Store.save()`, and `new
+  Store()` for the class itself;
+- a method of the enclosing class through `self`/`cls` (Python) or `this` (TypeScript,
+  JavaScript), at confidence 0.85, since a subclass may override it.
+
+Python modules resolve relative to the importing file (`.`, `..`) or, for an absolute
+import, to `a/b.py` or `a/b/__init__.py` at the root or, failing that, the one indexed
+file whose path ends that way (several is no answer). TypeScript and JavaScript resolve
+only relative specifiers (`./`, `../`), trying the specifier as written, then with
+`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs` and as a directory `index`,
+and mapping TypeScript's ESM `./a.js` to `a.ts`; a bare specifier (a package, a bundler
+or `tsconfig` alias) is not followed. A default import is not followed either, since it
+does not name the declaration. Everything else — a call through an untyped value,
+dynamic dispatch, a re-export, a wildcard import — makes no edge, never a guessed one,
+so these graphs make no completeness claim: the census and caller-completeness answers
+stay Go-only, and a pack labels a short Python or TypeScript caller list as the floor it
+is. Traversals (`context_for_task`, `call_hierarchy`'s topology fallback,
+`topology_affected`, `minimal_diff_review`) follow these edges; `AdmitCallGraph`,
+package and function reachability do not.
+
+The extractors find a call's enclosing function by the definition's position, not its
+name, so two classes' same-named methods keep their own calls (and their intra-file
+heuristic edges).
+
 ## Route recovery
 
 `topology_routes` reads REGISTRATION sites — the call, composite-literal field or
@@ -544,12 +581,13 @@ never committed.
 
 - **Syntactic, not semantic.** Topology does not resolve types or follow dynamic
   dispatch. Treat its graph as a strong hint, then confirm with LSP.
-- **Cross-file call edges cover about 17% of call sites, in Go only** (about 85% of the
+- **Cross-file call edges cover about 17% of Go call sites** (about 85% of the
   cross-file caller→callee pairs a type checker finds). See the section above: a method
   call on a field, an unnamed value or a local of no single declared type carries no type
   in a syntactic parse and is left unresolved by design, so a caller list from the
   topology call graph is a lower bound and never a complete one, weakest for methods
-  across packages. Confirm with `find_references`.
+  across packages. Confirm with `find_references`. Python, TypeScript and JavaScript get
+  import-resolved edges only (see above), with no reach measurement yet.
 - **`topology_routes` recovers what is written at the registration site, untyped.**
   Handlers are tied by import and package scope, never type-checked; router group and
   mount prefixes are not composed; Swift and frameworks with no recorded site fall back

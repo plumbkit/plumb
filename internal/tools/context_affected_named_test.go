@@ -259,3 +259,34 @@ func TestAffectedNeighbours_WalkCallersFirstThenByName(t *testing.T) {
 		t.Errorf("understanding code changes nothing, yet neighbours were walked: %v %v", n, a)
 	}
 }
+
+func TestRunnableTestName_PerLanguage(t *testing.T) {
+	for _, c := range []struct {
+		name, lang string
+		want       bool
+	}{
+		{"TestCart", "go", true},
+		{"Testcart", "go", false},
+		{"ExampleCart", "go", true},
+		{"BenchmarkCart", "go", false},
+		{"test_cart", "python", true},
+		{"test", "python", true},
+		{"testcart", "python", false},
+		{"TestCart", "python", false},
+		{"adds an item", "typescript", false},
+		{"test_cart", "javascript", false},
+	} {
+		if got := runnableTestName(c.name, c.lang); got != c.want {
+			t.Errorf("runnableTestName(%q, %s) = %v, want %v", c.name, c.lang, got, c.want)
+		}
+	}
+}
+
+// A pytest-style target gets a -k expression over the names, ready to paste.
+func TestNamedTestsLine_Pytest(t *testing.T) {
+	line := namedTestsLine(TestScope{Language: "python", Style: TargetPath}, "tests", namedTests{Names: []string{"test_add", "test_total"}, Total: 2})
+	want := `run_task(slot:"test", target:"./tests", run:"test_add or test_total")`
+	if !strings.Contains(line, want) {
+		t.Errorf("line = %q, want it to contain %q", line, want)
+	}
+}

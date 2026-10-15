@@ -43,17 +43,18 @@ func (e *PythonExtractor) Extract(ctx context.Context, relPath string, src []byt
 	return nodes, edges, err
 }
 
-// ExtractWithCallSites is Extract plus the file's decorator sites, from the same
-// parse. Only decorators are recorded: they are where a Flask or FastAPI route is
-// bound to its handler, and the handler is the decorated declaration itself, so
-// no cross-file resolution is needed to name it. Ordinary Python call sites are
-// NOT recorded — Python is not a call-graph language (callgraph.go), and a
-// partial set of call rows would read as a complete one.
+// ExtractWithCallSites is Extract plus the file's sites, from the same parse:
+// decorators (where a Flask or FastAPI route is bound to its handler, the
+// decorated declaration itself), every call inside a function, and what each
+// import binds. The calls and bindings feed the module resolver
+// (indexer_calls_modules.go), which follows a call across a file boundary only
+// when an import names its target; it makes no completeness claim, so a call it
+// cannot follow is simply not an edge.
 func (e *PythonExtractor) ExtractWithCallSites(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	lang := e.lang.get()
 	var sites []topology.CallSite
 	nodes, edges, err := extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
-		w := &pyWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+		w := &pyWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, funcByStart: map[uint32]int64{}}
 		w.walk(root, -1, false)
 		w.callEdges(root)
 		sites = w.sites
@@ -63,14 +64,15 @@ func (e *PythonExtractor) ExtractWithCallSites(ctx context.Context, relPath stri
 }
 
 type pyWalk struct {
-	lang       *tsg.Language
-	src        []byte
-	path       string
-	nodes      []topology.Node
-	edges      []topology.Edge
-	funcIdx    map[string]int64 // function/method/test name → node index, for call edges
-	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
-	sites      []topology.CallSite
+	lang        *tsg.Language
+	src         []byte
+	path        string
+	nodes       []topology.Node
+	edges       []topology.Edge
+	funcIdx     map[string]int64 // function/method/test name → node index, for call edges
+	funcByStart map[uint32]int64 // function definition start byte → node index, for enclosing scopes
+	nameCounts  map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
+	sites       []topology.CallSite
 }
 
 func line(p tsg.Point) int { return int(p.Row) + 1 }
@@ -381,6 +383,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 	node.DocStartByte, node.DocEndByte = pyDocSpan(n, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
+	w.funcByStart[n.StartByte()] = idx
 	if enclosingClass >= 0 {
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     enclosingClass,
@@ -393,6 +396,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 }
 
 func (w *pyWalk) addImports(n *tsg.Node) {
+	w.addBindings(n)
 	switch n.Type(w.lang) {
 	case "import_from_statement":
 		if m := n.ChildByFieldName("module_name", w.lang); m != nil {
@@ -430,18 +434,19 @@ func (w *pyWalk) addImport(name string, n *tsg.Node) {
 }
 
 // callEdges does a second pass emitting EdgeCalls between functions defined in
-// the same file. The call node is syntactically certain but the callee is
-// resolved by name within the file, so confidence is 0.8 (heuristic).
+// the same file, and recording every call as a site. The call node is
+// syntactically certain but the callee is resolved by name within the file, so
+// confidence is 0.8 (heuristic). The enclosing function is found by position,
+// not name, so same-named methods of two classes keep their own calls.
 func (w *pyWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	walkCallSites(root,
-		scopeByType(w.lang, w.funcIdx, w.fieldName, "function_definition"),
-		func(n *tsg.Node, curFunc int64) {
-			if n.Type(w.lang) == "call" {
-				w.maybeCallEdge(n, curFunc, seen)
-			}
-		})
+	walkCallSites(root, w.scopeByStart, func(n *tsg.Node, curFunc int64) {
+		if n.Type(w.lang) == "call" {
+			w.maybeCallEdge(n, curFunc, seen)
+			w.addCallSite(n, curFunc)
+		}
+	})
 }
 
 func (w *pyWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

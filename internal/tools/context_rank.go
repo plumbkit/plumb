@@ -196,7 +196,11 @@ func isTestNode(n topology.Node) bool {
 // isTestPath recognises the test-file conventions of the languages plumb indexes.
 func isTestPath(p string) bool {
 	base := strings.ToLower(path.Base(p))
-	for _, suffix := range []string{"_test.go", "_test.py", "_test.rs", ".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.js", "test.java", "tests.cs"} {
+	for _, suffix := range []string{
+		"_test.go", "_test.py", "_test.rs", "test.java", "tests.cs",
+		".test.ts", ".test.tsx", ".test.mts", ".test.js", ".test.jsx", ".test.mjs", ".test.cjs",
+		".spec.ts", ".spec.tsx", ".spec.mts", ".spec.js", ".spec.jsx", ".spec.mjs", ".spec.cjs",
+	} {
 		if strings.HasSuffix(base, suffix) {
 			return true
 		}
