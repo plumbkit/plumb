@@ -139,6 +139,7 @@ func allToolSchemas() map[string]json.RawMessage {
 		(*TypeHierarchy)(nil).Name():        (*TypeHierarchy)(nil).InputSchema(),
 		(*UndoEdit)(nil).Name():             (*UndoEdit)(nil).InputSchema(),
 		(*WorkspaceSearch)(nil).Name():      (*WorkspaceSearch)(nil).InputSchema(),
+		(*ToolFeedback)(nil).Name():         (*ToolFeedback)(nil).InputSchema(),
 		(*WorkspaceSessions)(nil).Name():    (*WorkspaceSessions)(nil).InputSchema(),
 		(*WorkspaceSymbols)(nil).Name():     (*WorkspaceSymbols)(nil).InputSchema(),
 		(*WriteFile)(nil).Name():            (*WriteFile)(nil).InputSchema(),

@@ -372,7 +372,7 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | Flag | Applies to | Effect |
 |---|---|---|
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
-| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~21 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 60. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
+| `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~22 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 61. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
 | `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
@@ -927,6 +927,7 @@ Redaction does not use a marker. A stored diff shows each secret it masked as a 
 ```
 plumb stats [--workspace <dir>] [--limit <n>] [--since <age>] [--failures]
 plumb stats --health [--workspace <dir>]
+plumb stats --context [--workspace <dir> | --all-workspaces] [--since <age>] [--json]
 ```
 
 Aliases: **`plumb status`**.
@@ -942,6 +943,33 @@ of the most recent calls.
 | `--since <age>` | all history | Only count calls newer than this age: `90m`, `24h`, `7d`, `2w`. Rejected together with `--health`. |
 | `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. Rejected together with `--health`. |
 | `--health` | `false` | Replace the default view with the three standing health metrics (PLAN-368), computed for today (UTC) and upserted into `stats.db`'s `health_daily` table. |
+| `--context` | `false` | Replace the default view with the `context_for_task` report, week by week (see below). `--since` defaults to `8w`. Rejected together with `--health`, `--failures` or `--limit`. |
+| `--all-workspaces` | `false` | With `--context`: count every workspace's calls (worktrees and scratch checkouts included), not only `--workspace`'s. |
+| `--json` | `false` | With `--context`: print the report as JSON (no logo). |
+
+`--context` answers, from the calls plumb already records (no new table, no new
+write), what `context_for_task` packs did for the agents that asked for them, in
+UTC weeks starting Monday plus a total. An *agent stream* is one session, or one
+logical agent on a shared connection; a pack's *window* runs from the pack to the
+stream's next pack or its end.
+
+- **Uptake:** streams, streams with a pack, packs and how many started from task
+  prose.
+- **Pack quality:** of the files edited in a pack's window, how many the pack named
+  (recall); of the files a pack named, how many were then read or edited (use); how
+  many of the seeds prose discovery proposed were used; searches run before the
+  first edit; seed files read again after the pack delivered them.
+- **Edits with a pack, and without:** for streams that edited, the share of edits
+  that failed, that added a compile error the post-write diagnostics confirmed,
+  undos per stream, edits per file edited, failed test runs (`run_task` slot
+  `test`), and tested streams whose last test run passed.
+- **Leads:** files edited after a pack that it did not name, what agents searched
+  for after a pack and before their first edit, the gaps packs admitted most
+  often, and the notes agents left with `tool_feedback`.
+
+Only plumb calls are recorded, so every rate is over plumb's lane: a client's
+native reads, searches and edits are invisible. The with/without split compares
+different streams doing different work; it is a lead, not a controlled result.
 
 `--health` renders and persists three metrics, idempotently per UTC day (safe to
 run more than once — a re-run overwrites that day's rows rather than duplicating

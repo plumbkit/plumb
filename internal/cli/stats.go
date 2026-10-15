@@ -67,20 +67,40 @@ func resolveStatsWorkspace() (string, error) {
 	return resolveCLIWorkspace(ws, cfg)
 }
 
-func runStats(cmd *cobra.Command, _ []string) error {
-	PrintLogo()
-
-	if err := checkHealthFlagCompat(cmd); err != nil {
-		return err
+// runStatsAlternateView runs --context or --health, the views that replace the
+// default one, and reports whether it did.
+func runStatsAlternateView(ws string) (bool, error) {
+	switch {
+	case statsFlagContext:
+		return true, runStatsContext(ws, statsContextOut)
+	case statsFlagHealth:
+		return true, runStatsHealth(ws)
 	}
+	return false, nil
+}
 
-	ws, err := resolveStatsWorkspace()
+// statsPreamble checks the flag combinations, prints the logo (not before JSON,
+// which goes to a pipe the logo would corrupt) and resolves the workspace.
+func statsPreamble(cmd *cobra.Command) (string, error) {
+	if err := checkContextFlagCompat(cmd); err != nil {
+		return "", err
+	}
+	if !statsFlagJSON {
+		PrintLogo()
+	}
+	if err := checkHealthFlagCompat(cmd); err != nil {
+		return "", err
+	}
+	return resolveStatsWorkspace()
+}
+
+func runStats(cmd *cobra.Command, _ []string) error {
+	ws, err := statsPreamble(cmd)
 	if err != nil {
 		return err
 	}
-
-	if statsFlagHealth {
-		return runStatsHealth(ws)
+	if handled, err := runStatsAlternateView(ws); handled {
+		return err
 	}
 
 	db, err := stats.OpenReadOnly()

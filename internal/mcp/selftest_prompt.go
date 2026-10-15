@@ -52,7 +52,7 @@ var (
 
 	selftestMemoryWrite = []string{"write_memory", "delete_memory"}
 
-	selftestSession = []string{"rename_session", "workspace_sessions"}
+	selftestSession = []string{"rename_session", "workspace_sessions", "tool_feedback"}
 
 	selftestCollab = []string{"share_intent", "leave_note", "check_messages", "share_findings"}
 
@@ -245,7 +245,8 @@ func selftestTierB() []string {
 		"- **Memory (write):** " + toolList(selftestMemoryWrite) + ": `write_memory` a temp",
 		"  memory named `selftest-temp`, confirm it, then `delete_memory` it.",
 		"- **Session:** " + toolList(selftestSession) + ": read the current name via `daemon_info`,",
-		"  `rename_session` to a temp name, then rename it back.",
+		"  `rename_session` to a temp name, then rename it back, and `tool_feedback` with",
+		"  `tool: \"session_start\"` and a one-line `note` (it should acknowledge, nothing more).",
 		"- **Cross-agent sharing (advisory):** " + toolList(selftestCollab) + ": call `share_intent`",
 		"  with a short `body`, `leave_note` with a `body` and `to: \"next\"`, `check_messages`",
 		"  with no arguments (it should report the note you just left, exactly once), and",

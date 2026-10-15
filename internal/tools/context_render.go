@@ -61,8 +61,14 @@ func (p *contextPack) lines() []packLine {
 	ls = append(ls, p.affectedLines()...)
 	ls = append(ls, p.constraintLines()...)
 	ls = append(ls, p.gapLines()...)
-	return append(ls, p.nextLines()...)
+	ls = append(ls, p.nextLines()...)
+	return append(ls, packLine{text: contextFeedbackLine, prio: prioRelRest, section: secNext, class: classNext})
 }
+
+// contextFeedbackLine closes every pack: where to say what it lacked or carried
+// needlessly. It has the lowest priority, so it is the first line a tight budget
+// drops.
+const contextFeedbackLine = `feedback: missing something, or noise? tool_feedback {"tool":"context_for_task","missing":"…","noise":"…"}`
 
 // headerLine names the tool, the agent's root, the intent and the budget. It is
 // the first line of the output, and baselineBytesFrom reads that line looking

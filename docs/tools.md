@@ -1,6 +1,6 @@
 # Tools — MCP API Reference
 
-Plumb exposes **60** structured tools to AI assistants. Every write tool is
+Plumb exposes **61** structured tools to AI assistants. Every write tool is
 concurrency-safe, atomic, and notifies the language server via
 `workspace/didChangeWatchedFiles`.
 
@@ -220,6 +220,15 @@ an ended session whose identity is not recoverable does not reserve its name.
 Generated names are checked the same way at registration and re-drawn, so no two
 registered sessions share one. (A session whose registration failed keeps
 a display name but has no mailbox address at all, so it cannot shadow one.)
+
+### `tool_feedback`
+An agent's short note on what a plumb answer lacked or carried needlessly.
+**Inputs:** `tool` (required: the plumb tool the note is about), `missing`,
+`noise`, `note` (at least one; each at most 500 bytes). The tool stores nothing
+itself: plumb's local call record keeps every call's arguments, and
+`plumb stats --context` lists the notes newest first as leads. Read-only, no
+network; never include secrets or source. Every `context_for_task` pack ends with
+a one-line pointer to it, the first line a tight budget drops.
 
 ### `workspace_sessions`
 Same-workspace peer awareness: lists active sessions on this workspace and recent

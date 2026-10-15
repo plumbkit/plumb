@@ -52,6 +52,22 @@
   `--no-context`; `--context` is still accepted and deprecated. An unreadable
   config still reads as off. The hook and the tool share one prompt parser
   (`tools.PromptSelectors`).
+- **`plumb stats --context`: is `context_for_task` helping?** A week-by-week
+  report (default 8 weeks; `--all-workspaces`, `--json`) derived from the calls
+  plumb already records, with no new table: uptake (streams with a pack, packs
+  from prose); pack quality (edited files the pack named, pack files then read or
+  edited, proposed seeds used, searches before the first edit, seed re-reads);
+  edits with a pack and without (failed edits, edits adding a confirmed compile
+  error, undos, edits per file, failed test runs, tested streams ending green);
+  and leads (files edited that a pack missed, searches after a pack, the gaps
+  packs admit most, agents' notes). Only plumb's own calls are visible, and the
+  report says so.
+- **`tool_feedback`: agents say what a plumb answer lacked.** A new read-only
+  tool (61 tools now) takes a `tool` and a short `missing` / `noise` / `note`;
+  the call record keeps it and `plumb stats --context` lists it. Every
+  `context_for_task` pack ends with a one-line pointer to it, dropped first when
+  the budget is tight.
+
 ## 0.25.0 (2026-10-15)
 
 ### Removed

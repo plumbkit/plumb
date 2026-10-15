@@ -67,6 +67,7 @@ var knownToolGuarding = map[string]string{
 	// No path input — guard not applicable
 	"NewDaemonInfoFunc":   "none",
 	"NewRenameSession":    "none",
+	"NewToolFeedback":     "none",
 	"NewSessionStart":     "none", // workspace arg is for deliberate re-pinning, not file access
 	"NewTopologySearch":   "none",
 	"NewWorkspaceSearch":  "none", // queries the pinned connection's indexes; no user path input
