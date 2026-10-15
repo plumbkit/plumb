@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/lsp"
 )
 
 // This file holds the pool entry's teardown lifecycle: idle-grace reaping,
@@ -27,12 +29,24 @@ func (p *workspacePool) reapEntry(e *poolEntry) {
 		p.mu.Unlock()
 		return
 	}
+	e.graceTimer = nil
+	// The same clear-then-check as hibernateEntry: a call holding a lease keeps
+	// the entry, and its end re-arms this teardown (clientProxy.end → onIdle).
+	client := e.proxy.get()
+	e.proxy.clear()
+	if e.proxy.inflight.Load() > 0 {
+		e.proxy.set(client)
+		p.mu.Unlock()
+		return
+	}
 	delete(p.entries, key)
 	p.mu.Unlock()
 	slog.Info("pool: tearing down idle LS", "root", e.root, "language", e.language)
 	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
 	defer cancel()
-	e.closeOnce.Do(func() { closeEntry(ctx, e) })
+	// The client stays cleared — nothing can start a call on it — and the
+	// shutdown handshake goes to it directly.
+	e.closeOnce.Do(func() { closeEntryClient(ctx, e, client) })
 }
 
 // awaitReady waits up to startGrace for a freshly started entry to become
@@ -175,7 +189,13 @@ func (p *workspacePool) close() {
 // (which cancels the supervisor's exec.CommandContext, killing the process) is
 // the real guarantee the language server dies.
 func closeEntry(ctx context.Context, e *poolEntry) {
-	if c := e.proxy.get(); c != nil {
+	closeEntryClient(ctx, e, e.proxy.get())
+}
+
+// closeEntryClient is closeEntry with the client to shut down given, for a
+// caller that has already cleared it from the proxy (reapEntry).
+func closeEntryClient(ctx context.Context, e *poolEntry, c lsp.Client) {
+	if c != nil {
 		_ = c.Shutdown(ctx)
 		_ = c.Exit(ctx)
 	}

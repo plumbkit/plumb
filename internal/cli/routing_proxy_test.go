@@ -233,7 +233,7 @@ func TestRoutingProxy_ResetPrimaryOverridesFirstWins(t *testing.T) {
 	if rp.primaryRoot != rootB {
 		t.Fatalf("resetPrimary should override first-wins: got %s, want %s", rp.primaryRoot, rootB)
 	}
-	c, err := rp.primaryClient(context.Background())
+	c, _, err := rp.primaryClient(context.Background())
 	if err != nil {
 		t.Fatalf("primaryClient after reset: %v", err)
 	}

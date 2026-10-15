@@ -812,11 +812,11 @@ func TestPool_PinDuringGraceCancelsTeardown(t *testing.T) {
 	}
 }
 
-// TestPool_UnpinnedAcquireNeverScheduledForTeardown verifies that an on-demand
-// routing acquire (pin=false) holds no reference and is never reclaimed by the
-// refcount path — release is a no-op for a never-pinned entry, matching the
-// pre-refcount "lives until shutdown" behaviour.
-func TestPool_UnpinnedAcquireNeverScheduledForTeardown(t *testing.T) {
+// TestPool_UnpinnedAcquireReapedAfterGrace pins PLAN-533's replacement of the
+// old "an unpinned entry lives until daemon shutdown": an acquire that takes no
+// session lease leaves an entry that is reaped idleGrace after its call ends.
+// A stray release must not take a lease it never had (refs stays 0).
+func TestPool_UnpinnedAcquireReapedAfterGrace(t *testing.T) {
 	pool, ctx := fastWarmingPool(t, 20*time.Millisecond)
 	defer pool.close()
 
@@ -827,9 +827,9 @@ func TestPool_UnpinnedAcquireNeverScheduledForTeardown(t *testing.T) {
 	if got := poolRefs(pool, root); got != 0 {
 		t.Fatalf("refs = %d, want 0 for an unpinned acquire", got)
 	}
-	pool.release(root, "go") // defensive no-op: refs already 0, must not schedule teardown
-	time.Sleep(3 * pool.idleGrace)
-	if pool.lookup(root, "go") == nil {
-		t.Fatal("unpinned entry was reclaimed; release must be a no-op when refs == 0")
+	pool.release(root, "go") // no lease to drop: must not go negative
+	if got := poolRefs(pool, root); got > 0 {
+		t.Fatalf("refs = %d after a stray release, want 0 (or the entry already reaped)", got)
 	}
+	waitEntryGone(t, pool, root, 2*time.Second)
 }

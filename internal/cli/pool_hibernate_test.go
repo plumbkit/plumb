@@ -258,7 +258,12 @@ func TestPool_HibernateAndWakeRestartsServer(t *testing.T) {
 	if woken != e {
 		t.Fatal("wake created a new entry instead of restarting the existing one")
 	}
-	if e.state != poolActive {
-		t.Fatalf("state = %v, want poolActive after wake", e.state)
+	// The no-op process never completes the handshake, so the woken entry stays
+	// waking: running, but not yet active (PLAN-533's explicit states).
+	pool.mu.Lock()
+	state := e.state
+	pool.mu.Unlock()
+	if state != poolWaking {
+		t.Fatalf("state = %v, want waking after a wake whose handshake has not finished", state)
 	}
 }

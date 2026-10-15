@@ -201,7 +201,7 @@ func TestCanonicalRoot_AliasedURIRoutesToThePrimaryServer(t *testing.T) {
 	rp.setPrimary(realRoot, "go", pool.entries[poolKey{realRoot, "go"}].proxy)
 
 	// The client names a file in the pinned project by the ALIASED spelling.
-	got, err := rp.route(context.Background(), "file://"+filepath.Join(alias, "main.go"), false)
+	got, _, err := rp.route(context.Background(), "file://"+filepath.Join(alias, "main.go"), false)
 	if err != nil {
 		t.Fatalf("route: %v", err)
 	}

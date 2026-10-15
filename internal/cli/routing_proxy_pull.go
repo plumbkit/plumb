@@ -79,10 +79,11 @@ func (r *routingProxy) DiagnosticsMode(uri string) string {
 // false whenever the primary is not ready or does not implement pull. New
 // callers should prefer the per-URI DiagnosticsMode.
 func (r *routingProxy) SupportsPullDiagnostics() bool {
-	c, err := r.primaryClient(context.Background())
+	c, done, err := r.primaryClient(context.Background())
 	if err != nil {
 		return false
 	}
+	defer done()
 	pc, ok := c.(pullCapableClient)
 	return ok && pc.SupportsPullDiagnostics()
 }
@@ -124,10 +125,11 @@ func (r *routingProxy) DiagnosticCapabilities(uri string) (interFileDependencies
 // returned — the caller re-reads the mode, sees push, and falls back.
 func (r *routingProxy) Diagnostic(ctx context.Context, params protocol.DocumentDiagnosticParams) (*protocol.DocumentDiagnosticReport, error) {
 	uri := params.TextDocument.URI
-	c, err := r.route(ctx, uri, true)
+	c, done, err := r.route(ctx, uri, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	pc, ok := c.(pullCapableClient)
 	if !ok {
 		return nil, fmt.Errorf("pull diagnostics unsupported for %s", uri)
@@ -146,10 +148,11 @@ func (r *routingProxy) Diagnostic(ctx context.Context, params protocol.DocumentD
 // workspaceDiagnostics; an adapter without the surface returns a wrapped
 // error. The same -32601 downgrade as Diagnostic applies.
 func (r *routingProxy) WorkspaceDiagnostic(ctx context.Context, uri string, params protocol.WorkspaceDiagnosticParams) (*protocol.WorkspaceDiagnosticReport, error) {
-	c, err := r.route(ctx, uri, true)
+	c, done, err := r.route(ctx, uri, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	wc, ok := c.(workspacePullCapableClient)
 	if !ok {
 		return nil, errors.New("workspace pull diagnostics unsupported")

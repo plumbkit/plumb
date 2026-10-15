@@ -126,15 +126,20 @@ type langConfig struct {
 	cfg  config.LSPConfig
 }
 
-// poolLifecycle tracks whether a poolEntry's language-server process is running
-// or has been hibernated — stopped to reclaim memory while the entry, its warm
-// cache, and its map slot survive. See workspacePool.hibernateEntry / wakeLocked.
+// poolLifecycle tracks a poolEntry's language-server process: first starting,
+// running, or hibernated — stopped to reclaim memory while the entry, its warm
+// cache, and its map slot survive — and waking again. See
+// workspacePool.hibernateEntry / wakeLocked.
+//
+// poolActive stays the zero value so an entry built directly (tests) is running.
 type poolLifecycle int
 
 const (
-	poolActive      poolLifecycle = iota // process running (or warming)
+	poolActive      poolLifecycle = iota // process running and its handshake done
 	poolHibernating                      // teardown in progress
 	poolHibernated                       // process stopped; next acquire restarts it
+	poolStarting                         // first start: process spawned, handshake not done
+	poolWaking                           // restart after hibernation, handshake not done
 )
 
 func (s poolLifecycle) String() string {
@@ -145,9 +150,20 @@ func (s poolLifecycle) String() string {
 		return "hibernating"
 	case poolHibernated:
 		return "hibernated"
+	case poolStarting:
+		return "starting"
+	case poolWaking:
+		return "waking"
 	default:
 		return "unknown"
 	}
+}
+
+// running reports whether the entry's process is up or coming up: the states
+// hibernation, budgets and reuse treat alike. Only the handshake separates
+// starting and waking from active.
+func (s poolLifecycle) running() bool {
+	return s == poolActive || s == poolStarting || s == poolWaking
 }
 
 type poolEntry struct {
@@ -195,14 +211,16 @@ type poolEntry struct {
 	// the same supervisor and so the same environment. Guarded by workspacePool.mu.
 	goWorkOff string
 
-	// refs counts the sessions that hold this root as their PINNED primary
-	// workspace (attach / re-pin). On-demand routing acquires (routingProxy.route
-	// for a non-primary URI) deliberately do NOT pin, so a route target is never
-	// prematurely reclaimed mid-call and a never-pinned entry simply lives until
-	// daemon shutdown (the pre-refcount behaviour). graceTimer fires teardown
-	// after refs falls to zero; a new pin cancels it. closeOnce makes teardown
-	// idempotent across the grace reaper and daemon shutdown. All three are
-	// guarded by workspacePool.mu (closeOnce is self-synchronising).
+	// refs counts the leases that keep this entry alive between calls: a session
+	// holding the root as its PINNED primary (attach / re-pin), and a session
+	// BORROWING it — a routed or fanned-out call from a session whose primary is
+	// elsewhere, such as a nested root (plumb-ops routing into plumb). The pool
+	// owns the entry; lease holders never close it themselves. Calls in progress
+	// are counted separately (clientProxy.inflight). graceTimer fires teardown
+	// once refs is zero and no call is running; a new lease or call cancels it.
+	// closeOnce makes teardown idempotent across the grace reaper and daemon
+	// shutdown. All three are guarded by workspacePool.mu (closeOnce is
+	// self-synchronising); proxy.held mirrors refs > 0 for the lock-free path.
 	refs       int
 	graceTimer *time.Timer
 	closeOnce  sync.Once
@@ -300,11 +318,20 @@ const (
 // proxy.get() as a transient miss, not a failure.
 //
 // pin records a long-lived session reference on the entry (see poolEntry.refs):
-// pass true from a workspace attach / re-pin, false from an on-demand routing
-// acquire. A pinned entry is kept alive until its last session releases it (and
-// then for idleGrace); an unpinned acquire never affects the refcount.
+// pass true from a workspace attach / re-pin. A pinned entry is kept alive until
+// its last session releases it (and then for idleGrace). pin=false is an acquire
+// with no lease of its own: the entry is reaped idleGrace after it returns
+// unless something leases it meanwhile. Routed calls use acquireCall instead,
+// which keeps the entry for the whole call.
 func (p *workspacePool) acquireLang(ctx context.Context, root, language string, pin bool) (*poolEntry, error) {
-	e, readyCh, err := p.startOrReuse(root, language, pin)
+	if !pin {
+		e, done, err := p.acquireCall(ctx, root, language)
+		if done != nil {
+			done()
+		}
+		return e, err
+	}
+	e, readyCh, err := p.startOrReuse(root, language, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -333,7 +360,10 @@ func existingDir(dir string) string {
 // is never held across the warm-up: the entry is published into the map before
 // the lock is released, so concurrent callers for the same root reuse it and a
 // language server is never spawned twice.
-func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntry, <-chan error, error) {
+//
+// pin takes a session lease (refs) and call takes a call lease (inflight), both
+// under the lock and only once the entry is known good; see leaseLocked.
+func (p *workspacePool) startOrReuse(root, language string, pin, call bool) (*poolEntry, <-chan error, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -374,9 +404,7 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 			if err != nil {
 				return nil, nil, err
 			}
-			if pin {
-				p.pinLocked(e)
-			}
+			p.leaseLocked(e, pin, call)
 			slog.Info("pool: waking hibernated LS", "root", root, "language", e.language, "refs", e.refs)
 			return e, readyCh, nil
 		case poolHibernating:
@@ -384,14 +412,10 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 			// Return the not-yet-ready entry so the caller retries (route surfaces
 			// "LSP server not yet ready"); the next acquire finds it hibernated and
 			// wakes it.
-			if pin {
-				p.pinLocked(e)
-			}
+			p.leaseLocked(e, pin, call)
 			return e, nil, nil
 		default:
-			if pin {
-				p.pinLocked(e)
-			}
+			p.leaseLocked(e, pin, call)
 			slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
 			return e, nil, nil
 		}
@@ -412,7 +436,8 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 	inv := cache.NewInvalidator(c)
 	proxy := &clientProxy{}
 	env, goWorkOff := goLSPEnv(language, root, lspCfg, envFor(lspCfg))
-	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolActive, startedAt: time.Now(), goWorkOff: goWorkOff}
+	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolStarting, startedAt: time.Now(), goWorkOff: goWorkOff}
+	proxy.onIdle = func() { go p.scheduleIdleReap(e) }
 	proxy.touch()
 
 	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), env, lsp.SupervisorOptions{
@@ -436,47 +461,10 @@ func (p *workspacePool) startOrReuse(root, language string, pin bool) (*poolEntr
 		e.watcher = watcher
 		watcher.Start()
 	}
-	if pin {
-		p.pinLocked(e)
-	}
+	p.leaseLocked(e, pin, call)
 	p.entries[poolKey{root, language}] = e
 	slog.Info("pool: new workspace (warming)", "root", root, "language", language, "refs", e.refs)
 	return e, readyCh, nil
-}
-
-// pinLocked increments an entry's session refcount and cancels any pending
-// idle-teardown timer (a re-pin during the grace window keeps the server
-// alive). Caller must hold p.mu.
-func (p *workspacePool) pinLocked(e *poolEntry) {
-	e.refs++
-	if e.graceTimer != nil {
-		e.graceTimer.Stop()
-		e.graceTimer = nil
-	}
-}
-
-// release drops one pinned session reference on root (paired with an
-// acquireLang(pin=true)). When the last reference goes, the entry is scheduled
-// for teardown after idleGrace rather than torn down immediately, so a client
-// reconnect or quick re-attach reuses the warm server. A no-op when root has no
-// entry or no outstanding pins (defensive: a session that attached without LSP,
-// LanguageNone, holds no pin and must not decrement a sibling's count).
-func (p *workspacePool) release(root, language string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	e, ok := p.entries[poolKey{root, language}]
-	if !ok || e.refs <= 0 {
-		return
-	}
-	e.refs--
-	if e.refs > 0 {
-		return
-	}
-	if e.graceTimer != nil {
-		e.graceTimer.Stop()
-	}
-	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(e) })
-	slog.Info("pool: last session detached — scheduling idle teardown", "root", root, "language", language, "grace", p.idleGrace)
 }
 
 // warmupFor reports whether the language server for (root, language) is still
@@ -532,6 +520,7 @@ func (p *workspacePool) poolOnStart(e *poolEntry, rootURI string, lspCfg config.
 			return fmt.Errorf("initialized: %w", err)
 		}
 		e.proxy.set(ad)
+		p.markActive(e)
 		slog.Info("pool: LS ready", "root", e.root, "language", e.language, "diag", p.diagModeFor(e.root, e.language))
 		return nil
 	}

@@ -39,6 +39,19 @@
   `--no-context`; `--context` is still accepted and deprecated. An unreadable
   config still reads as off. The hook and the tool share one prompt parser
   (`tools.PromptSelectors`).
+### Changed
+
+- **A language server no connection uses is reclaimed, not kept until the
+  daemon stops** (PLAN-533). The pool now owns each server and counts leases on
+  it: a connection leases its primary and borrows every other server it routes
+  to — a secondary language, a nested root such as a parent repository routing
+  into a submodule, a workspace-symbol fan-out target — until it disconnects or
+  switches workspace, and every call holds a lease for its whole duration. A
+  server is hibernated only with no call in progress, and torn down 90 s after
+  its last lease and last call are gone. Before, a server started by routing
+  lived until daemon shutdown, and hibernation or `max_workspaces` eviction
+  could stop a server in the middle of a call. `plumb debug lsp` shows the new
+  `starting` and `waking` states while a handshake is in progress.
 
 ## 0.25.0 (2026-10-15)
 

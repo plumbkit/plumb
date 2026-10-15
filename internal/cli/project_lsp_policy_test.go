@@ -116,11 +116,11 @@ func TestProjectLSP_DisableRefusesAnAlreadyPooledEntry(t *testing.T) {
 	writePoolProjectConfig(t, root, "[lsp.python]\nenabled = true\n")
 	installEntryLang(pool, root, "python", &stubClient{id: "python"})
 
-	if _, _, err := pool.startOrReuse(root, "python", false); err != nil {
+	if _, _, err := pool.startOrReuse(root, "python", false, false); err != nil {
 		t.Fatalf("premise broken: the pooled entry was not reusable while enabled: %v", err)
 	}
 	writePoolProjectConfig(t, root, "[lsp.python]\nenabled = false\n")
-	if _, _, err := pool.startOrReuse(root, "python", false); err == nil {
+	if _, _, err := pool.startOrReuse(root, "python", false, false); err == nil {
 		t.Error("a project that disabled python was still handed the pooled python server")
 	}
 }
