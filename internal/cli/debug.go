@@ -138,7 +138,8 @@ restarts them transparently.`,
 
 // renderLSPStatus turns the daemon's tab-separated lsp-status reply
 // (language, root, state, pid, rss_bytes, idle_seconds, diag=<mode>, then —
-// from PLAN-534's daemons — refs, in-flight calls, over-cap 0/1 per line) into
+// from PLAN-534's daemons — refs, in-flight calls, over-cap 0/1, and from
+// PLAN-538's seconds since the last resync, -1 for never) into
 // an aligned table. A seven-field line from an older daemon shows "-" for the
 // newer columns. Presentation lives here, not in the daemon, so the wire
 // format stays raw values.

@@ -292,6 +292,7 @@ func (p *workspacePool) beginHibernateLocked(e *poolEntry) func() {
 		return nil
 	}
 	e.state = poolHibernating
+	p.cancelResyncLocked(e) // it re-reads the tree when it wakes
 	sup := e.sup
 	watcher := e.watcher
 	e.watcher = nil

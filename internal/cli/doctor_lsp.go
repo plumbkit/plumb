@@ -186,8 +186,8 @@ func checkActiveLSPProcesses() []checkResult {
 	return parseActiveLSP(resp)
 }
 
-// parseActiveLSP turns an lsp-status (7 fields) or lsp-status-v2 (10 fields)
-// reply into one check row per live server.
+// parseActiveLSP turns an lsp-status (7 fields) or lsp-status-v2 (11 fields)
+// reply (7 or more fields) into one check row per live server.
 func parseActiveLSP(resp string) []checkResult {
 	var results []checkResult
 	for line := range strings.SplitSeq(resp, "\n") {

@@ -33,10 +33,10 @@
   snapshot "may need a daemon restart" — and that restart re-warmed every
   project. Now that one server is restarted in place, once no call holds it,
   and reads the tree afresh; every other server is untouched. A burst of losses
-  costs one restart (30 s quiet, at most one per server per 10 minutes). A
-  watcher that fails is recreated with backoff, and its server resynced once it
-  is back.
-
+  costs one restart (30 s quiet, at most one per server per 10 minutes, the
+  interval doubling up to an hour while losses keep recurring). A watcher that
+  fails is recreated with backoff until one attaches, and its server resynced
+  once it is back.
 - **One file watcher per workspace, not one per consumer** (PLAN-503). The
   topology index and every language server on a workspace each ran their own
   recursive OS watcher over the same tree — a Go and TypeScript workspace ran

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -222,4 +224,134 @@ func TestWatcherFailed_IsReattachedBeforeAnyResync(t *testing.T) {
 	if n != 0 {
 		t.Fatal("control: a resync ran although it was held off")
 	}
+}
+
+// TestWatcherFailed_RetriesUntilAWatcherAttaches: a recreation whose new
+// watcher cannot be created (the limit that failed the first) keeps trying.
+func TestWatcherFailed_RetriesUntilAWatcherAttaches(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	pool.watcherFactory = func(r string, proxy *clientProxy) (*lspFSWatcher, error) {
+		if calls.Add(1) <= 2 {
+			return nil, errors.New("seam: inotify watch limit")
+		}
+		return f.factory(r, proxy)
+	}
+	close(f.latest(root).failed)
+	eventually(t, 5*time.Second, "the recreation gave up after a failed attach", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return e.watcher != nil && calls.Load() >= 3
+	})
+}
+
+// TestWatcherFailed_AStaleRecreationLeavesAHealthyWatcher: when another path
+// (a wake, a restart) attached a healthy watcher during the backoff, the
+// recreation for the old, failed one does nothing.
+func TestWatcherFailed_AStaleRecreationLeavesAHealthyWatcher(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	pool.watcherRetryDelay = 200 * time.Millisecond
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(f.latest(root).failed)
+	pool.mu.Lock()
+	old := e.watcher
+	e.watcher = nil
+	pool.mu.Unlock()
+	old.Stop()
+	if !pool.attachWatcher(e) { // the healthy replacement another path made
+		t.Fatal("control: could not attach the replacement")
+	}
+	pool.mu.Lock()
+	healthy := e.watcher
+	pool.mu.Unlock()
+	time.Sleep(500 * time.Millisecond)
+	pool.mu.Lock()
+	now := e.watcher
+	pool.mu.Unlock()
+	if now != healthy || f.count(root) != 2 {
+		t.Fatalf("the stale recreation replaced the healthy watcher (%d watchers built)", f.count(root))
+	}
+}
+
+// TestWatcherLost_ARecurringStormWidensTheInterval: resyncs that follow each
+// other closely count a streak, which doubles the minimum interval.
+func TestWatcherLost_ARecurringStormWidensTheInterval(t *testing.T) {
+	pool, _ := resyncPool(t)
+	pool.resyncMinInterval = 20 * time.Millisecond
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		pool.mu.Lock()
+		e.reconfiguring = true // count the resync without a restart
+		pool.mu.Unlock()
+		pool.resyncEntry(e)
+		time.Sleep(5 * time.Millisecond)
+	}
+	pool.mu.Lock()
+	streak := e.resyncStreak
+	e.reconfiguring = false
+	pool.mu.Unlock()
+	if streak < 2 {
+		t.Fatalf("resync streak = %d after three back-to-back resyncs, want it to grow", streak)
+	}
+}
+
+// TestWatcherLost_APendingResyncIsDroppedWhenTheServerHibernates.
+func TestWatcherLost_APendingResyncIsDroppedWhenTheServerHibernates(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.latest(root).lost <- struct{}{}
+	eventually(t, 3*time.Second, "control: no resync was scheduled", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return e.resyncTimer != nil
+	})
+	pool.hibernateEntry(e)
+	pool.mu.Lock()
+	pending := e.resyncTimer != nil
+	pool.mu.Unlock()
+	if pending {
+		t.Fatal("a hibernated server kept its pending resync")
+	}
+}
+
+// TestWatcherFailed_ALongHealthyRunResetsTheBackoff.
+func TestWatcherFailed_ALongHealthyRunResetsTheBackoff(t *testing.T) {
+	pool, _ := resyncPool(t)
+	pool.watcherRetryDelay = time.Hour // park the recreation after its first count
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.mu.Lock()
+	e.watcherFailures = 6
+	e.watcherHealthySince = time.Now().Add(-lspWatcherRetryMax - time.Minute)
+	w := e.watcher
+	pool.mu.Unlock()
+	pool.onWatcherFailed(e, w)
+	eventually(t, 3*time.Second, "the backoff was not reset after a long healthy run", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return e.watcherFailures == 1
+	})
 }

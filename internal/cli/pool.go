@@ -285,6 +285,13 @@ type poolEntry struct {
 	lastResync      time.Time
 	watcherRetrying bool
 	watcherFailures int
+	// watcherRetryAgain records a failure that arrived during a recreation;
+	// watcherHealthySince is when the last recreated watcher attached (a long
+	// healthy run resets the backoff); resyncStreak counts back-to-back resyncs
+	// (it doubles the minimum interval). Guarded by workspacePool.mu.
+	watcherRetryAgain   bool
+	watcherHealthySince time.Time
+	resyncStreak        int
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that

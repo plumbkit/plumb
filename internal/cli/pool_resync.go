@@ -21,6 +21,7 @@ import (
 const (
 	lspResyncQuiet       = 30 * time.Second
 	lspResyncMinInterval = 10 * time.Minute
+	lspResyncMaxInterval = time.Hour
 	lspWatcherRetryBase  = 5 * time.Second
 	lspWatcherRetryMax   = 5 * time.Minute
 )
@@ -48,7 +49,11 @@ func (p *workspacePool) onWatcherLost(e *poolEntry) {
 	quiet, minInterval := p.resyncDelays()
 	delay := quiet
 	if !e.lastResync.IsZero() {
-		if wait := time.Until(e.lastResync.Add(minInterval)); wait > delay {
+		// Losses that keep recurring (a flooding tree) double the interval each
+		// time, up to an hour, so a busy server is not made cold every ten
+		// minutes; a quiet spell resets it.
+		interval := min(minInterval<<min(e.resyncStreak, 3), lspResyncMaxInterval)
+		if wait := time.Until(e.lastResync.Add(interval)); wait > delay {
 			delay = wait
 		}
 	}
@@ -65,7 +70,14 @@ func (p *workspacePool) resyncEntry(e *poolEntry) {
 	if p.closed || p.entries[poolKey{e.root, e.language}] != e || e.sup == nil || !e.state.running() {
 		return
 	}
-	e.lastResync = time.Now()
+	now := time.Now()
+	_, minInterval := p.resyncDelays()
+	if !e.lastResync.IsZero() && now.Sub(e.lastResync) < 2*min(minInterval<<min(e.resyncStreak, 3), lspResyncMaxInterval) {
+		e.resyncStreak++
+	} else {
+		e.resyncStreak = 0
+	}
+	e.lastResync = now
 	p.resyncs++
 	p.lastResynced = poolKey{e.root, e.language}
 	if e.reconfiguring {
@@ -75,53 +87,86 @@ func (p *workspacePool) resyncEntry(e *poolEntry) {
 	go p.restartWithConfig(e, e.lspCfg, true)
 }
 
-// onWatcherFailed starts recreating e's watcher, unless that is already under
-// way.
-func (p *workspacePool) onWatcherFailed(e *poolEntry) {
+// onWatcherFailed starts recreating e's watcher after failed — the watcher
+// that reported it — failed, unless a recreation is already under way, in which
+// case it runs again once that one ends (Failed fires once per watcher, so it
+// must not be dropped). A failure after a long healthy run starts the backoff
+// afresh.
+func (p *workspacePool) onWatcherFailed(e *poolEntry, failed *lspFSWatcher) {
 	p.mu.Lock()
 	if e.watcherRetrying {
+		e.watcherRetryAgain = true
 		p.mu.Unlock()
 		return
+	}
+	if !e.watcherHealthySince.IsZero() && time.Since(e.watcherHealthySince) > lspWatcherRetryMax {
+		e.watcherFailures = 0
 	}
 	e.watcherRetrying = true
 	p.mu.Unlock()
-	go p.recreateWatcher(e)
+	go p.recreateWatcher(e, failed)
 }
 
-// recreateWatcher replaces e's failed watcher after a backoff that doubles with
-// each failure (capped), then resyncs the server for what it missed. It gives
-// up when the entry is gone, stopped (a wake attaches a fresh watcher) or the
-// pool closes.
-func (p *workspacePool) recreateWatcher(e *poolEntry) {
+// recreateWatcher replaces e's failed watcher, retrying with a backoff that
+// doubles with each failure (capped) until one attaches, then resyncs the server
+// for what it missed. It gives up when the entry is gone, stopped (a wake
+// attaches a fresh watcher), the pool closes, or another path has already
+// attached a healthy watcher in place of failed.
+func (p *workspacePool) recreateWatcher(e *poolEntry, failed *lspFSWatcher) {
 	defer func() {
 		p.mu.Lock()
+		again := e.watcherRetryAgain
+		e.watcherRetryAgain = false
 		e.watcherRetrying = false
+		cur := e.watcher
 		p.mu.Unlock()
+		if again && cur != nil {
+			p.onWatcherFailed(e, cur) // a failure that arrived while this ran
+		}
 	}()
-	p.mu.Lock()
-	delay := lspWatcherRetryBase << min(e.watcherFailures, 6)
-	e.watcherFailures++
-	p.mu.Unlock()
-	if p.watcherRetryDelay > 0 {
-		delay = p.watcherRetryDelay
-	}
-	select {
-	case <-p.shutdownCtx().Done():
-		return
-	case <-time.After(min(delay, lspWatcherRetryMax)):
-	}
-	p.mu.Lock()
-	if p.closed || p.entries[poolKey{e.root, e.language}] != e || !e.state.running() {
+	for {
+		p.mu.Lock()
+		delay := lspWatcherRetryBase << min(e.watcherFailures, 6)
+		e.watcherFailures++
 		p.mu.Unlock()
-		return
+		if p.watcherRetryDelay > 0 {
+			delay = p.watcherRetryDelay
+		}
+		select {
+		case <-p.shutdownCtx().Done():
+			return
+		case <-time.After(min(delay, lspWatcherRetryMax)):
+		}
+		p.mu.Lock()
+		if p.closed || p.entries[poolKey{e.root, e.language}] != e || !e.state.running() ||
+			(e.watcher != nil && e.watcher != failed) {
+			p.mu.Unlock()
+			return // gone, stopped, or a healthy watcher is already attached
+		}
+		old := e.watcher
+		e.watcher = nil
+		p.mu.Unlock()
+		if old != nil {
+			old.Stop()
+		}
+		if p.attachWatcher(e) {
+			p.mu.Lock()
+			e.watcherHealthySince = time.Now()
+			p.mu.Unlock()
+			slog.Info("lsp: file watcher recreated", "root", e.root, "language", e.language)
+			p.onWatcherLost(e) // changes made while it was down were not seen
+			return
+		}
+		failed = nil // nothing attached; keep trying while e.watcher stays nil
 	}
-	old := e.watcher
-	e.watcher = nil
-	p.mu.Unlock()
-	if old != nil {
-		old.Stop()
+}
+
+// cancelResyncLocked drops a pending resync: the server is about to be stopped
+// or restarted anyway, and reads the tree afresh when it next runs. Caller holds
+// p.mu.
+func (p *workspacePool) cancelResyncLocked(e *poolEntry) {
+	if e.resyncTimer != nil {
+		e.resyncTimer.Stop()
+		e.resyncTimer = nil
 	}
-	p.attachWatcher(e)
-	slog.Info("lsp: file watcher recreated", "root", e.root, "language", e.language)
-	p.onWatcherLost(e) // changes made while it was down were not seen
 }
