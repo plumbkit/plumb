@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -175,5 +176,68 @@ func TestHeldByAConnection(t *testing.T) {
 	m.release(root)
 	if held(root) {
 		t.Fatal("a released root is still held")
+	}
+}
+
+// TestDrainIdle_HoldsTheFlightWhileClosing: an open of a root being drained
+// waits for the close (it would otherwise open a second handle on the database
+// the drain is still closing).
+func TestDrainIdle_HoldsTheFlightWhileClosing(t *testing.T) {
+	var mu sync.Mutex
+	var flight keyedFlight
+	stores := map[string]int{"/r": 1}
+	used := map[string]time.Time{"/r": time.Now().Add(-storeIdleGrace)}
+	closing, release := make(chan struct{}), make(chan struct{})
+	done := make(chan int, 1)
+	go func() {
+		done <- drainIdle(drainSet[int]{
+			mu: &mu, stores: &stores, used: &used, flight: &flight,
+			close: func(string, int) { close(closing); <-release },
+		}, time.Now(), nil)
+	}()
+	<-closing
+	mu.Lock()
+	wait, leader := flight.begin("/r")
+	mu.Unlock()
+	if leader {
+		t.Fatal("an open of a root being drained did not wait for the close")
+	}
+	close(release)
+	<-wait
+	if n := <-done; n != 1 {
+		t.Fatalf("drained %d, want 1", n)
+	}
+}
+
+// TestPools_ALookupKeepsARootAlive: a lookup (topology Acquire, collab
+// open) refreshes the root's use, so the drain spares it.
+func TestPools_ALookupKeepsARootAlive(t *testing.T) {
+	topo := newTopologyPool(topoCfg())
+	defer topo.StopAll()
+	root := t.TempDir()
+	if topo.Acquire(root, topoCfg()) == nil {
+		t.Fatal("control: could not open")
+	}
+	topo.mu.Lock()
+	ageUse(topo.used, root, storeIdleGrace)
+	topo.mu.Unlock()
+	topo.Acquire(root, topoCfg())
+	if n := topo.reapIdle(time.Now(), nil); n != 0 {
+		t.Fatal("a topology root just acquired was drained")
+	}
+
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	collabs := newCollabPool()
+	defer collabs.closeAll()
+	ws := t.TempDir()
+	if collabs.acquire(ws) == nil {
+		t.Fatal("control: could not open the collab store")
+	}
+	collabs.mu.Lock()
+	ageUse(collabs.used, ws, storeIdleGrace)
+	collabs.mu.Unlock()
+	collabs.get(ws)
+	if n := collabs.reapIdle(time.Now(), nil); n != 0 {
+		t.Fatal("a collab store just looked up was drained")
 	}
 }
