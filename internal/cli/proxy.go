@@ -62,7 +62,7 @@ func (p *clientProxy) begin() (lsp.Client, func()) {
 	p.inflight.Add(1)
 	c := p.get()
 	if c == nil {
-		p.inflight.Add(-1)
+		p.release() // no call made: return the count without touching the clock
 		return nil, nil
 	}
 	p.touch()
@@ -79,6 +79,13 @@ func (p *clientProxy) endOnce() func() {
 // long call counts as activity for its whole duration, not just its start.
 func (p *clientProxy) end() {
 	p.touch()
+	p.release()
+}
+
+// release returns one call lease. The last one on an entry nobody holds asks
+// the pool to arm its idle teardown — also on begin's not-ready path, whose
+// count may have made a concurrent reap stand down.
+func (p *clientProxy) release() {
 	if p.inflight.Add(-1) == 0 && !p.held.Load() && p.onIdle != nil {
 		p.onIdle()
 	}

@@ -46,9 +46,12 @@
   it: a connection leases its primary and borrows every other server it routes
   to — a secondary language, a nested root such as a parent repository routing
   into a submodule, a workspace-symbol fan-out target — until it disconnects or
-  switches workspace, and every call holds a lease for its whole duration. A
+  switches workspace, and every routed tool call holds a lease for its whole
+  duration (the file watcher's change notifications do not: one racing a
+  hibernation fails harmlessly, and the woken server re-reads the disk). A
   server is hibernated only with no call in progress, and torn down 90 s after
-  its last lease and last call are gone. Before, a server started by routing
+  its last lease is gone and its last call has ended. An explicit Swift restart
+  waits for calls in progress instead of failing. Before, a server started by routing
   lived until daemon shutdown, and hibernation or `max_workspaces` eviction
   could stop a server in the middle of a call. `plumb debug lsp` shows the new
   `starting` and `waking` states while a handshake is in progress.

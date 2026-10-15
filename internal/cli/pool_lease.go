@@ -90,16 +90,20 @@ func (p *workspacePool) unborrow(e *poolEntry) {
 	p.unleaseLocked(e)
 }
 
-// scheduleIdleReap arms the idle teardown for an entry that has just lost its
-// last call lease, when nothing else holds it. The checks repeat under the lock
-// because the call's end read the held mirror without it. An armed timer is left
-// alone: no call has started since it was armed (a call cancels it).
+// scheduleIdleReap (re-)arms the idle teardown for an entry that has just lost
+// its last call lease, when nothing else holds it, so the grace counts from the
+// end of the last call. A timer already armed is replaced: it may have been
+// armed by a release while this call was still running, and keeping it would
+// reap the entry a grace after that release rather than after this call. The
+// checks repeat under the lock because the call's end read the held mirror
+// without it.
 func (p *workspacePool) scheduleIdleReap(e *poolEntry) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.entries[poolKey{e.root, e.language}] != e || e.refs > 0 || e.proxy.inflight.Load() > 0 || e.graceTimer != nil {
+	if p.entries[poolKey{e.root, e.language}] != e || e.refs > 0 || e.proxy.inflight.Load() > 0 {
 		return
 	}
+	p.cancelGraceLocked(e)
 	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(e) })
 }
 

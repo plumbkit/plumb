@@ -346,6 +346,12 @@ func TestPool_EntryStates(t *testing.T) {
 // the last release cancels that teardown, so the server stays for a full grace
 // after the call ends — not just until the grace armed by the release expires.
 func TestPool_GraceCountsFromTheLastCall(t *testing.T) {
+	t.Run("call started after the release", func(t *testing.T) { graceFromLastCall(t, false) })
+	t.Run("call started before the release", func(t *testing.T) { graceFromLastCall(t, true) })
+}
+
+func graceFromLastCall(t *testing.T, callFirst bool) {
+	t.Helper()
 	pool, ctx := fastWarmingPool(t, 300*time.Millisecond)
 	defer pool.close()
 	const root = "/tmp/plumb-lease-last-call"
@@ -353,11 +359,20 @@ func TestPool_GraceCountsFromTheLastCall(t *testing.T) {
 	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
 		t.Fatalf("pinned acquire: %v", err)
 	}
+	var done func()
+	call := func() {
+		var err error
+		if _, done, err = pool.acquireCall(ctx, root, "go"); err != nil {
+			t.Fatalf("acquireCall: %v", err)
+		}
+	}
+	if callFirst {
+		call()
+	}
 	released := time.Now()
 	pool.release(root, "go") // arms a teardown for released+grace
-	_, done, err := pool.acquireCall(ctx, root, "go")
-	if err != nil {
-		t.Fatalf("acquireCall: %v", err)
+	if !callFirst {
+		call()
 	}
 	time.Sleep(200 * time.Millisecond)
 	done() // the call ends inside the release's grace
@@ -453,5 +468,83 @@ func TestPool_OnStartMarksTheEntryActive(t *testing.T) {
 	}
 	if got := entryState(pool, e); got != poolActive {
 		t.Fatalf("state = %v after a successful handshake, want active", got)
+	}
+}
+
+// TestRestartSwift_WaitsForACallInProgress: an explicit restart that meets a
+// call holding its lease waits for the call to end, then restarts, instead of
+// failing with "entry did not hibernate" (the #683 review's regression).
+func TestRestartSwift_WaitsForACallInProgress(t *testing.T) {
+	pool := &workspacePool{entries: make(map[poolKey]*poolEntry), baseCtx: context.Background(), cacheTTL: time.Minute, startGrace: 15 * time.Millisecond}
+	defer pool.close()
+	root := t.TempDir()
+	release := make(chan struct{})
+	close(release) // the woken start succeeds at once
+	var outcome error
+	e := swiftEntryWithControllableStart(t, pool, root, nil, release, &outcome)
+	e.proxy.set(&stubClient{id: "swift"})
+
+	_, done := e.proxy.begin()
+	ended := make(chan struct{})
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		done()
+		close(ended)
+	}()
+	if err := runRestartSwift(t, pool, root, 5*time.Second); err != nil {
+		t.Fatalf("restartSwift with a call in progress: %v", err)
+	}
+	select {
+	case <-ended:
+	default:
+		t.Fatal("restartSwift returned before the call in progress ended")
+	}
+}
+
+// TestPool_AbortedReapKeepsTheClientAndRearms: a reap that fires while a call
+// holds the entry leaves it fully usable — the live client is restored, not left
+// cleared — and the call's end re-arms the teardown even though that reap had
+// already fired its timer.
+func TestPool_AbortedReapKeepsTheClientAndRearms(t *testing.T) {
+	pool := newTestPool()
+	pool.idleGrace = 30 * time.Millisecond
+	probe := &shutdownProbe{}
+	e := leasedEntry(t, pool, "/tmp/plumb-lease-abort", probe)
+	e.proxy.onIdle = func() { go pool.scheduleIdleReap(e) }
+
+	c, done := e.proxy.begin()
+	if c == nil {
+		t.Fatal("begin on a ready entry returned no client")
+	}
+	pool.mu.Lock()
+	e.graceTimer = time.AfterFunc(time.Hour, func() {}) // as a release would arm it
+	pool.mu.Unlock()
+	pool.reapEntry(e) // the timer firing mid-call
+	if e.proxy.get() == nil {
+		t.Fatal("an aborted reap left the live client cleared")
+	}
+	if probe.shutdown.Load() != 0 {
+		t.Fatal("an aborted reap shut the server down")
+	}
+	done()
+	waitEntryGone(t, pool, "/tmp/plumb-lease-abort", 2*time.Second)
+}
+
+// TestClientProxy_NotReadyBeginReArmsAnUnheldEntry: a not-ready begin on an
+// entry nobody holds returns its count through the same idle check as a call's
+// end, so a reap it made stand down is re-armed.
+func TestClientProxy_NotReadyBeginReArmsAnUnheldEntry(t *testing.T) {
+	var idle atomic.Int32
+	p := &clientProxy{onIdle: func() { idle.Add(1) }}
+	if c, _ := p.begin(); c != nil {
+		t.Fatal("not-ready begin returned a client")
+	}
+	if idle.Load() != 1 {
+		t.Fatalf("onIdle ran %d times after a not-ready begin on an unheld entry, want 1", idle.Load())
+	}
+	p.held.Store(true)
+	p.begin()
+	if idle.Load() != 1 {
+		t.Fatal("onIdle ran for a held entry")
 	}
 }

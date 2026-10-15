@@ -303,7 +303,9 @@ Key design properties:
   nested root such as a parent repository routing into a submodule, a
   workspace-symbol fan-out target — which it *borrows* on first use and returns
   when it disconnects or switches workspace. Each call holds a *call lease* for
-  its whole duration, including the primary's lock-free fast path. Hibernation
+  its whole duration, including the primary's lock-free fast path (the file
+  watcher's change notifications hold none: one racing a hibernation fails
+  harmlessly, and the woken server re-reads the disk). Hibernation
   needs no call in progress; reaping needs no call and no session lease, then
   the same 90 s grace. A server no connection holds is therefore reclaimed, not
   kept until daemon shutdown. Entries move through `starting`, `active`,
