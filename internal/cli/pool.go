@@ -123,6 +123,10 @@ type workspacePool struct {
 	// A test seam: a slow or probing factory shows the watcher is built without
 	// p.mu (PLAN-536).
 	watcherFactory func(root string, proxy *clientProxy) (*lspFSWatcher, error)
+
+	// closed is set by close(), under mu: a watcher whose build finishes after
+	// it is stopped rather than attached (attachWatcher).
+	closed bool
 }
 
 type langConfig struct {

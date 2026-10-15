@@ -124,20 +124,36 @@ func (p *collabPool) open(workspace string, global, create bool) (*collab.Store,
 			<-wait
 			continue
 		}
-		s, err := p.openUnlocked(workspace, global, create)
-		p.mu.Lock()
-		p.flight.end(key)
-		closed := p.closed
-		if s != nil && err == nil && !closed {
-			p.publishLocked(key, s)
-		}
-		p.mu.Unlock()
-		if s != nil && closed {
-			_ = s.Close()
-			return nil, errors.New("collab: mailbox pool closed")
-		}
-		return s, err
+		return p.openAsLeader(key, workspace, global, create)
 	}
+}
+
+// openAsLeader opens key's store without p.mu, publishes it and ends the flight.
+// Caller holds key's flight. A panicking open still ends it, so the panic cannot
+// wedge every later open of key.
+func (p *collabPool) openAsLeader(key, workspace string, global, create bool) (*collab.Store, error) {
+	ended := false
+	defer func() {
+		if !ended {
+			p.mu.Lock()
+			p.flight.end(key)
+			p.mu.Unlock()
+		}
+	}()
+	s, err := p.openUnlocked(workspace, global, create)
+	p.mu.Lock()
+	p.flight.end(key)
+	ended = true
+	closed := p.closed
+	if s != nil && err == nil && !closed {
+		p.publishLocked(key, s)
+	}
+	p.mu.Unlock()
+	if s != nil && closed {
+		_ = s.Close()
+		return nil, errors.New("collab: mailbox pool closed")
+	}
+	return s, err
 }
 
 func (p *collabPool) cachedLocked(key string) *collab.Store {

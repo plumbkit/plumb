@@ -39,6 +39,10 @@ type topologyPool struct {
 	// pool stopped, so an open that finishes afterwards closes its store.
 	flight keyedFlight
 	closed bool
+	// sweeps counts the disabling reloads that closed every store; a leader
+	// whose open spans one does not publish its store (it would outlive the
+	// sweep on a pool the reload just disabled).
+	sweeps uint64
 	// openStore opens a store; nil means topology.Open with every extractor. A
 	// test seam for a slow or probing open.
 	openStore func(root string, cfg config.TopologyConfig) (*topology.Store, error)
@@ -82,14 +86,15 @@ func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology
 		old := p.stores[root]
 		delete(p.stores, root)
 		delete(p.cfgs, root)
+		sweeps := p.sweeps
 		p.mu.Unlock()
-		return p.reopen(root, old, cfg)
+		return p.reopen(root, old, cfg, sweeps)
 	}
 }
 
 // reopen closes old (when any) and opens root with cfg, both without p.mu, then
 // publishes the result and ends root's flight. Caller holds root's flight.
-func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.TopologyConfig) *topology.Store {
+func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.TopologyConfig, sweeps uint64) *topology.Store {
 	if old != nil {
 		if err := old.Close(); err != nil {
 			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
@@ -101,10 +106,15 @@ func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.Topol
 			return topology.Open(root, cfg, buildExtractors())
 		}
 	}
+	ended := false
+	defer p.endFlightUnlessEnded(root, &ended)
 	s, err := open(root, cfg)
 	p.mu.Lock()
 	p.flight.end(root)
-	closed := p.closed
+	ended = true
+	// A reload that disabled topology while this open ran has already swept the
+	// pool; publishing now would leave a store the sweep meant to close.
+	closed := p.closed || p.sweeps != sweeps
 	if err == nil && !closed {
 		p.stores[root] = s
 		p.cfgs[root] = cfg
@@ -120,6 +130,18 @@ func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.Topol
 	}
 	slog.Info("topology: store opened", "root", root)
 	return s
+}
+
+// endFlightUnlessEnded ends root's flight when the leader's open did not reach
+// its own end — a panicking open — so the panic cannot wedge every later Acquire
+// for root behind a flight nobody will end. Deferred by the leader.
+func (p *topologyPool) endFlightUnlessEnded(root string, ended *bool) {
+	if *ended {
+		return
+	}
+	p.mu.Lock()
+	p.flight.end(root)
+	p.mu.Unlock()
 }
 
 // get returns the pool's store for root when one is already open, and nil
@@ -200,6 +222,7 @@ func (p *topologyPool) Reconcile(cfg config.TopologyConfig) {
 	p.cfg = cfg
 
 	if !cfg.Enabled {
+		p.sweeps++
 		closing := make(map[string]*topology.Store, len(p.stores))
 		for root, s := range p.stores {
 			closing[root] = s

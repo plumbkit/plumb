@@ -143,6 +143,11 @@ func (p *workspacePool) removeFailed(e *poolEntry) {
 // entries are shut down immediately rather than after their grace window.
 func (p *workspacePool) close() {
 	p.mu.Lock()
+	// Set under p.mu, so an attachWatcher finishing after this snapshot stops its
+	// watcher instead of publishing it onto an entry that is being torn down —
+	// and closeEntryClient's later read of e.watcher is ordered after any attach
+	// that did publish.
+	p.closed = true
 	// Snapshot entries and cancel any pending grace timers while holding the lock.
 	entries := make([]*poolEntry, 0, len(p.entries))
 	for _, e := range p.entries {

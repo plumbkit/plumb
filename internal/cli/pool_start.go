@@ -52,10 +52,12 @@ func (p *workspacePool) reuseUnlock(e *poolEntry, pin, call bool) (*poolEntry, <
 }
 
 // startLocked builds a new entry for key, starts its language server warming,
-// and publishes it in the map. Caller holds p.mu. The supervisor's StartAsync
-// only spawns the process and its goroutine, so it stays under the lock: that
-// is what keeps one key from ever getting two servers. The file watcher does
-// not — the caller attaches it after the unlock (attachWatcher).
+// and publishes it in the map. Caller holds p.mu. What stays under the lock is
+// short: argsFor's small filesystem prep (a log directory, a timestamp) and
+// StartAsync, which spawns the process and its goroutine — keeping the spawn
+// under the lock is what keeps one key from ever getting two servers. The file
+// watcher's walk does not — the caller attaches it after the unlock
+// (attachWatcher).
 func (p *workspacePool) startLocked(key poolKey, lspCfg config.LSPConfig, env []string, goWorkOff string) (*poolEntry, <-chan error, error) {
 	root, language := key.root, key.language
 	// LRU eviction: before starting a new server, if this language is at its
@@ -105,8 +107,9 @@ func (p *workspacePool) newWatcher(root string, proxy *clientProxy) (*lspFSWatch
 
 // attachWatcher creates e's file watcher WITHOUT p.mu — its initial walk is the
 // slowest step of a start or a wake — and publishes it under the lock only if
-// the entry is still the live, running entry that has none. An entry torn down
-// or hibernated meanwhile gets nothing, and the watcher is stopped.
+// the entry is still the live, running entry that has none and the pool is not
+// closed. An entry torn down or hibernated meanwhile, or one close() has already
+// swept (it does not empty p.entries), gets nothing, and the watcher is stopped.
 func (p *workspacePool) attachWatcher(e *poolEntry) {
 	watcher, err := p.newWatcher(e.root, e.proxy)
 	if err != nil {
@@ -114,7 +117,7 @@ func (p *workspacePool) attachWatcher(e *poolEntry) {
 		return
 	}
 	p.mu.Lock()
-	live := p.entries[poolKey{e.root, e.language}] == e && e.state.running() && e.watcher == nil
+	live := !p.closed && p.entries[poolKey{e.root, e.language}] == e && e.state.running() && e.watcher == nil
 	if live {
 		e.watcher = watcher
 		watcher.Start()

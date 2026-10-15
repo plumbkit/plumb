@@ -58,9 +58,18 @@ func (p *memoryIndexPool) openAndPublish(workspace string) *memory.Index {
 	if open == nil {
 		open = memory.OpenIndex
 	}
+	ended := false
+	defer func() { // a panicking open must not wedge every later Get for workspace
+		if !ended {
+			p.mu.Lock()
+			p.flight.end(workspace)
+			p.mu.Unlock()
+		}
+	}()
 	ix, err := open(workspace)
 	p.mu.Lock()
 	p.flight.end(workspace)
+	ended = true
 	closed := p.closed
 	if err == nil && !closed {
 		p.indexes[workspace] = ix
