@@ -195,3 +195,31 @@ func TestWatcherLost_AHibernatedServerIsNotRestarted(t *testing.T) {
 		t.Fatal("a hibernated server was restarted for lost events")
 	}
 }
+
+// TestWatcherFailed_IsReattachedBeforeAnyResync: the recreated watcher is
+// attached by the recreation itself (the resync is held off here, so its restart
+// cannot be what builds one).
+func TestWatcherFailed_IsReattachedBeforeAnyResync(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.mu.Lock()
+	first := e.watcher
+	pool.mu.Unlock()
+	close(f.latest(root).failed)
+	eventually(t, 5*time.Second, "the failed watcher was not replaced on the entry", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return e.watcher != nil && e.watcher != first
+	})
+	pool.mu.Lock()
+	n := pool.resyncs
+	pool.mu.Unlock()
+	if n != 0 {
+		t.Fatal("control: a resync ran although it was held off")
+	}
+}
