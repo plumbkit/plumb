@@ -393,7 +393,7 @@ func (s *connSession) attachOrRepinTo(ctx context.Context, root, language string
 			v.qualityRunner.Stop()
 			v.qualityRunner = nil
 		}
-		v.topologyStore = nil // pool stores are daemon-lifetime and shared; just re-Acquire
+		v.topologyStore = nil // pool stores are shared; just re-Acquire (the pool drains idle ones)
 		// Per-session read/write tracking is workspace-relative: plumb has read and
 		// written nothing in the new project yet, so the dirty-guard and strict-mode
 		// read check must start clean rather than inherit the old root's paths. A

@@ -43,6 +43,9 @@ type topologyPool struct {
 	// whose open spans one does not publish its store (it would outlive the
 	// sweep on a pool the reload just disabled).
 	sweeps uint64
+	// used stamps each root's last lookup, so the store drain (store_drain.go,
+	// PLAN-535) can close an idle, unattached root's store.
+	used map[string]time.Time
 	// openStore opens a store; nil means topology.Open with every extractor. A
 	// test seam for a slow or probing open.
 	openStore func(root string, cfg config.TopologyConfig) (*topology.Store, error)
@@ -71,6 +74,7 @@ func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology
 	for {
 		p.mu.Lock()
 		if s, ok := p.stores[root]; ok && reflect.DeepEqual(p.cfgs[root], cfg) {
+			p.used = stampUsedLocked(p.used, root)
 			p.mu.Unlock()
 			return s
 		}
@@ -118,6 +122,7 @@ func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.Topol
 	if err == nil && !closed {
 		p.stores[root] = s
 		p.cfgs[root] = cfg
+		p.used = stampUsedLocked(p.used, root)
 	}
 	p.mu.Unlock()
 	if err != nil {
@@ -155,7 +160,11 @@ func (p *topologyPool) get(root string) *topology.Store {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.stores[root]
+	s, ok := p.stores[root]
+	if ok {
+		p.used = stampUsedLocked(p.used, root)
+	}
+	return s
 }
 
 // forRoot returns the pool's already-open store for a canonical root, or nil when
@@ -174,6 +183,7 @@ func (p *topologyPool) forRoot(root string) *topology.Store {
 	}
 	p.mu.Lock()
 	if s, ok := p.stores[root]; ok {
+		p.used = stampUsedLocked(p.used, root)
 		p.mu.Unlock()
 		return s
 	}
@@ -181,10 +191,28 @@ func (p *topologyPool) forRoot(root string) *topology.Store {
 	p.mu.Unlock()
 	for _, key := range slices.Sorted(maps.Keys(open)) {
 		if paths.Canonical(key) == root {
+			p.mu.Lock()
+			p.used = stampUsedLocked(p.used, key)
+			p.mu.Unlock()
 			return open[key]
 		}
 	}
 	return nil
+}
+
+// reapIdle drains every root whose store no connection holds and that has gone
+// storeIdleGrace without a lookup (PLAN-535; see drainIdle). The close stops
+// and joins the store's watcher and indexer. Returns how many it closed.
+func (p *topologyPool) reapIdle(now time.Time, held func(root string) bool) int {
+	return drainIdle(drainSet[*topology.Store]{
+		mu: &p.mu, stores: &p.stores, used: &p.used, flight: &p.flight,
+		forget: func(root string) { delete(p.cfgs, root) },
+		close: func(root string, s *topology.Store) {
+			if err := s.Close(); err != nil {
+				slog.Warn("topology: close an idle store", "root", root, "err", err)
+			}
+		},
+	}, now, held)
 }
 
 // healthFor reports the LIVE indexer's health for root, and false when the pool
@@ -206,9 +234,10 @@ func (p *topologyPool) healthFor(root string) (topology.Health, bool) {
 // re-opens each open store so the new settings (resync interval, excludes, size
 // caps) take effect. Stores opened afterwards use the new config.
 //
-// This is safe to do live because the indexer is a background subsystem with no
-// synchronous request path — no in-flight tool call fails when a store is
-// closed and re-opened.
+// Closing a store under a session is safe: tool calls do query it synchronously
+// (Store.Search, for one), but a call racing the close gets a clean
+// database-closed error, and the session's handle re-acquires on its next use
+// (topologyStoreLive).
 //
 // The map is snapshotted under p.mu; every close and re-open runs without it
 // (PLAN-536), one root at a time through that root's flight.

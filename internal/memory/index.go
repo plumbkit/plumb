@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -118,6 +119,14 @@ type Index struct {
 	workspace string
 	// reindexing guards ReindexAsync: at most one background reindex per index.
 	reindexing atomic.Bool
+	// The background reindexes (ReindexBackground, ReindexAsync) are cancelled
+	// and joined by Close, so closing an index — the daemon draining an idle
+	// workspace (PLAN-535) — leaves no goroutine behind. bgMu orders a start
+	// against Close's join (a WaitGroup must not gain work once Wait begins).
+	bgMu     sync.Mutex
+	bgClosed bool
+	bg       sync.WaitGroup
+	stop     atomic.Bool
 }
 
 // IndexDBPath returns the canonical path to the memory index for a workspace.
@@ -175,6 +184,14 @@ func (ix *Index) Close() error {
 	if ix == nil {
 		return nil
 	}
+	// Cancel and join the background reindexes first, outside ix.mu: they take
+	// it per memory, and Reindex checks stop between memories, so the join is
+	// short.
+	ix.bgMu.Lock()
+	ix.bgClosed = true
+	ix.bgMu.Unlock()
+	ix.stop.Store(true)
+	ix.bg.Wait()
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if ix.db == nil {
@@ -249,6 +266,9 @@ func (ix *Index) Reindex(workspace string) (int, error) {
 	live := make(map[string]bool, len(mems))
 	changed := 0
 	for _, m := range mems {
+		if ix.stop.Load() {
+			return changed, ErrIndexClosing
+		}
 		live[m.Name] = true
 		if stored, ok := anchors[m.Name]; ok && m.ContentSHA != "" && m.ContentSHA == stored {
 			continue // unchanged on disk — skip the second read
@@ -301,13 +321,43 @@ func (ix *Index) ReindexAsync(workspace string) {
 	if ix == nil || !ix.reindexing.CompareAndSwap(false, true) {
 		return
 	}
-	go func() {
+	if !ix.goBackground(func() {
 		defer ix.reindexing.Store(false)
 		if _, err := ix.Reindex(workspace); err != nil {
 			slog.Debug("memory: async reindex failed", "workspace", workspace, "err", err)
 		}
-	}()
+	}) {
+		ix.reindexing.Store(false)
+	}
 }
+
+// ReindexBackground runs Reindex in a background goroutine that Close cancels
+// and joins. Errors are logged at Debug.
+func (ix *Index) ReindexBackground(workspace string) {
+	if ix == nil {
+		return
+	}
+	ix.goBackground(func() {
+		if _, err := ix.Reindex(workspace); err != nil {
+			slog.Debug("memory: background reindex", "workspace", workspace, "err", err)
+		}
+	})
+}
+
+// goBackground starts fn as a joined background task, unless the index is
+// closing. Reports whether it started.
+func (ix *Index) goBackground(fn func()) bool {
+	ix.bgMu.Lock()
+	defer ix.bgMu.Unlock()
+	if ix.bgClosed {
+		return false
+	}
+	ix.bg.Go(fn)
+	return true
+}
+
+// ErrIndexClosing is returned by a Reindex that Close interrupted.
+var ErrIndexClosing = errors.New("memory: index is closing")
 
 func (ix *Index) removeMissing(live map[string]bool) error {
 	ix.mu.Lock()

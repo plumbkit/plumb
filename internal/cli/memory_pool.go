@@ -3,6 +3,7 @@ package cli
 import (
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/memory"
 )
@@ -10,7 +11,8 @@ import (
 // memoryIndexPool manages one memory.Index per workspace root, shared across all
 // connections to that workspace (the index is a single-writer SQLite handle, so
 // sharing avoids redundant handles and reindexes). Indexes are opened lazily on
-// first Acquire and live until daemon shutdown.
+// first Acquire and closed once no connection holds the workspace and it has
+// gone storeIdleGrace unused (store_drain.go, PLAN-535), or at daemon shutdown.
 //
 // Concurrency: all methods are safe for concurrent use.
 type memoryIndexPool struct {
@@ -20,6 +22,9 @@ type memoryIndexPool struct {
 	// pool shut, so an open that finishes afterwards closes its index.
 	flight keyedFlight
 	closed bool
+	// used stamps each workspace's last Acquire, so the store drain
+	// (store_drain.go, PLAN-535) can close an idle, unattached workspace's index.
+	used map[string]time.Time
 	// openIndex opens an index; nil means memory.OpenIndex. A test seam.
 	openIndex func(workspace string) (*memory.Index, error)
 }
@@ -38,6 +43,7 @@ func (p *memoryIndexPool) Acquire(workspace string) *memory.Index {
 	for {
 		p.mu.Lock()
 		if ix, ok := p.indexes[workspace]; ok {
+			p.used = stampUsedLocked(p.used, workspace)
 			p.mu.Unlock()
 			return ix
 		}
@@ -73,6 +79,7 @@ func (p *memoryIndexPool) openAndPublish(workspace string) *memory.Index {
 	closed := p.closed
 	if err == nil && !closed {
 		p.indexes[workspace] = ix
+		p.used = stampUsedLocked(p.used, workspace)
 	}
 	p.mu.Unlock()
 	if err != nil {
@@ -83,21 +90,30 @@ func (p *memoryIndexPool) openAndPublish(workspace string) *memory.Index {
 		_ = ix.Close()
 		return nil
 	}
-	go func() {
-		if _, rerr := ix.Reindex(workspace); rerr != nil {
-			slog.Debug("memory: initial reindex", "workspace", workspace, "err", rerr)
-		}
-	}()
+	ix.ReindexBackground(workspace) // joined by ix.Close (PLAN-535)
 	return ix
 }
 
-// CloseAll closes every open index. Called by the daemon on shutdown.
+// CloseAll closes every open index. Called by the daemon on shutdown. The
+// indexes are closed outside p.mu: Close joins the background reindex.
 func (p *memoryIndexPool) CloseAll() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
-	for _, ix := range p.indexes {
+	indexes := p.indexes
+	p.indexes = make(map[string]*memory.Index)
+	p.used = nil
+	p.mu.Unlock()
+	for _, ix := range indexes {
 		_ = ix.Close()
 	}
-	p.indexes = make(map[string]*memory.Index)
+}
+
+// reapIdle closes every workspace's index that no connection holds and that
+// has gone storeIdleGrace without an Acquire (PLAN-535; see drainIdle). The
+// close cancels and joins the background reindex. Returns how many it closed.
+func (p *memoryIndexPool) reapIdle(now time.Time, held func(root string) bool) int {
+	return drainIdle(drainSet[*memory.Index]{
+		mu: &p.mu, stores: &p.indexes, used: &p.used, flight: &p.flight,
+		close: func(_ string, ix *memory.Index) { _ = ix.Close() },
+	}, now, held)
 }
