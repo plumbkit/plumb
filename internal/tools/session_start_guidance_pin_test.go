@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/topology"
 )
@@ -62,6 +63,53 @@ func TestGuidanceNamesPinnedToolsOnly(t *testing.T) {
 							profile, topologyOn, name, line)
 					}
 				}
+			}
+		}
+	}
+}
+
+// The LSP-state advisories reach every client, Claude Code included, so they are
+// held to the same invariant: a tool they name is pinned, or the line says
+// ToolSearch.
+func TestLSPAdvisoriesNamePinnedToolsOnly(t *testing.T) {
+	names := make([]string, 0, len(leanToolSet())+len(nonLeanToolSet()))
+	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
+		names = append(names, tl.Name())
+	}
+	sort.Slice(names, func(i, j int) bool { return len(names[i]) > len(names[j]) })
+	s := &SessionStart{clientNameFn: func() string { return "claude-code" }}
+	s.topo = func() *topology.Store { return &topology.Store{} }
+	s.lspWarmingFn = func(string) (bool, time.Duration) { return true, time.Second }
+	s.lspServerFn = func(string) (string, bool) { return "go", false }
+	s.lspRoutedFn = func() []string { return []string{"python"} }
+	var sb strings.Builder
+	s.writeLSPWarming(&sb, "/ws")
+	s.writeLSPNotStarted(&sb, "/ws")
+	s.writeLSPRouted(&sb)
+	s.writeSessionRecommendedStart(&sb, "/ws", false, "", "")
+	for line := range strings.SplitSeq(sb.String(), "\n") {
+		for _, name := range names {
+			if strings.Contains(line, name) && !IsPinned(name) && !strings.Contains(line, "ToolSearch") {
+				t.Errorf("advisory names deferred tool %q with no ToolSearch note:\n%s", name, line)
+			}
+		}
+	}
+	if !strings.Contains(sb.String(), "context_for_task") {
+		t.Errorf("control: the advisories rendered nothing the check could see:\n%s", sb.String())
+	}
+
+	// No server at all, the index active: the recommended start's own branch.
+	plain := &SessionStart{clientNameFn: func() string { return "claude-code" }}
+	plain.topo = func() *topology.Store { return &topology.Store{} }
+	var sb2 strings.Builder
+	plain.writeSessionRecommendedStart(&sb2, "/ws", false, "", "")
+	if !strings.Contains(sb2.String(), "context_for_task") {
+		t.Fatalf("control: the no-server, index-active advice did not render:\n%s", sb2.String())
+	}
+	for line := range strings.SplitSeq(sb2.String(), "\n") {
+		for _, name := range names {
+			if strings.Contains(line, name) && !IsPinned(name) && !strings.Contains(line, "ToolSearch") {
+				t.Errorf("no-server advice names deferred tool %q with no ToolSearch note:\n%s", name, line)
 			}
 		}
 	}

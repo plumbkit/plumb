@@ -15,49 +15,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // contextHintHookBudget is the hook's whole wait, the daemon's own budget plus
 // the round trip, well inside the 5 s hook timeout.
 const contextHintHookBudget = contextHintBudget + 200*time.Millisecond
 
-var (
-	// backtickRe: `Cart.Total`, `(*Cart).Total`, `internal/x/y.go`.
-	backtickRe = regexp.MustCompile("`([^`\\s]{1,200})`")
-	// pathTokenRe: a bare token with a slash and a file extension.
-	pathTokenRe = regexp.MustCompile(`(?:^|[\s(\[{"'])((?:\.{0,2}/)?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+\.[A-Za-z0-9]{1,8})(?::\d+(?:-\d+)?)?`)
-	// selectorShapeRe: what a backticked token must look like to be a selector
-	// rather than a command, a flag or a value.
-	selectorShapeRe = regexp.MustCompile(`^(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,8}$|^\(?\*?[A-Za-z_][A-Za-z0-9_]*\)?(?:\.[A-Za-z_][A-Za-z0-9_]*)+$`)
-)
-
 // promptSelectors lifts at most maxContextHintSelectors explicit selectors out
-// of a prompt, in order of appearance, without duplicates. A bare word is never
-// a selector: "fix the cart total" names nothing.
+// of a prompt (tools.PromptSelectors, which context_for_task's prose discovery
+// also reads a task with). A bare word is never a selector: "fix the cart
+// total" names nothing.
 func promptSelectors(prompt string) []string {
-	var out []string
-	seen := map[string]bool{}
-	add := func(s string) {
-		s = strings.TrimRight(s, ".,;:")
-		if s == "" || seen[s] || len(out) == maxContextHintSelectors {
-			return
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	for _, m := range backtickRe.FindAllStringSubmatch(prompt, -1) {
-		if tok := strings.TrimSuffix(m[1], "()"); selectorShapeRe.MatchString(tok) {
-			add(tok)
-		}
-	}
-	for _, m := range pathTokenRe.FindAllStringSubmatch(prompt, -1) {
-		add(m[1])
-	}
-	return out
+	return tools.PromptSelectors(prompt, maxContextHintSelectors)
 }
 
 // claudeContextHintOutput is what Claude Code's hook prints for a context-hint
@@ -223,11 +197,10 @@ func askContextHint(req contextHintRequest) string {
 	return reply.Text
 }
 
-// claudeContextHookEntries are Claude Code's opt-in advisory context-hint
-// handlers: selectors and locations only, at most 1 KiB a turn,
-// silent on any failure. They are installed only on `plumb hooks install
-// --context`, or refreshed when already present: an unpromoted feature must not
-// spawn a process on every prompt of every user.
+// claudeContextHookEntries are Claude Code's advisory context-hint handlers:
+// selectors and locations only, at most 1 KiB a turn, silent on any failure.
+// `plumb hooks install` writes them unless given --no-context, and refreshes them
+// when already present.
 func claudeContextHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, claudeHookVerb)
 	return []hookEntry{
@@ -244,8 +217,8 @@ func claudeContextHookEntries(plumbBin string) []hookEntry {
 	}
 }
 
-// codexContextHookEntries are Codex's opt-in context-hint handlers, on the same
-// terms as Claude Code's. They carry no statusMessage: Codex would show it on
+// codexContextHookEntries are Codex's context-hint handlers, on the same terms as
+// Claude Code's. They carry no statusMessage: Codex would show it on
 // every prompt, and a hint that is usually silent must not announce itself.
 // Codex asks the user to trust each new handler (/hooks) before it runs.
 func codexContextHookEntries(plumbBin string) []hookEntry {

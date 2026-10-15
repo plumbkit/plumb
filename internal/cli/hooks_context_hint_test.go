@@ -86,6 +86,36 @@ func TestHookPlan_ContextEntriesAreOptIn(t *testing.T) {
 	}
 }
 
+// `plumb hooks install` adds the context-hint handlers by default, for both
+// clients; --no-context leaves them out of a fresh install.
+func TestInstallPlan_ContextEntriesByDefault(t *testing.T) {
+	for _, base := range []hooksTarget{claudeCodeHooksTarget, codexHooksTarget} {
+		target := base
+		path := filepath.Join(t.TempDir(), "hooks.json")
+		target.pathFn = func() (string, error) { return path, nil }
+		hasContext := func(entries []hookEntry) bool {
+			return slices.ContainsFunc(entries, func(e hookEntry) bool { return slices.Contains(contextHintEvents, e.event) })
+		}
+		_, def, _, err := installPlan(target, "/opt/plumb")
+		if err != nil || !hasContext(def) {
+			t.Errorf("%s: default install plan has no context-hint entries (%v)", target.name, err)
+		}
+		hooksInstallNoContext = true
+		t.Cleanup(func() { hooksInstallNoContext = false })
+		_, without, _, err := installPlan(target, "/opt/plumb")
+		hooksInstallNoContext = false
+		if err != nil || hasContext(without) {
+			t.Errorf("%s: --no-context plan still has context-hint entries (%v)", target.name, err)
+		}
+	}
+	if f := hooksInstallCmd.Flags().Lookup("context"); f == nil || f.Deprecated == "" {
+		t.Error("--context must stay accepted, marked deprecated")
+	}
+	if f := hooksInstallCmd.Flags().Lookup("no-context"); f == nil || f.DefValue != "false" {
+		t.Error("--no-context must be registered, off by default")
+	}
+}
+
 // `plumb hooks` says where context hints stand per client: not installed,
 // installed but off, or on (the environment overriding the config).
 func TestContextHintStatusNote(t *testing.T) {

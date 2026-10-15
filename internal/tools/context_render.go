@@ -85,7 +85,11 @@ func headerSafe(s string) string {
 }
 
 func (p *contextPack) seedHeading() string {
-	return fmt.Sprintf("seeds (%d resolved, %d unresolved):", len(p.Seeds), len(p.Misses))
+	h := fmt.Sprintf("seeds (%d resolved, %d unresolved)", len(p.Seeds), len(p.Misses))
+	if p.Discovery != nil {
+		h += " — proposed from the task prose, none were given; pass files or symbols to choose your own"
+	}
+	return h + ":"
 }
 
 func (p *contextPack) seedLines() []packLine {
@@ -103,7 +107,72 @@ func (p *contextPack) seedLines() []packLine {
 	for _, m := range p.Misses {
 		ls = append(ls, missLines(m)...)
 	}
+	return append(ls, p.discoveryLines()...)
+}
+
+// discoveryLines says why prose discovery found nothing, when it found nothing,
+// names the path-shaped tokens that are no file here, and lists the matches it
+// did not take, as candidates to pass back as symbols.
+func (p *contextPack) discoveryLines() []packLine {
+	d := p.Discovery
+	if d == nil {
+		return nil
+	}
+	var ls []packLine
+	line := func(text string, prio int, class packClass) {
+		ls = append(ls, packLine{text: "  " + textfmt.TerminalSafeLine(text), prio: prio, section: secSeeds, class: class})
+	}
+	if note := p.discoveryNote(); note != "" {
+		line(note, prioSeed, classSeed)
+	}
+	if len(d.NotFiles) > 0 {
+		line("named in the task but no file here: "+strings.Join(d.NotFiles, ", "), prioDetail, classSeed)
+	}
+	if len(d.Others) == 0 {
+		return ls
+	}
+	line("other matches (candidates, not seeds):", prioDetail, classCandidate)
+	for _, c := range d.Others {
+		ls = append(ls, packLine{
+			text: fmt.Sprintf("    %s#%s (%s, line %d)", textfmt.TerminalSafeLine(c.Path), textfmt.TerminalSafeLine(c.Selector), c.NodeKind, c.Line),
+			prio: prioDetail, section: secSeeds, class: classCandidate,
+		})
+	}
 	return ls
+}
+
+// discoveryNote names the real reason a prose-only pack has no seed, or says
+// what a search left out; "" when there is nothing to say.
+func (p *contextPack) discoveryNote() string {
+	d := p.Discovery
+	var aside []string
+	if d.Excluded > 0 {
+		aside = append(aside, fmt.Sprintf("%d match(es) outside within/corpora left out", d.Excluded))
+	}
+	if d.Withheld > 0 {
+		aside = append(aside, fmt.Sprintf("%d match(es) in sensitive files, which discovery never proposes", d.Withheld))
+	}
+	suffix := ""
+	if len(aside) > 0 {
+		suffix = " (" + strings.Join(aside, "; ") + ")"
+	}
+	switch {
+	case d.Note != "":
+		return d.Note + suffix
+	case len(p.Seeds) > 0:
+		if suffix == "" {
+			return ""
+		}
+		return "search" + suffix
+	case len(p.Misses) > 0:
+		return "no proposal resolved to one declaration (see the unresolved lines above)" + suffix +
+			"; name a file or symbol, or use workspace_search"
+	case len(d.Terms) == 0:
+		return "the task prose has no searchable words; name a file or symbol, or use workspace_search"
+	default:
+		return fmt.Sprintf("no declaration name carries the task's words (%s)%s; name a file or symbol, or use workspace_search",
+			strings.Join(d.Terms, " "), suffix)
+	}
 }
 
 func seedText(s contextSeed) string {
@@ -122,6 +191,12 @@ func seedText(s contextSeed) string {
 	}
 	if s.Coverage != "" {
 		fmt.Fprintf(&sb, " — coverage gap: %s", s.Coverage)
+	}
+	switch s.Origin {
+	case originNamed:
+		sb.WriteString(" — " + originNamed)
+	case originFound:
+		fmt.Fprintf(&sb, " — %s on: %s", originFound, textfmt.TerminalSafeLine(s.Matched))
 	}
 	return sb.String()
 }

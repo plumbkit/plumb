@@ -50,7 +50,7 @@ The package map, daemon/persistence layout, extractor choices, and concurrency m
 
 ## Configuration and clients
 
-Resolution is compiled defaults → global config → project `.plumb/config.toml` → environment; use `plumb config show` for values and provenance. The lean profile hides the non-lean remainder (39 tools today, out of 60) only for clients with verified deferred discovery; hidden tools remain callable by name.
+Resolution is compiled defaults → global config → project `.plumb/config.toml` → environment; use `plumb config show` for values and provenance. The lean profile hides the non-lean remainder (38 tools today, out of 60) only for clients with verified deferred discovery; hidden tools remain callable by name.
 
 `plumb setup <client>` registers MCP configuration. `plumb skills sync` installs eight idempotent user-scoped skills for clients that read `SKILL.md`: `plumb-explore`, `plumb-refactor`, `plumb-testing`, `plumb-minimal-change`, `plumb-memory`, `plumb-diagnose`, `plumb-git`, and `plumb-chat`. Lifecycle hooks are separate and opt-in through `plumb hooks install [client]`.
 

@@ -263,7 +263,7 @@ var registryData = []Field{
 	// --- Context ---
 	{
 		Key: "context.hints", Type: FieldBool, ReloadTier: ReloadLive,
-		Description: "Experimental advisory context hints from lifecycle hooks: a few selectors and locations (never source) when a prompt names code, after a resume or compaction, and when a subagent starts. At most 1 KiB a turn and 8 KiB per agent. Default off; the hint-only hooks install with `plumb hooks install --context`, and PLUMB_CONTEXT_HINTS=on|off overrides this.",
+		Description: "Advisory context hints from lifecycle hooks: a few selectors and locations (never source) when a prompt names code, after a resume or compaction, and when a subagent starts. At most 1 KiB a turn and 8 KiB per agent. Default on; `plumb hooks install` adds the hint-only hooks unless given --no-context, and PLUMB_CONTEXT_HINTS=on|off overrides this.",
 	},
 
 	// --- Collab ---
