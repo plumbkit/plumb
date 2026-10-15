@@ -154,3 +154,26 @@ func TestDrainIdleStores_SparesARecentUse(t *testing.T) {
 		t.Fatal("a root used during the drain was closed")
 	}
 }
+
+// TestHeldByAConnection: a root is held exactly while a connection's
+// project-config watch references it.
+func TestHeldByAConnection(t *testing.T) {
+	if heldByAConnection(nil) != nil {
+		t.Fatal("no watch manager must mean no held predicate")
+	}
+	m := newProjectConfigWatchManager(t.Context(), func(string) {})
+	defer m.close()
+	root := t.TempDir()
+	held := heldByAConnection(m)
+	if held(root) {
+		t.Fatal("control: an unwatched root is held")
+	}
+	m.acquire(root)
+	if !held(root) {
+		t.Fatal("a root a connection watches is not held")
+	}
+	m.release(root)
+	if held(root) {
+		t.Fatal("a released root is still held")
+	}
+}
