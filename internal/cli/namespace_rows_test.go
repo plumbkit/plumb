@@ -272,3 +272,33 @@ func TestLatestEpisodic_IsTheNamespaces(t *testing.T) {
 		t.Fatalf("a namespaced session's last-session summary = %q, want its own namespace's", got)
 	}
 }
+
+// TestGeneratedSummary_CarriesTheNamespace: the idle summary a namespaced
+// session leaves is stored under its namespace, so the default namespace's
+// "last session" never shows it.
+func TestGeneratedSummary_CarriesTheNamespace(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	s, root := namespacedAttached(t, r, token, "psid-summary")
+	s.statsStore = newStatsStore()
+	for _, f := range []string{"a.txt", "b.txt"} {
+		args, _ := json.Marshal(map[string]any{"file_path": root + "/" + f, "content": "x"})
+		s.afterToolFromCtx(context.Background(), "write_file", args, "wrote", "", time.Millisecond, false, nil)
+	}
+	s.statsStore.Close()
+	s.statsStore = newStatsStore()
+	s.generateEpisodicSummary()
+	s.statsStore.Close()
+
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, ok, _ := db.LatestEpisodic(root, ns.ID); !ok {
+		t.Fatal("control: the namespaced session left no summary under its namespace")
+	}
+	if _, ok, _ := db.LatestEpisodic(root, ""); ok {
+		t.Fatal("a namespaced session's summary is visible to the default namespace")
+	}
+}
