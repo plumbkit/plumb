@@ -92,3 +92,24 @@ func TestPool_AStartedServerWatchesThroughTheHub(t *testing.T) {
 		t.Fatalf("hub subscriptions after a server started = %d, want 1", n)
 	}
 }
+
+// TestTopologyPool_OpensItsStoresThroughTheHub pins the topology pool's wiring.
+func TestTopologyPool_OpensItsStoresThroughTheHub(t *testing.T) {
+	root := t.TempDir()
+	if probe, err := fswatch.New(root, fswatch.Options{}); err != nil {
+		t.Skipf("no file watcher on this platform: %v", err)
+	} else {
+		probe.Close()
+	}
+	cfg := config.Defaults().Topology
+	cfg.Enabled, cfg.Watch = true, true
+	p := newTopologyPool(cfg)
+	defer p.StopAll()
+	p.watchHub = fswatch.NewHub()
+	if p.Acquire(root, cfg) == nil {
+		t.Fatal("control: could not open")
+	}
+	if n := p.watchHub.Subscriptions(); n != 1 {
+		t.Fatalf("hub subscriptions after a store opened = %d, want 1", n)
+	}
+}
