@@ -103,7 +103,7 @@ func Multi2() int {
 	"py/mod.py":    "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
 	// A class attribute is named through its class, not a file-level use; an
 	// assignment in the body shadows the module's name.
-	"py/cls.py": "RATE = 2\nSIZE = 7\n\n\nclass Box:\n    SIZE = 3\n\n    def area(self):\n        return self.SIZE * RATE\n\n\n" +
+	"py/cls.py": "RATE = 2\nSIZE = 7\nROUTES = [\n    \"a\",\n    \"b\",\n]\n\n\nclass Box:\n    SIZE = 3\n\n    def area(self):\n        return SIZE * RATE + len(ROUTES)\n\n\n" +
 		"def shadowed(n):\n    RATE = 1\n    return RATE + n\n",
 }
 
@@ -326,6 +326,7 @@ func TestContextForTask_UsesServesPython(t *testing.T) {
 	s := newUsesTool(t)
 	pack := s.collect(t, map[string]any{"symbols": []string{"py/mod.py#cap", "py/cls.py#area", "py/cls.py#shadowed"}, "max_bytes": 12000})
 	uses := map[string][]string{}
+	decls := map[string]usedDecl{}
 	for i, sd := range pack.Seeds {
 		b := pack.Bodies[i]
 		if b.State != bodyReady {
@@ -334,14 +335,23 @@ func TestContextForTask_UsesServesPython(t *testing.T) {
 		var names []string
 		for _, u := range b.Uses {
 			names = append(names, u.Name)
+			decls[sd.Name+"/"+u.Name] = u
 		}
 		uses[sd.Name] = names
+	}
+	// The declaration is the whole statement the extractor recorded, the
+	// multi-line list included; the module's SIZE (line 2), not Box's.
+	if d := decls["area/ROUTES"]; d.Cut || d.Start != 3 || d.End != 6 || !strings.Contains(d.Text, "\"b\",") {
+		t.Errorf("ROUTES declaration = %+v, want lines 3-6 whole", d)
+	}
+	if d := decls["area/SIZE"]; d.Start != 2 {
+		t.Errorf("SIZE declaration = %+v, want the module's, line 2", d)
 	}
 	if !slices.Equal(uses["cap"], []string{"LIMIT"}) {
 		t.Errorf("cap uses %v, want [LIMIT]", uses["cap"])
 	}
-	if !slices.Equal(uses["area"], []string{"RATE"}) {
-		t.Errorf("area uses %v, want [RATE] (Box.SIZE is a class attribute, SIZE is not named bare)", uses["area"])
+	if !slices.Equal(uses["area"], []string{"RATE", "SIZE", "ROUTES"}) {
+		t.Errorf("area uses %v, want [RATE SIZE ROUTES] (Box.SIZE, a class attribute, is not file-level)", uses["area"])
 	}
 	if len(uses["shadowed"]) != 0 {
 		t.Errorf("shadowed uses %v, want none: its RATE is a local", uses["shadowed"])
