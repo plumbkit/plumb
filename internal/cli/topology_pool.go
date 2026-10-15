@@ -95,6 +95,8 @@ func (p *topologyPool) Acquire(root string, cfg config.TopologyConfig) *topology
 // reopen closes old (when any) and opens root with cfg, both without p.mu, then
 // publishes the result and ends root's flight. Caller holds root's flight.
 func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.TopologyConfig, sweeps uint64) *topology.Store {
+	ended := false
+	defer p.endFlightUnlessEnded(root, &ended) // first: old.Close can panic too
 	if old != nil {
 		if err := old.Close(); err != nil {
 			slog.Warn("topology: close on reconfigure", "root", root, "err", err)
@@ -106,8 +108,6 @@ func (p *topologyPool) reopen(root string, old *topology.Store, cfg config.Topol
 			return topology.Open(root, cfg, buildExtractors())
 		}
 	}
-	ended := false
-	defer p.endFlightUnlessEnded(root, &ended)
 	s, err := open(root, cfg)
 	p.mu.Lock()
 	p.flight.end(root)

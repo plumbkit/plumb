@@ -53,7 +53,8 @@ func (p *workspacePool) reuseUnlock(e *poolEntry, pin, call bool) (*poolEntry, <
 
 // startLocked builds a new entry for key, starts its language server warming,
 // and publishes it in the map. Caller holds p.mu. What stays under the lock is
-// short: argsFor's small filesystem prep (a log directory, a timestamp) and
+// short: argsFor's small filesystem prep (the server's data directory — jdtls
+// -data, kotlin-lsp --system-path — and its mtime stamp) and
 // StartAsync, which spawns the process and its goroutine — keeping the spawn
 // under the lock is what keeps one key from ever getting two servers. The file
 // watcher's walk does not — the caller attaches it after the unlock
