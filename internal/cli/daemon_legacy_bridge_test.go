@@ -491,11 +491,13 @@ func TestCtrlSocketUnavailable_DoesNotPointAtOurOwnBridge(t *testing.T) {
 // to the group after the drain began. Each loop's exit is held until the test
 // releases it, so a close that does not wait is caught deterministically.
 func TestLegacyBridge_CloseWaitsForItsAcceptLoops(t *testing.T) {
-	f := newBridgeFixture(t)
+	// The hook is set BEFORE the fixture starts the accept loops: each loop reads
+	// it when it starts, so setting it afterwards would race that read.
 	release := make(chan struct{})
 	old := bridgeLoopExited
 	t.Cleanup(func() { bridgeLoopExited = old })
 	bridgeLoopExited = func() { <-release }
+	f := newBridgeFixture(t)
 
 	closed := make(chan struct{})
 	go func() { f.bridge.close(); close(closed) }()
