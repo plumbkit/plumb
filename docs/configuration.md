@@ -906,17 +906,17 @@ memory as `finding-<timestamp>-<session>`, retention-shared with the idle
 displaces a user-authored memory in a capped hint slot. Rule-based only — the
 agent supplies the text; no LLM summary.
 
-## `[context]` — advisory context hints (experimental, global only)
+## `[context]` — advisory context hints (global only)
 
 ```toml
 [context]
-hints = false   # default
+hints = true   # default
 ```
 
-Experimental and opt-in. `plumb hooks install <client> --context` adds two
-hint-only hook handlers (UserPromptSubmit and SubagentStart), and `hints = true`
-(or `PLUMB_CONTEXT_HINTS=on`) turns hints on. The explicit `context_for_task`
-tool is the supported path; hints point at it. When on, a hook can put a short,
+On by default. `plumb hooks install <client>` adds two hint-only hook handlers
+(UserPromptSubmit and SubagentStart) unless given `--no-context`, and
+`hints = false` (or `PLUMB_CONTEXT_HINTS=off`) turns hints off. Hints point at
+`context_for_task`, the explicit tool. When on, a hook can put a short,
 advisory hint in front of an agent: a few code selectors with their locations, never
 source, documentation, memory or mail text. A hint is offered when a prompt names
 files or symbols explicitly (backticked selectors and path-shaped tokens; the
@@ -934,7 +934,8 @@ still require an explicit read.
 `PLUMB_CONTEXT_HINTS` overrides `hints` in either direction (`on`/`1`/`true`,
 `off`/`0`/`false`), and the hook reads it from its own environment as well as
 the daemon's. Off costs nothing: an installed hook still starts, but with
-`PLUMB_CONTEXT_HINTS=off`, or with it unset and `hints = false`, it does not
+`PLUMB_CONTEXT_HINTS=off`, or with it unset and `hints = false` (an unreadable
+config counts as off), it does not
 call the daemon, and a daemon asked while off answers without touching the
 ledger. To remove
 the hint-only hooks, run `plumb hooks uninstall <client> --only context`; the
@@ -943,7 +944,7 @@ whether hints are not installed, installed but off, or on.
 
 The daemon keeps one bounded observation ledger for hints, `context_hints.db`
 in the data directory, created by the first request that finds hints on (a user
-who never turns them on has none): metadata only (session, agent, event, capped
+who turns them off before any hook fires has none): metadata only (session, agent, event, capped
 selectors, bytes, outcome), at most 1000 rows and 1 MiB per workspace, seven
 days. A project config's `[context]` has no effect.
 
@@ -1082,7 +1083,7 @@ excluded so an authoritative empty answer is never supplanted.
 Governs which tools are *advertised* in `tools/list` — a hidden tool stays
 callable by name via `tools/call` (hidden ≠ unregistered); this only trims the
 advertised set so a client with its own native filesystem tools isn't billed for
-the non-lean remainder (39 tools today). Project-overridable.
+the non-lean remainder (38 tools today). Project-overridable.
 
 A *schema-discovery-only* client cannot use this knob at all — it can only
 invoke what `tools/list` advertised, so hiding a tool removes the capability

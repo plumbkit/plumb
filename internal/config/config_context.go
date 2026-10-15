@@ -9,11 +9,10 @@ package config
 // overrides it either way (on|1|true, off|0|false), and is read in the hook
 // process as well, where a shell export reaches even when the daemon's does not.
 //
-// Experimental: the hint-only hook handlers are installed only by `plumb hooks
-// install --context`, and hints are off until turned on here or by the
-// environment.
+// On by default: `plumb hooks install` adds the hint-only handlers unless given
+// --no-context, and `plumb hooks uninstall --only context` removes them again.
 type ContextConfig struct {
-	// Hints gates every advisory context hint. Default false. Off, any installed
+	// Hints gates every advisory context hint. Default true. Off, any installed
 	// hook still runs and the daemon records each request as noop(off), so the
 	// switch is measurable rather than indistinguishable from an outage.
 	Hints bool `toml:"hints"`

@@ -100,7 +100,7 @@ func uncoveredPrimaryLanguageNote(lang string) string {
 		if !ok || l.Structural != langsupport.EngineNone {
 			continue
 		}
-		return fmt.Sprintf("\nNOTE: the topology Map does not cover %s yet — topology_search, "+
+		return fmt.Sprintf("\nNOTE: the topology Map does not cover %s yet — context_for_task, "+
 			"workspace_search and file_outline will return little or nothing for this "+
 			"workspace's %s sources. That is a coverage gap, not an empty codebase. "+
 			"Use search_in_files (exact) and read_file instead, and see topology_status "+
@@ -159,7 +159,7 @@ func (t *SessionStart) writeSessionRecommendedStart(sb *strings.Builder, ws stri
 		// routed advisory already written
 	case t.topologyActive():
 		sb.WriteString("No language server is attached, but the topology index is active — use " +
-			"`topology_search` and `file_outline` for discovery and structure. " +
+			"`context_for_task` and `file_outline` for discovery and structure. " +
 			"(`get_definition`/`find_references` still need a language server.)\n\n")
 	case lang != "":
 		t.writeNoLSPGuidance(sb, lang, lspKey)
@@ -218,7 +218,7 @@ func (t *SessionStart) writeLSPRouted(sb *strings.Builder) bool {
 	fmt.Fprintf(sb, "No primary language server is attached, but %s files here are served by a live language server — "+
 		"`get_definition`, `find_references`, and `diagnostics` work for them. ", strings.Join(routed, "/"))
 	if t.topologyActive() {
-		sb.WriteString("For anything else, the topology index is active — use `topology_search` and `file_outline`.\n\n")
+		sb.WriteString("For anything else, the topology index is active — use `context_for_task` and `file_outline`.\n\n")
 		return true
 	}
 	fmt.Fprintf(sb, "For anything else, %s.\n\n", t.lastResortSearch())
@@ -240,7 +240,7 @@ func (t *SessionStart) writeLSPWarming(sb *strings.Builder, ws string) bool {
 	} else {
 		sb.WriteString("Language server is still warming up. ")
 	}
-	sb.WriteString("`topology_search`, `workspace_symbols`, and `file_outline` answer now; " +
+	sb.WriteString("`context_for_task`, `workspace_symbols`, and `file_outline` answer now; " +
 		"`get_definition`, `find_references`, and the hierarchies will work once it's ready (retry shortly).\n\n")
 	return true
 }

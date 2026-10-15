@@ -334,10 +334,10 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 	srv.Register(tools.NewStructuralQuery(topoFn, s.workspaceFor))
 	srv.Register(tools.NewWorkspaceSearch(s.workspaceFor, topoFn).WithMemoryIndex(s.memoryIndexLive))
 	srv.Register(tools.NewMinimalDiffReview(topoFn).WithWorkspace(s.workspaceFor).WithBoundary(readBoundaryFor).WithContested(s.pinContested))
-	// context_for_task is experimental and deliberately unpinned and non-lean (see
-	// tools.PinnedTools / tools.LeanTools): it is found by name, not pushed. The
-	// collector carries no read tracker, so gathering a pack never records a read;
-	// the tool records, per agent, only the bodies it actually delivered. A body it
+	// context_for_task is pinned and lean (see tools.PinnedTools / tools.LeanTools):
+	// it is the one-call start for a task. The collector carries no read tracker,
+	// so gathering a pack never records a read; the tool records, per agent, only
+	// the bodies it actually delivered. A body it
 	// reaches by expansion, rather than being named, is withheld under the same
 	// decision write responses and history take (changeSensitive). Its index is
 	// keyed by the calling agent's root (topologyStoreForRoot), not by the

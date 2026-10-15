@@ -53,6 +53,7 @@ func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 	sb.WriteString("## Tool guidance\n\n")
 
 	if t.topologyActive() {
+		sb.WriteString(contextForTaskGuidance)
 		if t.nameLeanToolsOnly() {
 			sb.WriteString("- Discovery: start with **topology_search** (ranked, works while the language " +
 				"server warms), then **get_definition** / **find_references** for exact, type-aware answers.\n")
@@ -89,6 +90,13 @@ func (t *SessionStart) writeGenericGuidance(sb *strings.Builder) {
 	}
 }
 
+// contextForTaskGuidance is the one line every topology-backed guidance block
+// leads its moves with: context_for_task is pinned and lean, so it is never a
+// broken pointer.
+const contextForTaskGuidance = "- **context_for_task** — start a task here: pass the files or symbols you know, " +
+	"or only the task in prose and it proposes the seeds. One bounded call returns their bodies, related " +
+	"code, affected tests and constraints, each labelled with how sure it is.\n"
+
 // leanProfile reports whether the connection resolved to the lean tool profile,
 // under which guidance must not steer the agent to a tool hidden from tools/list.
 func (t *SessionStart) leanProfile() bool {
@@ -124,14 +132,16 @@ func (t *SessionStart) writeClaudeCodeGuidance(sb *strings.Builder) {
 			"discovery, structure, and impact — it answers instantly, tolerates broken code, and " +
 			"covers every indexed language. **LSP (the GPS)** is for precise, type-aware navigation " +
 			"once you know where to work.\n\n")
+		sb.WriteString(contextForTaskGuidance)
 		sb.WriteString("- **topology_affected** — which tests to run after an edit (dependency edges + " +
 			"co-location, recall-biased, confidence-labelled); the plumb-testing skill has the post-edit flow " +
 			"(skills install via `plumb skills sync`).\n")
-		// workspace_search is not in the lean set, so a lean client is pointed at
-		// topology_search instead — guidance must never name a hidden tool.
+		// workspace_search is not in the lean set, and topology_search is lean but no
+		// longer pinned, so a lean client is pointed at get_definition and the pack
+		// instead — guidance must never name a hidden or unloaded tool bare.
 		if t.leanProfile() {
-			sb.WriteString("- Discovery: start with **topology_search**, then **get_definition** / " +
-				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")
+			sb.WriteString("- Discovery: **get_definition** / **find_references** for exact, type-aware answers; " +
+				"**topology_search** (load via ToolSearch) for ranked search — the plumb-explore skill has the full ladder.\n")
 		} else {
 			sb.WriteString("- Discovery: start with **workspace_search**, then the Map and **get_definition** / " +
 				"**find_references** for exact, type-aware answers — the plumb-explore skill has the full ladder.\n")

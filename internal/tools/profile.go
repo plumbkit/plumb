@@ -50,6 +50,7 @@ var LeanTools = map[string]bool{
 	"topology_search":   true,
 	"topology_explore":  true,
 	"topology_affected": true,
+	"context_for_task":  true,
 	"search_memories":   true,
 	"run_task":          true,
 }
@@ -140,7 +141,7 @@ func IsMailbox(name string) bool { return MailboxTools[name] }
 // The 20-tool set below is deliberately curated, not derived: session_start,
 // read_file, read_symbol, file_outline, edit_file, write_file, git,
 // diagnostics, workspace_search, search_in_files, get_definition,
-// find_references, workspace_symbols, topology_search, topology_affected,
+// find_references, workspace_symbols, context_for_task, topology_affected,
 // transaction_apply, run_task, search_memories, leave_note, check_messages.
 // It happens to be a superset of BootstrapTools and MailboxTools (both are
 // pinned for their own stated reasons — see their doc comments), but is NOT
@@ -152,6 +153,11 @@ func IsMailbox(name string) bool { return MailboxTools[name] }
 // them), topology_explore (reachable from topology_search output), and
 // rename_symbol (17.2% advertisement-gate error rate in practice — re-pin once
 // PLAN-363 improves that).
+//
+// context_for_task took topology_search's slot (PLAN-462 B4): the pack is the
+// one-call start for a task, and it now finds its own seeds from task prose,
+// which is what an agent pinned topology_search for. topology_search stays lean,
+// so it is advertised and callable; only its schema waits for tool search.
 //
 // NEVER PINNED (PLAN-367): read_multiple_files. It is a real turns win (one
 // round trip instead of N, inline per-file errors), but a measured BYTE loss
@@ -177,7 +183,7 @@ var PinnedTools = map[string]bool{
 	"get_definition":    true,
 	"find_references":   true,
 	"workspace_symbols": true,
-	"topology_search":   true,
+	"context_for_task":  true,
 	"topology_affected": true,
 	"transaction_apply": true,
 	"run_task":          true,

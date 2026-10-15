@@ -83,7 +83,7 @@ func (t *SessionStart) writeLSPNotStarted(sb *strings.Builder, ws string) bool {
 	}
 	fmt.Fprintf(sb, "The %s language server for this workspace has not started yet — the first call that needs it "+
 		"starts it (`workspace_symbols`, `get_definition`, `find_references`, `diagnostics`). "+
-		"`topology_search` and `file_outline` answer now.\n\n", labelForLSPKey(lang))
+		"`context_for_task` and `file_outline` answer now.\n\n", labelForLSPKey(lang))
 	return true
 }
 

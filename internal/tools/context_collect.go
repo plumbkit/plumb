@@ -46,6 +46,10 @@ type contextSeed struct {
 	// index's span only if the snapshot is exactly the bytes this hash describes,
 	// never because the index has since caught up with the file.
 	IndexHash string
+	// Origin is "" for a seed the caller gave, else how prose discovery found it
+	// (originNamed, originFound); Matched is the task words a found seed carries.
+	Origin  string
+	Matched string
 }
 
 // contextCandidate is a labelled possibility. A candidate is never a seed.
@@ -96,7 +100,10 @@ type contextPack struct {
 	// acknowledgements matched.
 	Affected    contextAffected
 	Constraints []contextConstraint
-	Have        haveStats
+	// Discovery is set when the request named no seed and the seeds came from its
+	// task prose; nil otherwise.
+	Discovery *contextDiscovery
+	Have      haveStats
 	// SourceRead is the bytes of source the call read in all (the bodies, then the
 	// memories and documents), which never exceeds 4 x max_bytes.
 	SourceRead int64
@@ -207,10 +214,14 @@ func (c *ContextCollector) agentRoot(ctx context.Context) (string, error) {
 	return canonicalRoot(ws), nil
 }
 
-// seedInput is one requested seed before resolution.
+// seedInput is one requested seed before resolution. origin and matched are set
+// only on a seed prose discovery proposed (context_discover.go), which resolves
+// its proposals itself (collectDiscovered).
 type seedInput struct {
-	kind string
-	text string
+	kind    string
+	text    string
+	origin  string
+	matched string // the task words a found seed's declaration carries, space-separated
 }
 
 // seedInputs lists the request's seeds, files then symbols, dropping exact
@@ -254,7 +265,13 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 	}
 	pack := contextPack{Root: root, Intent: req.Intent, MaxBytes: req.MaxBytes, ClampedFrom: req.clampedFrom}
 	index := c.indexFor(root)
-	for i, in := range req.seedInputs() {
+	inputs := req.seedInputs()
+	if len(inputs) == 0 {
+		if err := c.collectDiscovered(ctx, &pack, scope, index, req.Task); err != nil {
+			return contextPack{}, err
+		}
+	}
+	for i, in := range inputs {
 		if i >= contextMaxSeeds {
 			pack.miss(in.text, fmt.Sprintf("over the %d-seed cap; not resolved", contextMaxSeeds))
 			continue

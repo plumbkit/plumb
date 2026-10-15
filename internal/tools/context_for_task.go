@@ -25,6 +25,10 @@ const (
 	// the reserve; a smaller budget could not carry even the truncation notice.
 	contextMinMaxBytes = contextReserveBytes + 512
 	contextMaxSeeds    = 8
+	// contextMaxTaskBytes bounds task prose that seeds a pack: a paragraph, not a
+	// pasted file. Prose beside explicit seeds only re-ranks, and the ranker reads
+	// its first words alone, so it is not refused.
+	contextMaxTaskBytes = 4000
 	// contextMaxCandidates bounds the candidates shown for an ambiguous or
 	// unmatched selector.
 	contextMaxCandidates = 5
@@ -43,35 +47,33 @@ var contextForTaskSchema = json.RawMessage(`{
     "files": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Seed files (not directories)."
+      "description": "Seed files."
     },
     "symbols": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Seed selectors: path#Recv.Method or a bare name."
+      "description": "path#Recv.Method or a bare name."
     },
     "intent": {
       "type": "string",
-      "enum": ["understand", "change"],
-      "description": "Default understand."
+      "enum": ["understand", "change"]
     },
     "task": {
       "type": "string",
-      "description": "Prose; re-ranks only, never seeds."
+      "description": "Prose; proposes seeds when none are given."
     },
     "within": {
       "type": "array",
       "items": {"type": "string"},
-      "description": "Narrow to these paths or globs; never widens."
+      "description": "Paths or globs."
     },
     "corpora": {
       "type": "array",
-      "items": {"type": "string", "enum": ["code", "docs", "memory"]},
-      "description": "Default all permitted."
+      "items": {"type": "string", "enum": ["code", "docs", "memory"]}
     },
     "max_bytes": {
       "type": "integer",
-      "description": "Whole-response budget (default 12000, cap 32000)."
+      "description": "Default 12000, cap 32000."
     },
     "have": {
       "type": "array",
@@ -181,12 +183,11 @@ func AppendRoom(tool string) (room int, bounded bool) {
 func (*ContextForTask) Name() string                 { return contextForTaskName }
 func (*ContextForTask) InputSchema() json.RawMessage { return contextForTaskSchema }
 func (*ContextForTask) Description() string {
-	return "Experimental, read-only context pack that starts from explicit seeds: at least one file or symbol is required, and task prose only re-ranks, never seeds. " +
-		"Returns seeds, complete symbol bodies with an edit guard, related code, affected tests, memory and doc constraints, gaps and next calls; ambiguous or missing selectors are reported with candidates, never guessed. " +
-		"Files must be files (a directory is scope: use within); symbols are path#Selector or a bare selector, code only (documents come through corpora). " +
-		"Relative paths resolve against the pinned workspace; an unpinned call is refused. " +
-		"max_bytes bounds the WHOLE response and includes a 1024-byte reserve for appended connection notes; above the cap it is clamped and disclosed. " +
-		"No LLM, network or mutation. To find where to start, use workspace_search."
+	return "Read-only task context in one call: seeds, bodies with an edit guard, related code, affected tests, constraints, gaps, next calls. " +
+		"Give known files/symbols, or only task prose and it proposes up to 3 labelled seeds. " +
+		"Unclear selectors get candidates, never guesses. " +
+		"Directories are scope (within). " +
+		"max_bytes bounds the WHOLE response (1024 reserved)."
 }
 
 // contextHave is one body the caller still holds: the declaration it names and
@@ -283,10 +284,13 @@ func (r *contextRequest) checkSeeds() error {
 			return badArgument(fmt.Errorf("context_for_task: symbols[%d] is empty", i))
 		}
 	}
-	if len(r.Files)+len(r.Symbols) == 0 {
-		return badArgument(errors.New("context_for_task: at least one file or symbol is required; " +
-			"the pack grows from explicit seeds, and task prose alone only re-ranks them. " +
-			"To find where to start, use workspace_search, then pass what it finds as files or symbols"))
+	if len(r.Files)+len(r.Symbols) == 0 && strings.TrimSpace(r.Task) == "" {
+		return badArgument(errors.New("context_for_task: give files, symbols or task prose; " +
+			"with prose alone the tool proposes the seeds"))
+	}
+	if len(r.Files)+len(r.Symbols) == 0 && len(r.Task) > contextMaxTaskBytes {
+		return badArgument(fmt.Errorf("context_for_task: task is %d bytes, over the %d-byte limit for prose that seeds a pack; "+
+			"summarise it, or name the files and symbols it is about", len(r.Task), contextMaxTaskBytes))
 	}
 	return nil
 }

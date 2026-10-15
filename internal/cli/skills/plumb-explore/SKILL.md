@@ -21,7 +21,7 @@ One query across every indexed corpus at once — code symbols, doc sections, an
 
 Drop down once a hit gives you a symbol or file worth following — or straight away when you already know the name. This rung is approximate by design and never proof of absence.
 
-**Already know where the task starts?** Make one call: **`context_for_task`** with those files and symbols as `files` / `symbols` (add `intent: "change"` when you will edit). It returns a bounded pack grown from exactly those seeds — what resolved, what did not (with labelled candidates, never a guess), the gaps it cannot cover, and the exact next calls — so you need not walk the rungs below by hand. Task prose alone is not enough; if you do not yet have a seed, find one here first. The tool is experimental and not advertised under the lean profile: if it is not offered to you, carry on down the ladder.
+**Starting a task?** Make one call: **`context_for_task`** with the files and symbols you know as `files` / `symbols`, or with only the task in `task` (add `intent: "change"` when you will edit). It returns a bounded pack grown from those seeds — what resolved, what did not (with labelled candidates, never a guess), the gaps it cannot cover, and the exact next calls — so you need not walk the rungs below by hand. Given only prose, it proposes up to 3 seeds and labels each with how it was found (named in the task, or found by search on the words it matched); check them, and pass your own `files` / `symbols` when they are off.
 
 ## 1. Map (topology) — structure and impact
 
