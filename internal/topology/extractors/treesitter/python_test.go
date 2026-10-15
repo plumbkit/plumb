@@ -417,9 +417,17 @@ def create_app():
 def login():
     pass
 `)
-	nodes, _, sites, err := NewPython().ExtractWithCallSites(context.Background(), "views.py", src)
+	nodes, _, all, err := NewPython().ExtractWithCallSites(context.Background(), "views.py", src)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Calls and import bindings are recorded too (python_calls_test.go); this
+	// test is about the decorators.
+	var sites []topology.CallSite
+	for _, s := range all {
+		if s.Kind == topology.CallSiteDecorator {
+			sites = append(sites, s)
+		}
 	}
 	enclosing := func(s topology.CallSite) string {
 		if s.EnclosingIdx < 0 || s.EnclosingIdx >= len(nodes) {

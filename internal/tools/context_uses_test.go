@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -100,6 +101,10 @@ func Multi2() int {
 	// A declaration that is not valid UTF-8 is not offered, as a body is not.
 	"store/bad.go": "package store\n\nconst bad = 1 // \xff\n\nconst good = 2\n\nfunc UsesBad() int { return bad + good }\n",
 	"py/mod.py":    "LIMIT = 5\n\n\ndef cap(n):\n    return min(n, LIMIT)\n",
+	// A class attribute is named through its class, not a file-level use; an
+	// assignment in the body shadows the module's name.
+	"py/cls.py": "RATE = 2\nSIZE = 7\nROUTES = [\n    \"a\",\n    \"b\",\n]\n\n\nclass Box:\n    SIZE = 3\n\n    def area(self):\n        return SIZE * RATE + len(ROUTES)\n\n\n" +
+		"def shadowed(n):\n    RATE = 1\n    return RATE + n\n",
 }
 
 func newUsesTool(t *testing.T) shopTool {
@@ -114,7 +119,7 @@ func newUsesTool(t *testing.T) shopTool {
 			t.Fatal(err)
 		}
 	}
-	return newShopTool(t, openContextStore(t, root, 6), root)
+	return newShopTool(t, openContextStore(t, root, 7), root)
 }
 
 // usesBlock is the uses record that follows the body of the seed or related
@@ -314,26 +319,76 @@ func TestContextForTask_UsesNeverOutlivesItsBodyNorOutranksAnother(t *testing.T)
 	}
 }
 
-func TestContextForTask_UsesIsGoOnly(t *testing.T) {
+// Python bodies get the uses record too: a module-level binding the body names
+// is listed; a class attribute is not (it is named through its class), and an
+// assignment in the body shadows the module's name.
+func TestContextForTask_UsesServesPython(t *testing.T) {
 	s := newUsesTool(t)
-	pack := s.collect(t, map[string]any{"symbols": []string{"py/mod.py#cap", "store/store.go#List"}, "max_bytes": 12000})
-	var py, gobody *contextBody
+	pack := s.collect(t, map[string]any{"symbols": []string{"py/mod.py#cap", "py/cls.py#area", "py/cls.py#shadowed"}, "max_bytes": 12000})
+	uses := map[string][]string{}
+	decls := map[string]usedDecl{}
 	for i, sd := range pack.Seeds {
-		switch sd.Name {
-		case "cap":
-			py = &pack.Bodies[i]
-		case "List":
-			gobody = &pack.Bodies[i]
+		b := pack.Bodies[i]
+		if b.State != bodyReady {
+			t.Fatalf("%s: body not delivered: %+v", sd.Name, b)
+		}
+		var names []string
+		for _, u := range b.Uses {
+			names = append(names, u.Name)
+			decls[sd.Name+"/"+u.Name] = u
+		}
+		uses[sd.Name] = names
+	}
+	// The declaration is the whole statement the extractor recorded, the
+	// multi-line list included; the module's SIZE (line 2), not Box's.
+	if d := decls["area/ROUTES"]; d.Cut || d.Start != 3 || d.End != 6 || !strings.Contains(d.Text, "\"b\",") {
+		t.Errorf("ROUTES declaration = %+v, want lines 3-6 whole", d)
+	}
+	if d := decls["area/SIZE"]; d.Start != 2 {
+		t.Errorf("SIZE declaration = %+v, want the module's, line 2", d)
+	}
+	if !slices.Equal(uses["cap"], []string{"LIMIT"}) {
+		t.Errorf("cap uses %v, want [LIMIT]", uses["cap"])
+	}
+	if !slices.Equal(uses["area"], []string{"RATE", "SIZE", "ROUTES"}) {
+		t.Errorf("area uses %v, want [RATE SIZE ROUTES] (Box.SIZE, a class attribute, is not file-level)", uses["area"])
+	}
+	if len(uses["shadowed"]) != 0 {
+		t.Errorf("shadowed uses %v, want none: its RATE is a local", uses["shadowed"])
+	}
+}
+
+func TestUsesHelpers_PerLanguage(t *testing.T) {
+	if got := bareNames("return $state.x + limit_1 + obj.skip", "typescript"); !got["$state"] || !got["limit_1"] || got["skip"] {
+		t.Errorf("typescript bare names = %v", got)
+	}
+	cases := []struct {
+		text, name, lang string
+		want             bool
+	}{
+		{"x := LIMIT", "x", "go", true},
+		{"var LIMIT = 1", "LIMIT", "go", true},
+		{"y := LIMIT", "LIMIT", "go", false},
+		{"LIMIT = 1", "LIMIT", "python", true},
+		{"LIMIT: int = 1", "LIMIT", "python", true},
+		{"for LIMIT in xs:", "LIMIT", "python", true},
+		{"if LIMIT == 1:", "LIMIT", "python", false},
+		{"self.LIMIT = 1", "LIMIT", "python", false},
+		{"svc(LIMIT=1)", "LIMIT", "python", false},
+		{"svc(\n    LIMIT=LIMIT,\n)", "LIMIT", "python", false},
+		{"svc(\n    a=1,\n)\nLIMIT = 2", "LIMIT", "python", true},
+		{"x = 1\n    LIMIT = 2", "LIMIT", "python", true},
+		{"const LIMIT = 1", "LIMIT", "typescript", true},
+		{"let LIMIT = 1", "LIMIT", "javascript", true},
+		{"return LIMIT", "LIMIT", "javascript", false},
+	}
+	for _, c := range cases {
+		if got := shadows(c.text, c.name, c.lang); got != c.want {
+			t.Errorf("shadows(%q, %q, %s) = %v, want %v", c.text, c.name, c.lang, got, c.want)
 		}
 	}
-	if py == nil || gobody == nil || py.State != bodyReady || !strings.Contains(py.Text, "LIMIT") {
-		t.Fatalf("want both bodies delivered, the Python one naming LIMIT: %+v / %+v", py, gobody)
-	}
-	if len(py.Uses) != 0 {
-		t.Errorf("a Python body gets no uses, got %+v", py.Uses)
-	}
-	if len(gobody.Uses) == 0 {
-		t.Fatal("positive control: the Go body in the same pack has uses")
+	if !usesLanguage("javascript") || usesLanguage("rust") {
+		t.Error("usesLanguage serves Go, Python, TypeScript and JavaScript only")
 	}
 }
 
@@ -481,7 +536,7 @@ func TestDeclLines_TheLineLimitIsInclusive(t *testing.T) {
 			lines = append(lines, "\t1,")
 		}
 		lines = append(lines, "}")
-		d, ok := (&bodySource{lines: lines}).declLines(topology.Node{Name: "x", Kind: topology.KindVariable, StartLine: 1})
+		d, ok := (&bodySource{lines: lines}).declLines(topology.Node{Name: "x", Kind: topology.KindVariable, StartLine: 1}, "go")
 		if !ok || d.Cut != c.cut || (!c.cut && d.End != c.n) || (c.cut && d.Text != "var x = []int{\n") {
 			t.Errorf("%d lines: got %+v, %v; want cut=%v", c.n, d, ok, c.cut)
 		}

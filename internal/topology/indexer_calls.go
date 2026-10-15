@@ -177,6 +177,11 @@ func (idx *Indexer) resolveCallsContext(ctx context.Context, mode rebuildMode, c
 		}
 		total.add(r)
 	}
+	// Python, TypeScript and JavaScript: edges from what an import names. They
+	// add no census rows; the census is the Go resolver's claim alone.
+	if err := resolveModuleCalls(ctx, tx, scoped); err != nil {
+		return err
+	}
 	// Scoped passes preserve the published whole-index census. A callee re-index
 	// changes rowids, not call-site facts; a caller re-index that changes sites is
 	// followed by the next full reconciliation (resync/failure recovery).
@@ -358,25 +363,6 @@ func (r *callResolution) countBucket(b resolveBucket) {
 	case bucketBareUnmatched:
 		r.bareUnmatched++
 	}
-}
-
-func insertResolvedEdges(tx *sql.Tx, edges []resolvedEdge) error {
-	if len(edges) == 0 {
-		return nil
-	}
-	stmt, err := tx.Prepare(
-		`INSERT INTO topology_edges(from_id, to_id, kind, confidence, source, to_identity)
-         VALUES (?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return fmt.Errorf("topology: resolve calls: prepare: %w", err)
-	}
-	defer stmt.Close()
-	for _, e := range edges {
-		if _, err := stmt.Exec(e.from, e.to, string(EdgeCalls), e.confidence, callResolverSource, e.toIdentity); err != nil {
-			return fmt.Errorf("topology: resolve calls: insert: %w", err)
-		}
-	}
-	return nil
 }
 
 // resolveBucket is a site's outcome, persisted in topology_call_sites.outcome: append, never renumber.

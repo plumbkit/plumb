@@ -181,7 +181,8 @@ func TestCompareRelated_BreaksTiesOnPathThenSelectorAndIsDeterministic(t *testin
 func TestIsTestPath_RecognisesTheIndexedLanguagesConventions(t *testing.T) {
 	for p, want := range map[string]bool{
 		"cart/cart_test.go": true, "pkg/test_x.py": true, "pkg/x_test.py": true, "web/a.test.ts": true,
-		"web/a.spec.js": true, "pkg/__tests__/a.js": true,
+		"web/a.spec.js": true, "pkg/__tests__/a.js": true, "web/A.test.jsx": true, "web/a.spec.tsx": true,
+		"lib/a.test.mjs": true, "lib/a.spec.cjs": true, "web/a.ts": false, "web/spec.ts": false,
 		"cart/cart.go": false, "pkg/contest.py": false, "docs/testing.md": false,
 	} {
 		if got := isTestPath(p); got != want {

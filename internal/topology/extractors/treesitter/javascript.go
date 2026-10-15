@@ -37,14 +37,24 @@ func (e *JavaScriptExtractor) Extensions() []string { return []string{".js", ".m
 // and therefore certain (1.0); intra-file call edges are name-resolved
 // heuristics (0.8). Returns (nil, nil, nil) when src cannot be parsed.
 func (e *JavaScriptExtractor) Extract(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, error) {
+	nodes, edges, _, err := e.ExtractWithCallSites(ctx, relPath, src)
+	return nodes, edges, err
+}
+
+// ExtractWithCallSites is Extract plus every call inside a function and what each
+// import binds (js_calls.go), from the same parse, for the module resolver.
+func (e *JavaScriptExtractor) ExtractWithCallSites(ctx context.Context, relPath string, src []byte) ([]topology.Node, []topology.Edge, []topology.CallSite, error) {
 	lang := e.lang.get()
-	return extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
-		w := &jsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}}
+	var sites []topology.CallSite
+	nodes, edges, err := extractWith(ctx, lang, src, func(root *tsg.Node) ([]topology.Node, []topology.Edge) {
+		w := &jsWalk{lang: lang, src: src, path: relPath, funcIdx: map[string]int64{}, js: newJSSites(lang, src)}
 		w.walk(root)
 		w.scanTests(root)
 		w.callEdges(root)
+		sites = w.js.sites
 		return w.nodes, w.edges
 	})
+	return nodes, edges, sites, err
 }
 
 type jsWalk struct {
@@ -55,6 +65,7 @@ type jsWalk struct {
 	edges      []topology.Edge
 	funcIdx    map[string]int64 // function/method name → node index, for call edges
 	nameCounts map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
+	js         *jsSites         // call sites and import bindings, scopes by position
 }
 
 // walk scans the program's direct children. Declarations are top-level by
@@ -121,7 +132,10 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 	node.DocStartByte, node.DocEndByte = jsDocSpan(rng, w.lang, w.src)
 	w.nodes = append(w.nodes, node)
 	w.funcIdx[name] = idx
+	w.js.register(rng, idx)
 	if enclosingType >= 0 {
+		// Qualified by its class, as TypeScript's members are (tsWalk.containment).
+		w.nodes[idx].Qualified = w.nodes[enclosingType].Name + "." + name
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     enclosingType,
 			ToID:       idx,
@@ -200,6 +214,7 @@ func (w *jsWalk) addMember(rng *tsg.Node, classIdx int64, name string) {
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
+	node.Qualified = w.nodes[classIdx].Name + "." + name
 	w.nodes = append(w.nodes, node)
 	w.edges = append(w.edges, topology.Edge{
 		FromID:     classIdx,
@@ -242,8 +257,10 @@ func (w *jsWalk) handleDeclarator(d, decl *tsg.Node, isConst bool) {
 	switch {
 	case value != nil && jsFuncValues[value.Type(w.lang)]:
 		w.appendFunc(name, decl, -1)
+		w.js.register(d, int64(len(w.nodes)-1))
 	case value != nil && w.isRequire(value):
 		w.addRequireImport(value, decl)
+		w.js.addRequireBinding(d, name, w.callStringArg(value))
 	case isConst:
 		w.addBinding(name, decl, topology.KindConstant)
 	default:
@@ -301,6 +318,7 @@ func (w *jsWalk) addRequireImport(call, decl *tsg.Node) {
 func (w *jsWalk) addImport(n *tsg.Node) {
 	if str := childByType(n, "string", w.lang); str != nil {
 		w.appendImport(w.stringText(str), n)
+		w.js.addImportBindings(n, w.stringText(str))
 	}
 }
 
@@ -420,38 +438,19 @@ func jsDocSpan(decl *tsg.Node, lang *tsg.Language, src []byte) (start, end int) 
 func (w *jsWalk) callEdges(root *tsg.Node) {
 	seen := map[[2]int64]bool{}
 	w.nameCounts = callableNameCounts(w.nodes)
-	// JavaScript scopes are not a flat type switch — an arrow function bound to a
-	// const opens one — so enclosingFunc replaces scopeByType here.
-	walkCallSites(root, w.enclosingFunc,
+	// JavaScript scopes are not a flat type switch (an arrow function bound to a
+	// const opens one), and two classes may share a method name, so scopes are
+	// found by declaration position (jsSites.enclosing).
+	walkCallSites(root, w.js.enclosing,
 		func(n *tsg.Node, curFunc int64) {
-			if n.Type(w.lang) == "call_expression" {
+			switch n.Type(w.lang) {
+			case "call_expression":
 				w.maybeCallEdge(n, curFunc, seen)
+				w.js.addCall(n, curFunc)
+			case "new_expression":
+				w.js.addCall(n, curFunc)
 			}
 		})
-}
-
-// enclosingFunc updates the current enclosing-function index when entering a
-// node that names a registered function (declaration, method, or arrow/function
-// binding).
-func (w *jsWalk) enclosingFunc(n *tsg.Node, curFunc int64) int64 {
-	var name string
-	switch n.Type(w.lang) {
-	case "function_declaration", "generator_function_declaration":
-		name = w.nodeName(n)
-	case "method_definition":
-		name = w.methodName(n)
-	case "variable_declarator":
-		if v := n.ChildByFieldName("value", w.lang); v != nil && jsFuncValues[v.Type(w.lang)] {
-			name = w.declaratorName(n)
-		}
-	}
-	if name == "" {
-		return curFunc
-	}
-	if idx, ok := w.funcIdx[name]; ok {
-		return idx
-	}
-	return curFunc
 }
 
 func (w *jsWalk) maybeCallEdge(call *tsg.Node, curFunc int64, seen map[[2]int64]bool) {

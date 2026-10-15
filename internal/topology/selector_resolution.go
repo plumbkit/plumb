@@ -98,6 +98,11 @@ func classifyResolution(nodes []Node) SelectorResolution {
 // edges are opt-in, so failing closed only ever withholds them, never invents
 // them.
 //
+// A language the module resolver serves (Python, TypeScript, JavaScript) is
+// admitted here too: its derived edges are import-named and may be followed. It
+// is not admitted to AdmitCallGraph, whose answers (package reachability, the
+// Go-only completeness wording) claim more than an import-named edge supports.
+//
 // It applies the rule alone (languageAdmitted), not the whole AdmitCallGraph: the
 // rest of an admission is wording for a user — the scope note, the intra-file
 // count, the empty-result label — and costs whole-index COUNT queries. A context
@@ -107,6 +112,9 @@ func DerivedCallsAdmitted(ctx context.Context, db *sql.DB, nodeID int64) bool {
 	subject, err := CallGraphSubjectForNode(ctx, db, nodeID)
 	if err != nil {
 		return false
+	}
+	if moduleLanguageResolved(subject.Language) {
+		return true
 	}
 	ok, err := languageAdmitted(ctx, db, subject.Language)
 	return err == nil && ok

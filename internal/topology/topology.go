@@ -251,6 +251,12 @@ const (
 	// enclosing node is NOT a caller — it is the decorated declaration, which for
 	// a route decorator is the handler itself.
 	CallSiteDecorator CallSiteKind = "decorator"
+	// CallSiteBinding is what an import binds, in a language the module resolver
+	// serves (Python, TypeScript, JavaScript): Callee is the local name,
+	// Qualifier the module as the source wrote it, and FirstStringArg the name
+	// imported from it ("" with HasStringArg false when the whole module is
+	// bound). It is not a call; it is what lets a call through the name resolve.
+	CallSiteBinding CallSiteKind = "binding"
 )
 
 // MaxCallSiteArgIdents caps how many identifier-shaped arguments a CallSite

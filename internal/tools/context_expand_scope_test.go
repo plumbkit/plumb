@@ -16,6 +16,8 @@ import (
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/sqlitex"
 	"github.com/plumbkit/plumb/internal/topology"
+	goext "github.com/plumbkit/plumb/internal/topology/extractors/golang"
+	"github.com/plumbkit/plumb/internal/topology/extractors/treesitter"
 )
 
 // context_expand_scope_test.go — what bounds the walk: the scope filter at every
@@ -299,26 +301,50 @@ func resolveOne(t *testing.T, store *topology.Store, name string) topology.Node 
 	return nodes[0]
 }
 
-// Derived call edges are used only around a subject whose language the call-graph
-// admission rule accepts. A derived edge recorded around a Python node is not
-// followed; the same kind of edge around a Go node is. The control in each half
+// Derived call edges are used only around a subject whose language a resolver
+// serves: Go (the package resolver) and Python, TypeScript and JavaScript (the
+// module resolver). A derived edge recorded around a Rust node is not followed;
+// the same kind of edge around a Python or Go node is. The control in each half
 // proves the other half can fail.
 func TestContextForTask_DerivedEdgesAreFollowedOnlyWhereTheCallGraphIsAdmitted(t *testing.T) {
-	s := newShop(t)
-	store := s.store
+	root := copyShopFixture(t)
+	rs := "fn helper() -> u32 { 1 }\n\nfn render() -> u32 { helper() }\n\nfn other() -> u32 { 2 }\n"
+	if err := os.WriteFile(filepath.Join(root, "scripts", "gen.rs"), []byte(rs), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := topology.Open(root, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024},
+		[]topology.Extractor{goext.New(), treesitter.NewPython(), treesitter.NewMarkdown(), treesitter.NewRust()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	for deadline := time.Now().Add(30 * time.Second); store.Status().IndexedFiles < shopFixtureFiles+1 || store.Status().IndexerState == "running"; {
+		if time.Now().After(deadline) {
+			t.Fatalf("index not ready: %+v", store.Status())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	s := newShopTool(t, store, root)
 	formatRow, exportCharges := resolveOne(t, store, "format_row"), resolveOne(t, store, "export_charges")
 	apply, lookup := resolveOne(t, store, "Apply"), resolveOne(t, store, "Lookup")
-	insertEdge(t, s.root, formatRow, exportCharges, sourceCallResolver, 0.9) // python: not admitted
+	render, other := resolveOne(t, store, "render"), resolveOne(t, store, "other")
+	insertEdge(t, s.root, render, other, sourceCallResolver, 0.9)            // rust: not admitted
+	insertEdge(t, s.root, formatRow, exportCharges, sourceCallResolver, 0.9) // python: admitted
 	insertEdge(t, s.root, apply, lookup, sourceCallResolver, 0.9)            // go: admitted
 
-	py := s.collect(t, map[string]any{"symbols": []string{"scripts/export.py#format_row"}})
-	for _, r := range py.Related {
+	rust := s.collect(t, map[string]any{"symbols": []string{"scripts/gen.rs#render"}})
+	for _, r := range rust.Related {
 		if r.Source == sourceCallResolver || r.Evidence == evidenceDerived {
 			t.Errorf("a derived edge around a non-admitted language was followed: %+v", r)
 		}
 	}
-	if r, ok := py.related(goldID("scripts/export.py", "export_charges")); !ok || r.Evidence != evidenceHeuristic || !strings.HasPrefix(r.Via, "caller of ") {
-		t.Errorf("control: the extractor-side heuristic caller edge should still show, got %+v (found=%v)", r, ok)
+	if r, ok := rust.related(goldID("scripts/gen.rs", "helper")); !ok || r.Evidence != evidenceHeuristic {
+		t.Errorf("control: the extractor-side heuristic edge should still show, got %+v (found=%v)", r, ok)
+	}
+
+	py := s.collect(t, map[string]any{"symbols": []string{"scripts/export.py#format_row"}})
+	if r, ok := py.related(goldID("scripts/export.py", "export_charges")); !ok || r.Evidence != evidenceDerived || r.Source != sourceCallResolver {
+		t.Errorf("the derived edge around an admitted Python node was not followed, got %+v (found=%v)", r, ok)
 	}
 
 	goPack := s.collect(t, map[string]any{"symbols": []string{"pricing/discount.go#Apply"}})

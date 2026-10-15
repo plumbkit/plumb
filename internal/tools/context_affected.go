@@ -117,7 +117,7 @@ func edgeReachedTests(pkgs []affectedPackage, freshness string) map[string]named
 		var reached []affectedTest
 		seen := map[string]bool{}
 		for _, t := range pk.Tests {
-			if t.Confidence <= colocatedConfidence || !runnableTestName(t.Node.Name) || seen[t.Node.Name] {
+			if t.Confidence <= colocatedConfidence || !runnableTestName(t.Node.Name, t.Node.Language) || seen[t.Node.Name] {
 				continue
 			}
 			seen[t.Node.Name] = true
@@ -156,10 +156,21 @@ func hopRank(h int) int {
 	return h
 }
 
-// runnableTestName is a top-level function go test -run selects: Test, Example or
-// Fuzz followed by nothing or a non-lowercase rune, as the testing package
-// requires. A benchmark needs -bench, and a helper is not a test at all.
-func runnableTestName(name string) bool {
+// runnableTestName is a test a filter can select by name. Go: a top-level
+// function go test -run selects, Test, Example or Fuzz followed by nothing or a
+// non-lowercase rune, as the testing package requires (a benchmark needs -bench,
+// and a helper is not a test at all). Python: a function pytest collects by its
+// default rule, test followed by an underscore. A JavaScript or
+// TypeScript test is named by its title, which no filter here can select safely.
+func runnableTestName(name, lang string) bool {
+	if lang == "python" {
+		// A function named just "test" is collected too, but `-k test` would
+		// select nearly every test, so it is never named.
+		return strings.HasPrefix(name, "test_")
+	}
+	if lang != "go" && lang != "" {
+		return false
+	}
 	for _, p := range []string{"Test", "Example", "Fuzz"} {
 		if rest, ok := strings.CutPrefix(name, p); ok {
 			return rest == "" || !unicode.IsLower([]rune(rest)[0])
@@ -323,19 +334,25 @@ const namedTestsReach = "call a seed or a declaration next to one, directly or t
 // the tests ran or passed.
 func namedTestsLine(scope TestScope, dir string, n namedTests) string {
 	names := n.Names
-	if target, ok := testTarget(scope, dir); ok && scope.Style == TargetGoPackage {
-		for len(names) > 0 && validateRunFilter("run", runFilterFor(names)) != nil {
+	filter := map[TargetStyle]func([]string) string{TargetGoPackage: runFilterFor, TargetPath: pytestFilterFor}[scope.Style]
+	if target, ok := testTarget(scope, dir); ok && filter != nil {
+		for len(names) > 0 && validateRunFilter("run", filter(names)) != nil {
 			names = names[:len(names)-1]
 		}
 		if len(names) > 0 {
 			return fmt.Sprintf("    run first: run_task(slot:\"test\", target:%q, run:%q) — %s %s%s",
-				target, runFilterFor(names), namedCount(len(names), n.Total), namedTestsReach, namedMore(len(names), n.Total))
+				target, filter(names), namedCount(len(names), n.Total), namedTestsReach, namedMore(len(names), n.Total))
 		}
 		names = n.Names
 	}
 	return fmt.Sprintf("    %s %s: %s%s", namedCount(len(names), n.Total), namedTestsReach,
 		textfmt.TerminalSafeLine(strings.Join(names, ", ")), namedMore(len(names), n.Total))
 }
+
+// pytestFilterFor is a pytest -k expression selecting exactly the names: pytest
+// matches each name as a substring, so "test_a" also selects "test_ab"; the line
+// says the names it means, and a wider selection only costs a little time.
+func pytestFilterFor(names []string) string { return strings.Join(names, " or ") }
 
 // runFilterFor anchors the names as one group: go test -run splits a pattern only
 // at a top-level |, so the alternation inside the parentheses stays whole. The
