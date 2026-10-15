@@ -64,9 +64,9 @@
   report says so.
 - **`tool_feedback`: agents say what a plumb answer lacked.** A new read-only
   tool (61 tools now) takes a `tool` and a short `missing` / `noise` / `note`;
-  the call record keeps it and `plumb stats --context` lists it. Every
-  `context_for_task` pack ends with a one-line pointer to it, dropped first when
-  the budget is tight.
+  the call record keeps it and `plumb stats --context` lists it. A
+  `context_for_task` pack ends with a one-line pointer to it when it has room
+  left; the pointer never takes a line's place.
 
 ## 0.25.0 (2026-10-15)
 

@@ -50,6 +50,9 @@ func checkContextFlagCompat(cmd *cobra.Command) error {
 		}
 		return nil
 	}
+	if statsFlagAllWorkspaces && cmd.Flags().Changed("workspace") {
+		return errors.New("--all-workspaces and --workspace are alternatives: give one")
+	}
 	var set []string
 	for _, name := range []string{"health", "failures", "limit"} {
 		if cmd.Flags().Changed(name) {
@@ -76,12 +79,15 @@ func runStatsContext(ws string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("opening stats db: %w", err)
 	}
+	now := time.Now()
 	if db == nil {
+		if statsFlagJSON {
+			return writeContextJSON(out, stats.EmptyContextReport(now.Add(-window), now))
+		}
 		fmt.Fprintln(out, "No statistics recorded yet.")
 		return nil
 	}
 	defer db.Close()
-	now := time.Now()
 	filter := stats.Filter{Workspace: ws, Since: now.Add(-window)}
 	if statsFlagAllWorkspaces {
 		filter.Workspace, ws = "", "all workspaces"
@@ -91,12 +97,16 @@ func runStatsContext(ws string, out io.Writer) error {
 		return err
 	}
 	if statsFlagJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(report)
+		return writeContextJSON(out, report)
 	}
 	renderContextReport(out, ws, report)
 	return nil
+}
+
+func writeContextJSON(out io.Writer, r stats.ContextReport) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	return enc.Encode(r)
 }
 
 // ratio renders n of d as "n/d (p%)", or "—" when there is nothing to divide.
@@ -115,7 +125,7 @@ func perStream(n, d int) string {
 	return fmt.Sprintf("%.1f", float64(n)/float64(d))
 }
 
-// contextRow is one metric across the shown weeks and the total.
+// contextReportRow is one metric across the shown weeks and the total.
 type contextReportRow struct {
 	label string
 	cell  func(p stats.ContextPeriod) string
@@ -123,14 +133,16 @@ type contextReportRow struct {
 
 var contextReportRows = []contextReportRow{
 	{"Uptake", nil},
-	{"  agent streams", func(p stats.ContextPeriod) string { return strconv.Itoa(p.Streams) }},
+	{"  agent streams (any plumb call)", func(p stats.ContextPeriod) string { return strconv.Itoa(p.Streams) }},
 	{"  streams with a pack", func(p stats.ContextPeriod) string { return ratio(p.StreamsWithPack, p.Streams) }},
 	{"  packs (from task prose)", func(p stats.ContextPeriod) string { return fmt.Sprintf("%d (%d)", p.Packs, p.ProsePacks) }},
 	{"Pack quality", nil},
 	{"  edited files the pack named", func(p stats.ContextPeriod) string { return ratio(p.EditedFilesInPack, p.EditedFiles) }},
 	{"  pack files read or edited", func(p stats.ContextPeriod) string { return ratio(p.PackFilesUsed, p.PackFiles) }},
 	{"  proposed seeds used", func(p stats.ContextPeriod) string { return ratio(p.ProposedSeedsUsed, p.ProposedSeeds) }},
-	{"  searches before 1st edit, per pack", func(p stats.ContextPeriod) string { return perStream(p.SearchesBeforeEdit, p.WindowsWithEdits) }},
+	{"  searches before 1st edit, per pack that led to one", func(p stats.ContextPeriod) string {
+		return perStream(p.SearchesBeforeEdit, p.WindowsWithEdits)
+	}},
 	{"  seed files re-read", func(p stats.ContextPeriod) string { return strconv.Itoa(p.SeedRereads) }},
 	{"Edits with a pack | without", nil},
 	{"  editing streams", func(p stats.ContextPeriod) string { return pair(p.WithPack.Streams, p.WithoutPack.Streams) }},
@@ -223,11 +235,16 @@ func renderContextLeads(out io.Writer, ws string, l stats.ContextLeads) {
 
 const contextReportFootnote = `
 How to read it: an agent stream is one session, or one logical agent on a shared
-connection. A pack's window runs from the pack to the stream's next pack or its
-end. Only plumb calls are recorded: native reads, searches and edits are not, so
-every rate is over plumb's lane. "With a pack" and "without" compare different
-streams doing different work; read a gap between them as a lead, not a verdict.
-Compile errors come from the post-write diagnostics an edit asked for.
+connection; a stream with any call in the workspace is read whole, whatever
+workspace its other calls name. It belongs to the week of its first call, a
+pack's window to the week of its pack, and the window runs to the stream's next
+pack or its end. "With a pack" scores a stream from its first pack on; its work
+before that is not counted, and a pack before --since is not seen. Previews
+(dry_run) are not edits. Only plumb calls are recorded: native reads, searches
+and edits are not, so every rate is over plumb's lane. "With a pack" and
+"without" compare different streams doing different work; read a gap between
+them as a lead, not a verdict. Compile errors are the ones a confirmed post-write
+diagnostics pass reported.
 `
 
 // statsContextOut is where the report is written; a var so tests capture it.

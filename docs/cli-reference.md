@@ -944,14 +944,18 @@ of the most recent calls.
 | `--failures` | `false` | Replace the default view with a failure breakdown grouped by kind, tool and client build. Rejected together with `--health`. |
 | `--health` | `false` | Replace the default view with the three standing health metrics (PLAN-368), computed for today (UTC) and upserted into `stats.db`'s `health_daily` table. |
 | `--context` | `false` | Replace the default view with the `context_for_task` report, week by week (see below). `--since` defaults to `8w`. Rejected together with `--health`, `--failures` or `--limit`. |
-| `--all-workspaces` | `false` | With `--context`: count every workspace's calls (worktrees and scratch checkouts included), not only `--workspace`'s. |
+| `--all-workspaces` | `false` | With `--context`: count every workspace's calls (worktrees and scratch checkouts included), not only `--workspace`'s. Rejected together with `--workspace`. |
 | `--json` | `false` | With `--context`: print the report as JSON (no logo). |
 
 `--context` answers, from the calls plumb already records (no new table, no new
 write), what `context_for_task` packs did for the agents that asked for them, in
 UTC weeks starting Monday plus a total. An *agent stream* is one session, or one
-logical agent on a shared connection; a pack's *window* runs from the pack to the
-stream's next pack or its end.
+logical agent on a shared connection; a stream with any call in the workspace is
+read whole, since a call is recorded under the workspace its paths name. A
+stream belongs to the week of its first call; a pack's *window*, to the week of
+its pack, and it runs to the stream's next pack or its end. A stream with a pack
+is scored from its first pack on; a pack before `--since` is not seen.
+Previews (`dry_run`) are not edits. Leads are redacted for secrets.
 
 - **Uptake:** streams, streams with a pack, packs and how many started from task
   prose.

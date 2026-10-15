@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -223,5 +224,101 @@ func TestContextReport_ANewPackClosesTheWindow(t *testing.T) {
 	if p.Packs != 2 || p.WindowsWithEdits != 1 || p.EditedFiles != 1 || p.EditedFilesInPack != 1 || p.PackFiles != 3 || p.PackFilesUsed != 1 {
 		t.Errorf("packs=%d windows=%d edited=%d inPack=%d packFiles=%d used=%d, want 2 1 1 1 3 1",
 			p.Packs, p.WindowsWithEdits, p.EditedFiles, p.EditedFilesInPack, p.PackFiles, p.PackFilesUsed)
+	}
+}
+
+// recordAll records calls in order, one second apart from at.
+func recordAll(t *testing.T, db *DB, at time.Time, calls []Call) {
+	t.Helper()
+	for i, c := range calls {
+		c.CalledAt = at.Add(time.Duration(i) * time.Second)
+		if err := db.Record(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A stream is read whole when any of its calls is in the workspace, so a pack in
+// one workspace and the edits it led to under another stay one stream; its work
+// before the first pack is not counted for the pack; previews are not edits;
+// failed packs, reads and notes count for nothing.
+func TestContextReport_StreamsAreWholeAndScoredFromTheFirstPack(t *testing.T) {
+	db := openFailuresDB(t)
+	at := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	pack := Call{Workspace: "/w", SessionID: "s", Tool: "context_for_task", InputJSON: `{"files":["api/checkout.go"]}`, OutputText: contextFixturePack, Success: true}
+	recordAll(t, db, at, []Call{
+		{Workspace: "/other", SessionID: "s", Tool: "edit_file", InputJSON: `{"file_path":"early.go"}`, Success: true},
+		{Workspace: "/w", SessionID: "s", Tool: "context_for_task", InputJSON: `{"files":["x.go"]}`, Success: false},
+		pack,
+		{Workspace: "/other", SessionID: "s", Tool: "read_file", InputJSON: `{"file_path":"api/checkout.go"}`, Success: false},
+		{Workspace: "/other", SessionID: "s", Tool: "read_file", InputJSON: `{"file_path":"cart/cart.go"}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "rename_symbol", InputJSON: `{"uri":"cart/cart.go","new_name":"X"}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "find_replace", InputJSON: `{"path":"cart","find":"a","replace":"b"}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "find_replace", InputJSON: `{"path":"cart","find":"a","replace":"b","dry_run":false}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "edit_file", InputJSON: `{"file_path":"api/checkout.go"}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "tool_feedback", InputJSON: `{"tool":"x","note":"lost"}`, Success: false},
+	})
+	r, err := db.ContextReport(Filter{Workspace: "/w", Since: at.Add(-time.Hour)}, at.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := r.Total
+	checks := []struct {
+		name      string
+		got, want int
+	}{
+		{"packs (the failed one opens nothing)", p.Packs, 1},
+		{"with: streams", p.WithPack.Streams, 1},
+		{"without: streams (early.go is pre-pack)", p.WithoutPack.Streams, 0},
+		{"with: edits (find_replace applied + edit_file; previews and pre-pack work not)", p.WithPack.Edits, 2},
+		{"with: files (find_replace names none)", p.WithPack.FilesEdited, 1},
+		{"edited files in pack", p.EditedFilesInPack, 1},
+		{"pack files used (the failed read is not a use)", p.PackFilesUsed, 2},
+		{"seed rereads (only the seed's file, and the failed read is none)", p.SeedRereads, 0},
+		{"feedback (a failed note is none)", p.Feedback, 0},
+	}
+	for _, c := range checks {
+		if c.got != c.want {
+			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// A stream belongs to the week of its first call; a pack, to the week of the
+// pack.
+func TestContextReport_WeeksByFirstCallAndByPack(t *testing.T) {
+	db := openFailuresDB(t)
+	mon := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	recordAll(t, db, mon, []Call{{Workspace: "/w", SessionID: "s", Tool: "read_file", InputJSON: `{"file_path":"a.go"}`, Success: true}})
+	recordAll(t, db, mon.Add(8*24*time.Hour), []Call{{Workspace: "/w", SessionID: "s", Tool: "context_for_task", InputJSON: `{"files":["a.go"]}`, OutputText: contextFixturePack, Success: true}})
+	r, err := db.ContextReport(Filter{Workspace: "/w", Since: mon.Add(-time.Hour)}, mon.Add(20*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Weeks) != 2 || r.Weeks[0].Streams != 1 || r.Weeks[0].Packs != 0 || r.Weeks[1].Streams != 0 || r.Weeks[1].Packs != 1 {
+		t.Errorf("weeks = %+v, want the stream in week 1 and its pack in week 2", r.Weeks)
+	}
+}
+
+// Leads are call input printed back, so a secret in one is redacted, and the
+// JSON's lists are never null.
+func TestContextReport_LeadsRedactedAndJSONListsNeverNull(t *testing.T) {
+	db := openFailuresDB(t)
+	at := time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC)
+	secret := "ghp_" + strings.Repeat("A1b2", 9)
+	recordAll(t, db, at, []Call{
+		{Workspace: "/w", SessionID: "s", Tool: "context_for_task", InputJSON: `{"files":["a.go"]}`, OutputText: contextFixturePack, Success: true},
+		{Workspace: "/w", SessionID: "s", Tool: "search_in_files", InputJSON: `{"pattern":"token ` + secret + `"}`, Success: true},
+	})
+	r, err := db.ContextReport(Filter{Workspace: "/w", Since: at.Add(-time.Hour)}, at.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Leads.Searches) != 1 || strings.Contains(r.Leads.Searches[0].Text, secret) {
+		t.Errorf("search lead %+v carries the secret", r.Leads.Searches)
+	}
+	b, err := json.Marshal(EmptyContextReport(at, at))
+	if err != nil || strings.Contains(string(b), "null") {
+		t.Errorf("empty report JSON has a null list: %s (%v)", b, err)
 	}
 }

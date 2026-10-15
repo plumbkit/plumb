@@ -227,8 +227,9 @@ An agent's short note on what a plumb answer lacked or carried needlessly.
 `noise`, `note` (at least one; each at most 500 bytes). The tool stores nothing
 itself: plumb's local call record keeps every call's arguments, and
 `plumb stats --context` lists the notes newest first as leads. Read-only, no
-network; never include secrets or source. Every `context_for_task` pack ends with
-a one-line pointer to it, the first line a tight budget drops.
+network; never include secrets or source. A `context_for_task` pack ends with a
+one-line pointer to it when it has room left for one; the pointer never takes a
+line's place.
 
 ### `workspace_sessions`
 Same-workspace peer awareness: lists active sessions on this workspace and recent

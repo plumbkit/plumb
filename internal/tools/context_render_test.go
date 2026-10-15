@@ -55,7 +55,10 @@ func splitFooter(t *testing.T, out string) (body []string, omitted int, hasFoote
 func TestRenderContextPack_BudgetSweep(t *testing.T) {
 	p := busyPack("/work/café/project")
 	all := p.lines()
-	full := renderContextPack(p)
+	// The feedback pointer follows the lines of a pack with room for it; it is
+	// not one of the pack's lines.
+	noFeedback := func(s string) string { return strings.TrimSuffix(s, "\n"+contextFeedbackLine) }
+	full := noFeedback(renderContextPack(p))
 	if got := strings.Count(full, "\n") + 1; got != len(all) {
 		t.Fatalf("the unbounded render has %d lines but the pack has %d", got, len(all))
 	}
@@ -68,10 +71,11 @@ func TestRenderContextPack_BudgetSweep(t *testing.T) {
 		for _, l := range all {
 			prioOf[l.text] = l.prio
 		}
-		out := renderContextPack(p)
-		if len(out) > p.budget() {
-			t.Fatalf("max_bytes %d: %d bytes, over the %d-byte pack budget", mb, len(out), p.budget())
+		withFeedback := renderContextPack(p)
+		if len(withFeedback) > p.budget() {
+			t.Fatalf("max_bytes %d: %d bytes, over the %d-byte pack budget", mb, len(withFeedback), p.budget())
 		}
+		out := noFeedback(withFeedback)
 		if !utf8.ValidString(out) {
 			t.Fatalf("max_bytes %d: the output is not valid UTF-8", mb)
 		}

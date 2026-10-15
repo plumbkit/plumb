@@ -32,6 +32,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/redact"
 )
 
 // Report bounds.
@@ -157,50 +159,77 @@ type contextRow struct {
 	out    string
 }
 
-// ContextReport reads every call in filter's workspace since filter.Since (the
-// caller sets it) and builds the report, bucketed into UTC weeks starting on
-// Monday. nil-safe.
+// ContextReport builds the report over every agent stream that made a call in
+// filter's workspace since filter.Since (the caller sets both), reading each such
+// stream whole within the window: a call is recorded under the workspace its
+// paths name, so one agent's pack and its edits can sit under different ones,
+// and a stream cut by workspace would read its own edits as "without a pack".
+// Weeks are UTC weeks starting on Monday. nil-safe.
 func (d *DB) ContextReport(filter Filter, now time.Time) (ContextReport, error) {
 	if d == nil {
-		return ContextReport{}, nil
+		return emptyContextReport(filter.Since, now), nil
 	}
-	rows, err := d.contextRows(filter)
-	if err != nil {
+	b := newReportBuilder()
+	if err := d.eachContextStream(filter, b.stream); err != nil {
 		return ContextReport{}, err
 	}
-	return buildContextReport(rows, filter.Since, now), nil
+	return b.report(filter.Since, now), nil
 }
 
-// contextRows reads the window's rows, the output only for outputTools.
+// EmptyContextReport is the report of a window with no calls, its lists empty
+// rather than null.
+func EmptyContextReport(since, now time.Time) ContextReport { return emptyContextReport(since, now) }
+
+func emptyContextReport(since, now time.Time) ContextReport {
+	return newReportBuilder().report(since, now)
+}
+
+// eachContextStream reads the window's rows stream by stream, the output only
+// for outputTools, and hands each stream to fn as soon as it ends, so memory is
+// bounded by the longest stream, not the window.
 //
-//nolint:gosec // G202: the IN list is placeholders for constant tool names and where() binds every value
-func (d *DB) contextRows(filter Filter) ([]contextRow, error) {
-	where, args := filter.where()
+//nolint:gosec // G202: the IN list is placeholders for constant tool names and every value is bound
+func (d *DB) eachContextStream(filter Filter, fn func([]contextRow)) error {
 	ph := strings.TrimSuffix(strings.Repeat("?,", len(outputTools)), ",")
+	args := make([]any, 0, len(outputTools)+3)
+	for _, t := range outputTools {
+		args = append(args, t)
+	}
+	since := filter.Since.UnixMilli()
+	where := `WHERE called_at >= ?`
+	args = append(args, since)
+	if filter.Workspace != "" {
+		where += ` AND (session_id, logical_agent) IN (
+		             SELECT DISTINCT session_id, logical_agent FROM tool_calls WHERE workspace = ? AND called_at >= ?)`
+		args = append(args, filter.Workspace, since)
+	}
 	q := `SELECT session_id, logical_agent, tool, called_at, success, input_json,
 	             CASE WHEN tool IN (` + ph + `) THEN output_text ELSE '' END
 	      FROM tool_calls ` + where + ` ORDER BY session_id, logical_agent, called_at, id`
-	all := make([]any, 0, len(outputTools)+len(args))
-	for _, t := range outputTools {
-		all = append(all, t)
-	}
-	all = append(all, args...)
-	rs, err := d.db.Query(q, all...)
+	rs, err := d.db.Query(q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("stats: context report: %w", err)
+		return fmt.Errorf("stats: context report: %w", err)
 	}
 	defer rs.Close()
-	var out []contextRow
+	var cur []contextRow
 	for rs.Next() {
 		var sid, agent, tool, in, outText string
 		var at int64
 		var ok bool
 		if err := rs.Scan(&sid, &agent, &tool, &at, &ok, &in, &outText); err != nil {
-			return nil, fmt.Errorf("stats: context report: %w", err)
+			return fmt.Errorf("stats: context report: %w", err)
 		}
-		out = append(out, contextRow{stream: sid + "\x00" + agent, tool: tool, at: time.UnixMilli(at), ok: ok, in: in, out: outText})
+		r := contextRow{stream: sid + "\x00" + agent, tool: tool, at: time.UnixMilli(at), ok: ok, in: in, out: outText}
+		if len(cur) > 0 && cur[0].stream != r.stream {
+			fn(cur)
+			cur = nil
+		}
+		cur = append(cur, r)
 	}
-	return out, rs.Err()
+	if len(cur) > 0 {
+		fn(cur)
+	}
+	return rs.Err()
 }
 
 // weekStart is the Monday 00:00 UTC that starts t's week.
@@ -227,17 +256,14 @@ func (b *reportBuilder) week(t time.Time) *ContextPeriod {
 	return b.weeks[k]
 }
 
-func buildContextReport(rows []contextRow, since, now time.Time) ContextReport {
-	b := &reportBuilder{weeks: map[time.Time]*ContextPeriod{}, missed: map[string]int{}, searches: map[string]int{}, gaps: map[string]int{}}
-	for start := 0; start < len(rows); {
-		end := start
-		for end < len(rows) && rows[end].stream == rows[start].stream {
-			end++
-		}
-		b.stream(rows[start:end])
-		start = end
-	}
-	r := ContextReport{Since: since, Until: now}
+func newReportBuilder() *reportBuilder {
+	return &reportBuilder{weeks: map[time.Time]*ContextPeriod{}, missed: map[string]int{}, searches: map[string]int{}, gaps: map[string]int{}}
+}
+
+// report assembles the weeks oldest first, their total and the leads. Lists are
+// never null, and times are UTC, so the JSON reads the same everywhere.
+func (b *reportBuilder) report(since, now time.Time) ContextReport {
+	r := ContextReport{Since: since.UTC(), Until: now.UTC(), Weeks: []ContextPeriod{}}
 	keys := make([]time.Time, 0, len(b.weeks))
 	for k := range b.weeks {
 		keys = append(keys, k)
@@ -253,6 +279,9 @@ func buildContextReport(rows []contextRow, since, now time.Time) ContextReport {
 	sort.SliceStable(b.feedback, func(i, j int) bool { return b.feedback[i].At.After(b.feedback[j].At) })
 	if len(b.feedback) > contextReportMaxFeedback {
 		b.feedback = b.feedback[:contextReportMaxFeedback]
+	}
+	if b.feedback == nil {
+		b.feedback = []ContextFeedback{}
 	}
 	r.Leads = ContextLeads{MissedFiles: topCounts(b.missed), Searches: topCounts(b.searches), Gaps: topCounts(b.gaps), Feedback: b.feedback}
 	return r
@@ -291,14 +320,31 @@ type packWindow struct {
 
 // streamState is one agent stream being read.
 type streamState struct {
+	// pre is the stream's edit and test record before its first pack, post from
+	// it on. A stream with a pack is scored on post alone: the work it did before
+	// it asked for one is not work a pack informed.
+	pre, post outcomeTrack
+	window    *packWindow
+	packs     int
+}
+
+// outcomeTrack is one stretch of a stream's edit and test record.
+type outcomeTrack struct {
 	outcome  ContextOutcome
 	files    []string
 	lastTest string
-	window   *packWindow
-	packs    int
 }
 
-// stream reads one agent stream's calls in order.
+// track is the stretch the stream is in now.
+func (s *streamState) track() *outcomeTrack {
+	if s.packs > 0 {
+		return &s.post
+	}
+	return &s.pre
+}
+
+// stream reads one agent stream's calls in order. A stream belongs to the week
+// of its first call; a pack window, to the week of its pack.
 func (b *reportBuilder) stream(rows []contextRow) {
 	s := &streamState{}
 	for _, r := range rows {
@@ -310,21 +356,22 @@ func (b *reportBuilder) stream(rows []contextRow) {
 	if s.packs > 0 {
 		w.StreamsWithPack++
 	}
-	if s.outcome.Edits == 0 {
+	t := s.track()
+	if t.outcome.Edits == 0 {
 		return
 	}
-	s.outcome.Streams = 1
-	s.outcome.FilesEdited = len(s.files)
-	if s.lastTest == "pass" {
-		s.outcome.EndedGreen = 1
+	t.outcome.Streams = 1
+	t.outcome.FilesEdited = len(t.files)
+	if t.lastTest == "pass" {
+		t.outcome.EndedGreen = 1
 	}
-	if s.outcome.TestRuns > 0 {
-		s.outcome.StreamsWithTests = 1
+	if t.outcome.TestRuns > 0 {
+		t.outcome.StreamsWithTests = 1
 	}
 	if s.packs > 0 {
-		w.WithPack.add(s.outcome)
+		w.WithPack.add(t.outcome)
 	} else {
-		w.WithoutPack.add(s.outcome)
+		w.WithoutPack.add(t.outcome)
 	}
 }
 
@@ -343,7 +390,7 @@ func (b *reportBuilder) call(s *streamState, r contextRow) {
 	case searchTools[r.tool]:
 		b.search(s, r)
 	case r.tool == toolUndoEdit:
-		s.outcome.Undos++
+		s.track().outcome.Undos++
 	case r.tool == toolRunTask:
 		s.testRun(r)
 	}
@@ -382,28 +429,35 @@ func (s *streamState) testRun(r contextRow) {
 	if o == "" {
 		return
 	}
-	s.outcome.TestRuns++
+	t := s.track()
+	t.outcome.TestRuns++
 	if o == "fail" {
-		s.outcome.TestFailures++
+		t.outcome.TestFailures++
 	}
-	s.lastTest = o
+	t.lastTest = o
 }
 
+// edit records an edit attempt. A preview (dry_run) changed nothing and is not
+// an edit at all.
 func (b *reportBuilder) edit(s *streamState, r contextRow) {
-	s.outcome.Edits++
+	if isPreview(r.tool, r.in) {
+		return
+	}
+	t := s.track()
+	t.outcome.Edits++
 	if !r.ok {
-		s.outcome.EditFailures++
+		t.outcome.EditFailures++
 		return
 	}
 	if present, n := newErrors(r.out); present {
-		s.outcome.DiagnosedEdits++
+		t.outcome.DiagnosedEdits++
 		if n > 0 {
-			s.outcome.NewErrorEdits++
+			t.outcome.NewErrorEdits++
 		}
 	}
-	for _, p := range callPaths(r.in) {
-		if !containsPath(s.files, p) {
-			s.files = append(s.files, p)
+	for _, p := range editedPaths(r.tool, r.in) {
+		if !containsPath(t.files, p) {
+			t.files = append(t.files, p)
 		}
 		if w := s.window; w != nil && !containsPath(w.edited, p) {
 			w.edited = append(w.edited, p)
@@ -494,8 +548,10 @@ func (b *reportBuilder) feedbackNote(r contextRow) {
 	b.feedback = append(b.feedback, ContextFeedback{At: r.at, Tool: clampLead(in.Tool), Missing: clampLead(in.Missing), Noise: clampLead(in.Noise), Note: clampLead(in.Note)})
 }
 
-// clampLead keeps a lead to one bounded line.
+// clampLead keeps a lead to one bounded line, with any secret it carries
+// redacted: a lead is call input printed back, and `--json` may carry it on.
 func clampLead(s string) string {
+	s, _ = redact.Redact(s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) <= contextReportLeadBytes {
 		return s

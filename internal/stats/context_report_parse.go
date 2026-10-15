@@ -29,6 +29,34 @@ var editTools = map[string]bool{
 	"move_symbol": true, "safe_delete_symbol": true, "rename_file": true, "delete_file": true,
 }
 
+// previewByDefault are the edit tools whose dry_run defaults to true: a call to
+// one changed nothing unless it said dry_run false.
+var previewByDefault = map[string]bool{
+	"find_replace": true, "move_symbol": true, "rename_symbol": true, "replace_symbol_body": true,
+	"insert_after_symbol": true, "insert_before_symbol": true, "safe_delete_symbol": true,
+}
+
+// isPreview reports whether an edit call only previewed its change.
+func isPreview(tool, inputJSON string) bool {
+	var in struct {
+		DryRun *bool `json:"dry_run"`
+	}
+	_ = json.Unmarshal([]byte(inputJSON), &in)
+	if in.DryRun != nil {
+		return *in.DryRun
+	}
+	return previewByDefault[tool]
+}
+
+// editedPaths are the files an edit call names. find_replace's path may be a
+// directory, and which files it changed is in no input, so it names none.
+func editedPaths(tool, inputJSON string) []string {
+	if tool == "find_replace" {
+		return nil
+	}
+	return callPaths(inputJSON)
+}
+
 // readTools read source.
 var readTools = map[string]bool{
 	"read_file": true, "read_symbol": true, "read_multiple_files": true, "file_outline": true,
@@ -61,7 +89,7 @@ func callPaths(inputJSON string) []string {
 			out = append(out, strings.ReplaceAll(strings.TrimPrefix(s, "file://"), `\`, "/"))
 		}
 	}
-	for _, k := range []string{"file_path", "path", "uri", "from", "source_path"} {
+	for _, k := range []string{"file_path", "path", "uri", "from", "to", "source_path", "source_uri", "destination_uri"} {
 		add(in[k])
 	}
 	for _, k := range []string{"paths", "files"} {

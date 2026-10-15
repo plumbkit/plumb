@@ -35,3 +35,28 @@ func TestToolFeedback(t *testing.T) {
 		}
 	}
 }
+
+// The pack's pointer to tool_feedback takes only room nothing else wanted: it is
+// there when the pack has room, and a tight pack never loses a line to it.
+func TestContextForTask_FeedbackLineOnlyInSpareRoom(t *testing.T) {
+	s := newShop(t)
+	roomy, err := s.run(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}, "max_bytes": 32000})
+	if err != nil || !strings.Contains(roomy, contextFeedbackLine) {
+		t.Fatalf("a roomy pack lacks the feedback line (%v):\n%s", err, roomy)
+	}
+	for mb := contextMinMaxBytes; mb <= 6000; mb += 97 {
+		pack := s.collect(t, map[string]any{"symbols": []string{"cart/cart.go#Cart.Total"}, "max_bytes": mb})
+		without := packLines(pack.lines(), pack.budget()).Text
+		res := renderContext(pack)
+		with := res.Text
+		if res.Omitted && strings.Contains(with, contextFeedbackLine) {
+			t.Fatalf("max_bytes %d: a pack that lost lines also carries the feedback line:\n%s", mb, with)
+		}
+		if !strings.HasPrefix(with, without) {
+			t.Fatalf("max_bytes %d: the feedback line changed the pack itself:\n--- without\n%s\n--- with\n%s", mb, without, with)
+		}
+		if len(with) > pack.budget() {
+			t.Fatalf("max_bytes %d: %d bytes, over the %d-byte pack budget", mb, len(with), pack.budget())
+		}
+	}
+}

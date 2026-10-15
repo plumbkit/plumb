@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -69,5 +70,62 @@ func TestRenderContextReport(t *testing.T) {
 	renderContextReport(&out, "/w", stats.ContextReport{Since: wk, Until: wk})
 	if !strings.Contains(out.String(), "No plumb calls recorded") {
 		t.Errorf("empty report: %s", out.String())
+	}
+}
+
+// --json prints the report as JSON (no logo, so a pipe can read it), with
+// lists that are never null, whether or not the stats database exists yet.
+func TestRunStatsContext_JSON(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	statsFlagJSON = true
+	t.Cleanup(func() { statsFlagJSON = false })
+	var out bytes.Buffer
+	if err := runStatsContext("/w", &out); err != nil {
+		t.Fatal(err)
+	}
+	var empty map[string]any
+	if err := json.Unmarshal(out.Bytes(), &empty); err != nil || strings.Contains(out.String(), "null") {
+		t.Fatalf("no database: not JSON, or a null list: %v\n%s", err, out.String())
+	}
+
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Record(stats.Call{
+		Workspace: "/w", SessionID: "s", Tool: "context_for_task", CalledAt: time.Now(),
+		InputJSON: `{"task":"cart total"}`, OutputText: "context_for_task root=/w\nseeds (0 resolved, 0 unresolved):\n", Success: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	out.Reset()
+	if err := runStatsContext("/w", &out); err != nil {
+		t.Fatal(err)
+	}
+	var r stats.ContextReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("not a report: %v\n%s", err, out.String())
+	}
+	if r.Total.Packs != 1 || r.Total.ProsePacks != 1 {
+		t.Errorf("report = %+v, want one prose pack", r.Total)
+	}
+}
+
+func TestCheckContextFlagCompat_WorkspaceAndAll(t *testing.T) {
+	cmd := &cobra.Command{Use: "stats"}
+	for _, f := range []string{"health", "failures"} {
+		cmd.Flags().Bool(f, false, "")
+	}
+	cmd.Flags().Int("limit", 20, "")
+	cmd.Flags().String("workspace", "", "")
+	statsFlagContext, statsFlagAllWorkspaces = true, true
+	t.Cleanup(func() { statsFlagContext, statsFlagAllWorkspaces = false, false })
+	if err := checkContextFlagCompat(cmd); err != nil {
+		t.Fatalf("--all-workspaces alone: %v", err)
+	}
+	_ = cmd.Flags().Set("workspace", "/w")
+	if err := checkContextFlagCompat(cmd); err == nil || !strings.Contains(err.Error(), "alternatives") {
+		t.Errorf("--all-workspaces with --workspace: %v", err)
 	}
 }

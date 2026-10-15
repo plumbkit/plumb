@@ -573,7 +573,10 @@ func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullRecords := countRecords(full)
+	// The feedback pointer is not a record: it is added only to a pack with room
+	// to spare.
+	noFeedback := func(s string) string { return strings.ReplaceAll(s, "\n"+contextFeedbackLine, "") }
+	fullRecords := countRecords(noFeedback(full))
 	sawOmission := false
 	for mb := contextMinMaxBytes; mb <= contextMinMaxBytes+1200; mb += 7 {
 		out, err := s.run(t, args(mb))
@@ -583,7 +586,7 @@ func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 		if len(out) > mb-contextReserveBytes {
 			t.Fatalf("max_bytes %d: output is %d bytes, over the %d-byte pack budget", mb, len(out), mb-contextReserveBytes)
 		}
-		lines := strings.Split(out, "\n")
+		lines := strings.Split(noFeedback(out), "\n")
 		omitted := 0
 		if last := lines[len(lines)-1]; strings.HasPrefix(last, "omitted: ") {
 			sawOmission = true
