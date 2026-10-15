@@ -328,7 +328,7 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	// takes effect on the next request, and telling them to restart the daemon
 	// invites them to conclude the setting does not work.
 	reloadTable.Row("lsp.* (global and project)", configShowOkStyle().Render("live — restarts only the affected language servers"))
-	reloadTable.Row("cache, log_format, log_file, daemon.account_authority", configShowWarnStyle().Render("needs daemon restart"))
+	reloadTable.Row("cache, log_format, daemon.account_authority", configShowWarnStyle().Render("needs daemon restart"))
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 

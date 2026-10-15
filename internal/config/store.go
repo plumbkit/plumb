@@ -114,8 +114,8 @@ func (s *Store) RestartNeeded() bool {
 }
 
 // RestartSensitiveEqual reports whether a and b agree on every setting the
-// daemon cannot apply without a restart: cache sizing, log format, log file, and
-// the account authority that decides where the daemon's sockets, locks and
+// daemon cannot apply without a restart: cache sizing, log format, and the
+// account authority that decides where the daemon's sockets, locks and
 // state live. Everything else is applied live or on the next attach/session —
 // [lsp.<lang>] included, which restarts only the affected language servers
 // (PLAN-539).
@@ -126,7 +126,6 @@ func (s *Store) RestartNeeded() bool {
 // the user the wrong thing in one of them.
 func RestartSensitiveEqual(a, b Config) bool {
 	return a.LogFormat == b.LogFormat &&
-		a.LogFile == b.LogFile &&
 		a.Cache == b.Cache &&
 		a.Daemon == b.Daemon
 }

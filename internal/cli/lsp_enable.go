@@ -21,8 +21,8 @@ without restarting it.
 
   plumb enable-lsp rust     — enable the Rust server now
 
-Enabling a language normally requires a daemon restart. This command flips the
-language on live: the daemon adds it to its effective language set, and its
+Editing [lsp.<language>] in the config file also applies live; this command
+turns a configured language on without editing the file: the daemon adds it to its effective language set, and its
 server attaches lazily on the next file of that language a session opens (no
 process is spawned eagerly). It is honest about failure — an unknown language,
 or a server binary that is not installed (it names the binary to install).
@@ -216,8 +216,9 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	// shared with config.Store readers (Current()), which the store contract
 	// forbids mutating in place; replacing the pool's own map pointer flips
 	// enablement for cfgForWorkspace (LoadProject over baseConfig) without touching
-	// the store's map. The store's LSP block stays restart-tier by design — this
-	// live change is deliberately pool-local (see the CLI command's help).
+	// the store's map. This live change is deliberately pool-local: the config
+	// file does not record it, and a later reload keeps it unless that reload
+	// edits this language's enabled flag (applyGlobalLSP, PLAN-539).
 	newLSP := make(map[string]config.LSPConfig, len(p.baseConfig.LSP))
 	maps.Copy(newLSP, p.baseConfig.LSP)
 	newLSP[name] = cfg

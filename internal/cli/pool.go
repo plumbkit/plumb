@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -132,6 +133,10 @@ type workspacePool struct {
 	// daemon. A later global config reload keeps them enabled — the enable is a
 	// deliberate pool-local act the config file does not record. Guarded by mu.
 	liveEnabled map[string]bool
+	// fileLSP is the [lsp.*] map the global config file last had, so a reload
+	// can tell an edit of a language's `enabled` (which overrides a live
+	// enable) from a reload that left it alone. Guarded by mu.
+	fileLSP map[string]config.LSPConfig
 }
 
 type langConfig struct {
@@ -242,6 +247,10 @@ type poolEntry struct {
 	// (pool_reconfigure.go), so concurrent reloads do not start a second restart.
 	// Guarded by workspacePool.mu.
 	reconfiguring bool
+	// reconfigureAgain marks a reconfigure that arrived while one was running;
+	// the running restart re-resolves the config and goes again. Guarded by
+	// workspacePool.mu.
+	reconfigureAgain bool
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that
@@ -256,6 +265,7 @@ func newWorkspacePool(baseCtx context.Context, cfg config.Config) *workspacePool
 		entries:        make(map[poolKey]*poolEntry),
 		langs:          activeLanguages(cfg),
 		baseConfig:     cfg,
+		fileLSP:        maps.Clone(cfg.LSP),
 		languageConfig: languageConfigState{cache: make(map[string]cachedWorkspaceLanguages)},
 		cacheTTL:       cfg.Cache.TTL.Duration,
 		cacheMaxSize:   cfg.Cache.MaxSize,

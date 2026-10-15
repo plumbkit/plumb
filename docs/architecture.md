@@ -1015,7 +1015,7 @@ view on a change, so `[edits]`, `[git]`, `[walk]`, and the rate limit apply live
 `reconfigureRoot` after a project reload): each live entry whose effective config
 changed is hibernated once no call holds it, given a supervisor built from the new
 config, and woken in place, so its leases and map slot survive. Settings the
-daemon cannot apply live — `[cache]`, `log_format`, `log_file` and `[daemon]`
+daemon cannot apply live — `[cache]`, `log_format` and `[daemon]`
 (`config.RestartSensitiveEqual`) — are reported as restart-needed by
 `Store.RestartNeeded()`: a daemon WARN on the offending reload, a line in the
 `daemon_info` tool, and a "Reload behaviour" legend in `plumb config show`.
@@ -1093,7 +1093,7 @@ only triggered on `textDocument/publishDiagnostics` notifications.
 - **New config field**: add to `config.Config`, update `defaults`, add
   validation in `validate()`, document in this file and in
   `docs/configuration.md`. If the daemon cannot apply the field without a
-  restart (e.g. an LSP-process or cache setting), add it to
+  restart (e.g. a cache setting), add it to
   `config.RestartSensitiveEqual` so `Store.RestartNeeded()` reports it;
   otherwise it is picked up live via the per-session store subscription.
   Consider exposing it as a row in the TUI Settings screen

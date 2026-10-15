@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -79,6 +81,12 @@ func TestApplyGlobalLSP_RestartsOnlyTheChangedLanguage(t *testing.T) {
 	goSup, _, _ := entryNow(p, goEntry)
 	pySup, _, _ := entryNow(p, pyEntry)
 	builtBefore := watchers.Load()
+	genBefore := p.langsGen.Load()
+	p.mu.Lock()
+	goEntry.diagDowngraded = true
+	goEntry.goWorkOff = "/stale/go.work"
+	p.mu.Unlock()
+	goEntry.cache.Set("stale", 1, time.Minute)
 
 	next := cfg
 	next.LSP = map[string]config.LSPConfig{"go": cfg.LSP["go"], "python": cfg.LSP["python"]}
@@ -91,6 +99,18 @@ func TestApplyGlobalLSP_RestartsOnlyTheChangedLanguage(t *testing.T) {
 	waitReconfigured(t, p, goEntry, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"32"}) })
 	if sup, _, state := entryNow(p, goEntry); sup == goSup || !state.running() {
 		t.Fatalf("the Go server was not restarted in place and woken (same supervisor %v, state %s)", sup == goSup, state)
+	}
+	p.mu.Lock()
+	downgraded, goWork := goEntry.diagDowngraded, goEntry.goWorkOff
+	p.mu.Unlock()
+	if downgraded || goWork == "/stale/go.work" {
+		t.Fatalf("the new server inherited the old one's state (diag downgrade %v, go.work %q)", downgraded, goWork)
+	}
+	if _, ok := goEntry.cache.Get("stale"); ok {
+		t.Fatal("the new server kept the old one's cached answers")
+	}
+	if p.langsGen.Load() == genBefore {
+		t.Fatal("a global [lsp] change did not bump the language generation")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for watchers.Load() == builtBefore && time.Now().Before(deadline) {
@@ -290,4 +310,160 @@ func TestRestartWithConfig_DoesNotReviveAfterClose(t *testing.T) {
 	if now, c, state := entryNow(p, e); now != sup || slices.Equal(c.Args, []string{"35"}) || state.running() {
 		t.Fatalf("a closed pool's entry was restarted (new supervisor %v, args %v, state %s)", now != sup, c.Args, state)
 	}
+}
+
+// withGoArgs returns cfg with the Go server's args set (a fresh map).
+func withGoArgs(cfg config.Config, args ...string) config.Config {
+	g := cfg.LSP["go"]
+	g.Args = args
+	cfg.LSP = map[string]config.LSPConfig{"go": g, "python": cfg.LSP["python"]}
+	return cfg
+}
+
+// TestApplyGlobalLSP_ConvergesOnTheLatestChange: a second change that arrives
+// while the first restart waits on a call is not lost — the entry ends on the
+// latest config.
+func TestApplyGlobalLSP_ConvergesOnTheLatestChange(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	e, done, err := p.acquireCall(context.Background(), markedRoot(t, "go.mod"), "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.applyGlobalLSP(withGoArgs(cfg, "40"))
+	p.applyGlobalLSP(withGoArgs(cfg, "41"))
+	done()
+	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"41"}) })
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		busy := e.reconfiguring
+		p.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the restart never finished after converging")
+}
+
+// TestReconfigureRoot_IgnoresAnUnparsableProjectConfig: a half-typed project
+// file does not flip the servers onto the global fallback.
+func TestReconfigureRoot_IgnoresAnUnparsableProjectConfig(t *testing.T) {
+	p, _ := reconfigPool(t)
+	p.baseConfig.LogLevel = "info" // the project-config resolver is active
+	root := markedRoot(t, "go.mod")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePoolProjectConfig(t, root, "[lsp.go]\ndiagnostics = \"pull\"\n")
+	e, err := p.acquireLang(context.Background(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, c, _ := entryNow(p, e); c.Diagnostics != "pull" {
+		t.Fatalf("control: the project's diagnostics = %q, want pull", c.Diagnostics)
+	}
+	sup, _, _ := entryNow(p, e)
+	writePoolProjectConfig(t, root, "[lsp.go\ndiagnostics = \n")
+	p.invalidateLanguageConfig(root)
+	if n := p.reconfigureRoot(root); n != 0 {
+		t.Fatalf("restarts started = %d for an unparsable project config, want 0", n)
+	}
+	if now, c, _ := entryNow(p, e); now != sup || c.Diagnostics != "pull" {
+		t.Fatalf("the server moved onto the global fallback (new supervisor %v, diagnostics %q)", now != sup, c.Diagnostics)
+	}
+}
+
+// TestApplyGlobalLSP_FileEditOfEnabledOverridesALiveEnable: after enable-lsp,
+// a reload that leaves `enabled` alone keeps the language on, but one whose
+// file edit turns it off wins.
+func TestApplyGlobalLSP_FileEditOfEnabledOverridesALiveEnable(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	py := cfg.LSP["python"]
+	py.Enabled = false
+	off := cfg
+	off.LSP = map[string]config.LSPConfig{"go": cfg.LSP["go"], "python": py}
+	p.applyGlobalLSP(off)
+	if _, err := p.enableLanguage("python"); err != nil {
+		t.Fatal(err)
+	}
+	has := func() bool {
+		for _, l := range p.langsSnapshot() {
+			if l.name == "python" {
+				return true
+			}
+		}
+		return false
+	}
+	py.Enabled = true // the file now says on...
+	on := off
+	on.LSP = map[string]config.LSPConfig{"go": cfg.LSP["go"], "python": py}
+	p.applyGlobalLSP(on)
+	py.Enabled = false // ...and then off again: an edit, newer than the enable
+	again := off
+	again.LSP = map[string]config.LSPConfig{"go": cfg.LSP["go"], "python": py}
+	p.applyGlobalLSP(again)
+	if has() {
+		t.Fatal("a file edit turning python off was overridden by an older enable-lsp")
+	}
+}
+
+// TestApplyGlobalLSP_RootMarkersRestartNothing: root markers only decide where
+// a server starts, so changing them restarts no running server.
+func TestApplyGlobalLSP_RootMarkersRestartNothing(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	e, err := p.acquireLang(context.Background(), markedRoot(t, "go.mod"), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup, _, _ := entryNow(p, e)
+	next := cfg
+	g := cfg.LSP["go"]
+	g.RootMarkers = []string{"go.mod", "go.work"}
+	next.LSP = map[string]config.LSPConfig{"go": g, "python": cfg.LSP["python"]}
+	if n := p.applyGlobalLSP(next); n != 0 {
+		t.Fatalf("restarts started = %d for a root-marker change, want 0", n)
+	}
+	if now, _, _ := entryNow(p, e); now != sup {
+		t.Fatal("a root-marker change restarted the server")
+	}
+}
+
+// TestApplyGlobalLSP_RacesNothing runs reloads against live enables; -race
+// is the assertion (applyGlobalLSP publishes under p.mu and langsMu).
+func TestApplyGlobalLSP_RacesNothing(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range 50 {
+			p.applyGlobalLSP(withGoArgs(cfg, strconv.Itoa(i)))
+		}
+	})
+	wg.Go(func() {
+		for range 50 {
+			_, _ = p.enableLanguage("python")
+		}
+	})
+	wg.Wait()
+}
+
+// TestApplyGlobalLSP_ReachesProjectGovernedRoots: a global change reaches a
+// root whose languages are resolved through its project config — the cached
+// project resolution is dropped, not served stale.
+func TestApplyGlobalLSP_ReachesProjectGovernedRoots(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	p.baseConfig.LogLevel = "info" // the project-config resolver is active
+	root := markedRoot(t, "go.mod")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePoolProjectConfig(t, root, "[edits]\nrate_limit_per_minute = 100\n")
+	e, err := p.acquireLang(context.Background(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := p.applyGlobalLSP(withGoArgs(cfg, "42")); n != 1 {
+		t.Fatalf("restarts started = %d, want 1 for the project-governed root", n)
+	}
+	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"42"}) })
 }

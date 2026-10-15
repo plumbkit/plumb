@@ -110,15 +110,20 @@ func (m Model) setCycle(it settingItem, dir int) Model {
 // merged effective value in a workspace scope.
 func (m Model) setLSPCycle(it settingItem, dir int) Model {
 	next := cycleOption(it.options, it.value, dir)
-	var value any = next
-	if it.key == skLSPMaxWorkspaces {
-		n, _ := strconv.Atoi(next) // the options are all integers
-		value = n
-	}
-	if m.applyScopedLSP(it, value) {
+	if m.applyScopedLSP(it, lspCycleValue(it.key, next)) {
 		m.settingsStatus = m.scopedStatus(it.key, it.lspLang+" "+it.label+" → "+next)
 	}
 	return m
+}
+
+// lspCycleValue is the typed value a per-language cycle row stores: the server
+// cap is an int (its options are all integers), the rest are strings.
+func lspCycleValue(key settingKey, option string) any {
+	if key == skLSPMaxWorkspaces {
+		n, _ := strconv.Atoi(option)
+		return n
+	}
+	return option
 }
 
 // numberMetaTable holds the adjust step and status label for each numeric

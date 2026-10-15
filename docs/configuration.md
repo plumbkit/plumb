@@ -29,7 +29,7 @@ everything else is inherited from the layer below.
    hot-reloaded: an fsnotify watch on the file, the `reload-config`
    control-socket command, and `plumb config reload` each trigger a re-read
    that propagates to every live session. Settings the daemon cannot apply
-   live (cache, log format, log file, `[daemon]`) are flagged as
+   live (cache, log format, `[daemon]`) are flagged as
    restart-needed by `plumb config show` and the `daemon_info` tool. An
    `[lsp.<lang>]` change restarts only the servers it affects (see below).
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
@@ -61,7 +61,7 @@ language's, under the roots it governs), each once no call holds it; every other
 server and its warm state is left alone. A change to `idle_timeout` or
 `max_workspaces` alone is adopted without restarting anything, and a language
 turned on with `plumb enable-lsp` stays on across a reload. The restart-bound
-exceptions are `[cache]`, `log_format`, `log_file` and `[daemon]`;
+exceptions are `[cache]`, `log_format` and `[daemon]`;
 `plumb config show` and `daemon_info` flag those as restart-needed.
 
 ## File locations
