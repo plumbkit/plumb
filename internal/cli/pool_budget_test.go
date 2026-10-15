@@ -216,3 +216,20 @@ func TestDefaults_EveryLanguageHibernatesWhenIdle(t *testing.T) {
 		t.Errorf("go idle timeout = %v, want the 30m default", got)
 	}
 }
+
+// TestDaemonInfo_RegisteredToolShowsThePoolRow goes through registerAllTools,
+// where the pool row is wired.
+func TestDaemonInfo_RegisteredToolShowsThePoolRow(t *testing.T) {
+	_, srv := buildTestConnSession(t)
+	tool, ok := srv.Lookup("daemon_info")
+	if !ok {
+		t.Fatal("daemon_info is not registered")
+	}
+	out, err := tool.Execute(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "lsp pool:") {
+		t.Fatalf("the registered daemon_info has no pool row:\n%s", out)
+	}
+}
