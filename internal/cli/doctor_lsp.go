@@ -175,7 +175,7 @@ func checkXcodeLifecycle(status xcodebsp.Status, ws string) []checkResult {
 // confirms idle ones have hibernated. Returns nil when the daemon is down (the
 // Daemon section already reports that) or when no servers are pooled.
 func checkActiveLSPProcesses() []checkResult {
-	resp, err := dialDaemonCtrlFull("lsp-status")
+	resp, err := dialLSPStatus()
 	if err != nil {
 		return nil
 	}
@@ -183,10 +183,16 @@ func checkActiveLSPProcesses() []checkResult {
 	if resp == "" {
 		return nil
 	}
+	return parseActiveLSP(resp)
+}
+
+// parseActiveLSP turns an lsp-status (7 fields) or lsp-status-v2 (10 fields)
+// reply into one check row per live server.
+func parseActiveLSP(resp string) []checkResult {
 	var results []checkResult
 	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) < 7 { // newer daemons append fields (PLAN-534)
+		if len(f) < 7 { // v2 appends fields (PLAN-534)
 			continue
 		}
 		results = append(results, checkResult{

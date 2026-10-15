@@ -118,6 +118,7 @@ type ctrlHandlers struct {
 	reload        func() error                 // reload-config
 	reloadProject func(string)                 // reload-project <workspace>
 	lspStatus     func() string                // lsp-status
+	lspStatusV2   func() string                // lsp-status-v2 (PLAN-534)
 	enableLSP     func(string) (string, error) // enable-lsp <lang> → status line
 	xcodeStatus   func(string) string          // xcode-status <workspace>
 	webStart      func(int) (string, error)    // web-start [port] → URL
@@ -275,6 +276,10 @@ func handleDebugCommand(conn net.Conn, line string, h ctrlHandlers) bool {
 	case "lsp-status":
 		if h.lspStatus != nil {
 			fmt.Fprint(conn, h.lspStatus())
+		}
+	case "lsp-status-v2":
+		if h.lspStatusV2 != nil {
+			fmt.Fprint(conn, h.lspStatusV2())
 		}
 	case "goroutine-stacks":
 		handleStacksProfile(conn)

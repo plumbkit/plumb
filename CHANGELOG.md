@@ -15,12 +15,15 @@
   server in use** (PLAN-534). Every language now hibernates its server after
   30 minutes without a tool call (Java keeps 20 m; `idle_timeout = 0` turns it
   off), and a server hibernated for 4 hours is trimmed — removed when no session
-  holds it, otherwise its cache is dropped. `max_workspaces` is now enforced when
-  a server starts *and* when one wakes, and frees the slot synchronously: an idle
-  server no session holds goes first, then the least recently used. When every
-  server of the language is busy, the newcomer is admitted over the cap instead
-  of a busy one being stopped — a change from before, when eviction ignored work
-  in flight — and the language is reported over its cap. `daemon_info` gains an
+  holds it, otherwise its cache is dropped. A config saved by an older plumb's
+  whole-struct save pins `idle_timeout = '0s'` and keeps hibernation off;
+  `plumb doctor` now names those keys (`plumb config prune` removes them).
+  `max_workspaces` is now enforced when a server starts *and* when one wakes,
+  and frees the slots synchronously — every idle server it takes to get back
+  under the cap, one no session holds first, then the least recently used. A
+  server a call is using is still never stopped: with every one busy, the
+  newcomer runs over the cap and the language is reported over it until it is
+  back under. `daemon_info` gains an
   `lsp pool` row (active and hibernated servers, an estimated RSS against an
   advisory target of 12 servers and 6 GiB — reported, not enforced), and
   `plumb debug lsp` gains REFS, CALLS and OVER CAP columns.

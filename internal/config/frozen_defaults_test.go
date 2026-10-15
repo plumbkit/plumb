@@ -134,3 +134,18 @@ func TestFindFrozenDefaults_EmptyAndInvalidTOML(t *testing.T) {
 		t.Errorf("expected nil for invalid TOML, got %v", got)
 	}
 }
+
+// TestFindFrozenDefaults_ZeroIdleTimeoutFromTheWholeStructSave (PLAN-534): a
+// zero idle_timeout / max_workspaces beside other frozen keys is the old save's
+// signature and is reported; on its own it is a deliberate setting and is not.
+func TestFindFrozenDefaults_ZeroIdleTimeoutFromTheWholeStructSave(t *testing.T) {
+	frozen := FindFrozenDefaults([]byte("[lsp.go]\nargs = []\nidle_timeout = '0s'\n[lsp.java]\nargs = []\nmax_workspaces = 0\nidle_timeout = '0s'\n"))
+	for _, want := range []string{"lsp.go.idle_timeout", "lsp.java.max_workspaces", "lsp.java.idle_timeout"} {
+		if !slices.Contains(frozen, want) {
+			t.Errorf("frozen = %v, want %s", frozen, want)
+		}
+	}
+	if got := FindFrozenDefaults([]byte("[lsp.go]\nidle_timeout = '0s'\n")); slices.Contains(got, "lsp.go.idle_timeout") {
+		t.Errorf("a lone idle_timeout = 0 (a deliberate off) was reported frozen: %v", got)
+	}
+}

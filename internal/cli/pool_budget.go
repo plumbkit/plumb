@@ -43,6 +43,7 @@ const (
 type poolBudget struct {
 	active    int
 	rss       uint64
+	rssKnown  bool // at least one process's RSS could be read
 	sampledAt time.Time
 }
 
@@ -56,34 +57,59 @@ func (b poolBudget) over() bool {
 // the caller releases p.mu, or nil. Caller holds p.mu.
 func (p *workspacePool) admitLocked(language string, maxRunning int, exclude *poolEntry) func() {
 	if maxRunning <= 0 {
-		p.setOverCapLocked(language, false, 0)
 		return nil
 	}
-	if victim := p.overBudgetVictimLocked(language, maxRunning, exclude); victim != nil {
-		slog.Info("pool: max_workspaces reached — hibernating the least recently used idle server", "language", language, "victim_root", victim.root, "max", maxRunning)
+	// Evict until there is room: a language already over its cap (admitted over
+	// it while every server was busy) sheds every idle server it can, not one.
+	var teardowns []func()
+	for {
+		victim := p.overBudgetVictimLocked(language, maxRunning, exclude)
+		if victim == nil {
+			break
+		}
 		td := p.beginHibernateLocked(victim)
-		p.setOverCapLocked(language, false, maxRunning)
-		return td
+		if td == nil {
+			break // it took a call since it was chosen; nothing else is idle
+		}
+		slog.Info("pool: max_workspaces reached — hibernating the least recently used idle server", "language", language, "victim_root", victim.root, "max", maxRunning)
+		teardowns = append(teardowns, td)
 	}
-	p.setOverCapLocked(language, p.runningCountLocked(language, exclude) >= maxRunning, maxRunning)
-	return nil
+	if p.runningCountLocked(language, exclude) >= maxRunning {
+		slog.Warn("pool: every server of this language is busy — admitting one over max_workspaces", "language", language, "max", maxRunning)
+	}
+	if len(teardowns) == 0 {
+		return nil
+	}
+	return func() {
+		for _, td := range teardowns {
+			td()
+		}
+	}
 }
 
-// setOverCapLocked records whether language is admitted beyond its cap, logging
-// each transition. Caller holds p.mu.
-func (p *workspacePool) setOverCapLocked(language string, over bool, maxRunning int) {
-	if over == p.overCap[language] {
-		return
-	}
-	if over {
-		if p.overCap == nil {
-			p.overCap = make(map[string]bool)
+// overCapLocked names the languages running more servers than their
+// max_workspaces right now — derived on every read, so it is never stale: a
+// language admitted over its cap stops being reported the moment its servers
+// hibernate, stop or are reaped. Caller holds p.mu.
+func (p *workspacePool) overCapLocked() map[string]bool {
+	running := map[string]int{}
+	limit := map[string]int{}
+	for k, e := range p.entries {
+		if !e.state.running() {
+			continue
 		}
-		p.overCap[language] = true
-		slog.Warn("pool: every server of this language is busy — admitting one over max_workspaces", "language", language, "max", maxRunning)
-		return
+		running[k.language]++
+		if m := e.lspCfg.MaxWorkspaces; m > 0 && (limit[k.language] == 0 || m < limit[k.language]) {
+			limit[k.language] = m
+		}
 	}
-	delete(p.overCap, language)
+	over := map[string]bool{}
+	for lang, n := range running {
+		if m := limit[lang]; m > 0 && n > m {
+			over[lang] = true
+		}
+	}
+	return over
 }
 
 // runningCountLocked counts language's running servers, less exclude. Caller
@@ -143,9 +169,12 @@ func (p *workspacePool) sampleBudget(now time.Time) {
 	}
 	p.mu.Unlock()
 	b := poolBudget{active: active, sampledAt: now}
-	for _, pid := range append(pids, os.Getpid()) {
-		if rss, ok := monitor.ProcessRSS(pid); ok {
-			b.rss += rss
+	if active > 0 { // nothing to measure otherwise; macOS forks ps per process
+		for _, pid := range append(pids, os.Getpid()) {
+			if rss, ok := monitor.ProcessRSS(pid); ok {
+				b.rss += rss
+				b.rssKnown = true
+			}
 		}
 	}
 	p.mu.Lock()
@@ -174,15 +203,19 @@ func (p *workspacePool) budgetSummary() string {
 		}
 	}
 	b := p.budget
-	over := make([]string, 0, len(p.overCap))
-	for lang := range p.overCap {
+	overCap := p.overCapLocked()
+	over := make([]string, 0, len(overCap))
+	for lang := range overCap {
 		over = append(over, lang)
 	}
 	p.mu.Unlock()
 	slices.Sort(over)
 	s := fmt.Sprintf("%d active, %d hibernated (advisory target %d active", active, hibernated, softTargetActive)
-	if !b.sampledAt.IsZero() {
+	switch {
+	case b.rssKnown:
 		s += fmt.Sprintf(", est. RSS %s of %s", textfmt.HumanBytesCompact(b.rss), textfmt.HumanBytesCompact(softTargetRSS))
+	case b.active > 0:
+		s += ", est. RSS unavailable"
 	}
 	s += ")"
 	if b.over() {

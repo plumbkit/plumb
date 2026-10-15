@@ -129,11 +129,9 @@ type workspacePool struct {
 	// it is stopped rather than attached (attachWatcher).
 	closed bool
 
-	// overCap names the languages admitted beyond their max_workspaces because
-	// every server was busy; budget is the janitor's last sample of the
-	// advisory global target (pool_budget.go, PLAN-534). Guarded by mu.
-	overCap map[string]bool
-	budget  poolBudget
+	// budget is the janitor's last sample of the advisory global target
+	// (pool_budget.go, PLAN-534). Guarded by mu.
+	budget poolBudget
 
 	// liveEnabled names the languages `plumb enable-lsp` turned on in this
 	// daemon. A later global config reload keeps them enabled — the enable is a

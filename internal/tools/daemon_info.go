@@ -224,9 +224,6 @@ func (t *daemonInfo) WithDaemonCensus(fn func() string) *daemonInfo {
 	return t
 }
 
-// NewDaemonInfo creates a tool that exposes session and daemon metadata.
-// sessID and sessName identify the current MCP connection; daemonVersion and
-// startedAt describe the daemon process itself.
 // WithLSPPool wires the daemon-wide language-server pool's one-line budget
 // summary (active and hibernated servers against the advisory target, any
 // language over its max_workspaces — PLAN-534). Per-entry detail is
@@ -236,6 +233,9 @@ func (t *daemonInfo) WithLSPPool(fn func() string) *daemonInfo {
 	return t
 }
 
+// NewDaemonInfo creates a tool that exposes session and daemon metadata.
+// sessID and sessName identify the current MCP connection; daemonVersion and
+// startedAt describe the daemon process itself.
 func NewDaemonInfo(sessID, sessName, daemonVersion string, startedAt time.Time) *daemonInfo {
 	return NewDaemonInfoFunc(func() string { return sessID }, func() string { return sessName }, daemonVersion, startedAt)
 }

@@ -31,7 +31,15 @@ import (
 // warming); an empty diag mode (`diag=`) means it is not yet resolved. The map
 // is snapshotted under p.mu; RSS sampling (which may shell out on macOS) runs
 // after the lock is released.
-func (p *workspacePool) lspStatusReport() string {
+func (p *workspacePool) lspStatusReport() string { return p.lspStatusReportV(false) }
+
+// lspStatusReportV2 is lsp-status-v2: the seven lsp-status fields plus refs,
+// in-flight calls and whether the language is over its max_workspaces (0/1)
+// — PLAN-534. A separate command so a CLI that predates it, which reads exactly
+// seven fields, keeps reading lsp-status.
+func (p *workspacePool) lspStatusReportV2() string { return p.lspStatusReportV(true) }
+
+func (p *workspacePool) lspStatusReportV(v2 bool) string {
 	type row struct {
 		lang, root, state string
 		pid               int
@@ -42,6 +50,7 @@ func (p *workspacePool) lspStatusReport() string {
 		overCap           bool
 	}
 	p.mu.Lock()
+	overCap := p.overCapLocked()
 	rows := make([]row, 0, len(p.entries))
 	for k, e := range p.entries {
 		pid := 0
@@ -50,7 +59,7 @@ func (p *workspacePool) lspStatusReport() string {
 		}
 		rows = append(rows, row{
 			k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load(), e.diagMode,
-			e.refs, e.proxy.inflight.Load(), p.overCap[k.language],
+			e.refs, e.proxy.inflight.Load(), overCap[k.language] && e.state.running(),
 		})
 	}
 	p.mu.Unlock()
@@ -71,15 +80,25 @@ func (p *workspacePool) lspStatusReport() string {
 			}
 		}
 		idle := (now - r.lastUsed) / int64(time.Second)
-		over := 0
-		if r.overCap {
-			over = 1
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\tdiag=%s", r.lang, r.root, r.state, pidStr, rssStr, idle, r.diag)
+		if v2 {
+			over := 0
+			if r.overCap {
+				over = 1
+			}
+			fmt.Fprintf(&b, "\t%d\t%d\t%d", r.refs, r.inflight, over)
 		}
-		// Fields 8-10 (refs, in-flight calls, language over its cap) were added
-		// by PLAN-534 after the first seven; readers accept seven or more.
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\tdiag=%s\t%d\t%d\t%d\n", r.lang, r.root, r.state, pidStr, rssStr, idle, r.diag, r.refs, r.inflight, over)
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// janitorTick is one idle-ticker pass: hibernate idle servers, trim long-
+// hibernated entries, and sample the advisory budget (PLAN-534).
+func (p *workspacePool) janitorTick(now time.Time) {
+	p.hibernateIdle()
+	p.trimLongHibernated(now)
+	p.sampleBudget(now)
 }
 
 // startJanitor launches the hibernation janitor on ctx (the daemon-lifetime
@@ -100,9 +119,7 @@ func (p *workspacePool) janitor(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-idleTicker.C:
-			p.hibernateIdle()
-			p.trimLongHibernated(now)
-			p.sampleBudget(now)
+			p.janitorTick(now)
 		case <-pruneTicker.C:
 			p.pruneServerStateCaches()
 		}

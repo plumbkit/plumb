@@ -117,14 +117,16 @@ var debugLSPCmd = &cobra.Command{
 	Short: "List the running daemon's language servers with PID, RSS, and idle time",
 	Long: `List every language server the daemon currently pools, with its lifecycle
 state (active / hibernating / hibernated), child-process PID, resident memory,
-and time since its last tool call.
+time since its last tool call, the sessions holding it (REFS), the calls in
+progress (CALLS), and whether its language is running more servers than its
+max_workspaces (OVER CAP).
 
 Hibernated servers show no PID or RSS — their process was stopped to reclaim
 memory after going idle past the language's idle_timeout, and the next tool call
 restarts them transparently.`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		resp, err := dialDaemonCtrlFull("lsp-status")
+		resp, err := dialLSPStatus()
 		if err != nil {
 			return err
 		}
@@ -162,6 +164,19 @@ func renderLSPStatus(resp string) string {
 	}
 	_ = w.Flush()
 	return b.String()
+}
+
+// dialLSPStatus asks for lsp-status-v2 (with refs, calls and over-cap) and
+// falls back to lsp-status on a daemon that predates it.
+func dialLSPStatus() (string, error) {
+	resp, err := dialDaemonCtrlFull("lsp-status-v2")
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(resp, "error: unknown command") {
+		return dialDaemonCtrlFull("lsp-status")
+	}
+	return resp, nil
 }
 
 func dashIfEmpty(s string) string {

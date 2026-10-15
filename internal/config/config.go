@@ -64,15 +64,18 @@ type LSPConfig struct {
 	// tool call, reclaiming its process memory even while a session stays
 	// attached. The poolEntry and its warm cache are kept; the next tool call
 	// transparently restarts the process. Aimed at heavyweight servers (jdtls
-	// reaches ~1.5 GB RSS). 0 disables hibernation (the default for every
-	// language except java). Applied live: a change is adopted by the running
+	// reaches ~1.5 GB RSS). 0 disables hibernation. Default 30m for every
+	// language, java 20m (PLAN-534). Applied live: a change is adopted by the running
 	// entries without restarting their servers (PLAN-539).
 	IdleTimeout Duration `toml:"idle_timeout"`
 	// MaxWorkspaces caps the number of simultaneously-running servers of this
-	// language across all workspaces. Before starting one beyond the cap, the
-	// pool hibernates the least-recently-used running entry of the same language
-	// (LRU eviction). 0 means unlimited (the default for every language except
-	// java). Applied live, without restarting any server (PLAN-539).
+	// language across all workspaces. When a server starts or wakes at the cap,
+	// the pool hibernates idle ones of the same language — one no session holds
+	// first, then the least recently used — and never one a call is using: with
+	// every server busy, the newcomer runs over the cap and the language is
+	// reported over it (PLAN-534). 0 means unlimited (the default for every
+	// language except java). Applied live, without restarting any server
+	// (PLAN-539).
 	MaxWorkspaces int `toml:"max_workspaces"`
 	// Diagnostics selects how plumb negotiates this language server's
 	// diagnostics: "auto" (or empty) defers to plumb's per-adapter policy —

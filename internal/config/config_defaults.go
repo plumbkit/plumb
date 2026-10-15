@@ -295,8 +295,6 @@ var defaults = Config{
 	// deny_network (default false).
 }
 
-// Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
-// that want to compare what's in the resolved config against the baseline.
 // defaultLSPIdleTimeout is how long a language server may go without a tool
 // call before it is hibernated (its process stopped, its warm cache kept), for
 // every language that sets no timeout of its own (PLAN-534). An initial target,
@@ -314,6 +312,8 @@ func withLSPIdleDefault(m map[string]LSPConfig) map[string]LSPConfig {
 	return m
 }
 
+// Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
+// that want to compare what's in the resolved config against the baseline.
 func Defaults() Config {
 	return cloneConfig(defaults)
 }

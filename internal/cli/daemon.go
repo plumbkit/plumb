@@ -460,6 +460,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			reloadProject: registry.reloadProject,
 			namespace:     registry.namespaces.handleCtrl,
 			lspStatus:     pool.lspStatusReport,
+			lspStatusV2:   pool.lspStatusReportV2,
 			enableLSP:     pool.enableLanguageCtrl,
 			xcodeStatus:   pool.xcodeStatusJSON,
 			webStart:      webServer.Start,

@@ -181,7 +181,9 @@ one, and the row names the remedy when the count is wrong or could not be read);
 the workspace pin's provenance when known
 (how, when, and from where the pin was last set — pin-drift observability,
 issue #182); live config-store state (generation, last reload time, whether a
-restart is needed); and this session's tool-call count plus its slowest calls
+restart is needed); the language-server pool (`lsp pool`: active and hibernated
+servers against an advisory target of 12, an estimated RSS against 6 GiB, and
+any language running over its `max_workspaces`); and this session's tool-call count plus its slowest calls
 (per-call durations from recorded stats).
 **Inputs:** none.
 

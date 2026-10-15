@@ -57,13 +57,16 @@ func TestAdmitLocked_FreesTheSlotUnderTheLock(t *testing.T) {
 }
 
 // TestAdmitLocked_BusyLanguageIsAdmittedOverItsCapAndReported: with every
-// server busy the newcomer is admitted (no victim) and the language is flagged
-// until it is back under its cap.
+// server busy the newcomer is admitted (no victim), the language is reported
+// over its cap while it runs over it, and no longer once its servers stop.
 func TestAdmitLocked_BusyLanguageIsAdmittedOverItsCapAndReported(t *testing.T) {
 	p := hibernatePool("java", time.Hour, 1)
 	installEntryLang(p, "/a", "java", &stubClient{})
-	a := p.lookup("/a", "java")
+	installEntryLang(p, "/b", "java", &stubClient{})
+	a, b := p.lookup("/a", "java"), p.lookup("/b", "java")
+	a.lspCfg.MaxWorkspaces, b.lspCfg.MaxWorkspaces = 1, 1
 	a.proxy.inflight.Add(1)
+	b.proxy.inflight.Add(1)
 	p.mu.Lock()
 	teardown := p.admitLocked("java", 1, nil)
 	p.mu.Unlock()
@@ -73,14 +76,27 @@ func TestAdmitLocked_BusyLanguageIsAdmittedOverItsCapAndReported(t *testing.T) {
 	if s := p.budgetSummary(); !strings.Contains(s, "over max_workspaces: java") {
 		t.Fatalf("summary does not report the language over its cap: %q", s)
 	}
-	a.proxy.inflight.Add(-1)
-	a.state = poolHibernated
-	p.mu.Lock()
-	p.admitLocked("java", 1, nil)
-	p.mu.Unlock()
+	a.state, b.state = poolHibernated, poolHibernated // its servers went idle and hibernated
 	if s := p.budgetSummary(); strings.Contains(s, "over max_workspaces") {
-		t.Fatalf("the over-cap flag outlived the condition: %q", s)
+		t.Fatalf("the over-cap report outlived the condition: %q", s)
 	}
+}
+
+// TestAdmitLocked_EvictsUntilUnderTheCap: a language already over its cap sheds
+// every idle server it takes to get back under, not just one.
+func TestAdmitLocked_EvictsUntilUnderTheCap(t *testing.T) {
+	p := hibernatePool("java", time.Hour, 2)
+	for _, r := range []string{"/a", "/b", "/c"} {
+		installEntryLang(p, r, "java", &stubClient{})
+	}
+	p.mu.Lock()
+	teardown := p.admitLocked("java", 2, nil)
+	running := p.runningCountLocked("java", nil)
+	p.mu.Unlock()
+	if teardown == nil || running != 1 {
+		t.Fatalf("after admitting at cap 2 with 3 running: %d still running; want 1 (room for the newcomer)", running)
+	}
+	teardown()
 }
 
 // TestWake_JoinsTheCap: waking a hibernated server at its language's cap
@@ -105,10 +121,72 @@ func TestWake_JoinsTheCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	pool.mu.Lock()
-	aState, bState := a.state, b.state
+	aState := a.state
 	pool.mu.Unlock()
-	if !aState.running() || bState.running() {
-		t.Fatalf("after the wake: A %s, B %s; want A running and B hibernated to keep the cap", aState, bState)
+	if !aState.running() {
+		t.Fatalf("after the wake: A %s, want running", aState)
+	}
+	waitUntil(t, 5*time.Second, "B was not hibernated (its teardown never ran)", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return b.state == poolHibernated
+	})
+	pool.mu.Lock()
+	reset := a.hibernatedAt.IsZero() && !a.trimmed
+	pool.mu.Unlock()
+	if !reset {
+		t.Fatal("waking A did not reset its hibernation record")
+	}
+}
+
+// TestStart_JoinsTheCap: starting a new server at the cap hibernates an idle
+// one, and its teardown runs.
+func TestStart_JoinsTheCap(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, time.Minute)
+	defer pool.close()
+	for i := range pool.langs {
+		pool.langs[i].cfg.MaxWorkspaces = 1
+	}
+	a, err := pool.acquireLang(ctx, goModRoot(t), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.acquireLang(ctx, goModRoot(t), "go", true); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, 5*time.Second, "starting a server at the cap did not hibernate the idle one", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return a.state == poolHibernated
+	})
+}
+
+// TestJanitorTick_TrimsAndSamples pins the janitor's PLAN-534 duties.
+func TestJanitorTick_TrimsAndSamples(t *testing.T) {
+	p := hibernatePool("go", 0, 0)
+	installEntryLang(p, "/free", "go", &stubClient{})
+	e := p.lookup("/free", "go")
+	e.state, e.hibernatedAt = poolHibernated, time.Now().Add(-hibernatedTrimAfter-time.Minute)
+	now := time.Now()
+	p.janitorTick(now)
+	if p.lookup("/free", "go") != nil {
+		t.Fatal("the janitor did not trim a long-hibernated entry")
+	}
+	p.mu.Lock()
+	sampled := p.budget.sampledAt
+	p.mu.Unlock()
+	if !sampled.Equal(now) {
+		t.Fatal("the janitor did not sample the budget")
+	}
+}
+
+func TestParseActiveLSP_AcceptsBothReplies(t *testing.T) {
+	v1 := "go\t/r\tactive\t42\t1024\t5\tdiag=pull"
+	v2 := v1 + "\t2\t1\t0"
+	for _, line := range []string{v1, v2} {
+		if got := parseActiveLSP(line); len(got) != 1 || !strings.Contains(got[0].detail, "/r") {
+			t.Errorf("parseActiveLSP(%q) = %+v", line, got)
+		}
 	}
 }
 
@@ -181,8 +259,14 @@ func TestLSPStatusReport_CarriesRefsCallsAndOverCap(t *testing.T) {
 	a := p.lookup("/a", "java")
 	a.refs = 2
 	a.proxy.inflight.Add(1)
-	p.overCap = map[string]bool{"java": true}
-	f := strings.Split(strings.TrimSpace(p.lspStatusReport()), "\t")
+	installEntryLang(p, "/b", "java", &stubClient{}) // two running against a cap of 1
+	for _, e := range []*poolEntry{a, p.lookup("/b", "java")} {
+		e.lspCfg.MaxWorkspaces = 1
+	}
+	if v1 := strings.Split(strings.Split(p.lspStatusReport(), "\n")[0], "\t"); len(v1) != 7 {
+		t.Fatalf("lsp-status (v1) rows have %d fields, want the 7 an older CLI reads", len(v1))
+	}
+	f := strings.Split(strings.Split(p.lspStatusReportV2(), "\n")[0], "\t")
 	if len(f) != 10 || f[7] != "2" || f[8] != "1" || f[9] != "1" {
 		t.Fatalf("lsp-status fields = %q, want refs 2, calls 1, over-cap 1", f)
 	}
@@ -231,5 +315,16 @@ func TestDaemonInfo_RegisteredToolShowsThePoolRow(t *testing.T) {
 	}
 	if !strings.Contains(out, "lsp pool:") {
 		t.Fatalf("the registered daemon_info has no pool row:\n%s", out)
+	}
+}
+
+func waitUntil(t *testing.T, within time.Duration, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal(what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
