@@ -19,6 +19,9 @@ import (
 type connHandle struct {
 	cancel    context.CancelFunc
 	workspace func() string
+	// namespace returns the namespace this connection belongs to ("" for the
+	// default), so a released namespace's connections can be cancelled.
+	namespace func() string
 	// proxySessionID returns the stable proxy session ID this connection was
 	// identified by ("" for a non-serve client), so the session-state TTL sweep
 	// can spare rows belonging to a session that is still connected.
@@ -53,6 +56,9 @@ type connRegistry struct {
 	// stopMailSeen bounds both recipient gates and unchanged Stop notices.
 	// No database query or recipient policy resolution runs under mu.
 	stopMailSeen map[string]*stopMailboxState
+	// namespaces is the daemon's namespace registry (PLAN-520); nil for a
+	// registry built outside the daemon, where every namespace token is refused.
+	namespaces *namespaceRegistry
 }
 
 func newConnRegistry() *connRegistry {
@@ -70,6 +76,26 @@ func (r *connRegistry) conversationClears() *clearMarkers {
 		return nil
 	}
 	return r.clears
+}
+
+// cancelNamespace cancels every live connection of namespace id and reports how
+// many there were — a released namespace's drain is over.
+func (r *connRegistry) cancelNamespace(id string) int {
+	if r == nil || id == "" {
+		return 0
+	}
+	r.mu.Lock()
+	var cancels []context.CancelFunc
+	for _, h := range r.conns {
+		if h.namespace != nil && h.namespace() == id && h.cancel != nil {
+			cancels = append(cancels, h.cancel)
+		}
+	}
+	r.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+	return len(cancels)
 }
 
 // liveProxyIDs returns the non-empty proxy session IDs of every live

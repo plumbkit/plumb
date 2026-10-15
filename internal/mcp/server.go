@@ -128,12 +128,15 @@ type ServerInfo struct {
 // Concurrency: Register and setting callbacks must finish before Serve is called.
 // Serve handles individual requests concurrently.
 type Server struct {
-	info      ServerInfo
-	mu        sync.RWMutex
-	tools     map[string]Tool
-	argShapes map[string]*shape          // parsed argument contract per tool; nil when unguardable
-	pubSchema map[string]json.RawMessage // alias-tolerant schema advertised in tools/list
-	order     []string                   // insertion order for tools/list
+	info ServerInfo
+	mu   sync.RWMutex
+	// namespaceRefusal holds the message of a connection the namespace gate
+	// refused (OnNamespace); once set, every request is answered with it.
+	namespaceRefusal atomic.Pointer[string]
+	tools            map[string]Tool
+	argShapes        map[string]*shape          // parsed argument contract per tool; nil when unguardable
+	pubSchema        map[string]json.RawMessage // alias-tolerant schema advertised in tools/list
+	order            []string                   // insertion order for tools/list
 
 	// OnInit is called once after a successful MCP initialize exchange. notify
 	// lets the callback send server-initiated notifications to the client.
@@ -213,6 +216,13 @@ type Server struct {
 	// available when the connection rehydrates persisted state. Empty/absent ⇒
 	// not called.
 	OnProxySession func(ctx context.Context, id string)
+
+	// OnNamespace gates the connection: called first in the initialize exchange,
+	// with the namespace token from _meta[MetaNamespaceTokenKey] ("" when none was
+	// sent) and the proxy session ID. A non-nil error refuses the connection: the
+	// initialize answer and every later request carry that error
+	// (CodeNamespaceRefused) and no other hook runs.
+	OnNamespace func(ctx context.Context, token, proxySessionID string) error
 
 	// OnResumeCredentialConsumer is called once during the initialize exchange when
 	// the proxy announced, in _meta[MetaResumeCredentialConsumerKey], that it
@@ -399,6 +409,10 @@ func (s *Server) handle(ctx context.Context, raw []byte) (mcpResponse, bool) {
 	if req.ID == nil {
 		slog.Debug("mcp: notification", "method", req.Method)
 		return mcpResponse{}, false
+	}
+
+	if msg := s.namespaceRefusal.Load(); msg != nil {
+		return errResp(req.ID, CodeNamespaceRefused, *msg), true
 	}
 
 	switch req.Method {

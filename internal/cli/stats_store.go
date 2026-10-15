@@ -79,6 +79,17 @@ func (s *statsStore) RecordEpisodic(e stats.Episodic) {
 	}
 }
 
+// PurgeNamespace deletes a namespace's tool-call rows and summaries (PLAN-520)
+// through the writer, behind the inserts already queued.
+func (s *statsStore) PurgeNamespace(ns string) {
+	if s == nil || ns == "" {
+		return
+	}
+	if w := s.ensureWriter(); w != nil {
+		w.PurgeNamespace(ns)
+	}
+}
+
 // Close drains and flushes in-flight writes, then shuts the writer. Intended to
 // be called once at daemon shutdown.
 func (s *statsStore) Close() {

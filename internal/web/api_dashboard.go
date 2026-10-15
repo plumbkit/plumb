@@ -8,7 +8,6 @@ import (
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/monitor"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -94,7 +93,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	out.Metrics = readMetricsDTO(s.deps.MetricsPath)
 
-	if sessions, err := session.List(); err == nil {
+	if sessions, err := defaultSessions(); err == nil {
 		out.Sessions = len(sessions)
 	}
 

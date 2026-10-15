@@ -87,7 +87,7 @@ func OpenGlobalAt(path string) (*Store, error) {
 	}
 	// ws is deliberately empty: this store belongs to the daemon, not to any one
 	// workspace, and nothing may treat it as a workspace's own database.
-	return &Store{db: db, ws: ""}, nil
+	return &Store{storeCore: &storeCore{db: db, ws: ""}}, nil
 }
 
 // OpenGlobalReadOnly opens the daemon-level cross-project store strictly for
@@ -111,7 +111,7 @@ func OpenGlobalReadOnly() (*Store, error) {
 	}
 	// ws is deliberately empty, as in OpenGlobalAt: this store belongs to the
 	// daemon, not to any one workspace.
-	return &Store{db: db, ws: ""}, nil
+	return &Store{storeCore: &storeCore{db: db, ws: ""}}, nil
 }
 
 // IsGlobal reports whether this store is the daemon-level cross-project one.

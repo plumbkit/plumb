@@ -12,6 +12,9 @@ import (
 
 // Call holds one tool invocation record.
 type Call struct {
+	// Namespace is the namespace the calling session belongs to (PLAN-520); ""
+	// is the default namespace.
+	Namespace     string
 	SessionID     string
 	SessionName   string // human-readable name, e.g. "swift-falcon"
 	Workspace     string // absolute path to the project root
@@ -82,8 +85,8 @@ func capString(s string) string {
 
 // insertCallSQL inserts one tool_calls row. Shared by Record and RecordBatch.
 const insertCallSQL = `INSERT INTO tool_calls
-	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose, error_kind, error_retryable, remediation_class, logical_agent, call_id)
-	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	 (session_id, session_name, workspace, tool, called_at, duration_ms, input_bytes, output_bytes, success, error_msg, input_json, output_text, client_name, client_version, tokens_saved, savings_model_version, capability_tokens, efficiency_tokens, purpose, error_kind, error_retryable, remediation_class, logical_agent, call_id, namespace)
+	 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // validateCall reports the required-field error for c, or nil when storable.
 // These three are the row's identity: without them it cannot be attributed to a
@@ -187,6 +190,7 @@ func callArgs(c Call) []any {
 		string(c.ErrorKind), retryable, string(c.RemediationClass),
 		c.LogicalAgent,
 		c.CallID,
+		c.Namespace,
 	}
 }
 

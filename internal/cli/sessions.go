@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	sessionsFlagAll  bool
-	sessionsFlagJSON bool
+	sessionsFlagAll       bool
+	sessionsFlagJSON      bool
+	sessionsFlagNamespace string
 )
 
 var sessionsCmd = &cobra.Command{
@@ -26,12 +27,16 @@ var sessionsCmd = &cobra.Command{
 func init() {
 	sessionsCmd.Flags().BoolVar(&sessionsFlagAll, "all", false, "include sessions without a resolved workspace")
 	sessionsCmd.Flags().BoolVar(&sessionsFlagJSON, "json", false, "emit a JSON array instead of a table")
+	sessionsCmd.Flags().StringVar(&sessionsFlagNamespace, "namespace", "", "list this namespace's sessions instead of the default namespace's (\"*\" for every namespace)")
 }
 
 func runSessions(_ *cobra.Command, _ []string) error {
 	all, err := session.List()
 	if err != nil {
 		return fmt.Errorf("listing sessions: %w", err)
+	}
+	if sessionsFlagNamespace != "*" {
+		all = session.InNamespace(all, sessionsFlagNamespace)
 	}
 
 	sessions, hidden := filterSessions(all, sessionsFlagAll)

@@ -83,7 +83,8 @@ func (c *peerWriteCache) refresh(ws, selfID string, now time.Time) {
 	if err != nil || db == nil {
 		return
 	}
-	writes, err := db.RecentWritesByWorkspace(ws, tools.WriteToolNames(), 50)
+	all, _ := session.List()
+	writes, err := db.RecentWritesByWorkspace(ws, session.NamespaceOf(all, selfID), tools.WriteToolNames(), 50)
 	if err != nil {
 		return
 	}
@@ -117,6 +118,7 @@ func activePeerNames(ws, selfID string) map[string]string {
 	if err != nil {
 		return nil
 	}
+	all = session.InNamespaceOf(all, selfID)
 	out := make(map[string]string)
 	for _, p := range all {
 		if p.ID == selfID {

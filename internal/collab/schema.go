@@ -71,6 +71,13 @@ var chatColumns = []struct{ name, ddl string }{
 	// row backfills to '', which no reader treats as its own family: an older note
 	// stays readable exactly by whoever could read it before.
 	{"origin_git_common_dir", `ALTER TABLE collab_rows ADD COLUMN origin_git_common_dir TEXT NOT NULL DEFAULT ''`},
+	// namespace (v5) is the private slice of the shared daemon a row was written
+	// in (namespace.go). Every store is shared by every namespace — one *sql.DB per
+	// file — so the namespace is carried by the ROW, and every read, claim and
+	// delete a namespaced view makes binds it. An existing row backfills to '', the
+	// default namespace, so a file written before namespaces existed reads exactly
+	// as it did and the default store loses nothing.
+	{"namespace", `ALTER TABLE collab_rows ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`},
 }
 
 // chatIndexes accelerate the two hot chat queries: "what is unread for me" and
@@ -110,7 +117,20 @@ CREATE INDEX IF NOT EXISTS idx_collab_target ON collab_rows(target_workspace, or
 // v2 added the chat columns and v3 addressee_id (see chatColumns), applied in
 // place. v4 added origin_git_common_dir and idx_collab_target, which serves the
 // read scope's per-call lookup of a workspace's sending repositories (scope.go).
-const schemaVersion = 4
+// v5 added namespace, which scopes every row to the namespace it was written in.
+//
+// It has NO index of its own, deliberately. Measured with EXPLAIN QUERY PLAN on a
+// populated table: every statement that filters on namespace also filters on a
+// column that already has an index (addressee_id, conversation_id, author_id), and
+// with a bare idx_collab_ns SQLite — which has no row statistics unless ANALYZE has
+// run — preferred it for the exchange-budget count and the intent delete, trading
+// a seek on conversation_id or author_id for a walk of every row in the namespace.
+// Without it the planner keeps the old indexes for all of them and the probe,
+// claim and snapshot still run MULTI-INDEX OR on idx_collab_inbox_id. The one
+// statement that would use it, PurgeNamespace, is a rare retirement of a whole
+// namespace on a table of expiring rows, and a scan there costs nothing that
+// matters.
+const schemaVersion = 5
 
 func initDB(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {

@@ -102,8 +102,8 @@ func (s *connSession) hookInbox(external string) (tools.Inbox, bool) {
 	}
 	ctx := mcp.WithLogicalAgent(s.ctx, external)
 	inbox := s.knownInboxFor(ctx)
-	inbox.WorkspaceReader = func() (*collab.Store, error) { return s.collabPool.probeResult(inbox.Root) }
-	inbox.GlobalReader = s.collabPool.probeGlobalResult
+	inbox.WorkspaceReader = func() (*collab.Store, error) { return s.nsCollabResult(s.collabPool.probeResult(inbox.Root)) }
+	inbox.GlobalReader = func() (*collab.Store, error) { return s.nsCollabResult(s.collabPool.probeGlobalResult()) }
 	return inbox, inbox.Self != "" && inbox.SelfID != "" && inbox.Root != ""
 }
 

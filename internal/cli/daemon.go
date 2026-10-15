@@ -414,6 +414,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// control socket can reach it for the reload-project command, which targets
 	// the per-workspace config reload at the sessions on that workspace.
 	registry := newConnRegistry()
+	// Namespaces (PLAN-520) live in session_state.db; with no store, every
+	// namespace token is refused rather than silently ignored.
+	startNamespaces(ctx, sessState, registry, statsStore, collabPool)
 
 	// The per-workspace project-config watchers (PLAN-414) are the hot-reload
 	// correctness mechanism: one fsnotify watch per live workspace, dispatching
@@ -458,6 +461,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 			diags:         diagsFn,
 			reload:        store.Reload,
 			reloadProject: registry.reloadProject,
+			namespace:     registry.namespaces.handleCtrl,
 			lspStatus:     pool.lspStatusReport,
 			enableLSP:     pool.enableLanguageCtrl,
 			xcodeStatus:   pool.xcodeStatusJSON,
@@ -518,6 +522,7 @@ func newConnHandle(s *connSession) connHandle {
 	return connHandle{
 		cancel:         s.cancel,
 		workspace:      s.workspace,
+		namespace:      func() string { return s.view().namespace },
 		proxySessionID: func() string { return s.view().proxySessionID },
 		reloadProject:  func() { s.applyProjectConfig(s.workspace()) },
 		summarise:      s.generateEpisodicSummary,

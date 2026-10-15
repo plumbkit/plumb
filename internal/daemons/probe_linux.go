@@ -286,3 +286,26 @@ func fileTargets(path string) (map[string]bool, error) {
 	}
 	return out, nil
 }
+
+// ProcessStart reports when process pid started, from /proc; false when there
+// is no such process or its start cannot be read. A pid plus its start time
+// names one process for life, which a pid alone does not once it is recycled.
+func ProcessStart(pid int) (time.Time, bool) {
+	if pid <= 0 {
+		return time.Time{}, false
+	}
+	boot := bootTime()
+	if boot.IsZero() {
+		return time.Time{}, false
+	}
+	fields, _ := procStatFields("/proc/"+strconv.Itoa(pid), pid)
+	if fields == nil {
+		return time.Time{}, false
+	}
+	ticks, err := strconv.ParseUint(fields[statStartField], 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	//nolint:gosec // G115: ticks is a count of clock ticks since boot (see readProc)
+	return boot.Add(time.Duration(ticks) * time.Second / userHZ), true
+}

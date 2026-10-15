@@ -229,7 +229,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewToolFeedback())
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithNamespace(s.namespaceID).WithBoundary(boundary).
 		WithAgentIdentity(s.rosterIdentity).
 		WithAgentName(s.addressableNameFor).
 		WithCollabStoreFor(s.collabStoreIfExistsForWorkspace).
@@ -264,7 +264,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		Index:               s.memoryIndexLive,
 		GeneratedMemoryKeep: func() int { return s.memoryConfig().GeneratedMemoryKeep },
 	}))
-	srv.Register(tools.NewSessionStart(s.workspaceFor, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
+	srv.Register(tools.NewSessionStart(s.workspaceFor, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithNamespace(s.namespaceID).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int, string) {
 			p, reason := s.resolveToolProfile()
@@ -362,6 +362,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
 		s.onAllowDirs(dirs)
 	}
+	srv.OnNamespace = func(_ context.Context, token, proxySessionID string) error {
+		return s.onNamespace(token, proxySessionID)
+	}
 	srv.OnResumeCredentialConsumer = func(context.Context) {
 		s.mutate(func(v *sessionView) { v.credentialConsumer = true })
 	}
@@ -386,6 +389,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		// Runs after the param hooks above, so restoreIdentity has already
 		// decided who this connection is — the identity stated here is the
 		// settled one, not a guess made before recovery ran.
+		s.stampNamespace()
 		meta := map[string]any{
 			mcp.MetaSessionIdentityKey: s.identityMeta(),
 			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),

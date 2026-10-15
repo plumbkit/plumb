@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/memory"
-	"github.com/plumbkit/plumb/internal/session"
 )
 
 type memoryDTO struct {
@@ -80,7 +79,7 @@ func (s *Server) handleMemoryRead(w http.ResponseWriter, r *http.Request) {
 
 // activeWorkspaces returns the distinct active session folders, de-duplicated.
 func activeWorkspaces() []workspaceRef {
-	infos, err := session.List()
+	infos, err := defaultSessions()
 	if err != nil {
 		return nil
 	}

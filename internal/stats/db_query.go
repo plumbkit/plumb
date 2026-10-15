@@ -32,6 +32,13 @@ type ActivitySummary struct {
 
 // Filter narrows a stats query. Empty fields are not constrained.
 type Filter struct {
+	// Namespace restricts to rows of one namespace (PLAN-520). It applies to
+	// every filter that does not name a session: the zero value is the default
+	// namespace, so a namespaced run's calls never appear in the stats a
+	// default-namespace view shows. A SessionID filter needs no namespace — a
+	// session belongs to exactly one — so it finds that session's rows wherever
+	// they are.
+	Namespace   string
 	SessionID   string
 	SessionName string    // when set, restricts to calls for this session name
 	Workspace   string    // absolute path; when set, restricts to calls for this workspace
@@ -50,6 +57,10 @@ type Filter struct {
 func (f Filter) where() (string, []any) {
 	var conds []string
 	var args []any
+	if f.SessionID == "" {
+		conds = append(conds, "namespace = ?")
+		args = append(args, f.Namespace)
+	}
 	if f.SessionID != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, f.SessionID)
@@ -74,9 +85,7 @@ func (f Filter) where() (string, []any) {
 		conds = append(conds, "savings_model_version = ?")
 		args = append(args, f.SavingsModelVersion)
 	}
-	if len(conds) == 0 {
-		return "", nil
-	}
+	// Never empty: a filter either names a session or carries the namespace.
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
@@ -161,11 +170,7 @@ func (d *DB) ActivityAt(now time.Time, window time.Duration, bucketCount int, fi
 	}
 
 	where, args := filter.where()
-	if where == "" {
-		where = " WHERE called_at >= ? AND called_at <= ?"
-	} else {
-		where += " AND called_at >= ? AND called_at <= ?"
-	}
+	where += " AND called_at >= ? AND called_at <= ?" // where() is never empty
 	args = append(args, start.UnixMilli(), now.UnixMilli())
 	// where is built by filter.where() using ? placeholders; no user values interpolated.
 	q := `SELECT called_at FROM tool_calls` + where + ` ORDER BY called_at` //nolint:gosec // G202: see comment above
@@ -198,7 +203,7 @@ func (d *DB) FirstCallAt() time.Time {
 		return time.Time{}
 	}
 	var ms sql.NullInt64
-	err := d.db.QueryRow("SELECT MIN(called_at) FROM tool_calls").Scan(&ms)
+	err := d.db.QueryRow("SELECT MIN(called_at) FROM tool_calls WHERE namespace = ''").Scan(&ms)
 	if err != nil || !ms.Valid {
 		return time.Time{}
 	}
@@ -409,7 +414,9 @@ func (d *DB) CallsForTool(tool string, workspace string, limit int) ([]RecentCal
 // passed in (the tools package owns the write-tool list) and rendered as a
 // parameterised IN clause, so no caller value is ever interpolated. Returns nil
 // when writeTools is empty or d is nil.
-func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limit int) ([]RecentCall, error) {
+//
+// namespace scopes the feed to one namespace's writes (PLAN-520).
+func (d *DB) RecentWritesByWorkspace(workspace, namespace string, writeTools []string, limit int) ([]RecentCall, error) {
 	if d == nil || len(writeTools) == 0 {
 		return nil, nil
 	}
@@ -417,8 +424,8 @@ func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limi
 		limit = 20
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(writeTools)), ",")
-	args := make([]any, 0, len(writeTools)+2)
-	args = append(args, workspace)
+	args := make([]any, 0, len(writeTools)+3)
+	args = append(args, workspace, namespace)
 	for _, t := range writeTools {
 		args = append(args, t)
 	}
@@ -428,7 +435,7 @@ func (d *DB) RecentWritesByWorkspace(workspace string, writeTools []string, limi
 	             error_msg, input_bytes, output_bytes, input_json,
 	             CASE WHEN tool = 'git' THEN output_text ELSE '' END, logical_agent
 	      FROM tool_calls
-	      WHERE workspace = ? AND tool IN (` + placeholders + `)
+	      WHERE workspace = ? AND namespace = ? AND tool IN (` + placeholders + `)
 	      ORDER BY called_at DESC LIMIT ?`
 
 	rows, err := d.db.Query(q, args...)
@@ -564,11 +571,7 @@ func (d *DB) TotalTokensSavedSince(since time.Time, filter Filter) int64 {
 	}
 	where, args := filter.where()
 	if !since.IsZero() {
-		if where == "" {
-			where = " WHERE called_at >= ?"
-		} else {
-			where += " AND called_at >= ?"
-		}
+		where += " AND called_at >= ?" // where() is never empty
 		args = append(args, since.UnixMilli())
 	}
 	// where is built by filter.where() using ? placeholders; no user values interpolated.

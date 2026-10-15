@@ -27,6 +27,17 @@ const MetaAllowDirsKey = "dev.plumbkit/allow-dirs"
 // rehydrate its persisted state. Reverse-DNS namespaced per the MCP convention.
 const MetaProxySessionKey = "dev.plumbkit/proxy-session-id"
 
+// MetaNamespaceTokenKey is the MCP initialize-params `_meta` key under which
+// `plumb serve --namespace` transports the token of the namespace the connection
+// belongs to (PLAN-520). The daemon checks it before any other initialize hook:
+// an unknown, revoked or expired token refuses the connection outright, and a
+// namespaced connection never falls back to the default namespace.
+const MetaNamespaceTokenKey = "dev.plumbkit/namespace-token" //nolint:gosec // G101: a _meta key name, not a credential
+
+// CodeNamespaceRefused is the JSON-RPC error code of a connection the namespace
+// gate refused, on initialize and on every request after it.
+const CodeNamespaceRefused = -32010
+
 // MetaProxyVersionKey is the MCP initialize-params `_meta` key under which
 // `plumb serve` transports its OWN version — the binary the proxy is running,
 // which is not the binary the daemon is running.

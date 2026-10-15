@@ -379,3 +379,17 @@ func filterPIDs(pids, candidates []int) []int {
 	}
 	return out
 }
+
+// ProcessStart reports when process pid started, read from the kernel; false
+// when there is no such process. A pid plus its start time names one process
+// for life, which a pid alone does not once it is recycled.
+func ProcessStart(pid int) (time.Time, bool) {
+	if pid <= 0 {
+		return time.Time{}, false
+	}
+	p, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil || p == nil || int(p.Proc.P_pid) != pid {
+		return time.Time{}, false
+	}
+	return time.Unix(p.Proc.P_starttime.Sec, int64(p.Proc.P_starttime.Usec)*1000), true
+}

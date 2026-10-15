@@ -160,11 +160,7 @@ func (d *DB) FailureSummary(n int, filter Filter) (FailureReport, error) {
 		n = defaultFailureBuckets
 	}
 	where, args := filter.where()
-	if where == "" {
-		where = " WHERE success = 0"
-	} else {
-		where += " AND success = 0"
-	}
+	where += " AND success = 0" // filter.where() is never empty
 
 	report, err := d.failureTotals(where, args)
 	if err != nil {
@@ -243,11 +239,7 @@ func (d *DB) PreventedIncidents(filter Filter) int64 {
 		args = append(args, string(k))
 	}
 	clause := "success = 0 AND error_kind IN (" + strings.Join(placeholders, ",") + ")"
-	if where == "" {
-		where = " WHERE " + clause
-	} else {
-		where += " AND " + clause
-	}
+	where += " AND " + clause // filter.where() is never empty
 	//nolint:gosec // G202: where is built from filter.where() plus a fixed IN(...) of ? placeholders only
 	q := `SELECT COUNT(*) FROM tool_calls` + where
 	var n int64

@@ -64,6 +64,7 @@ func (s *connSession) generateEpisodicSummary() {
 	summary, _ := redact.Redact(detail.Summary)
 	summary = textfmt.ClampBytes(summary, episodicBudget(mcfg))
 	s.statsStore.RecordEpisodic(stats.Episodic{
+		Namespace:    s.view().namespace,
 		Workspace:    ws,
 		SessionID:    s.sessionID(),
 		SessionName:  s.view().sessName,

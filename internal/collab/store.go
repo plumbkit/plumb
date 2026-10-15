@@ -25,19 +25,43 @@ import (
 // row always lives at least this long.
 const minTTL = time.Minute
 
-// Store is the per-workspace collab.db handle.
+// Store is a collab.db handle: the per-workspace file or the daemon-level
+// cross-project one, read and written as ONE namespace (namespace.go).
+//
+// A Store is a thin view over a shared storeCore. Open and the global openers
+// return the default-namespace view (ns == ""); InNamespace returns another view
+// of the same core. Every statement a view issues binds its namespace, so a view
+// reads, claims, counts and deletes only its own namespace's rows.
 //
 // Concurrency: safe for concurrent use — every method runs a self-contained
 // query or a short transaction against the WAL-mode SQLite handle, which
-// serialises writers internally. One Store is shared across all connections to a
-// workspace (see the cli collabPool).
+// serialises writers internally. One storeCore is shared across all connections
+// to a workspace (see the cli collabPool), and across every namespace's view.
 type Store struct {
+	*storeCore
+
+	// ns is the namespace this view reads and writes; "" is the default namespace.
+	ns string
+	// view marks a Store made by InNamespace. Close is a no-op on it: the core is
+	// shared, and the view's owner must not close the handle out from under every
+	// other namespace.
+	view bool
+}
+
+// storeCore is what every view of one collab.db shares: the database handle and
+// the caches that hang off it. It holds NO namespace, so nothing in it can
+// accidentally scope — or fail to scope — a query.
+//
+// Concurrency: db is safe for concurrent use; probeMu guards probeStmts; owned
+// carries its own mutex. Never copied after construction.
+type storeCore struct {
 	db *sql.DB
 	ws string
 
 	// probeMu guards probeStmts, which caches the prepared form of the
 	// HasPendingNotes probe. See probeStmt in mailbox.go for why the cache is
-	// keyed by SQL text rather than being a single statement, and Close for the
+	// keyed by SQL text rather than being a single statement (the namespace is a
+	// bound argument, so views share one entry per shape), and Close for the
 	// lifecycle that keeps it from outliving the store.
 	probeMu    sync.Mutex
 	probeStmts map[string]*sql.Stmt
@@ -85,11 +109,12 @@ func Open(workspace string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db, ws: workspace}, nil
+	return &Store{storeCore: &storeCore{db: db, ws: workspace}}, nil
 }
 
 // Close releases the database handle, closing any cached prepared statements
-// first.
+// first. It is a no-op on a view made by InNamespace and on a nil Store: only the
+// store that Open returned owns the handle.
 //
 // The statements must be closed explicitly rather than left to the handle.
 // database/sql prepares a *sql.Stmt lazily on EACH pooled connection it is used
@@ -102,7 +127,7 @@ func Open(workspace string) (*Store, error) {
 // handle's own Close is what actually frees the file, and skipping it because a
 // statement complained would trade a small leak for a large one.
 func (s *Store) Close() error {
-	if s == nil || s.db == nil {
+	if s == nil || s.view || s.storeCore == nil || s.db == nil {
 		return nil
 	}
 	s.probeMu.Lock()
@@ -133,16 +158,16 @@ func (s *Store) PutIntent(ctx context.Context, in IntentInput, now time.Time) er
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM collab_rows WHERE kind = ? AND author_id = ?`,
-		string(KindIntent), in.AuthorID); err != nil {
+		`DELETE FROM collab_rows WHERE kind = ? AND author_id = ? AND namespace = ?`,
+		string(KindIntent), in.AuthorID, s.ns); err != nil {
 		return fmt.Errorf("collab: clear prior intent: %w", err)
 	}
 	expires := now.Add(clampTTL(in.TTL))
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs, addressee, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, '', ?, ?)`,
+		`INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs, addressee, created_at, expires_at, namespace)
+		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)`,
 		string(KindIntent), in.AuthorSession, in.AuthorID, in.Body,
-		joinGlobs(in.PathGlobs), now.UnixNano(), expires.UnixNano()); err != nil {
+		joinGlobs(in.PathGlobs), now.UnixNano(), expires.UnixNano(), s.ns); err != nil {
 		return fmt.Errorf("collab: insert intent: %w", err)
 	}
 	return tx.Commit()
@@ -165,16 +190,18 @@ var ErrNotAParticipant = errors.New("collab: not a participant in that conversat
 // exchange budget can be appended to the SAME statement as a WHERE clause.
 const insertNote = `INSERT INTO collab_rows (kind, author_session, author_id, body, path_globs,
                           addressee, created_at, expires_at, conversation_id, origin_workspace,
-                          target_workspace, addressee_id, origin_git_common_dir)
-	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?`
+                          target_workspace, addressee_id, origin_git_common_dir, namespace)
+	 SELECT ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?`
 
 // budgetGuard suppresses the insert when the thread has already spent its
 // budget. It counts only UNEXPIRED rows, so the budget reads the same whether or
 // not the reaper has run — pruning deletes exactly the rows this excludes, and
 // counting them would let a prune silently hand an exhausted thread a fresh
-// allowance.
+// allowance. It counts only the writer's own namespace: a thread id in another
+// namespace is a different thread, and must neither spend this one's budget nor
+// reveal, by refusing, that it exists.
 const budgetGuard = `(SELECT COUNT(*) FROM collab_rows
-	        WHERE kind = ? AND conversation_id = ? AND expires_at > ?) < ?`
+	        WHERE kind = ? AND conversation_id = ? AND namespace = ? AND expires_at > ?) < ?`
 
 // PutNote stores a note addressed to a peer session name or AddresseeNext and
 // returns the conversation it belongs to — the caller's ConversationID when it
@@ -240,7 +267,7 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	args := []any{
 		string(KindNote), in.AuthorSession, in.AuthorID, in.Body,
 		addr, now.UnixNano(), expires.UnixNano(), conv, in.OriginWorkspace,
-		in.TargetWorkspace, addrID, originCommon,
+		in.TargetWorkspace, addrID, originCommon, s.ns,
 	}
 
 	// Membership is checked only when THREADING onto an exchange the caller named.
@@ -250,16 +277,13 @@ func (s *Store) PutNote(ctx context.Context, in NoteInput, now time.Time) (strin
 	capped := in.MaxExchanges > 0
 	var conds []string
 	if threading {
-		guard, guardArgs := participantGuard(in.authorIdentities(), in.AuthorSession)
+		guard, guardArgs := participantGuard(conv, s.ns, in.authorIdentities(), in.AuthorSession)
 		conds = append(conds, guard)
-		// guardArgs[0] is the kind; the conversation is bound between it and the
-		// membership values, matching the order they appear in the guard's SELECT.
-		args = append(args, guardArgs[0], conv)
-		args = append(args, guardArgs[1:]...)
+		args = append(args, guardArgs...)
 	}
 	if capped {
 		conds = append(conds, budgetGuard)
-		args = append(args, string(KindNote), conv, now.UnixNano(), in.MaxExchanges)
+		args = append(args, string(KindNote), conv, s.ns, now.UnixNano(), in.MaxExchanges)
 	}
 	if len(conds) > 0 {
 		stmt += "\n\t WHERE " + strings.Join(conds, "\n\t   AND ")
@@ -336,8 +360,8 @@ func (s *Store) LiveIntents(ctx context.Context, now time.Time) ([]Row, error) {
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
-		 FROM collab_rows WHERE kind = ? AND expires_at > ? ORDER BY created_at DESC`,
-		string(KindIntent), now.UnixNano())
+		 FROM collab_rows WHERE kind = ? AND namespace = ? AND expires_at > ? ORDER BY created_at DESC`,
+		string(KindIntent), s.ns, now.UnixNano())
 	if err != nil {
 		return nil, fmt.Errorf("collab: query intents: %w", err)
 	}
@@ -358,9 +382,10 @@ func (s *Store) ConversationPeerWorkspace(ctx context.Context, conversationID, p
 	var ws string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT origin_workspace FROM collab_rows
-		 WHERE kind = ? AND conversation_id = ? AND author_session = ? AND origin_workspace != ''
+		 WHERE kind = ? AND namespace = ? AND conversation_id = ? AND author_session = ?
+		   AND origin_workspace != ''
 		 ORDER BY created_at DESC LIMIT 1`,
-		string(KindNote), conversationID, peerName).Scan(&ws)
+		string(KindNote), s.ns, conversationID, peerName).Scan(&ws)
 	if err != nil || ws == "" {
 		return "", false
 	}
@@ -384,8 +409,8 @@ func (s *Store) ConversationCount(ctx context.Context, conversationID string) (i
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM collab_rows
-		 WHERE kind = ? AND conversation_id = ? AND expires_at > ?`,
-		string(KindNote), conversationID, time.Now().UnixNano()).Scan(&n)
+		 WHERE kind = ? AND namespace = ? AND conversation_id = ? AND expires_at > ?`,
+		string(KindNote), s.ns, conversationID, time.Now().UnixNano()).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("collab: count conversation: %w", err)
 	}
@@ -423,9 +448,9 @@ func (s *Store) Conversation(ctx context.Context, conversationID string, now tim
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+rowColumns+`
 		 FROM collab_rows
-		 WHERE kind = ? AND conversation_id = ? AND expires_at > ?
+		 WHERE kind = ? AND namespace = ? AND conversation_id = ? AND expires_at > ?
 		 ORDER BY created_at ASC`,
-		string(KindNote), conversationID, now.UnixNano())
+		string(KindNote), s.ns, conversationID, now.UnixNano())
 	if err != nil {
 		return nil, fmt.Errorf("collab: query conversation: %w", err)
 	}
@@ -441,8 +466,8 @@ func (s *Store) ClearSessionIntents(ctx context.Context, authorID string) error 
 		return nil
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM collab_rows WHERE kind = ? AND author_id = ?`,
-		string(KindIntent), authorID); err != nil {
+		`DELETE FROM collab_rows WHERE kind = ? AND author_id = ? AND namespace = ?`,
+		string(KindIntent), authorID, s.ns); err != nil {
 		return fmt.Errorf("collab: clear session intents: %w", err)
 	}
 	return nil
@@ -451,6 +476,12 @@ func (s *Store) ClearSessionIntents(ctx context.Context, authorID string) error 
 // Prune deletes every row past its expiry and returns how many were removed. Run
 // on the daemon session-reaper tick; reads filter expired rows regardless, so
 // pruning is a space reclaim, not a correctness requirement.
+//
+// Prune is deliberately NOT namespaced. It is the daemon's expiry sweep over the
+// whole file, and an expired row is dead to every reader whichever namespace
+// wrote it, so the one sweep reclaims all of them. That is safe only because it
+// removes nothing a view could still read; PurgeNamespace is the only other
+// statement that crosses namespaces.
 func (s *Store) Prune(ctx context.Context, now time.Time) (int, error) {
 	if s == nil || s.db == nil {
 		return 0, nil

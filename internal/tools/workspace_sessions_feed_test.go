@@ -69,7 +69,7 @@ func TestRecentWritesFeed_RefusedWriteIsMarked(t *testing.T) {
 		}
 	}
 
-	writes, err := db.RecentWritesByWorkspace("/ws", writeToolNames, 10)
+	writes, err := db.RecentWritesByWorkspace("/ws", "", writeToolNames, 10)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace: %v", err)
 	}

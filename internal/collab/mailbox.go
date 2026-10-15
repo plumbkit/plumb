@@ -181,8 +181,8 @@ func notAuthoredBy(who Claimant) (string, []any) {
 
 // claimable is the FULL predicate for "a note this claimant may be handed":
 // unexpired, unclaimed, addressed to it or to "next", identity-matched, not
-// written by it, and within its workspace scope. ClaimNotes, HasPendingNotes
-// and ClaimableNotes share it verbatim.
+// written by it, and within its namespace and workspace scope. ClaimNotes,
+// HasPendingNotes and ClaimableNotes share it verbatim.
 //
 // They must, because HasPendingNotes exists to decide whether ClaimNotes is
 // worth running. A probe that is broader than the claim reports mail that does

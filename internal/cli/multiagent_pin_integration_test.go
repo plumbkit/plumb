@@ -531,7 +531,7 @@ func testEveryAgentWriteVisible(t *testing.T) {
 		t.Fatalf("stats.Open: %v", err)
 	}
 	defer db.Close()
-	rows, err := db.RecentWritesByWorkspace(ws, tools.WriteToolNames(), 50)
+	rows, err := db.RecentWritesByWorkspace(ws, "", tools.WriteToolNames(), 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace: %v", err)
 	}

@@ -11,6 +11,7 @@ import (
 // Episodic is a rule-based summary of one session's activity, generated when the
 // session goes idle and surfaced in the next session_start for the workspace.
 type Episodic struct {
+	Namespace    string // PLAN-520; "" is the default namespace
 	Workspace    string
 	SessionID    string
 	SessionName  string
@@ -32,10 +33,10 @@ func (d *DB) recordEpisodic(e Episodic) error {
 	defer d.mu.Unlock()
 	_, err := d.db.Exec(`
 		INSERT INTO episodic_memories
-		  (workspace, session_id, session_name, generated_at, summary, touched_files, read_count, write_count)
-		VALUES (?,?,?,?,?,?,?,?)`,
+		  (workspace, session_id, session_name, generated_at, summary, touched_files, read_count, write_count, namespace)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
 		e.Workspace, e.SessionID, e.SessionName, e.GeneratedAt.UnixMilli(),
-		capString(e.Summary), string(touched), e.ReadCount, e.WriteCount)
+		capString(e.Summary), string(touched), e.ReadCount, e.WriteCount, e.Namespace)
 	if err != nil {
 		return fmt.Errorf("stats: insert episodic: %w", err)
 	}
@@ -47,7 +48,10 @@ func (d *DB) recordEpisodic(e Episodic) error {
 // no mutex: database/sql + SetMaxOpenConns(1) already serialises the single
 // connection, and in practice this runs on the SharedReadOnly handle. d.mu
 // guards only the writer's critical sections.
-func (d *DB) LatestEpisodic(workspace string) (Episodic, bool, error) {
+//
+// namespace scopes it: a namespace sees only its own sessions' summaries
+// (PLAN-520).
+func (d *DB) LatestEpisodic(workspace, namespace string) (Episodic, bool, error) {
 	if d == nil || workspace == "" {
 		return Episodic{}, false, nil
 	}
@@ -59,9 +63,9 @@ func (d *DB) LatestEpisodic(workspace string) (Episodic, bool, error) {
 	row := d.db.QueryRow(`
 		SELECT workspace, session_id, session_name, generated_at, summary, touched_files, read_count, write_count
 		FROM episodic_memories
-		WHERE workspace = ?
+		WHERE workspace = ? AND namespace = ?
 		ORDER BY generated_at DESC
-		LIMIT 1`, workspace)
+		LIMIT 1`, workspace, namespace)
 	err := row.Scan(&e.Workspace, &e.SessionID, &e.SessionName, &genMS, &e.Summary,
 		&touched, &e.ReadCount, &e.WriteCount)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -112,4 +116,27 @@ func (d *DB) ToolCallsForSession(workspace, sessionID string, since time.Time) (
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// PurgeNamespace deletes every tool-call row and episodic summary of namespace
+// ns (PLAN-520) and reports how many tool-call rows went. The default namespace
+// ("") is refused: nothing purges it.
+func (d *DB) PurgeNamespace(ns string) (int64, error) {
+	if d == nil {
+		return 0, nil
+	}
+	if ns == "" {
+		return 0, errors.New("stats: refusing to purge the default namespace")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	res, err := d.db.Exec(`DELETE FROM tool_calls WHERE namespace = ?`, ns)
+	if err != nil {
+		return 0, fmt.Errorf("stats: purge namespace calls: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if _, err := d.db.Exec(`DELETE FROM episodic_memories WHERE namespace = ?`, ns); err != nil {
+		return n, fmt.Errorf("stats: purge namespace summaries: %w", err)
+	}
+	return n, nil
 }

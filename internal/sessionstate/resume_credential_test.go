@@ -495,8 +495,8 @@ func TestMigrateV10ToV11_AddsTheCredentialTable(t *testing.T) {
 				if err != nil {
 					t.Fatalf("open #%d: %v", i+1, err)
 				}
-				if got := userVersion(t, s); got != SchemaVersion || SchemaVersion != 11 {
-					t.Fatalf("user_version = %d, SchemaVersion = %d, want 11", got, SchemaVersion)
+				if got := userVersion(t, s); got != SchemaVersion || SchemaVersion != 12 {
+					t.Fatalf("user_version = %d, SchemaVersion = %d, want 12", got, SchemaVersion)
 				}
 				if !tableExists(t, s, "resume_credential") {
 					t.Fatalf("open #%d: the credential table is missing", i+1)

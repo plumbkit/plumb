@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
@@ -112,7 +111,7 @@ func resolveWorkspace(explicit string) (ws string, ok bool) {
 		}
 		return explicit, true
 	}
-	infos, err := session.List()
+	infos, err := defaultSessions()
 	if err != nil {
 		return "", true
 	}

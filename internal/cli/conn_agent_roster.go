@@ -119,9 +119,10 @@ func (s *connSession) registerAgentRow(sh *agentShard, root, language string) {
 	}
 	// The draw avoids names reserved for agents that are not live (#526).
 	info, err := session.RegisterReserved(session.Info{
-		ParentID: s.sessionID(),
-		Folder:   root,
-		Language: language,
+		ParentID:  s.sessionID(),
+		Folder:    root,
+		Language:  language,
+		Namespace: s.view().namespace,
 	}, s.reservedNamesFor("", ""))
 	if err != nil {
 		s.log().Debug("daemon: registering the agent's roster row failed", "agent", sh.id, "root", root, "err", err)

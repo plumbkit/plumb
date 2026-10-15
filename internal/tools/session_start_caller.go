@@ -41,6 +41,13 @@ type LinkResult struct {
 // It replaces WithExternalID where the connection can tell its callers apart:
 // the answer to "was this caller resumed?" differs between the conversation's
 // main thread, a subagent of it, and a different conversation entirely.
+// WithNamespace wires the connection's namespace (PLAN-520), which scopes the
+// peer digest. Unwired, it is read off the caller's own session row.
+func (t *SessionStart) WithNamespace(fn func() string) *SessionStart {
+	t.namespaceFn = fn
+	return t
+}
+
 func (t *SessionStart) WithLinkage(fn func(ctx context.Context, id string) LinkResult) *SessionStart {
 	t.linkFn = fn
 	return t

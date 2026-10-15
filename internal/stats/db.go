@@ -36,7 +36,8 @@ const episodicMemoriesDDL = `CREATE TABLE IF NOT EXISTS episodic_memories (
     summary       TEXT    NOT NULL DEFAULT '',
     touched_files TEXT    NOT NULL DEFAULT '',
     read_count    INTEGER NOT NULL DEFAULT 0,
-    write_count   INTEGER NOT NULL DEFAULT 0
+    write_count   INTEGER NOT NULL DEFAULT 0,
+    namespace     TEXT    NOT NULL DEFAULT ''
 )`
 
 // schema is the current fresh database shape. The global stats database uses
@@ -68,7 +69,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     error_retryable       INTEGER NOT NULL DEFAULT 0,
     remediation_class     TEXT    NOT NULL DEFAULT '',
     logical_agent         TEXT    NOT NULL DEFAULT '',
-    call_id               TEXT    NOT NULL DEFAULT ''
+    call_id               TEXT    NOT NULL DEFAULT '',
+    namespace             TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_tc_tool      ON tool_calls(tool);
 CREATE INDEX IF NOT EXISTS idx_tc_called_at ON tool_calls(called_at);
@@ -90,6 +92,7 @@ CREATE INDEX IF NOT EXISTS idx_em_ws ON episodic_memories(workspace, generated_a
 type migration struct {
 	from, to  int
 	addColumn string
+	table     string // the table addColumn is checked on; "" means tool_calls
 	sql       string
 }
 
@@ -155,6 +158,11 @@ WHERE tool IN ('leave_note', 'share_intent', 'share_findings', 'check_messages',
 	// index there would fail on a pre-v20 table) and an addColumn step is skipped
 	// on a fresh database — so the index needs a step that always runs.
 	{from: 20, to: 21, sql: `CREATE INDEX IF NOT EXISTS idx_tc_call ON tool_calls(call_id)`},
+	// v22 and v23 tag each row with the namespace its session belonged to
+	// (PLAN-520): '' is the default namespace, which every existing row is. Reads
+	// see their own namespace only, and a namespace's purge deletes its rows.
+	{from: 21, to: 22, addColumn: "namespace", sql: `ALTER TABLE tool_calls ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`},
+	{from: 22, to: 23, addColumn: "namespace", table: "episodic_memories", sql: `ALTER TABLE episodic_memories ADD COLUMN namespace TEXT NOT NULL DEFAULT ''`},
 }
 
 // ErrReadOnlySchemaUpgradeRequired marks a stats database that is too old for
@@ -172,11 +180,11 @@ func migrate(db *sql.DB, currentVersion int) error {
 			continue
 		}
 		if m.addColumn != "" {
-			has, err := hasColumn(db, "tool_calls", m.addColumn)
+			skip, err := columnStepDone(db, m)
 			if err != nil {
-				return fmt.Errorf("stats: migration v%d→v%d: check column: %w", m.from, m.to, err)
+				return fmt.Errorf("stats: migration v%d→v%d: %w", m.from, m.to, err)
 			}
-			if has {
+			if skip {
 				continue
 			}
 		}
@@ -185,6 +193,30 @@ func migrate(db *sql.DB, currentVersion int) error {
 		}
 	}
 	return nil
+}
+
+// columnStepDone reports whether an ADD COLUMN step has nothing to do: its
+// column already exists, or — for a table other than tool_calls — the table does
+// not exist yet and the schema will create it with the column in it.
+func columnStepDone(db *sql.DB, m migration) (bool, error) {
+	table := m.table
+	if table == "" {
+		table = "tool_calls"
+	}
+	if table != "tool_calls" {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&n); err != nil {
+			return false, fmt.Errorf("check table: %w", err)
+		}
+		if n == 0 {
+			return true, nil
+		}
+	}
+	has, err := hasColumn(db, table, m.addColumn)
+	if err != nil {
+		return false, fmt.Errorf("check column: %w", err)
+	}
+	return has, nil
 }
 
 // hasColumn reports whether table has a column named col, via PRAGMA
@@ -250,7 +282,9 @@ func DBPathFor() string {
 //	19 — added logical_agent column (per-agent write attribution, PLAN-401)
 //	20 — added call_id column
 //	21 — idx_tc_call
-const SchemaVersion = 21
+//	22 — tool_calls.namespace (PLAN-520)
+//	23 — episodic_memories.namespace (PLAN-520)
+const SchemaVersion = 23
 
 // Open opens (or creates) the stats database at the conventional global path.
 func Open() (*DB, error) {

@@ -27,7 +27,9 @@ import (
 // about rows it wrote itself. That is also what makes it safe against the
 // daemon-level store without the recipient's cross_project gate — that gate
 // stops a project READING another project's messages, and these are the caller's
-// own. limit caps the scan (non-positive means no cap).
+// own. The namespace still applies: a session's outbox is its own namespace's
+// rows, so a view never reports another namespace's notes as sent by an author id
+// it happens to share. limit caps the scan (non-positive means no cap).
 func (s *Store) UnreadSentBy(ctx context.Context, authorID string, now time.Time, limit int) ([]Row, error) {
 	return s.sentBy(ctx, authorID, now, limit, true)
 }
@@ -58,13 +60,13 @@ func (s *Store) sentBy(ctx context.Context, authorID string, now time.Time, limi
 	}
 	q := `SELECT ` + rowColumns + `
 		 FROM collab_rows
-		 WHERE kind = ? AND author_id = ? AND expires_at > ?`
+		 WHERE kind = ? AND namespace = ? AND author_id = ? AND expires_at > ?`
 	if unreadOnly {
 		q += ` AND delivered_at = 0 ORDER BY created_at ASC`
 	} else {
 		q += ` ORDER BY created_at DESC`
 	}
-	args := []any{string(KindNote), authorID, now.UnixNano()}
+	args := []any{string(KindNote), s.ns, authorID, now.UnixNano()}
 	if limit > 0 {
 		q += ` LIMIT ?`
 		args = append(args, limit)

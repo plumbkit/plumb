@@ -39,7 +39,7 @@ func TestEpisodic_ConcurrentReadDuringWrite(t *testing.T) {
 	go func() { // reader — LatestEpisodic, no mutex
 		defer wg.Done()
 		for range iters {
-			if _, _, err := db.LatestEpisodic("/ws"); err != nil {
+			if _, _, err := db.LatestEpisodic("/ws", ""); err != nil {
 				t.Errorf("LatestEpisodic: %v", err)
 				return
 			}
@@ -80,7 +80,7 @@ func TestEpisodic_RecordAndLatest(t *testing.T) {
 		t.Fatalf("recordEpisodic newer: %v", err)
 	}
 
-	got, ok, err := db.LatestEpisodic("/ws")
+	got, ok, err := db.LatestEpisodic("/ws", "")
 	if err != nil || !ok {
 		t.Fatalf("LatestEpisodic ok=%v err=%v", ok, err)
 	}
@@ -91,7 +91,7 @@ func TestEpisodic_RecordAndLatest(t *testing.T) {
 		t.Errorf("touched files not round-tripped: %v", got.TouchedFiles)
 	}
 	// Workspace partitioning: another workspace must not see /ws's summary.
-	if _, ok, _ := db.LatestEpisodic("/other"); ok {
+	if _, ok, _ := db.LatestEpisodic("/other", ""); ok {
 		t.Error("episodic summary leaked across workspaces")
 	}
 }

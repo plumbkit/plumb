@@ -110,10 +110,16 @@ func (s *Store) conversationSummaries(
 	// for a number.
 	where := `WHERE kind = ? AND expires_at > ?`
 	args := []any{string(KindNote), now.UnixNano()}
+	// Every count is of ONE namespace. A caller's read scope already carries the
+	// namespace (Store.scope); the unscoped ones — a participant's own threads, the
+	// operator's daemon-wide view — get the namespace term on its own, so no
+	// summary can be written that counts another namespace's traffic.
+	scope := namespaceScope(s.ns)
 	if sc != nil {
-		where += ` ` + sc.term
-		args = append(args, sc.args...)
+		scope = *sc
 	}
+	where += ` ` + scope.term
+	args = append(args, scope.args...)
 	if who != nil {
 		// Membership is a property of the THREAD, not of the row, so this selects
 		// conversations containing at least one row the claimant is in — not only
@@ -135,8 +141,8 @@ func (s *Store) conversationSummaries(
 		member, memberArgs := membershipPredicate(who.identities(), who.Name)
 		where += ` AND conversation_id IN (
 		              SELECT conversation_id FROM collab_rows
-		              WHERE kind = ? AND ` + member + `)`
-		args = append(args, string(KindNote))
+		              WHERE kind = ? AND namespace = ? AND ` + member + `)`
+		args = append(args, string(KindNote), s.ns)
 		args = append(args, memberArgs...)
 	}
 	query := `SELECT conversation_id, COUNT(*),
@@ -201,12 +207,12 @@ func (s *Store) ConversationWorkspaces(ctx context.Context, convID string, now t
 	// stamp an origin collapse to a single "".
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT origin_workspace FROM collab_rows
-		  WHERE kind = ? AND conversation_id = ? AND expires_at > ?
+		  WHERE kind = ? AND namespace = ? AND conversation_id = ? AND expires_at > ?
 		 UNION
 		 SELECT target_workspace FROM collab_rows
-		  WHERE kind = ? AND conversation_id = ? AND expires_at > ?`,
-		string(KindNote), convID, now.UnixNano(),
-		string(KindNote), convID, now.UnixNano())
+		  WHERE kind = ? AND namespace = ? AND conversation_id = ? AND expires_at > ?`,
+		string(KindNote), s.ns, convID, now.UnixNano(),
+		string(KindNote), s.ns, convID, now.UnixNano())
 	if err != nil {
 		return nil, fmt.Errorf("collab: conversation workspaces: %w", err)
 	}
@@ -260,10 +266,11 @@ func (s *Store) FilterDaemonWideConversations(
 	if fetch > 0 {
 		fetch *= daemonWideOverfetch
 	}
-	// Unscoped on purpose — the exported ConversationSummaries is narrowed to one
-	// session's own threads, which is the wrong question here. This view is the
+	// Not narrowed to a session's threads on purpose — the exported
+	// ConversationSummaries is, which is the wrong question here. This view is the
 	// daemon operator's, and its access rule is the unanimous-consent filter below
-	// rather than session membership.
+	// rather than session membership. It is still one namespace's view: the
+	// operator of a namespace sees that namespace's traffic and no other's.
 	all, err := s.conversationSummaries(ctx, now, fetch, nil, nil)
 	if err != nil {
 		return nil, err

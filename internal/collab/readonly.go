@@ -36,10 +36,13 @@ import (
 // legitimately has no collab.db, and this must not be the thing that gives it
 // one.
 //
-// The schema is NOT migrated, so a pre-v2 file is read with whatever columns it
-// has. Every query in this package selects the v2 column set, so a caller that
-// meets a v1 file gets a query error rather than wrong data — the right failure
-// for an advisory probe, which treats an error as "cannot tell" and proceeds.
+// The schema is NOT migrated, so an older file is read with whatever columns it
+// has. Every query in this package selects the current column set — including the
+// v5 namespace, which every read binds — so a caller that meets a file the daemon
+// has not yet migrated gets a query error rather than wrong data: the right
+// failure for an advisory probe, which treats an error as "cannot tell" and
+// proceeds. The store this returns is the default namespace's view; a caller
+// inspecting another namespace takes InNamespace of it.
 func OpenReadOnly(workspace string) (*Store, error) {
 	if workspace == "" {
 		return nil, errors.New("collab: empty workspace")
@@ -55,5 +58,5 @@ func OpenReadOnly(workspace string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{db: db, ws: workspace}, nil
+	return &Store{storeCore: &storeCore{db: db, ws: workspace}}, nil
 }

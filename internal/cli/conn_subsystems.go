@@ -148,7 +148,7 @@ func (s *connSession) latestEpisodic(ws string) (string, bool) {
 	if err != nil || ro == nil {
 		return "", false
 	}
-	e, ok, err := ro.LatestEpisodic(ws)
+	e, ok, err := ro.LatestEpisodic(ws, s.view().namespace)
 	if err != nil || !ok {
 		return "", false
 	}
@@ -397,6 +397,7 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string, callID string) {
 	session.Touch(s.sessionID())
 	s.touchAgentRoster(logicalAgent)
+	s.touchNamespace()
 	v := s.view()
 	root := v.acquiredRoot
 	sessionName := v.sessName
@@ -426,6 +427,7 @@ func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output,
 	// Scored above from the real output, so redaction costs no savings accuracy.
 	inputJSON, outputText := statsToolData(toolName, args, output)
 	s.statsStore.Record(root, withFailure(stats.Call{
+		Namespace:           v.namespace,
 		SessionID:           s.sessionID(),
 		SessionName:         sessionName,
 		Tool:                toolName,

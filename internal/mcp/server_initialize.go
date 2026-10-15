@@ -15,6 +15,11 @@ import (
 )
 
 func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpResponse {
+	if err := s.namespaceGate(ctx, req.Params); err != nil {
+		msg := err.Error()
+		s.namespaceRefusal.Store(&msg)
+		return errResp(req.ID, CodeNamespaceRefused, msg)
+	}
 	s.fireInitParamHooks(ctx, req.Params)
 	// The OnProtocolNegotiated hook is NOT fired here: it fires under the
 	// per-connection once-guard in dispatchMessage, so a client re-sending
@@ -58,6 +63,16 @@ func (s *Server) handleInitialize(ctx context.Context, req mcpRequest) mcpRespon
 		Meta:            s.initializeMeta(ctx),
 	}
 	return okResp(req.ID, res)
+}
+
+// namespaceGate runs OnNamespace before every other initialize hook, so a
+// refused connection never restores an identity, attaches a workspace or
+// reaches OnInit (which fires only after an initialize without an error).
+func (s *Server) namespaceGate(ctx context.Context, params json.RawMessage) error {
+	if s.OnNamespace == nil {
+		return nil
+	}
+	return s.OnNamespace(ctx, stringFromMeta(params, MetaNamespaceTokenKey), proxySessionFromParams(params))
 }
 
 // initializeMeta collects the `_meta` an application contributes to the

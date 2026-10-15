@@ -69,6 +69,7 @@ var (
 	mailFlagExternalID string
 	mailFlagWorkspace  string
 	mailFlagJSON       bool
+	mailFlagNamespace  string
 )
 
 var mailCmd = &cobra.Command{
@@ -118,6 +119,7 @@ func init() {
 	mailCmd.Flags().StringVar(&mailFlagExternalID, "external-id", "", "session_id the session passed to session_start")
 	mailCmd.Flags().StringVar(&mailFlagWorkspace, "workspace", "", "a directory inside a session's workspace; nearest enclosing root wins")
 	mailCmd.Flags().BoolVar(&mailFlagJSON, "json", false, "emit a JSON object instead of a sentence")
+	mailCmd.Flags().StringVar(&mailFlagNamespace, "namespace", "", "match sessions of this namespace instead of the default one")
 }
 
 // mailReport is the whole disclosure surface: the resolved session, its
@@ -165,7 +167,7 @@ func mailReportFor(selector, value string) (mailReport, error) {
 	if err != nil {
 		return mailReport{}, err
 	}
-	ages, err := mailWaiting(collab.Claimant{Name: info.Name, ID: info.ID, Workspace: info.Folder})
+	ages, err := mailWaitingNS(collab.Claimant{Name: info.Name, ID: info.ID, Workspace: info.Folder}, info.Namespace, openGlobalMailbox)
 	if err != nil {
 		return mailReport{}, err
 	}
@@ -203,7 +205,8 @@ func resolveMailSessionReading(selector, value string) (session.Info, bool, erro
 	if err != nil {
 		return session.Info{}, false, fmt.Errorf("listing sessions: %w", err)
 	}
-	matches := matchSessions(all, selector, value)
+	// One namespace's sessions only (PLAN-520): the default, or --namespace.
+	matches := matchSessions(session.InNamespace(all, mailFlagNamespace), selector, value)
 	switch len(matches) {
 	case 1:
 		return matches[0], locked, nil
@@ -319,8 +322,23 @@ func mailNames(matches []session.Info) []string {
 	return out
 }
 
-// mailWaiting returns the age in seconds of every message waiting for name in
-// the workspace's mailbox, oldest first.
+// openGlobalMailbox opens the daemon-level store read-only, or returns nil when
+// it does not exist — an absent store is "nothing waiting there", never an error.
+func openGlobalMailbox() (*collab.Store, error) {
+	if !collab.GlobalExists() {
+		return nil, nil
+	}
+	return collab.OpenGlobalReadOnly()
+}
+
+// mailWaitingIn is mailWaitingNS for the default namespace, with the daemon-level store's opener injected, so
+// a test reads a store of its own rather than the host's.
+func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)) ([]int, error) {
+	return mailWaitingNS(who, "", openGlobal)
+}
+
+// mailWaitingNS returns the age in seconds of every message waiting for name in
+// the workspace's mailbox, oldest first — namespace ns's mail only (PLAN-520).
 //
 // It goes through collab.ClaimableNotes — the claim predicate as a pure read —
 // rather than collab.PendingNotes, so the probe counts exactly what a claim
@@ -356,22 +374,7 @@ func mailNames(matches []session.Info) []string {
 // the daemon's session state, keyed on the serve proxy's own secret, and is not
 // reachable from a session file. So a note bound to a session a restart ended is
 // counted by check_messages inside the session, not by this probe.
-func mailWaiting(who collab.Claimant) ([]int, error) {
-	return mailWaitingIn(who, openGlobalMailbox)
-}
-
-// openGlobalMailbox opens the daemon-level store read-only, or returns nil when
-// it does not exist — an absent store is "nothing waiting there", never an error.
-func openGlobalMailbox() (*collab.Store, error) {
-	if !collab.GlobalExists() {
-		return nil, nil
-	}
-	return collab.OpenGlobalReadOnly()
-}
-
-// mailWaitingIn is mailWaiting with the daemon-level store's opener injected, so
-// a test reads a store of its own rather than the host's.
-func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)) ([]int, error) {
+func mailWaitingNS(who collab.Claimant, ns string, openGlobal func() (*collab.Store, error)) ([]int, error) {
 	// Never nil: ages_seconds is a JSON array in the contract, and a nil slice
 	// marshals as null. `jq '.ages_seconds | length'` errors on null, so a
 	// consumer would break on precisely the common case — no mail at all.
@@ -407,14 +410,14 @@ func mailWaitingIn(who collab.Claimant, openGlobal func() (*collab.Store, error)
 	who.CrossProject = false
 	var rows []collab.Row
 	for _, store := range stores {
-		got, err := store.ClaimableNotes(ctx, who, now, 0)
+		got, err := store.InNamespace(ns).ClaimableNotes(ctx, who, now, 0)
 		if err != nil {
 			return nil, fmt.Errorf("reading the mailbox: %w", err)
 		}
 		rows = append(rows, got...)
 	}
 	if global != nil {
-		got, err := global.ClaimableNotes(ctx, who, now, 0)
+		got, err := global.InNamespace(ns).ClaimableNotes(ctx, who, now, 0)
 		if err != nil {
 			slog.Debug("plumb mail: daemon-level mailbox unreadable", "err", err)
 		}

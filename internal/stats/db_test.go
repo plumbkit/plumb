@@ -825,7 +825,7 @@ func TestRecentWritesByWorkspace_GitRowsCarryOutput(t *testing.T) {
 		}
 	}
 
-	got, err := db.RecentWritesByWorkspace("/w", []string{"git", "edit_file"}, 10)
+	got, err := db.RecentWritesByWorkspace("/w", "", []string{"git", "edit_file"}, 10)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace: %v", err)
 	}

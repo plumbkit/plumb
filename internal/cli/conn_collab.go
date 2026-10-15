@@ -30,7 +30,7 @@ func (s *connSession) collabStoreCreate() *collab.Store {
 	if ws == "" {
 		return nil
 	}
-	return s.collabPool.acquire(ws)
+	return s.nsCollabWrite(s.collabPool.acquire(ws), ws)
 }
 
 // collabStoreFor returns the calling agent's workspace collab store, creating it
@@ -43,7 +43,7 @@ func (s *connSession) collabStoreFor(ctx context.Context) *collab.Store {
 	if ws == "" {
 		return nil
 	}
-	return s.collabPool.acquire(ws)
+	return s.nsCollabWrite(s.collabPool.acquire(ws), ws)
 }
 
 // collabStoreIfExists returns the workspace's collab store ONLY when collab.db
@@ -57,7 +57,7 @@ func (s *connSession) collabStoreIfExists() *collab.Store {
 	if ws == "" {
 		return nil
 	}
-	return s.collabPool.get(ws)
+	return s.nsCollab(s.collabPool.get(ws))
 }
 
 // collabStoreIfExistsFor returns the calling agent's workspace collab store only
@@ -70,12 +70,12 @@ func (s *connSession) collabStoreIfExistsFor(ctx context.Context) *collab.Store 
 	if ws == "" {
 		return nil
 	}
-	return s.collabPool.get(ws)
+	return s.nsCollab(s.collabPool.get(ws))
 }
 
 // collabStoreReader distinguishes a missing mailbox from a failed open.
 func (s *connSession) collabStoreReader(ctx context.Context) (*collab.Store, error) {
-	return s.collabPool.getResult(s.workspaceFor(ctx))
+	return s.nsCollabResult(s.collabPool.getResult(s.workspaceFor(ctx)))
 }
 
 // collabStoreIfExistsForWorkspace returns the collab store for a workspace root
@@ -84,7 +84,7 @@ func (s *connSession) collabStoreIfExistsForWorkspace(workspace string) *collab.
 	if s.collabPool == nil || workspace == "" {
 		return nil
 	}
-	return s.collabPool.get(workspace)
+	return s.nsCollab(s.collabPool.get(workspace))
 }
 
 // collabPolicy resolves the connection's [collab] intents/mailbox snapshot for
@@ -141,7 +141,7 @@ func (s *connSession) collabGlobalCreate() *collab.Store {
 	if s.collabPool == nil {
 		return nil
 	}
-	return s.collabPool.acquireGlobal()
+	return s.nsCollab(s.collabPool.acquireGlobal())
 }
 
 // collabGlobalIfExists returns the daemon-level cross-project store only when it
@@ -150,7 +150,7 @@ func (s *connSession) collabGlobalIfExists() *collab.Store {
 	if s.collabPool == nil {
 		return nil
 	}
-	return s.collabPool.getGlobal()
+	return s.nsCollab(s.collabPool.getGlobal())
 }
 
 // daemonWideConversationsFetchLimit is how many daemon-wide conversations a
@@ -218,6 +218,8 @@ func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 	if err != nil {
 		return tools.PeerSession{}, false
 	}
+	// Mail is addressed only inside the sender's namespace (PLAN-520).
+	all = session.InNamespace(all, s.view().namespace)
 	var found tools.PeerSession
 	matches := 0
 	for _, p := range all {
@@ -253,7 +255,7 @@ func (s *connSession) collabDeps() tools.CollabDeps {
 		GlobalStore:              s.collabGlobalCreate,
 		GlobalStoreIfExists:      s.collabGlobalIfExists,
 		StoreReader:              s.collabStoreReader,
-		GlobalStoreReader:        s.collabPool.getGlobalResult,
+		GlobalStoreReader:        s.nsGlobalReader,
 		Notifier:                 s.collabPool.notifier(),
 		ResolvePeer:              s.resolvePeer,
 		RecordUnended:            session.RecordUnended,
