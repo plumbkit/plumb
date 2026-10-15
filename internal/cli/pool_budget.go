@@ -203,6 +203,7 @@ func (p *workspacePool) budgetSummary() string {
 		}
 	}
 	b := p.budget
+	resyncs, last := p.resyncs, p.lastResynced
 	overCap := p.overCapLocked()
 	over := make([]string, 0, len(overCap))
 	for lang := range overCap {
@@ -223,6 +224,9 @@ func (p *workspacePool) budgetSummary() string {
 	}
 	if len(over) > 0 {
 		s += "; over max_workspaces: " + strings.Join(over, ", ")
+	}
+	if resyncs > 0 { // PLAN-538: servers restarted after their watcher lost events
+		s += fmt.Sprintf("; resynced after lost file events: %d (last %s %s)", resyncs, last.language, last.root)
 	}
 	return s
 }

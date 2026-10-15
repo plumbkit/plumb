@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -109,6 +110,18 @@ func TestWatcherLost_ResyncsOnlyThatServer(t *testing.T) {
 	pool.mu.Unlock()
 	if n != 1 || last.root != rootA {
 		t.Fatalf("resyncs = %d, last = %v; want 1 for root A", n, last)
+	}
+	if s := pool.budgetSummary(); !strings.Contains(s, "resynced after lost file events: 1") || !strings.Contains(s, rootA) {
+		t.Fatalf("daemon_info's pool row does not report the resync: %q", s)
+	}
+	var rowA []string
+	for line := range strings.SplitSeq(pool.lspStatusReportV2(), "\n") {
+		if f := strings.Split(line, "\t"); len(f) > 1 && f[1] == rootA {
+			rowA = f
+		}
+	}
+	if len(rowA) != 11 || rowA[10] == "-1" {
+		t.Fatalf("lsp-status-v2 row for root A = %q, want its last resync", rowA)
 	}
 }
 

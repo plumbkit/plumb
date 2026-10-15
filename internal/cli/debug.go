@@ -118,8 +118,9 @@ var debugLSPCmd = &cobra.Command{
 	Long: `List every language server the daemon currently pools, with its lifecycle
 state (active / hibernating / hibernated), child-process PID, resident memory,
 time since its last tool call, the sessions holding it (REFS), the calls in
-progress (CALLS), and whether its language is running more servers than its
-max_workspaces (OVER CAP).
+progress (CALLS), whether its language is running more servers than its
+max_workspaces (OVER CAP), and when it was last restarted to resync after its
+file watcher lost events (RESYNCED).
 
 Hibernated servers show no PID or RSS — their process was stopped to reclaim
 memory after going idle past the language's idle_timeout, and the next tool call
@@ -148,19 +149,22 @@ func renderLSPStatus(resp string) string {
 	}
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG\tREFS\tCALLS\tOVER CAP")
+	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG\tREFS\tCALLS\tOVER CAP\tRESYNCED")
 	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) < 7 {
 			continue
 		}
 		diag := dashIfEmpty(strings.TrimPrefix(f[6], "diag="))
-		refs, calls, over := "-", "-", "-"
+		refs, calls, over, resynced := "-", "-", "-", "-"
 		if len(f) >= 10 {
 			refs, calls = f[7], f[8]
 			over = map[string]string{"1": "yes", "0": "no"}[f[9]]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]), diag, refs, calls, dashIfEmpty(over))
+		if len(f) >= 11 && f[10] != "-1" {
+			resynced = formatIdleField(f[10]) + " ago"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]), diag, refs, calls, dashIfEmpty(over), resynced)
 	}
 	_ = w.Flush()
 	return b.String()

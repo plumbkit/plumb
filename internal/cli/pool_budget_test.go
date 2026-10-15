@@ -267,7 +267,7 @@ func TestLSPStatusReport_CarriesRefsCallsAndOverCap(t *testing.T) {
 		t.Fatalf("lsp-status (v1) rows have %d fields, want the 7 an older CLI reads", len(v1))
 	}
 	f := strings.Split(strings.Split(p.lspStatusReportV2(), "\n")[0], "\t")
-	if len(f) != 10 || f[7] != "2" || f[8] != "1" || f[9] != "1" {
+	if len(f) != 11 || f[7] != "2" || f[8] != "1" || f[9] != "1" || f[10] != "-1" {
 		t.Fatalf("lsp-status fields = %q, want refs 2, calls 1, over-cap 1", f)
 	}
 	out := renderLSPStatus(strings.Join(f, "\t"))
