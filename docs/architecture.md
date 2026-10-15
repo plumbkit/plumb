@@ -260,7 +260,8 @@ Key design properties:
   the release of every lock are confirmed, within the same 30 s deadline;
   otherwise it fails closed and starts nothing.
 - **The legacy bridge (PLAN-549), and what retires it** — an old `plumb serve`
-  proxy from before the account authority (0.24.0 and earlier) knows only its legacy socket
+  proxy from before the account authority (0.24.0 and earlier; the account
+  authority first ships in 0.25.0) knows only its legacy socket
   path, and after a migration its daemon is gone and it cannot start another (the
   canonical daemon holds that location's lifetime lock). So the canonical daemon
   also binds the **MCP** socket — never the control socket — of every legacy

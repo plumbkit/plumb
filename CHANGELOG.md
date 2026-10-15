@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.24.1 (unreleased)
+## 0.25.0 (2026-10-15)
 
 ### Removed
 
