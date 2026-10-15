@@ -360,11 +360,14 @@ func TestKillAllGroups_LatchesLaterSpawns(t *testing.T) {
 	}
 	// Killed at once, the server usually dies before its shell writes the pid.
 	// One that lived long enough to write it must be gone; one left running
-	// (the spawner forgot to kill it) writes it and stays.
+	// (the spawner forgot to kill it) writes it and stays. An EMPTY file is a
+	// shell killed between the redirect's truncate and the echo — it died
+	// before writing, which is the pass case, not a pid to probe.
 	time.Sleep(500 * time.Millisecond)
 	if data, err := os.ReadFile(pidFile); err == nil {
-		pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
-		waitGone(t, "the server spawned after KillAllGroups", pid)
+		if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && pid > 0 {
+			waitGone(t, "the server spawned after KillAllGroups", pid)
+		}
 	}
 }
 
