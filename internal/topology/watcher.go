@@ -117,14 +117,20 @@ type fsWatcher struct {
 	wg       sync.WaitGroup
 }
 
+// SharedWatchOptions are the options of the one OS watcher a root's consumers
+// share through an fswatch.Hub (PLAN-503): the topology index's cooldown and
+// exclusions, which are the set every consumer excludes. A consumer that
+// excludes more (the language servers' target/ and out/) filters them on its
+// own subscription.
+func SharedWatchOptions(workspace string) fswatch.Options {
+	return fswatch.Options{Cooldown: watchCooldown, ExcludeRegex: watchExcludeRegexFor(workspace)}
+}
+
 // newFSWatcher constructs a watcher rooted at workspace. It does not start
 // watching until Start is called. An error here (e.g. the platform watcher
 // cannot be created) lets the caller fall back to periodic resync.
-func newFSWatcher(workspace string, sink indexSink, excludePatterns []string) (*fsWatcher, error) {
-	w, err := fswatch.New(workspace, fswatch.Options{
-		Cooldown:     watchCooldown,
-		ExcludeRegex: watchExcludeRegexFor(workspace),
-	})
+func newFSWatcher(workspace string, sink indexSink, excludePatterns []string, hub *fswatch.Hub) (*fsWatcher, error) {
+	w, err := hub.Subscribe(workspace, SharedWatchOptions(workspace), "")
 	if err != nil {
 		return nil, err
 	}

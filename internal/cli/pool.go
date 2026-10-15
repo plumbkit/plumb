@@ -14,6 +14,7 @@ import (
 
 	"github.com/plumbkit/plumb/internal/cache"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
 )
@@ -132,6 +133,11 @@ type workspacePool struct {
 	// budget is the janitor's last sample of the advisory global target
 	// (pool_budget.go, PLAN-534). Guarded by mu.
 	budget poolBudget
+
+	// watchHub shares one OS file watcher per root between this pool's language
+	// servers and the topology index (PLAN-503); nil gives each its own. Set by
+	// the daemon before first use.
+	watchHub *fswatch.Hub
 
 	// liveEnabled names the languages `plumb enable-lsp` turned on in this
 	// daemon. A later global config reload keeps them enabled — the enable is a

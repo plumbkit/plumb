@@ -28,6 +28,14 @@
   `lsp pool` row (active and hibernated servers, an estimated RSS against an
   advisory target of 12 servers and 6 GiB — reported, not enforced), and
   `plumb debug lsp` gains REFS, CALLS and OVER CAP columns.
+- **One file watcher per workspace, not one per consumer** (PLAN-503). The
+  topology index and every language server on a workspace each ran their own
+  recursive OS watcher over the same tree — a Go and TypeScript workspace ran
+  three FSEvents streams, or three inotify watch sets counted against
+  `fs.inotify.max_user_watches`. They now share one through a daemon-wide hub,
+  opened on first use and closed with its last consumer. Each consumer keeps
+  its own buffer, so a slow one reports lost changes for itself without holding
+  up the others.
 
 - **A language server's helper processes no longer outlive it.** Each server
   now runs as the leader of its own process group, so stopping it (a pool

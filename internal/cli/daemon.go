@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fswatch"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/monitor"
@@ -372,6 +373,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	pool.startJanitor(ctx)
 
 	topoPool := newTopologyPool(cfg.Topology)
+	// One OS file watcher per root, shared by its topology index and its
+	// language servers (PLAN-503).
+	watchHub := fswatch.NewHub()
+	pool.watchHub = watchHub
+	topoPool.watchHub = watchHub
 	defer topoPool.StopAll()
 
 	memPool := newMemoryIndexPool()
