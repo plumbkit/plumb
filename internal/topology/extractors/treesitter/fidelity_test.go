@@ -258,9 +258,17 @@ func TestExtractors_MalformedInputNoPanic(t *testing.T) {
 	}
 	for _, tc := range fidelityCases() {
 		for i, g := range garbage {
-			// Extract must not panic; the result is unconstrained.
-			if _, _, err := tc.extractor().Extract(context.Background(), "broken"+tc.name, g); err != nil {
-				t.Errorf("%s garbage[%d]: Extract returned error (want graceful nil): %v", tc.name, i, err)
+			// v0.56.0 reports accepted-prefix parses as incomplete. The shared
+			// envelope must reject their partial symbols rather than index them.
+			nodes, edges, err := tc.extractor().Extract(context.Background(), "broken"+tc.name, g)
+			if err == nil {
+				continue
+			}
+			if err.Error() != "parse stopped early: accepted_prefix" {
+				t.Errorf("%s garbage[%d]: unexpected error: %v", tc.name, i, err)
+			}
+			if len(nodes) != 0 || len(edges) != 0 {
+				t.Errorf("%s garbage[%d]: incomplete parse emitted %d nodes and %d edges", tc.name, i, len(nodes), len(edges))
 			}
 		}
 	}

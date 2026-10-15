@@ -2,6 +2,20 @@
 
 ## 0.26.0 (unreleased)
 
+### Changed
+
+- Update gotreesitter to v0.56.0, klauspost/compress to v1.20.3 and modernc libc
+  to v1.78.0, and refresh the web UI's transitive dependency lockfile. The rebuilt
+  web assets are unchanged. Invert the fixed Swift directive tripwire and retain
+  rejection of incomplete parses on malformed input. Go 1.27.2 remains the
+  current stable toolchain; the Go 1.27 minimum is unchanged.
+- Use Node 26.12.0, the current stable release, across CI and the verification,
+  integration and scanner containers. Keep TypeScript 5.9.3 for the language
+  server's tsserver dependency; TypeScript 7 does not ship tsserver. Explicitly
+  disable fsevents' unnecessary native rebuild script for current npm. Update
+  client conformance pins to Codex 0.162.1 and OpenCode 1.19.0.
+
+
 ### Added
 
 - **`context_for_task` is a core tool: pinned, lean, and it starts from task
