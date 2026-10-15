@@ -197,11 +197,10 @@ func askContextHint(req contextHintRequest) string {
 	return reply.Text
 }
 
-// claudeContextHookEntries are Claude Code's opt-in advisory context-hint
-// handlers: selectors and locations only, at most 1 KiB a turn,
-// silent on any failure. They are installed only on `plumb hooks install
-// --context`, or refreshed when already present: an unpromoted feature must not
-// spawn a process on every prompt of every user.
+// claudeContextHookEntries are Claude Code's advisory context-hint handlers:
+// selectors and locations only, at most 1 KiB a turn, silent on any failure.
+// `plumb hooks install` writes them unless given --no-context, and refreshes them
+// when already present.
 func claudeContextHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, claudeHookVerb)
 	return []hookEntry{
@@ -218,8 +217,8 @@ func claudeContextHookEntries(plumbBin string) []hookEntry {
 	}
 }
 
-// codexContextHookEntries are Codex's opt-in context-hint handlers, on the same
-// terms as Claude Code's. They carry no statusMessage: Codex would show it on
+// codexContextHookEntries are Codex's context-hint handlers, on the same terms as
+// Claude Code's. They carry no statusMessage: Codex would show it on
 // every prompt, and a hint that is usually silent must not announce itself.
 // Codex asks the user to trust each new handler (/hooks) before it runs.
 func codexContextHookEntries(plumbBin string) []hookEntry {

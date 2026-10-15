@@ -13,7 +13,7 @@ func TestSessionStart_WarmingAdvisory(t *testing.T) {
 		t.Fatal("expected the warming advisory to be written")
 	}
 	out := sb.String()
-	if !strings.Contains(out, "warming up") || !strings.Contains(out, "topology_search") {
+	if !strings.Contains(out, "warming up") || !strings.Contains(out, "context_for_task") {
 		t.Fatalf("unexpected advisory: %q", out)
 	}
 	if !strings.Contains(out, "~4s elapsed") {

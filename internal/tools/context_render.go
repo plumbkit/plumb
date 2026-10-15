@@ -110,7 +110,8 @@ func (p *contextPack) seedLines() []packLine {
 	return append(ls, p.discoveryLines()...)
 }
 
-// discoveryLines says what prose discovery searched with and lists the matches it
+// discoveryLines says why prose discovery found nothing, when it found nothing,
+// names the path-shaped tokens that are no file here, and lists the matches it
 // did not take, as candidates to pass back as symbols.
 func (p *contextPack) discoveryLines() []packLine {
 	d := p.Discovery
@@ -118,23 +119,19 @@ func (p *contextPack) discoveryLines() []packLine {
 		return nil
 	}
 	var ls []packLine
-	note := d.Note
-	switch {
-	case note != "":
-	case len(p.Seeds) > 0:
-	case len(d.Terms) == 0:
-		note = "the task prose has no searchable words; name a file or symbol, or use workspace_search"
-	default:
-		note = fmt.Sprintf("no declaration name carries the task's words (%s); name a file or symbol, or use workspace_search",
-			strings.Join(d.Terms, " "))
+	line := func(text string, prio int, class packClass) {
+		ls = append(ls, packLine{text: "  " + textfmt.TerminalSafeLine(text), prio: prio, section: secSeeds, class: class})
 	}
-	if note != "" {
-		ls = append(ls, packLine{text: "  " + textfmt.TerminalSafeLine(note), prio: prioSeed, section: secSeeds, class: classSeed})
+	if note := p.discoveryNote(); note != "" {
+		line(note, prioSeed, classSeed)
+	}
+	if len(d.NotFiles) > 0 {
+		line("named in the task but no file here: "+strings.Join(d.NotFiles, ", "), prioDetail, classSeed)
 	}
 	if len(d.Others) == 0 {
 		return ls
 	}
-	ls = append(ls, packLine{text: "  other matches (candidates, not seeds):", prio: prioDetail, section: secSeeds, class: classCandidate})
+	line("other matches (candidates, not seeds):", prioDetail, classCandidate)
 	for _, c := range d.Others {
 		ls = append(ls, packLine{
 			text: fmt.Sprintf("    %s#%s (%s, line %d)", textfmt.TerminalSafeLine(c.Path), textfmt.TerminalSafeLine(c.Selector), c.NodeKind, c.Line),
@@ -142,6 +139,40 @@ func (p *contextPack) discoveryLines() []packLine {
 		})
 	}
 	return ls
+}
+
+// discoveryNote names the real reason a prose-only pack has no seed, or says
+// what a search left out; "" when there is nothing to say.
+func (p *contextPack) discoveryNote() string {
+	d := p.Discovery
+	var aside []string
+	if d.Excluded > 0 {
+		aside = append(aside, fmt.Sprintf("%d match(es) outside within/corpora left out", d.Excluded))
+	}
+	if d.Withheld > 0 {
+		aside = append(aside, fmt.Sprintf("%d match(es) in sensitive files, which discovery never proposes", d.Withheld))
+	}
+	suffix := ""
+	if len(aside) > 0 {
+		suffix = " (" + strings.Join(aside, "; ") + ")"
+	}
+	switch {
+	case d.Note != "":
+		return d.Note + suffix
+	case len(p.Seeds) > 0:
+		if suffix == "" {
+			return ""
+		}
+		return "search" + suffix
+	case len(p.Misses) > 0:
+		return "no proposal resolved to one declaration (see the unresolved lines above)" + suffix +
+			"; name a file or symbol, or use workspace_search"
+	case len(d.Terms) == 0:
+		return "the task prose has no searchable words; name a file or symbol, or use workspace_search"
+	default:
+		return fmt.Sprintf("no declaration name carries the task's words (%s)%s; name a file or symbol, or use workspace_search",
+			strings.Join(d.Terms, " "), suffix)
+	}
 }
 
 func seedText(s contextSeed) string {

@@ -83,8 +83,8 @@ type hooksTarget struct {
 	setup   setupTarget
 	pathFn  func() (string, error)
 	entries func(plumbBin string) []hookEntry
-	// contextEntries are the opt-in context-hint handlers: written on
-	// `install --context`, kept fresh while present. nil when the client has none.
+	// contextEntries are the context-hint handlers: written by `install` unless
+	// --no-context, kept fresh while present. nil when the client has none.
 	contextEntries func(plumbBin string) []hookEntry
 	ours           ownershipTest
 	notes          []string
@@ -121,7 +121,7 @@ var codexHooksTarget = hooksTarget{
 	contextEntries: codexContextHookEntries,
 	ours:           codexHookOwned,
 	notes: []string{
-		"Codex — run /hooks in Codex to review and trust the plumb command hooks (two; four with --context).",
+		"Codex — run /hooks in Codex to review and trust the plumb command hooks (four; two with --no-context).",
 		"Codex — the Stop hook checks only as a turn ends; Codex cannot wake an already-idle session.",
 	},
 }

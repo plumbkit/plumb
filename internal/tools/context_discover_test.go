@@ -1,6 +1,9 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -180,7 +183,7 @@ func TestContextForTask_Discover_ARefusedProposalIsAMissNotAnError(t *testing.T)
 	}
 	pack := s.collect(t, map[string]any{"task": "look at escape/x.go and the cart total"})
 	if !slices.ContainsFunc(pack.Misses, func(m contextMiss) bool {
-		return m.Input == "escape/x.go" && strings.Contains(m.Reason, "proposed from the task prose")
+		return strings.HasSuffix(m.Input, "/escape/x.go") && strings.Contains(m.Reason, "proposed from the task prose")
 	}) {
 		t.Errorf("the refused proposal is not reported as a miss: %+v", pack.Misses)
 	}
@@ -218,7 +221,7 @@ func TestRankDiscovered_StemsAndTestDemotion(t *testing.T) {
 		return topology.SearchResult{Node: topology.Node{Name: name, Qualified: name, Path: p, Kind: topology.KindFunction}}
 	}
 	hits := []topology.SearchResult{hit("restartDaemon", "d/d_test.go"), hit("restartDaemon", "d/d.go")}
-	got := rankDiscovered(hits, discoverTerms("daemon restarts"), scope)
+	got, _ := rankDiscovered(hits, discoverTerms("daemon restarts"), scope)
 	if len(got) != 2 || got[0].node.Path != "d/d.go" {
 		t.Fatalf("production code must outrank its test: %+v", got)
 	}
@@ -228,7 +231,7 @@ func TestRankDiscovered_StemsAndTestDemotion(t *testing.T) {
 	if got[1].score != 3 {
 		t.Errorf("the test-file twin scores %d, want 3 (one point off)", got[1].score)
 	}
-	withTests := rankDiscovered(hits, discoverTerms("daemon restarts in tests"), scope)
+	withTests, _ := rankDiscovered(hits, discoverTerms("daemon restarts in tests"), scope)
 	if withTests[0].node.Path != "d/d_test.go" {
 		t.Errorf("a task about tests must not demote test files (its path even carries \"test\"): %+v", withTests)
 	}
@@ -237,7 +240,7 @@ func TestRankDiscovered_StemsAndTestDemotion(t *testing.T) {
 // A word matches a name through its stem: "updating" carries "update".
 func TestRankDiscovered_StemMatchesInflections(t *testing.T) {
 	hits := []topology.SearchResult{{Node: topology.Node{Name: "updateLedger", Qualified: "updateLedger", Path: "s/s.go", Kind: topology.KindFunction}}}
-	got := rankDiscovered(hits, discoverTerms("updating ledgers"), contextScope{root: "/r"})
+	got, _ := rankDiscovered(hits, discoverTerms("updating ledgers"), contextScope{root: "/r"})
 	if len(got) != 1 || got[0].score != 4 {
 		t.Fatalf("updateLedger on \"updating ledgers\" = %+v, want score 4 (both words in the name, by stem)", got)
 	}
@@ -273,5 +276,162 @@ func TestContextForTask_Discover_PathOnlyMatchesNeverSeed(t *testing.T) {
 	}
 	if pack.Discovery == nil || len(pack.Discovery.Others) == 0 {
 		t.Error("the path-only matches must still be listed as candidates")
+	}
+}
+
+// Discovery is the tool's choice, so it is held to what expansion is held to: it
+// never proposes a seed in a sensitive file, by search or by a path the task
+// names, and the marker never reaches the response. Control: with no decision
+// wired, the same task does seed the vault (so the guard is what stops it).
+func TestContextForTask_Discover_NeverProposesASensitiveFile(t *testing.T) {
+	s := newSensitiveFixture(t)
+	task := map[string]any{"task": "rotate the vault token credential"}
+	open := s.collect(t, task)
+	if !slices.ContainsFunc(open.Seeds, func(sd contextSeed) bool { return sd.Path == "vault/secrets.go" }) {
+		t.Fatalf("control: without the decision the vault should be found; seeds %v", seedSelectors(open))
+	}
+	rule := &defaultSensitive{root: s.root}
+	s.collector.WithSensitive(rule.fn)
+	for _, args := range []map[string]any{task, {"task": "look at ./vault/secrets.go and vault/secrets.go"}} {
+		pack := s.collect(t, args)
+		for _, sd := range pack.Seeds {
+			if sd.Path == "vault/secrets.go" {
+				t.Errorf("%v: proposed a seed in a sensitive file: %v", args, seedSelectors(pack))
+			}
+		}
+		out, err := s.run(t, args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(out, sensitiveMarker) {
+			t.Errorf("%v: sensitive content reached the response:\n%s", args, out)
+		}
+	}
+	pack := s.collect(t, task)
+	if pack.Discovery.Withheld == 0 {
+		t.Error("the withheld match must be counted, so the pack can say so")
+	}
+}
+
+// A seed needs a task word in its own name: words only its path carries never
+// add up to one.
+func TestContextForTask_Discover_PathWordsNeverAddUpToASeed(t *testing.T) {
+	s := newShop(t)
+	pack := s.collect(t, map[string]any{"task": "pricing discount rules"})
+	for _, sd := range pack.Seeds {
+		if sd.Name == "Lookup" || sd.Name == "Off" || sd.Name == "Apply" {
+			t.Errorf("%s was seeded on path words alone: %v", sd.Selector, seedSelectors(pack))
+		}
+	}
+}
+
+// Named tokens that resolve to nothing do not crowd the search out: it still
+// fills the slots left after resolution, and the junk is reported.
+func TestContextForTask_Discover_UnresolvedNamesDoNotCrowdOutSearch(t *testing.T) {
+	s := newShop(t)
+	pack := s.collect(t, map[string]any{"task": "Fix `Cart.Total`, which calls `fmt.Sprintf` and `strings.Join`, when the ledger records twice"})
+	if len(pack.Seeds) < 2 || !slices.ContainsFunc(pack.Seeds, func(sd contextSeed) bool { return sd.Origin == originFound }) {
+		t.Errorf("search did not fill the slots the junk left: seeds %v, misses %+v", seedSelectors(pack), pack.Misses)
+	}
+	if len(pack.Misses) != 2 {
+		t.Errorf("misses = %+v, want the two unresolved names", pack.Misses)
+	}
+}
+
+// A declaration named in the task and found by search is one seed, not two.
+func TestContextForTask_Discover_NoDuplicateSeeds(t *testing.T) {
+	s := newShop(t)
+	pack := s.collect(t, map[string]any{"task": "`Cart.Total` cart total"})
+	n := 0
+	for _, sd := range pack.Seeds {
+		if sd.Path == "cart/cart.go" && sd.Name == "Total" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("(*Cart).Total seeded %d times: %v", n, seedSelectors(pack))
+	}
+}
+
+// Proposals are absolute, so they resolve on a contested pin, which refuses the
+// relative paths a caller never gave. Control: a relative explicit seed is
+// refused there.
+func TestContextForTask_Discover_ResolvesOnAContestedPin(t *testing.T) {
+	s := newShop(t)
+	s.collector.WithContested(func() bool { return true })
+	if _, err := s.run(t, map[string]any{"files": []string{"cart/cart.go"}}); err == nil {
+		t.Fatal("control: a relative explicit seed must be refused on a contested pin")
+	}
+	pack := s.collect(t, map[string]any{"task": "the checkout charges the ledger; see pricing/discount.go"})
+	if len(pack.Seeds) < 2 || len(pack.Misses) != 0 {
+		t.Errorf("seeds %v, misses %+v: proposals must resolve on a contested pin", seedSelectors(pack), pack.Misses)
+	}
+}
+
+// The pack names the real reason it has no seed, and the path-shaped tokens that
+// are no file here.
+func TestContextForTask_Discover_SaysWhyNothingWasSeeded(t *testing.T) {
+	s := newShop(t)
+	cases := []struct {
+		args map[string]any
+		want string
+	}{
+		{map[string]any{"task": "cart total", "within": []string{"docs/**"}}, "outside within/corpora left out"},
+		{map[string]any{"task": "`Nope.Missing` only"}, "no proposal resolved to one declaration"},
+		{map[string]any{"task": "see pricing/nothere.go"}, "named in the task but no file here: pricing/nothere.go"},
+	}
+	for _, c := range cases {
+		out, err := s.run(t, c.args)
+		if err != nil {
+			t.Fatalf("%v: %v", c.args, err)
+		}
+		if !strings.Contains(out, c.want) {
+			t.Errorf("%v: pack does not say %q:\n%s", c.args, c.want, out)
+		}
+	}
+}
+
+// A cancelled call is an error, never a quiet empty pack.
+func TestContextForTask_Discover_CancelledCallIsAnError(t *testing.T) {
+	s := newShop(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	raw, _ := json.Marshal(map[string]any{"task": "the checkout charges the ledger"})
+	if out, err := s.tool.Execute(ctx, raw); err == nil {
+		t.Errorf("a cancelled call returned a pack:\n%s", out)
+	}
+}
+
+// Equal hits order by path, then line; one hit per declaration is kept.
+func TestRankDiscovered_TieBreakAndOnePerDeclaration(t *testing.T) {
+	n := func(name, p string, line int) topology.SearchResult {
+		return topology.SearchResult{Node: topology.Node{Name: name, Qualified: name, Path: p, StartLine: line, Kind: topology.KindFunction}}
+	}
+	hits := []topology.SearchResult{n("Total", "b/b.go", 1), n("Total", "a/a.go", 9), n("Total", "a/a.go", 9), n("Total", "a/a.go", 2)}
+	got, _ := rankDiscovered(hits, []string{"total"}, contextScope{root: "/r"})
+	order := make([]string, 0, len(got))
+	for _, h := range got {
+		order = append(order, fmt.Sprintf("%s:%d", h.node.Path, h.node.StartLine))
+	}
+	if !slices.Equal(order, []string{"a/a.go:2", "a/a.go:9", "b/b.go:1"}) {
+		t.Errorf("order = %v", order)
+	}
+}
+
+func TestIsFileUnder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dir.go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "f.go"), []byte("package f\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		s    string
+		want bool
+	}{{"f.go", true}, {filepath.Join(root, "f.go"), true}, {"dir.go", false}, {"../f.go", false}, {"nope.go", false}} {
+		if got := isFileUnder(root, c.s); got != c.want {
+			t.Errorf("isFileUnder(%q) = %v, want %v", c.s, got, c.want)
+		}
 	}
 }

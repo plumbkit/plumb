@@ -101,6 +101,7 @@ func TestInstallPlan_ContextEntriesByDefault(t *testing.T) {
 			t.Errorf("%s: default install plan has no context-hint entries (%v)", target.name, err)
 		}
 		hooksInstallNoContext = true
+		t.Cleanup(func() { hooksInstallNoContext = false })
 		_, without, _, err := installPlan(target, "/opt/plumb")
 		hooksInstallNoContext = false
 		if err != nil || hasContext(without) {
@@ -109,6 +110,9 @@ func TestInstallPlan_ContextEntriesByDefault(t *testing.T) {
 	}
 	if f := hooksInstallCmd.Flags().Lookup("context"); f == nil || f.Deprecated == "" {
 		t.Error("--context must stay accepted, marked deprecated")
+	}
+	if f := hooksInstallCmd.Flags().Lookup("no-context"); f == nil || f.DefValue != "false" {
+		t.Error("--no-context must be registered, off by default")
 	}
 }
 

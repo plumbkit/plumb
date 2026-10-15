@@ -215,7 +215,8 @@ func (c *ContextCollector) agentRoot(ctx context.Context) (string, error) {
 }
 
 // seedInput is one requested seed before resolution. origin and matched are set
-// only on a seed prose discovery proposed (context_discover.go).
+// only on a seed prose discovery proposed (context_discover.go), which resolves
+// its proposals itself (collectDiscovered).
 type seedInput struct {
 	kind    string
 	text    string
@@ -266,26 +267,17 @@ func (c *ContextCollector) Collect(ctx context.Context, req contextRequest) (con
 	index := c.indexFor(root)
 	inputs := req.seedInputs()
 	if len(inputs) == 0 {
-		inputs = c.discoverSeeds(ctx, &pack, scope, index, req.Task)
+		if err := c.collectDiscovered(ctx, &pack, scope, index, req.Task); err != nil {
+			return contextPack{}, err
+		}
 	}
 	for i, in := range inputs {
 		if i >= contextMaxSeeds {
 			pack.miss(in.text, fmt.Sprintf("over the %d-seed cap; not resolved", contextMaxSeeds))
 			continue
 		}
-		before := len(pack.Seeds)
 		if err := c.collectSeed(ctx, &pack, scope, index, in); err != nil {
-			// A seed the tool proposed is not the caller's argument to fix: what would
-			// refuse an explicit seed (a path the boundary guard refuses, say) only
-			// drops this one, and says why.
-			if in.origin == "" {
-				return contextPack{}, err
-			}
-			pack.miss(in.text, "proposed from the task prose, but not usable as a seed: "+err.Error())
-			continue
-		}
-		if len(pack.Seeds) > before {
-			pack.Seeds[before].Origin, pack.Seeds[before].Matched = in.origin, in.matched
+			return contextPack{}, err
 		}
 	}
 	// The graph work (the walk and the test-impact estimate) shares one wall-clock

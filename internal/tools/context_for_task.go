@@ -25,7 +25,9 @@ const (
 	// the reserve; a smaller budget could not carry even the truncation notice.
 	contextMinMaxBytes = contextReserveBytes + 512
 	contextMaxSeeds    = 8
-	// contextMaxTaskBytes bounds the task prose: a paragraph, not a pasted file.
+	// contextMaxTaskBytes bounds task prose that seeds a pack: a paragraph, not a
+	// pasted file. Prose beside explicit seeds only re-ranks, and the ranker reads
+	// its first words alone, so it is not refused.
 	contextMaxTaskBytes = 4000
 	// contextMaxCandidates bounds the candidates shown for an ambiguous or
 	// unmatched selector.
@@ -286,8 +288,8 @@ func (r *contextRequest) checkSeeds() error {
 		return badArgument(errors.New("context_for_task: give files, symbols or task prose; " +
 			"with prose alone the tool proposes the seeds"))
 	}
-	if len(r.Task) > contextMaxTaskBytes {
-		return badArgument(fmt.Errorf("context_for_task: task is %d bytes, over the %d-byte limit; "+
+	if len(r.Files)+len(r.Symbols) == 0 && len(r.Task) > contextMaxTaskBytes {
+		return badArgument(fmt.Errorf("context_for_task: task is %d bytes, over the %d-byte limit for prose that seeds a pack; "+
 			"summarise it, or name the files and symbols it is about", len(r.Task), contextMaxTaskBytes))
 	}
 	return nil

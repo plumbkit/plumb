@@ -10,6 +10,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,16 +22,17 @@ import (
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
-// Discovery bounds. Three seeds keep a prose-only pack as focused as a typical
-// explicit request; the search over-fetches so the scope filter and the
+// Discovery bounds. Three resolved seeds keep a prose-only pack as focused as a
+// typical explicit request; the search over-fetches so the scope filter and the
 // one-per-declaration rule still leave enough to choose from.
 const (
 	contextMaxDiscovered    = 3
 	contextDiscoverFetch    = 40
 	contextDiscoverOthers   = 5
 	contextDiscoverMaxTerms = 16
-	// contextDiscoverMinScore is one task word in a declaration's name: a match
-	// in a docstring or a path alone is too weak to start a pack from.
+	// contextDiscoverMinScore is one task word in a declaration's name; a seed
+	// also needs that name hit itself (discoveredHit.qualifies), so words only a
+	// path carries never add up to one.
 	contextDiscoverMinScore = 2
 )
 
@@ -86,54 +88,124 @@ func PromptSelectors(text string, limit int) []string {
 }
 
 // contextDiscovery is what prose discovery did, for the renderer: the words it
-// searched with and the matches it did not take.
+// searched with, the matches it did not take, and why it found nothing when it
+// found nothing.
 type contextDiscovery struct {
 	Terms  []string
 	Others []contextCandidate
 	// Note says why the index was not searched (none, the wrong one, or the search
-	// failed); "" when it was, or when the task's own names left no room.
+	// failed); "" when it was.
 	Note string
+	// Excluded counts matches within/corpora left out; Withheld counts matches in
+	// sensitive files, which discovery never proposes (nor lists).
+	Excluded, Withheld int
+	// NotFiles are path-shaped tokens the task named that are no file here.
+	NotFiles []string
 }
 
-// discoverSeeds proposes seeds for a request that gave none. Named seeds come
-// first and take precedence; search fills what is left of contextMaxDiscovered.
-func (c *ContextCollector) discoverSeeds(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, task string) []seedInput {
+// collectDiscovered resolves seeds for a request that named none, from its task
+// prose. The code the task names outright is resolved first; then search fills
+// what is left of contextMaxDiscovered resolved seeds, so a named token that
+// resolves to nothing never costs the search a slot. A proposal never comes from
+// a sensitive file: discovery is the tool's choice, not the caller's, so it is
+// held to what expansion is held to and never delivers such a body.
+func (c *ContextCollector) collectDiscovered(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, task string) error {
 	d := &contextDiscovery{}
 	pack.Discovery = d
-	ins := namedSeeds(pack.Root, task)
-	if len(ins) >= contextMaxDiscovered {
-		return ins[:contextMaxDiscovered]
+	sensitive := c.sensitiveFor(ctx, pack.Root)
+	if sensitive == nil {
+		sensitive = func(string) bool { return false }
 	}
-	d.Terms = discoverTerms(task)
-	if len(d.Terms) == 0 {
-		return ins
-	}
-	if index.store == nil {
-		d.Note = "task prose was not searched: " + index.unavailable()
-		return ins
-	}
-	hits, err := index.store.Search(ctx, strings.Join(d.Terms, " "), topology.SearchOpts{Kinds: discoverKinds, Limit: contextDiscoverFetch})
-	if err != nil {
-		d.Note = "task prose search failed: " + err.Error()
-		return ins
-	}
-	for _, h := range rankDiscovered(hits, d.Terms, scope) {
-		if len(ins) < contextMaxDiscovered && h.score >= contextDiscoverMinScore && !namesSeedFile(ins, h.node.Path) {
-			ins = append(ins, seedInput{kind: seedSymbol, text: h.node.Path + "#" + nodeSelector(h.node), origin: originFound, matched: strings.Join(h.matched, " ")})
+	named, notFiles := namedSeeds(pack.Root, task)
+	d.NotFiles = notFiles
+	for i, in := range named {
+		if i >= contextMaxSeeds {
+			pack.miss(in.text, fmt.Sprintf("over the %d-seed cap; not resolved", contextMaxSeeds))
 			continue
 		}
-		if len(d.Others) < contextDiscoverOthers {
+		if err := c.proposeSeed(ctx, pack, scope, index, in, sensitive); err != nil {
+			return err
+		}
+	}
+	hits, err := c.searchTask(ctx, d, index, task)
+	if err != nil {
+		return err
+	}
+	ranked, excluded := rankDiscovered(hits, d.Terms, scope)
+	d.Excluded = excluded
+	for _, h := range ranked {
+		switch {
+		case sensitive(h.node.Path):
+			d.Withheld++
+		case pack.seeded(h.node):
+		case len(pack.Seeds) < contextMaxDiscovered && h.qualifies():
+			in := seedInput{
+				kind: seedSymbol, text: absUnder(pack.Root, h.node.Path) + "#" + nodeSelector(h.node),
+				origin: originFound, matched: strings.Join(h.matched, " "),
+			}
+			if err := c.proposeSeed(ctx, pack, scope, index, in, sensitive); err != nil {
+				return err
+			}
+		case len(d.Others) < contextDiscoverOthers:
 			d.Others = append(d.Others, candidateOf(h.node))
 		}
 	}
-	return ins
+	return nil
 }
 
-// namesSeedFile reports whether a named file seed already covers path, so search
-// does not add a declaration from a file the task itself named.
-func namesSeedFile(ins []seedInput, path string) bool {
-	for _, in := range ins {
-		if in.kind == seedFile && filepath.ToSlash(in.text) == path {
+// searchTask runs the lexical search for the task's words. An index that cannot
+// be searched, or a search that fails, is a note, not an error; a cancelled call
+// is an error.
+func (c *ContextCollector) searchTask(ctx context.Context, d *contextDiscovery, index contextIndex, task string) ([]topology.SearchResult, error) {
+	d.Terms = discoverTerms(task)
+	if len(d.Terms) == 0 {
+		return nil, nil
+	}
+	if index.store == nil {
+		d.Note = "task prose was not searched: " + index.unavailable()
+		return nil, nil
+	}
+	hits, err := index.store.Search(ctx, strings.Join(d.Terms, " "), topology.SearchOpts{Kinds: discoverKinds, Limit: contextDiscoverFetch})
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		d.Note = "task prose search failed: " + err.Error()
+		return nil, nil
+	}
+	return hits, nil
+}
+
+// proposeSeed resolves one proposal. A proposal that would refuse an explicit
+// seed only becomes a miss, with the reason, since the caller did not give it;
+// a cancelled call stays an error. A proposal that resolves into a sensitive file
+// is taken back and reported.
+func (c *ContextCollector) proposeSeed(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, in seedInput, sensitive func(string) bool) error {
+	before := len(pack.Seeds)
+	if err := c.collectSeed(ctx, pack, scope, index, in); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		pack.miss(in.text, "proposed from the task prose, but not usable as a seed: "+err.Error())
+		return nil
+	}
+	if len(pack.Seeds) == before {
+		return nil
+	}
+	if sensitive(pack.Seeds[before].Path) {
+		pack.Seeds = pack.Seeds[:before]
+		pack.miss(in.text, "a sensitive path: discovery never proposes one; name it in files or symbols to ask for it")
+		return nil
+	}
+	pack.Seeds[before].Origin, pack.Seeds[before].Matched = in.origin, in.matched
+	return nil
+}
+
+// seeded reports whether a resolved seed already covers n: a file seed of its
+// file, or a symbol seed of the same declaration.
+func (p *contextPack) seeded(n topology.Node) bool {
+	for _, s := range p.Seeds {
+		if s.Path == n.Path && (s.Kind == seedFile || s.Line == n.StartLine) {
 			return true
 		}
 	}
@@ -141,19 +213,27 @@ func namesSeedFile(ins []seedInput, path string) bool {
 }
 
 // namedSeeds turns the code the task names outright into seed inputs: a path that
-// is an existing regular file under root is a file seed, a selector-shaped token
-// without a slash is a symbol seed, and anything else is dropped, not guessed at.
-func namedSeeds(root, task string) []seedInput {
-	var out []seedInput
+// is an existing regular file under root is a file seed, and a selector-shaped
+// token without a slash is a symbol seed. A path-shaped token that is no file
+// here is returned apart, so the pack can say so; anything else is dropped.
+func namedSeeds(root, task string) (ins []seedInput, notFiles []string) {
 	for _, s := range PromptSelectors(task, contextMaxSeeds) {
 		switch {
 		case isFileUnder(root, s):
-			out = append(out, seedInput{kind: seedFile, text: s, origin: originNamed})
-		case taskSymbolRe.MatchString(s) && !strings.Contains(s, "/"):
-			out = append(out, seedInput{kind: seedSymbol, text: s, origin: originNamed})
+			// Absolute, so the proposal also resolves on a contested pin, which
+			// refuses relative paths the caller never gave.
+			abs := s
+			if !filepath.IsAbs(filepath.FromSlash(s)) {
+				abs = filepath.Join(root, filepath.FromSlash(s))
+			}
+			ins = append(ins, seedInput{kind: seedFile, text: abs, origin: originNamed})
+		case strings.Contains(s, "/"):
+			notFiles = append(notFiles, s)
+		case taskSymbolRe.MatchString(s):
+			ins = append(ins, seedInput{kind: seedSymbol, text: s, origin: originNamed})
 		}
 	}
-	return out
+	return ins, notFiles
 }
 
 // isFileUnder reports whether s names an existing regular file inside root.
@@ -206,10 +286,18 @@ func discoverTerms(task string) []string {
 
 // discoveredHit is one search hit with its discovery score.
 type discoveredHit struct {
-	node    topology.Node
-	score   int
-	matched []string
-	fts     float64
+	node     topology.Node
+	score    int
+	nameHits int
+	matched  []string
+	fts      float64
+}
+
+// qualifies reports whether a hit is strong enough to seed from: at least one
+// task word in the declaration's own name, and the minimum score. Words that
+// only its path carries never start a pack.
+func (h discoveredHit) qualifies() bool {
+	return h.nameHits > 0 && h.score >= contextDiscoverMinScore
 }
 
 // rankDiscovered scores each in-scope hit by the task words its declaration's
@@ -219,12 +307,11 @@ type discoveredHit struct {
 // outranks the tests of it. One hit per declaration is kept, ordered by score,
 // then by the search's own rank, then by path and line so equal hits order the
 // same way every call.
-func rankDiscovered(hits []topology.SearchResult, terms []string, scope contextScope) []discoveredHit {
+func rankDiscovered(hits []topology.SearchResult, terms []string, scope contextScope) (out []discoveredHit, excluded int) {
 	wantTests := false
 	for _, t := range terms {
 		wantTests = wantTests || stem(t) == "test"
 	}
-	var out []discoveredHit
 	seen := map[string]bool{}
 	for _, h := range hits {
 		n := h.Node
@@ -232,9 +319,10 @@ func rankDiscovered(hits []topology.SearchResult, terms []string, scope contextS
 			continue
 		}
 		if ok, _ := scope.allows(n.Path, corpusCode); !ok {
+			excluded++
 			continue
 		}
-		key := n.Path + "#" + nodeSelector(n)
+		key := fmt.Sprintf("%s#%s@%d", n.Path, nodeSelector(n), n.StartLine)
 		if seen[key] {
 			continue
 		}
@@ -258,7 +346,7 @@ func rankDiscovered(hits []topology.SearchResult, terms []string, scope contextS
 		}
 		return a.node.StartLine < b.node.StartLine
 	})
-	return out
+	return out, excluded
 }
 
 func scoreDiscovered(h topology.SearchResult, terms []string) discoveredHit {
@@ -279,6 +367,7 @@ func scoreDiscovered(h topology.SearchResult, terms []string) discoveredHit {
 		switch {
 		case name[st]:
 			d.score += 2
+			d.nameHits++
 			d.matched = append(d.matched, t)
 		case strings.Contains(where, st):
 			d.score++

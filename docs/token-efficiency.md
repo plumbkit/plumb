@@ -133,7 +133,7 @@ after the description compaction of plumb#612:
 
 So on today's clients the catalogue is paid on (nearly) every step, minus
 whatever prompt caching recovers. Shrinking the catalogue itself is the lever
-plumb controls: the lean profile cuts it to the 21 pinned tools, and the
+plumb controls: the lean profile cuts it to the 22 lean tools, and the
 descriptions are kept terse. `TestKimiWireCapture` is a tripwire: it fails on
 purpose when a Kimi release makes `tool-select` work, so this table gets
 re-measured.
