@@ -78,22 +78,32 @@ func (p *workspacePool) reconfigureRoot(root string) int {
 // language the new config disables is hibernated and stays so (an acquire now
 // refuses it). Returns how many restarts it started.
 func (p *workspacePool) reconfigureEntries(selected func(*poolEntry) bool) int {
+	// The candidates' configs are snapshotted under p.mu: a restart swaps
+	// e.lspCfg under it. An entry with no supervisor was not started by the pool
+	// (startLocked sets sup before publishing), so there is no server to restart.
+	type cand struct {
+		e   *poolEntry
+		cfg config.LSPConfig
+	}
 	p.mu.Lock()
-	var cands []*poolEntry
+	var cands []cand
 	for _, e := range p.entries {
-		if selected(e) && !e.reconfiguring {
-			cands = append(cands, e)
+		if e.sup != nil && selected(e) && !e.reconfiguring {
+			cands = append(cands, cand{e, e.lspCfg})
 		}
 	}
 	p.mu.Unlock()
 	n := 0
-	for _, e := range cands {
+	for _, c := range cands {
+		e := c.e
 		want, enabled := p.cfgForWorkspace(e.root, e.language)
-		if enabled && !serverChange(e.lspCfg, want) {
+		if enabled && !serverChange(c.cfg, want) {
 			// Nothing moved, or only the pool's own knobs (idle timeout, server
 			// cap): adopt them in place; the running server is what it should be.
 			p.mu.Lock()
-			e.lspCfg = want
+			if !e.reconfiguring { // a restart that began meanwhile installs its own
+				e.lspCfg = want
+			}
 			p.mu.Unlock()
 			continue
 		}
