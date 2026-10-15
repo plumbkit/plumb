@@ -32,6 +32,17 @@ func (r *connRegistry) namespaceForToken(token string) (string, bool) {
 	return ns.ID, true
 }
 
+// hookRequestNamespace is the namespace a hook request is answered from: the
+// handlers' resolver's answer, or — with no resolver wired — the default
+// namespace for a request without a token and nobody for one with a token
+// (never a silent fallback to the default namespace).
+func hookRequestNamespace(h ctrlHandlers, token string) (string, bool) {
+	if h.resolveNamespace == nil {
+		return "", token == ""
+	}
+	return h.resolveNamespace(token)
+}
+
 // handleNamespace is a registered connection's namespace ("" for the default,
 // and for a handle built without one in a test).
 func handleNamespace(h connHandle) string {

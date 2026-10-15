@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -200,5 +201,41 @@ func TestClearCommand_AnIDCannotSpellANamespacedKey(t *testing.T) {
 	client.Close()
 	if len(marked) != 0 {
 		t.Fatalf("an id spelling a namespaced key was marked: %q", marked)
+	}
+}
+
+// TestNamespaceForToken_ResolvesLiveTokensOnly runs against the real registry:
+// a live token names its namespace, no token is the default namespace, and a
+// released token is refused.
+func TestNamespaceForToken_ResolvesLiveTokensOnly(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	token, ns, err := r.create(time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns := r.conns
+	if id, ok := conns.namespaceForToken(token); !ok || id != ns.ID {
+		t.Fatalf("live token = %q, %v; want %s", id, ok, ns.ID)
+	}
+	if id, ok := conns.namespaceForToken(""); !ok || id != "" {
+		t.Fatalf("no token = %q, %v; want the default namespace", id, ok)
+	}
+	if _, err := r.release(token); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := conns.namespaceForToken(token); ok {
+		t.Fatal("a released token was still resolved")
+	}
+}
+
+// TestHookRequestNamespace_WithoutAResolverRefusesATokenedRequest: a daemon
+// that wired no resolver never answers a namespaced hook from the default
+// namespace.
+func TestHookRequestNamespace_WithoutAResolverRefusesATokenedRequest(t *testing.T) {
+	if _, ok := hookRequestNamespace(ctrlHandlers{}, "tok-1"); ok {
+		t.Fatal("a tokened request was answered with no resolver wired")
+	}
+	if ns, ok := hookRequestNamespace(ctrlHandlers{}, ""); !ok || ns != "" {
+		t.Fatal("control: a request without a token is the default namespace")
 	}
 }

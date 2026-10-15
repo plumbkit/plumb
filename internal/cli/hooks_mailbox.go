@@ -71,14 +71,12 @@ func handleMailboxCommand(out io.Writer, line string, h ctrlHandlers) bool {
 		fmt.Fprintln(out, "error: mailbox probe unavailable")
 		return true
 	}
-	if h.resolveNamespace != nil {
-		ns, ok := h.resolveNamespace(request.NamespaceToken)
-		if !ok {
-			fmt.Fprintln(out, "error: mailbox probe unavailable")
-			return true
-		}
-		request.namespace = ns
+	ns, ok := hookRequestNamespace(h, request.NamespaceToken)
+	if !ok {
+		fmt.Fprintln(out, "error: mailbox probe unavailable")
+		return true
 	}
+	request.namespace = ns
 	ctx, cancel := context.WithTimeout(context.Background(), hookMailboxBudget)
 	defer cancel()
 	reply, err := h.mailbox(ctx, request)

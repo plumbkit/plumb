@@ -563,14 +563,12 @@ func handleContextHintCommand(out io.Writer, line string, h ctrlHandlers) bool {
 		fmt.Fprintln(out, "error: context hint unavailable")
 		return true
 	}
-	if h.resolveNamespace != nil {
-		ns, ok := h.resolveNamespace(req.NamespaceToken)
-		if !ok {
-			fmt.Fprintln(out, "error: context hint unavailable")
-			return true
-		}
-		req.namespace = ns
+	ns, ok := hookRequestNamespace(h, req.NamespaceToken)
+	if !ok {
+		fmt.Fprintln(out, "error: context hint unavailable")
+		return true
 	}
+	req.namespace = ns
 	ctx, cancel := context.WithTimeout(context.Background(), contextHintBudget)
 	defer cancel()
 	reply := h.contextHint(ctx, req)
