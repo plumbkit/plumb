@@ -260,7 +260,10 @@ func (t *moduleTables) resolve(s moduleSite) (moduleDecl, float64, bool) {
 	switch {
 	case s.qualifier == "":
 		b, ok := t.binds[s.file][s.callee]
-		if !ok || b.imported == "" || b.imported == "*" || b.imported == "default" {
+		// A whole-module or namespace binding is not callable as a declaration;
+		// a default import names no declaration (the module's default export
+		// has no name the index records), so it finds nothing either.
+		if !ok || b.imported == "" || b.imported == "*" {
 			return moduleDecl{}, 0, false
 		}
 		d, ok := t.inModule(lang, s.path, b.spec, b.imported)

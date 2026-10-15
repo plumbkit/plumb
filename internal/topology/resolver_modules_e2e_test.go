@@ -86,9 +86,12 @@ func TestModuleResolver_Python(t *testing.T) {
 		"pkg/__init__.py": "from .util import helper as h\n\ndef top():\n    return h()\n",
 		"pkg/util.py": "def helper():\n    return 1\n\n" +
 			"class Store:\n    def save(self):\n        return self.flush()\n\n    def flush(self):\n        return 2\n\n" +
+			"    def again(self):\n        return self.again()\n\n" +
 			"    @classmethod\n    def make(cls):\n        return cls.flush()\n",
 		"pkg/svc.py": "import pkg.util\nfrom pkg import util\nfrom pkg.util import Store\nfrom . import util as u2\n\n" +
 			"def serve():\n    pkg.util.helper()\n    util.helper()\n    Store.save(None)\n    u2.helper()\n    unknown()\n\n" +
+			"def via_submodule():\n    return util.helper()\n\n" +
+			"def via_alias():\n    return u2.helper()\n\n" +
 			"class A:\n    def run(self):\n        return self.go()\n\n    def go(self):\n        return 1\n\n" +
 			"class B:\n    def run(self):\n        return self.stop()\n\n    def stop(self):\n        return 2\n",
 	})
@@ -101,6 +104,9 @@ func TestModuleResolver_Python(t *testing.T) {
 		{"pkg/svc.py", "serve", []string{"helper@pkg/util.py", "save@pkg/util.py"}},
 		{"pkg/util.py", "save", []string{"flush@pkg/util.py"}},
 		{"pkg/util.py", "make", []string{"flush@pkg/util.py"}},
+		{"pkg/svc.py", "via_submodule", []string{"helper@pkg/util.py"}},
+		{"pkg/svc.py", "via_alias", []string{"helper@pkg/util.py"}},
+		{"pkg/util.py", "again", nil},
 	}
 	for _, c := range cases {
 		if got := resolvedCallees(t, store, c.path, c.sel); !slices.Equal(got, c.want) {
@@ -155,6 +161,8 @@ func TestModuleResolver_TypeScriptAndJavaScript(t *testing.T) {
 		"src/svc.ts": "import { helper as h, Store } from \"./util\";\nimport * as u from \"./util.js\";\n" +
 			"import def from \"./util\";\nimport { readFileSync } from \"fs\";\n\n" +
 			"export function serve() {\n  h();\n  u.helper();\n  new Store();\n  def();\n  readFileSync(\"x\");\n}\n" +
+			"export function viaNamespace() { return u.helper(); }\n" +
+			"export function viaDefault() { return def(); }\n" +
 			"export const run = () => { return u.helper(); };\n" +
 			"class A { run() { return this.go(); } go() { return 1; } }\n" +
 			"class B { run() { return this.stop(); } stop() { return 2; } }\n",
@@ -168,6 +176,8 @@ func TestModuleResolver_TypeScriptAndJavaScript(t *testing.T) {
 		{"src/svc.ts", "serve", []string{"Store@src/util.ts", "helper@src/util.ts"}},
 		{"src/util.ts", "save", []string{"flush@src/util.ts"}},
 		{"lib/legacy.js", "legacy", []string{"helper@src/util.ts"}},
+		{"src/svc.ts", "viaNamespace", []string{"helper@src/util.ts"}},
+		{"src/svc.ts", "viaDefault", nil},
 	}
 	for _, c := range cases {
 		if got := resolvedCallees(t, store, c.path, c.sel); !slices.Equal(got, c.want) {
@@ -202,5 +212,23 @@ func TestModuleResolver_TypeScriptAndJavaScript(t *testing.T) {
 	sort.Strings(got)
 	if want := []string{"function>helper", "method>go", "method>stop"}; !slices.Equal(got, want) {
 		t.Errorf("the three runs resolve to %v, want %v (the arrow const, A.run, B.run)", got, want)
+	}
+}
+
+// An absolute Python import resolves to the one indexed module whose path ends
+// that way, and to none when several do: a guessed module is never an edge.
+func TestModuleResolver_PythonAbsoluteImportsBySuffix(t *testing.T) {
+	ws := writeTree(t, map[string]string{
+		"src/only/mod.py": "def f():\n    return 1\n",
+		"src/a/mod.py":    "def g():\n    return 1\n",
+		"lib/a/mod.py":    "def g():\n    return 2\n",
+		"app/main.py":     "import only.mod\nimport a.mod\n\ndef unique():\n    return only.mod.f()\n\ndef ambiguous():\n    return a.mod.g()\n",
+	})
+	store := openIndexed(t, ws, 4, treesitter.NewPython())
+	if got := resolvedCallees(t, store, "app/main.py", "unique"); !slices.Equal(got, []string{"f@src/only/mod.py"}) {
+		t.Errorf("unique calls %v, want [f@src/only/mod.py]", got)
+	}
+	if got := resolvedCallees(t, store, "app/main.py", "ambiguous"); len(got) != 0 {
+		t.Errorf("ambiguous calls %v, want none: two modules end in a/mod.py", got)
 	}
 }
