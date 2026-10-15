@@ -233,3 +233,45 @@ func TestRankDiscovered_StemsAndTestDemotion(t *testing.T) {
 		t.Errorf("a task about tests must not demote test files (its path even carries \"test\"): %+v", withTests)
 	}
 }
+
+// A word matches a name through its stem: "updating" carries "update".
+func TestRankDiscovered_StemMatchesInflections(t *testing.T) {
+	hits := []topology.SearchResult{{Node: topology.Node{Name: "updateLedger", Qualified: "updateLedger", Path: "s/s.go", Kind: topology.KindFunction}}}
+	got := rankDiscovered(hits, discoverTerms("updating ledgers"), contextScope{root: "/r"})
+	if len(got) != 1 || got[0].score != 4 {
+		t.Fatalf("updateLedger on \"updating ledgers\" = %+v, want score 4 (both words in the name, by stem)", got)
+	}
+}
+
+// A file the task names is its own seed: search does not add declarations from
+// it as further seeds. The control shows search would otherwise pick them.
+func TestContextForTask_Discover_NamedFileIsNotMinedForMoreSeeds(t *testing.T) {
+	s := newShop(t)
+	control := s.collect(t, map[string]any{"task": "apply the discount lookup"})
+	if !slices.ContainsFunc(control.Seeds, func(sd contextSeed) bool { return sd.Path == "pricing/discount.go" }) {
+		t.Fatalf("control: search should seed from pricing/discount.go; seeds %v", seedSelectors(control))
+	}
+	pack := s.collect(t, map[string]any{"task": "apply the discount lookup in pricing/discount.go"})
+	n := 0
+	for _, sd := range pack.Seeds {
+		if sd.Path == "pricing/discount.go" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("pricing/discount.go seeded %d times, want once (the named file): %v", n, seedSelectors(pack))
+	}
+}
+
+// A word that only a path carries is too weak to seed from: the declarations are
+// listed as candidates, never seeds.
+func TestContextForTask_Discover_PathOnlyMatchesNeverSeed(t *testing.T) {
+	s := newShop(t)
+	pack := s.collect(t, map[string]any{"task": "pricing"})
+	if len(pack.Seeds) != 0 {
+		t.Errorf("a path-only match seeded %v", seedSelectors(pack))
+	}
+	if pack.Discovery == nil || len(pack.Discovery.Others) == 0 {
+		t.Error("the path-only matches must still be listed as candidates")
+	}
+}
