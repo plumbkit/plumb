@@ -133,7 +133,7 @@ func runSetupClaudeDesktop(_ *cobra.Command, _ []string) error {
 		return runSetupUninstall(claudeDesktopTarget)
 	}
 	PrintLogo()
-	if err := ensureServiceProfileForSetup(); err != nil {
+	if err := recordServiceProfileForSetup(); err != nil {
 		return err
 	}
 	cfgPaths, err := claudeDesktopConfigPaths()
@@ -206,7 +206,7 @@ func runSetupClaudeCode(_ *cobra.Command, _ []string) error {
 		return uninstallTargetAt(claudeCodeTarget, []string{cfgPath}, scope == "user")
 	}
 	PrintLogo()
-	if err := ensureServiceProfileForSetup(); err != nil {
+	if err := recordServiceProfileForSetup(); err != nil {
 		return err
 	}
 

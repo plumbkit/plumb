@@ -129,6 +129,14 @@ func runServiceInstall(_ *cobra.Command, _ []string) error {
 	return installServiceProfile(true)
 }
 
+// recordServiceProfileForSetup is what every `plumb setup` entry point calls
+// first: claude-code, claude-desktop, the target-backed clients, --all and the
+// interactive picker. It is a variable for one reason (PLAN-555): a dropped call
+// at any of the five re-bricks those installs silently, because the next
+// canonical cold start finds no profile and refuses, and the suite can only pin
+// "each entry point makes the call" by substituting it.
+var recordServiceProfileForSetup = ensureServiceProfileForSetup
+
 // ensureServiceProfileForSetup records this binary in the account's launch
 // profile on the way through `plumb setup`.
 //

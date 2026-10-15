@@ -39,7 +39,7 @@ type pickerRow struct {
 
 func runSetupPicker() error {
 	PrintLogo()
-	if err := ensureServiceProfileForSetup(); err != nil {
+	if err := recordServiceProfileForSetup(); err != nil {
 		return err
 	}
 
