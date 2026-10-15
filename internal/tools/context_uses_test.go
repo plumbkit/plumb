@@ -375,6 +375,8 @@ func TestUsesHelpers_PerLanguage(t *testing.T) {
 		{"if LIMIT == 1:", "LIMIT", "python", false},
 		{"self.LIMIT = 1", "LIMIT", "python", false},
 		{"svc(LIMIT=1)", "LIMIT", "python", false},
+		{"svc(\n    LIMIT=LIMIT,\n)", "LIMIT", "python", false},
+		{"svc(\n    a=1,\n)\nLIMIT = 2", "LIMIT", "python", true},
 		{"x = 1\n    LIMIT = 2", "LIMIT", "python", true},
 		{"const LIMIT = 1", "LIMIT", "typescript", true},
 		{"let LIMIT = 1", "LIMIT", "javascript", true},

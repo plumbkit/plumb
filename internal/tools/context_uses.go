@@ -84,13 +84,42 @@ func shadows(text, name, lang string) bool {
 	var pattern string
 	switch lang {
 	case "python":
-		pattern = `(?m)^[ \t]*` + q + `\s*(:[^=\n]*)?=[^=]|\bfor\s+` + q + `\b`
+		if pythonAssigns(text, q) {
+			return true
+		}
+		pattern = `\bfor\s+` + q + `\b`
 	case "typescript", "javascript":
 		pattern = `\b(let|const|var)\s+` + q + `\b`
 	default:
 		pattern = `\b` + q + `\s*(,\s*\w+\s*)*:=|\bvar\s+` + q + `\b`
 	}
 	return regexp.MustCompile(pattern).MatchString(text)
+}
+
+// pythonAssigns reports whether text has an assignment statement to the quoted
+// name: one at the start of a line outside any bracket, so a keyword argument
+// (f(name=…), or a call split over lines in Black's style) is not one. Brackets
+// inside strings are not told apart; a string with an unbalanced bracket can
+// only hide an assignment, which keeps a use listed, never drop one wrongly.
+func pythonAssigns(text, quoted string) bool {
+	assign := regexp.MustCompile(`^[ \t]*` + quoted + `\s*(:[^=\n]*)?=[^=]`)
+	depth := 0
+	for _, line := range strings.Split(text, "\n") {
+		if depth == 0 && assign.MatchString(line) {
+			return true
+		}
+		for _, r := range line {
+			switch r {
+			case '(', '[', '{':
+				depth++
+			case ')', ']', '}':
+				if depth > 0 {
+					depth--
+				}
+			}
+		}
+	}
+	return false
 }
 
 // uses lists, in file order, at most contextUsesMax package-level constants and

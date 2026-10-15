@@ -483,7 +483,10 @@ For Python, TypeScript and JavaScript the extractors record what each import bin
 written, and the name imported from it) and every call inside a function that could be
 followed — one whose name or qualifier root is a bound name, or a method call on
 `self`/`cls`/`this` (a call like `print(x)` or `console.log(x)` could never become an
-edge, and most calls are of that kind, so they are not recorded). A second resolver,
+edge, and most calls are of that kind, so they are not recorded). A Python import inside
+a function binds its name for the whole file; a TypeScript or JavaScript binding is read
+from top-level imports and `require` declarations only, so a `require` inside a function
+body is not followed. A second resolver,
 the **module resolver**, runs in the same transaction after the Go one and writes
 `call-resolver` edges for the calls an import names, and nothing else:
 

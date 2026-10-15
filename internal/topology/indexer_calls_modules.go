@@ -97,6 +97,15 @@ func moduleLanguagePlaceholders() (string, []any) {
 // resolveModuleCalls resolves the module-language call sites in scope (every one
 // when not scoped) and inserts their edges.
 func resolveModuleCalls(ctx context.Context, tx *sql.Tx, scoped bool) error {
+	if scoped {
+		// A scope with no module-language file changes nothing here: an importer
+		// can only import one, and a deleted file's edges went with its nodes. A
+		// Go-only save in a polyglot repository skips the whole-index load.
+		touched, err := scopeHasModuleFile(ctx, tx)
+		if err != nil || !touched {
+			return err
+		}
+	}
 	t, err := loadModuleTables(ctx, tx)
 	if err != nil {
 		return err
@@ -169,6 +178,24 @@ func (t *moduleTables) importsAny(file int64, names map[string]moduleBinding, ch
 		}
 	}
 	return false
+}
+
+// scopeHasModuleFile reports whether the rebuild scope holds a module-language
+// file.
+//
+//nolint:gosec // G202: the IN list is placeholders only; every value is bound
+func scopeHasModuleFile(ctx context.Context, tx *sql.Tx) (bool, error) {
+	ph, args := moduleLanguagePlaceholders()
+	var one int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+scopeTable+` s JOIN topology_files f ON f.id = s.file_id
+		WHERE f.language IN (`+ph+`) LIMIT 1`, args...).Scan(&one)
+	switch {
+	case err == sql.ErrNoRows:
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("topology: module calls: scope: %w", err)
+	}
+	return true, nil
 }
 
 func scopeFileIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
