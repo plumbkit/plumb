@@ -355,3 +355,34 @@ func TestWatcherFailed_ALongHealthyRunResetsTheBackoff(t *testing.T) {
 		return e.watcherFailures == 1
 	})
 }
+
+// TestWatcherFailed_AFailureDuringARecreationRunsAnotherRound: Failed fires
+// once per watcher, so one that arrives while a recreation runs is queued and
+// handled when it ends, not dropped.
+func TestWatcherFailed_AFailureDuringARecreationRunsAnotherRound(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.mu.Lock()
+	e.watcherRetrying = true // a recreation is under way
+	cur := e.watcher
+	pool.mu.Unlock()
+	pool.onWatcherFailed(e, cur) // the current watcher fails meanwhile
+	pool.mu.Lock()
+	queued := e.watcherRetryAgain
+	pool.mu.Unlock()
+	if !queued {
+		t.Fatal("a failure during a recreation was dropped")
+	}
+	before := f.count(root)
+	// The running recreation ends (its own watcher was replaced elsewhere): the
+	// queued failure must start another round, which replaces cur.
+	pool.recreateWatcher(e, &lspFSWatcher{})
+	eventually(t, 3*time.Second, "the queued failure did not run another round", func() bool {
+		return f.count(root) > before
+	})
+}
