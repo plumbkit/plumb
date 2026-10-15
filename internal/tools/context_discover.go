@@ -118,12 +118,13 @@ func (c *ContextCollector) collectDiscovered(ctx context.Context, pack *contextP
 	}
 	named, notFiles := namedSeeds(pack.Root, task)
 	d.NotFiles = notFiles
-	for i, in := range named {
-		if i >= contextMaxSeeds {
-			pack.miss(in.text, fmt.Sprintf("over the %d-seed cap; not resolved", contextMaxSeeds))
+	for _, in := range named {
+		if len(pack.Seeds) >= contextMaxDiscovered {
+			pack.miss(relToRoot(pack.Root, in.text), fmt.Sprintf("over the %d-seed cap for proposals; not resolved "+
+				"(name it in files or symbols to include it)", contextMaxDiscovered))
 			continue
 		}
-		if err := c.proposeSeed(ctx, pack, scope, index, in, sensitive); err != nil {
+		if _, err := c.proposeSeed(ctx, pack, scope, index, in, sensitive); err != nil {
 			return err
 		}
 	}
@@ -133,24 +134,38 @@ func (c *ContextCollector) collectDiscovered(ctx context.Context, pack *contextP
 	}
 	ranked, excluded := rankDiscovered(hits, d.Terms, scope)
 	d.Excluded = excluded
+	proposed, failed := map[string]bool{}, 0
 	for _, h := range ranked {
+		in := seedInput{
+			kind: seedSymbol, text: absUnder(pack.Root, h.node.Path) + "#" + nodeSelector(h.node),
+			origin: originFound, matched: strings.Join(h.matched, " "),
+		}
 		switch {
 		case sensitive(h.node.Path):
 			d.Withheld++
-		case pack.seeded(h.node):
-		case len(pack.Seeds) < contextMaxDiscovered && h.qualifies():
-			in := seedInput{
-				kind: seedSymbol, text: absUnder(pack.Root, h.node.Path) + "#" + nodeSelector(h.node),
-				origin: originFound, matched: strings.Join(h.matched, " "),
-			}
-			if err := c.proposeSeed(ctx, pack, scope, index, in, sensitive); err != nil {
+		case pack.seeded(h.node), proposed[in.text]:
+			// Already a seed, or the same selector already tried: one
+			// ambiguous selector is one miss, not one per declaration.
+		case len(pack.Seeds) < contextMaxDiscovered && h.qualifies() && failed < contextMaxDiscovered:
+			proposed[in.text] = true
+			ok, err := c.proposeSeed(ctx, pack, scope, index, in, sensitive)
+			if err != nil {
 				return err
+			}
+			if !ok {
+				failed++
 			}
 		case len(d.Others) < contextDiscoverOthers:
 			d.Others = append(d.Others, candidateOf(h.node))
 		}
 	}
 	return nil
+}
+
+// relToRoot shows a proposal root-relative: proposals carry absolute paths so
+// they resolve on a contested pin, but the pack speaks in relative ones.
+func relToRoot(root, text string) string {
+	return strings.TrimPrefix(text, root+"/")
 }
 
 // searchTask runs the lexical search for the task's words. An index that cannot
@@ -176,29 +191,34 @@ func (c *ContextCollector) searchTask(ctx context.Context, d *contextDiscovery, 
 	return hits, nil
 }
 
-// proposeSeed resolves one proposal. A proposal that would refuse an explicit
-// seed only becomes a miss, with the reason, since the caller did not give it;
-// a cancelled call stays an error. A proposal that resolves into a sensitive file
-// is taken back and reported.
-func (c *ContextCollector) proposeSeed(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, in seedInput, sensitive func(string) bool) error {
-	before := len(pack.Seeds)
+// proposeSeed resolves one proposal and reports whether it became a seed. A
+// proposal that would refuse an explicit seed only becomes a miss, with the
+// reason, since the caller did not give it; a cancelled call stays an error. A
+// proposal that resolves into a sensitive file is taken back and reported.
+func (c *ContextCollector) proposeSeed(ctx context.Context, pack *contextPack, scope contextScope, index contextIndex, in seedInput, sensitive func(string) bool) (bool, error) {
+	before, misses := len(pack.Seeds), len(pack.Misses)
+	defer func() {
+		for i := misses; i < len(pack.Misses); i++ {
+			pack.Misses[i].Input = relToRoot(pack.Root, pack.Misses[i].Input)
+		}
+	}()
 	if err := c.collectSeed(ctx, pack, scope, index, in); err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 		pack.miss(in.text, "proposed from the task prose, but not usable as a seed: "+err.Error())
-		return nil
+		return false, nil
 	}
 	if len(pack.Seeds) == before {
-		return nil
+		return false, nil
 	}
 	if sensitive(pack.Seeds[before].Path) {
 		pack.Seeds = pack.Seeds[:before]
 		pack.miss(in.text, "a sensitive path: discovery never proposes one; name it in files or symbols to ask for it")
-		return nil
+		return false, nil
 	}
 	pack.Seeds[before].Origin, pack.Seeds[before].Matched = in.origin, in.matched
-	return nil
+	return true, nil
 }
 
 // seeded reports whether a resolved seed already covers n: a file seed of its

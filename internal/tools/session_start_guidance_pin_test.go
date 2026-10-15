@@ -97,4 +97,20 @@ func TestLSPAdvisoriesNamePinnedToolsOnly(t *testing.T) {
 	if !strings.Contains(sb.String(), "context_for_task") {
 		t.Errorf("control: the advisories rendered nothing the check could see:\n%s", sb.String())
 	}
+
+	// No server at all, the index active: the recommended start's own branch.
+	plain := &SessionStart{clientNameFn: func() string { return "claude-code" }}
+	plain.topo = func() *topology.Store { return &topology.Store{} }
+	var sb2 strings.Builder
+	plain.writeSessionRecommendedStart(&sb2, "/ws", false, "", "")
+	if !strings.Contains(sb2.String(), "context_for_task") {
+		t.Fatalf("control: the no-server, index-active advice did not render:\n%s", sb2.String())
+	}
+	for line := range strings.SplitSeq(sb2.String(), "\n") {
+		for _, name := range names {
+			if strings.Contains(line, name) && !IsPinned(name) && !strings.Contains(line, "ToolSearch") {
+				t.Errorf("no-server advice names deferred tool %q with no ToolSearch note:\n%s", name, line)
+			}
+		}
+	}
 }

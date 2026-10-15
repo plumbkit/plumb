@@ -348,7 +348,7 @@ func TestContextForTask_Refusals(t *testing.T) {
 	}{
 		{"no seeds", map[string]any{}, []string{"give files, symbols or task prose"}, toolerror.KindInvalidArguments, false},
 		{"blank prose", map[string]any{"task": "  \n "}, []string{"give files, symbols or task prose"}, toolerror.KindInvalidArguments, false},
-		{"prose over the limit", map[string]any{"task": strings.Repeat("cart ", 801)}, []string{"over the 4000-byte limit"}, toolerror.KindInvalidArguments, false},
+		{"prose over the limit", map[string]any{"task": strings.Repeat("cart ", 801)}, []string{"over the 4000-byte limit for prose that seeds a pack"}, toolerror.KindInvalidArguments, false},
 		{"empty file entry", map[string]any{"files": []string{" "}}, []string{"files[0] is empty"}, toolerror.KindInvalidArguments, false},
 		{"relative directory", map[string]any{"files": []string{"cart"}}, []string{"a directory is scope, not a seed"}, toolerror.KindInvalidArguments, false},
 		{"absolute directory", map[string]any{"files": []string{s.root}}, []string{"a directory is scope, not a seed"}, toolerror.KindInvalidArguments, false},
@@ -598,5 +598,14 @@ func TestContextForTask_TinyBudgetOmitsExactlyAndNeverOverruns(t *testing.T) {
 	}
 	if !sawOmission {
 		t.Error("the sweep never produced an omission, so it proved nothing about the count")
+	}
+}
+
+// The 4000-byte limit is for prose that seeds a pack: beside explicit seeds,
+// prose only re-ranks, and a long one is accepted.
+func TestContextForTask_LongProseBesideSeedsIsAccepted(t *testing.T) {
+	s := newShop(t)
+	if _, err := s.run(t, map[string]any{"files": []string{"cart/cart.go"}, "task": strings.Repeat("cart ", 1200)}); err != nil {
+		t.Errorf("long prose beside an explicit seed was refused: %v", err)
 	}
 }

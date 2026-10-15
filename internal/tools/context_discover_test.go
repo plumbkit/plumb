@@ -183,7 +183,7 @@ func TestContextForTask_Discover_ARefusedProposalIsAMissNotAnError(t *testing.T)
 	}
 	pack := s.collect(t, map[string]any{"task": "look at escape/x.go and the cart total"})
 	if !slices.ContainsFunc(pack.Misses, func(m contextMiss) bool {
-		return strings.HasSuffix(m.Input, "/escape/x.go") && strings.Contains(m.Reason, "proposed from the task prose")
+		return m.Input == "escape/x.go" && strings.Contains(m.Reason, "proposed from the task prose")
 	}) {
 		t.Errorf("the refused proposal is not reported as a miss: %+v", pack.Misses)
 	}
@@ -433,5 +433,56 @@ func TestIsFileUnder(t *testing.T) {
 		if got := isFileUnder(root, c.s); got != c.want {
 			t.Errorf("isFileUnder(%q) = %v, want %v", c.s, got, c.want)
 		}
+	}
+}
+
+// Named code counts toward the 3-seed cap like everything else discovery
+// proposes; what is over it is reported, not dropped.
+func TestContextForTask_Discover_NamedCodeIsCappedToo(t *testing.T) {
+	s := newShop(t)
+	pack := s.collect(t, map[string]any{"task": "`Cart.Total` `Cart.Add` `Cart.Remove` `Ledger.Record`"})
+	if len(pack.Seeds) != contextMaxDiscovered {
+		t.Errorf("seeds %v, want the cap %d", seedSelectors(pack), contextMaxDiscovered)
+	}
+	if !slices.ContainsFunc(pack.Misses, func(m contextMiss) bool {
+		return m.Input == "Ledger.Record" && strings.Contains(m.Reason, "over the 3-seed cap for proposals")
+	}) {
+		t.Errorf("the fourth named selector is not reported over the cap: %+v", pack.Misses)
+	}
+}
+
+// One ambiguous selector is tried once, however many declarations share it, and
+// a miss names it root-relative.
+func TestContextForTask_Discover_AnAmbiguousSelectorIsOneMiss(t *testing.T) {
+	root := copyShopFixture(t)
+	src := "def setup_ledger():\n    pass\n\n\ndef setup_ledger():\n    pass\n"
+	if err := os.WriteFile(filepath.Join(root, "scripts", "twice.py"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newShopTool(t, openContextStore(t, root, shopFixtureFiles+1), root)
+	pack := s.collect(t, map[string]any{"task": "setup ledger"})
+	n := 0
+	for _, m := range pack.Misses {
+		if strings.Contains(m.Input, "setup_ledger") {
+			n++
+			if strings.HasPrefix(m.Input, "/") {
+				t.Errorf("miss input %q is absolute; the pack speaks root-relative", m.Input)
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("setup_ledger produced %d misses, want 1: %+v", n, pack.Misses)
+	}
+}
+
+// A seed needs the minimum score as well as a name hit: one name word in a test
+// file scores 1 after the demotion and does not seed.
+func TestDiscoveredHit_Qualifies(t *testing.T) {
+	hit := func(name, p string) topology.SearchResult {
+		return topology.SearchResult{Node: topology.Node{Name: name, Qualified: name, Path: p, Kind: topology.KindFunction}}
+	}
+	got, _ := rankDiscovered([]topology.SearchResult{hit("Ledger", "s/s.go"), hit("Ledger", "s/s_test.go")}, []string{"ledger"}, contextScope{root: "/r"})
+	if len(got) != 2 || !got[0].qualifies() || got[1].qualifies() {
+		t.Errorf("production %+v should qualify and its test twin (score 1) should not", got)
 	}
 }
