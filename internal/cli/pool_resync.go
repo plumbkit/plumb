@@ -49,11 +49,7 @@ func (p *workspacePool) onWatcherLost(e *poolEntry) {
 	quiet, minInterval := p.resyncDelays()
 	delay := quiet
 	if !e.lastResync.IsZero() {
-		// Losses that keep recurring (a flooding tree) double the interval each
-		// time, up to an hour, so a busy server is not made cold every ten
-		// minutes; a quiet spell resets it.
-		interval := min(minInterval<<min(e.resyncStreak, 3), lspResyncMaxInterval)
-		if wait := time.Until(e.lastResync.Add(interval)); wait > delay {
+		if wait := time.Until(e.lastResync.Add(resyncInterval(minInterval, e.resyncStreak))); wait > delay {
 			delay = wait
 		}
 	}
@@ -72,11 +68,7 @@ func (p *workspacePool) resyncEntry(e *poolEntry) {
 	}
 	now := time.Now()
 	_, minInterval := p.resyncDelays()
-	if !e.lastResync.IsZero() && now.Sub(e.lastResync) < 2*min(minInterval<<min(e.resyncStreak, 3), lspResyncMaxInterval) {
-		e.resyncStreak++
-	} else {
-		e.resyncStreak = 0
-	}
+	e.resyncStreak = nextResyncStreak(e.lastResync, now, minInterval, e.resyncStreak)
 	e.lastResync = now
 	p.resyncs++
 	p.lastResynced = poolKey{e.root, e.language}
@@ -85,6 +77,23 @@ func (p *workspacePool) resyncEntry(e *poolEntry) {
 	}
 	e.reconfiguring = true
 	go p.restartWithConfig(e, e.lspCfg, true)
+}
+
+// resyncInterval is the minimum gap between an entry's resyncs: losses that
+// keep recurring (a flooding tree) double it each time, up to an hour, so a busy
+// server is not made cold every ten minutes.
+func resyncInterval(minInterval time.Duration, streak int) time.Duration {
+	return min(minInterval<<min(streak, 3), lspResyncMaxInterval)
+}
+
+// nextResyncStreak counts a resync that follows the last within twice the
+// current interval as part of a streak; a quieter gap resets it. Real resyncs
+// are at least one interval apart, so the factor two is what lets it grow.
+func nextResyncStreak(last, now time.Time, minInterval time.Duration, streak int) int {
+	if !last.IsZero() && now.Sub(last) < 2*resyncInterval(minInterval, streak) {
+		return streak + 1
+	}
+	return 0
 }
 
 // onWatcherFailed starts recreating e's watcher after failed — the watcher

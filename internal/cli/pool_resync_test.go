@@ -249,6 +249,12 @@ func TestWatcherFailed_RetriesUntilAWatcherAttaches(t *testing.T) {
 		defer pool.mu.Unlock()
 		return e.watcher != nil && calls.Load() >= 3
 	})
+	pool.mu.Lock()
+	healthy := e.watcherHealthySince
+	pool.mu.Unlock()
+	if healthy.IsZero() {
+		t.Fatal("a recreated watcher did not record when it became healthy")
+	}
 }
 
 // TestWatcherFailed_AStaleRecreationLeavesAHealthyWatcher: when another path
@@ -385,4 +391,61 @@ func TestWatcherFailed_AFailureDuringARecreationRunsAnotherRound(t *testing.T) {
 	eventually(t, 3*time.Second, "the queued failure did not run another round", func() bool {
 		return f.count(root) > before
 	})
+}
+
+func TestResyncInterval_DoublesWithTheStreakUpToAnHour(t *testing.T) {
+	for streak, want := range map[int]time.Duration{0: 10 * time.Minute, 1: 20 * time.Minute, 2: 40 * time.Minute, 3: time.Hour, 9: time.Hour} {
+		if got := resyncInterval(lspResyncMinInterval, streak); got != want {
+			t.Errorf("resyncInterval(streak %d) = %v, want %v", streak, got, want)
+		}
+	}
+	base := time.Now()
+	if s := nextResyncStreak(base, base.Add(15*time.Minute), lspResyncMinInterval, 0); s != 1 {
+		t.Errorf("a resync 15 min after the last (interval 10 min) is not part of a streak: %d", s)
+	}
+	if s := nextResyncStreak(base, base.Add(25*time.Minute), lspResyncMinInterval, 0); s != 0 {
+		t.Errorf("a resync 25 min after the last (interval 10 min) did not reset the streak: %d", s)
+	}
+	if s := nextResyncStreak(time.Time{}, base, lspResyncMinInterval, 4); s != 0 {
+		t.Errorf("a first resync carried a streak: %d", s)
+	}
+}
+
+// TestAttachWatcher_ReportsWhetherItAttached.
+func TestAttachWatcher_ReportsWhetherItAttached(t *testing.T) {
+	pool, _ := resyncPool(t)
+	e, err := pool.acquireLang(t.Context(), goModRoot(t), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.hibernateEntry(e)
+	if pool.attachWatcher(e) {
+		t.Fatal("attachWatcher reported success on a hibernated entry")
+	}
+}
+
+// TestWatcherLost_ASkippedHibernationKeepsThePendingResync: a hibernation
+// refused because a call is in progress leaves the pending resync in place.
+func TestWatcherLost_ASkippedHibernationKeepsThePendingResync(t *testing.T) {
+	pool, f := resyncPool(t)
+	pool.resyncQuiet = time.Hour
+	root := goModRoot(t)
+	e, done, err := pool.acquireCall(t.Context(), root, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+	f.latest(root).lost <- struct{}{}
+	eventually(t, 3*time.Second, "control: no resync was scheduled", func() bool {
+		pool.mu.Lock()
+		defer pool.mu.Unlock()
+		return e.resyncTimer != nil
+	})
+	pool.hibernateEntry(e) // refused: a call holds it
+	pool.mu.Lock()
+	pending := e.resyncTimer != nil
+	pool.mu.Unlock()
+	if !pending {
+		t.Fatal("a refused hibernation dropped the pending resync")
+	}
 }
