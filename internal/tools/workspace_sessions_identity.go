@@ -118,3 +118,12 @@ func (t *WorkspaceSessions) resolveWSCaller(ctx context.Context) (workspace stri
 	}
 	return workspace, c
 }
+
+// namespaceSelf is the session whose namespace scopes the roster: the caller's
+// own row, else the connection's (PLAN-520).
+func (t *WorkspaceSessions) namespaceSelf(callerID string) string {
+	if callerID == "" && t.selfSessID != nil {
+		return t.selfSessID()
+	}
+	return callerID
+}

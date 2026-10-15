@@ -231,6 +231,7 @@ func (t *WorkspaceSessions) runSync(workspace string, caller wsCaller, recentLim
 	all, err := session.List()
 	var peers []session.Info
 	if err == nil {
+		all = session.InNamespaceOf(all, t.namespaceSelf(caller.id))
 		for _, s := range all {
 			// Normalise both with filepath.Clean to tolerate trailing slashes
 			// or redundant separators in either side.

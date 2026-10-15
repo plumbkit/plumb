@@ -167,8 +167,8 @@ func (s *connSession) relinkTo(externalID string) {
 // record reserves.
 func (s *connSession) beginResume(linkage string) {
 	prev := session.FindEnded(linkage, 24*time.Hour)
-	if prev == nil {
-		return
+	if prev == nil || !session.NamespaceVisible(*prev, s.view().namespace) {
+		return // a session of another namespace is never resumed into this one (PLAN-520)
 	}
 	r := &resumeState{linkage: linkage}
 	name, err := s.renameSessionResuming(prev.Name, linkage)

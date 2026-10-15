@@ -83,6 +83,12 @@ func (p *reconnectingProxy) consumeInitializeResponse(fr *frameReader, initID st
 			// stale version.
 			p.daemonVersion = serverInfoVersion(frame)
 			p.hsMu.Unlock()
+			if msg, refused := namespaceRefusal(frame); refused {
+				if !answered {
+					p.writeClient(frame) // the client is still waiting for its answer
+				}
+				return fmt.Errorf("%w: %s", errNamespaceRefused, msg)
+			}
 			if !answered {
 				p.writeClient(frame)
 			} else {

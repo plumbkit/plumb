@@ -130,6 +130,9 @@ type ctrlHandlers struct {
 	// contextHint answers an advisory context hint for a lifecycle hook:
 	// context-hint <json> (context_hint.go).
 	contextHint func(context.Context, contextHintRequest) contextHintReply
+	// namespace answers a namespace admin request: namespace <json>
+	// (namespace_cmd.go, PLAN-520).
+	namespace func(namespaceRequest) namespaceReply
 }
 
 // ctrlAcceptor is the accept surface serveControlSocket needs. Production passes
@@ -180,6 +183,10 @@ func handleCtrlConn(conn net.Conn, configLevel, logFormat string, h ctrlHandlers
 	}
 
 	if handleHookCommand(conn, line, h) {
+		return
+	}
+
+	if handleNamespaceCommand(conn, line, h) {
 		return
 	}
 

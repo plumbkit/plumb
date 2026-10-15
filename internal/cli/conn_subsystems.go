@@ -397,6 +397,7 @@ func statsToolData(toolName string, args json.RawMessage, output string) (string
 func (s *connSession) onAfterTool(toolName string, args json.RawMessage, output, errMsg string, dur time.Duration, isError bool, failure *toolerror.Error, logicalAgent string, callID string) {
 	session.Touch(s.sessionID())
 	s.touchAgentRoster(logicalAgent)
+	s.touchNamespace()
 	v := s.view()
 	root := v.acquiredRoot
 	sessionName := v.sessName

@@ -117,6 +117,7 @@ func activePeerNames(ws, selfID string) map[string]string {
 	if err != nil {
 		return nil
 	}
+	all = session.InNamespaceOf(all, selfID)
 	out := make(map[string]string)
 	for _, p := range all {
 		if p.ID == selfID {

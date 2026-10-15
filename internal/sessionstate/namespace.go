@@ -254,6 +254,17 @@ func (s *Store) NamespaceMembers(id string) ([]string, error) {
 	return s.stringsWhere(`SELECT proxy_session_id FROM namespace_member WHERE namespace_id = ? ORDER BY proxy_session_id`, id)
 }
 
+// NamespaceSessionIDs returns the plumb session IDs the namespace's members
+// held — each connection's own, and each logical agent's roster row — so a purge
+// can remove their session files, which live outside this database.
+func (s *Store) NamespaceSessionIDs(id string) ([]string, error) {
+	return s.stringsWhere(`SELECT plumb_session_id FROM session_names
+	WHERE plumb_session_id != '' AND proxy_session_id IN (SELECT proxy_session_id FROM namespace_member WHERE namespace_id = ?1)
+UNION SELECT roster_session_id FROM logical_agent
+	WHERE roster_session_id != '' AND proxy_session_id IN (SELECT proxy_session_id FROM namespace_member WHERE namespace_id = ?1)
+ORDER BY 1`, id)
+}
+
 // AddNamespaceRoot records a workspace root a member wrote shared rows under,
 // so the purge can open it.
 func (s *Store) AddNamespaceRoot(id, root string) error {

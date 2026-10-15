@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -56,6 +57,11 @@ type proxyDeps struct {
 	// proxy passes the PID it connected to, so a hang on one client never kills a
 	// different (e.g. freshly-respawned) daemon. Called only on the hang path.
 	killDaemon func(pid int)
+
+	// namespaceToken is the token of the namespace this proxy's connections
+	// belong to (--namespace / PLUMB_NAMESPACE, PLAN-520), folded into every
+	// initialize it sends, the first and each replay. Empty: the default namespace.
+	namespaceToken string
 
 	// allowDirs are extra read-write roots (--allow-dir / PLUMB_ALLOWED_DIRS)
 	// folded into the captured initialize frame's _meta, so they reach the daemon
@@ -364,7 +370,7 @@ func (p *reconnectingProxy) captureHandshake(frame []byte) []byte {
 		// Version is this PROXY's, not the daemon's (see mcp.MetaProxyVersionKey).
 		// The consumer announcement is what entitles this proxy to be disclosed a resume
 		// credential, and it is only honest because writeClient strips the key.
-		frame = injectInitMeta(frame, withResumeConsumer(buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace, Version)))
+		frame = injectInitMeta(frame, withNamespace(withResumeConsumer(buildInitMeta(p.deps.allowDirs, p.deps.proxySessionID, p.deps.workspace, Version)), p.deps.namespaceToken))
 		p.hsMu.Lock()
 		p.initializeFrame = cloneBytes(frame)
 		p.initializeID = idKey(e.ID)
@@ -488,6 +494,13 @@ func (p *reconnectingProxy) reconnect(ctx context.Context, failedGen uint64, kil
 				return nil
 			}
 			_ = conn.Close()
+			if errors.Is(herr, errNamespaceRefused) {
+				// The namespace was released or expired: no reconnect brings it
+				// back, and this proxy must not carry on outside it.
+				p.failAllOutstanding()
+				slog.Error("serve: the daemon refused this connection's namespace — exiting", "err", herr)
+				return herr
+			}
 			err = herr
 		}
 		slog.Warn("serve: daemon reconnect attempt failed", "attempt", attempt, "error", err, "reason", reason)

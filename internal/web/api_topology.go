@@ -113,6 +113,7 @@ func resolveWorkspace(explicit string) (ws string, ok bool) {
 		return explicit, true
 	}
 	infos, err := session.List()
+	infos = session.InNamespace(infos, "") // human views show the default namespace (PLAN-520)
 	if err != nil {
 		return "", true
 	}

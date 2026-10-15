@@ -57,6 +57,9 @@ func (t *SessionStart) activePeers(ws string) []session.Info {
 	if err != nil {
 		return nil
 	}
+	if t.selfSessID != nil {
+		all = session.InNamespaceOf(all, t.selfSessID())
+	}
 	var peers []session.Info
 	for _, p := range all {
 		if t.selfSessID != nil && p.ID == t.selfSessID() {

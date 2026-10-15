@@ -95,6 +95,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	out.Metrics = readMetricsDTO(s.deps.MetricsPath)
 
 	if sessions, err := session.List(); err == nil {
+		sessions = session.InNamespace(sessions, "") // the default namespace (PLAN-520)
 		out.Sessions = len(sessions)
 	}
 

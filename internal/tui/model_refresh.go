@@ -17,6 +17,7 @@ import (
 
 func (m *Model) refresh() {
 	all, err := session.List()
+	all = session.InNamespace(all, "") // human views show the default namespace (PLAN-520)
 	if err != nil {
 		m.loadErr = err.Error()
 		return

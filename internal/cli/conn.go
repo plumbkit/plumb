@@ -40,6 +40,10 @@ import (
 // read-only — never mutate one in place.
 type sessionView struct {
 	acquiredRoot, acquiredLanguage string
+	// namespace is the public ID of the namespace this connection belongs to
+	// (PLAN-520), or "" for the default namespace. Set once, by the namespace
+	// gate at initialize, before any other hook runs.
+	namespace string
 	// lsRefRoot is the workspace root for which this session holds a PINNED
 	// reference on the shared language-server pool entry (set on a successful
 	// attach / re-pin, "" when the session attached without LSP). Released on

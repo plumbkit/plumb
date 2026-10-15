@@ -148,6 +148,14 @@ func (s *connSession) acceptResumeCredential(ctx context.Context, p presentation
 	if lk.ProxySessionID == p.proxyID {
 		return "" // this connection's own record: nothing to escalate
 	}
+	// A credential is valid only inside the namespace its identity belongs to
+	// (PLAN-520): a namespaced run cannot take over a default-namespace identity,
+	// nor the other way round.
+	if ns, err := s.sessionState.NamespaceOf(lk.ProxySessionID); err != nil || ns != s.view().namespace {
+		s.log().Info("daemon: a presented resume credential belongs to another namespace; not resuming",
+			"external_id", p.linkage)
+		return ""
+	}
 	old, ok, err := s.sessionState.LoadIdentity(lk.ProxySessionID)
 	if err != nil || !ok || old.SessionID == "" {
 		s.log().Warn("daemon: a presented resume credential matched a record with no session ID to resume",

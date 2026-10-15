@@ -362,6 +362,9 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 	srv.OnAllowDirs = func(_ context.Context, dirs []string) {
 		s.onAllowDirs(dirs)
 	}
+	srv.OnNamespace = func(_ context.Context, token, proxySessionID string) error {
+		return s.onNamespace(token, proxySessionID)
+	}
 	srv.OnResumeCredentialConsumer = func(context.Context) {
 		s.mutate(func(v *sessionView) { v.credentialConsumer = true })
 	}
@@ -386,6 +389,7 @@ func (s *connSession) registerHooks(srv *mcp.Server) {
 		// Runs after the param hooks above, so restoreIdentity has already
 		// decided who this connection is — the identity stated here is the
 		// settled one, not a guess made before recovery ran.
+		s.stampNamespace()
 		meta := map[string]any{
 			mcp.MetaSessionIdentityKey: s.identityMeta(),
 			mcp.MetaDaemonInstanceKey:  daemonInstanceID(s.daemonStartedAt),

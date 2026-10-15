@@ -182,3 +182,26 @@ func TestPurgeNamespace_CoversEveryProxySessionTable(t *testing.T) {
 		t.Fatalf("tables keyed by proxy_session_id = %v, purge covers %v", tables, want)
 	}
 }
+
+// TestNamespaceSessionIDs lists the session files a purge must remove: each
+// member's own session and each logical agent's roster row, nothing from the
+// default namespace.
+func TestNamespaceSessionIDs(t *testing.T) {
+	s := newTestStore(t)
+	ns, _ := newNamespace(t, s)
+	populate(t, s, "psid-default", "calm-otter")
+	populate(t, s, "psid-ns", "keen-lynx")
+	if err := s.RecordRosterIdentity("psid-ns", "agent-1", "brave-wren", "sid-agent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddNamespaceMember(ns.ID, "psid-ns"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.NamespaceSessionIDs(ns.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"sid-agent", "sid-psid-ns"}) {
+		t.Fatalf("session IDs = %v, want the member's own and its agent's", got)
+	}
+}

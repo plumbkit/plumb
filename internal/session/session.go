@@ -79,6 +79,10 @@ type Info struct {
 	// (issue #472), since workspace_sessions matches on Folder alone. Empty on
 	// a connection's own row, which is every row a single-agent connection has.
 	ParentID string `json:"parent_id,omitempty"`
+	// Namespace is the public ID of the namespace this session belongs to
+	// (PLAN-520), or empty for the default namespace. Rosters and mail address
+	// only sessions of the caller's own namespace; NamespaceVisible is the rule.
+	Namespace string `json:"namespace,omitempty"`
 	// ExternalID is an opaque string set by the caller via session_start's
 	// session_id parameter. It is persisted so FindEnded can match a
 	// reconnecting agent to its previous session across plumb restarts.

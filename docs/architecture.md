@@ -311,6 +311,16 @@ Key design properties:
   the same 90 s grace. A server no connection holds is therefore reclaimed, not
   kept until daemon shutdown. Entries move through `starting`, `active`,
   `hibernating`, `hibernated` and `waking`.
+- **Namespaces isolate an end-to-end run inside the one daemon** (PLAN-520, the
+  owner's decision E2). `plumb namespace create` returns a token; a serve started
+  with `--namespace <token>` joins it at initialize, before any other hook runs,
+  and a refused token refuses the connection outright. A namespace is the set of
+  proxy sessions that joined it (`namespace_member` in `session_state.db`), since
+  every per-connection table is keyed by proxy session ID; release or expiry
+  revokes it, drains its connections for 30 s, cancels them, and purges their
+  rows and session files. Discovery (rosters, peers, mail addressing, resume)
+  sees only the caller's own namespace; language servers, indexes and write locks
+  stay shared.
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.

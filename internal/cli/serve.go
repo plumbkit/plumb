@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,7 @@ var (
 	serveFlagNoReconnect bool
 	serveFlagAllowDirs   []string
 	serveFlagWorkspace   string
+	serveFlagNamespace   string
 	serveFlagAttachOnly  bool
 )
 
@@ -40,6 +42,8 @@ func init() {
 		"grant an extra read-write root to this connection (repeatable; also PLUMB_ALLOWED_DIRS, os-list-separated). Additive to the pinned workspace and config extra_roots; inert until a workspace is pinned — never a workspace source on an unattached serve.")
 	serveCmd.Flags().BoolVar(&serveFlagAttachOnly, "attach-only", false,
 		"dial the running daemon and never start one; fail if none is running (for scripts and harnesses)")
+	serveCmd.Flags().StringVar(&serveFlagNamespace, "namespace", "",
+		"join the namespace this token names (also PLUMB_NAMESPACE): an isolated slice of the daemon for an end-to-end run; see `plumb namespace create`. A refused token ends the serve — it never falls back to the default namespace.")
 	serveCmd.Flags().StringVar(&serveFlagWorkspace, "workspace", "",
 		"pre-pin this connection's workspace to a path (also PLUMB_WORKSPACE) for clients that report no roots. Without it serve starts unattached and session_start pins the workspace; never overrides an explicit session_start pin.")
 }
@@ -71,8 +75,18 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	cwd, _ := os.Getwd()
 	workspace := resolveWorkspaceHint(serveFlagWorkspace, os.Getenv("PLUMB_WORKSPACE"))
 
+	namespace := serveFlagNamespace
+	if namespace == "" {
+		namespace = os.Getenv("PLUMB_NAMESPACE")
+	}
+
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
+		if namespace != "" {
+			// The legacy byte pump cannot carry the token, and joining the default
+			// namespace instead would be exactly the fallback a namespace forbids.
+			return errors.New("plumb serve: --namespace needs the resilient proxy; drop --no-reconnect")
+		}
 		if len(allowDirs) > 0 {
 			slog.Warn("serve: --allow-dir is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")
 		}
@@ -89,7 +103,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		slog.Info("serve: no --workspace/PLUMB_WORKSPACE — starting unattached; the caller pins the workspace with session_start", "cwd", cwd)
 	}
 
-	p := newReconnectingProxy(serveProxyDeps(socketPath, serveFlagAttachOnly, allowDirs, workspace, conn))
+	deps := serveProxyDeps(socketPath, serveFlagAttachOnly, allowDirs, workspace, conn)
+	deps.namespaceToken = namespace
+	p := newReconnectingProxy(deps)
 	return p.run(ctx)
 }
 

@@ -218,6 +218,8 @@ func (s *connSession) resolvePeer(name string) (tools.PeerSession, bool) {
 	if err != nil {
 		return tools.PeerSession{}, false
 	}
+	// Mail is addressed only inside the sender's namespace (PLAN-520).
+	all = session.InNamespace(all, s.view().namespace)
 	var found tools.PeerSession
 	matches := 0
 	for _, p := range all {
