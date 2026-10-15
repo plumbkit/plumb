@@ -83,6 +83,12 @@ type bridgeRecord struct {
 
 func newLegacyBridge() *legacyBridge { return &legacyBridge{} }
 
+// bridgeLoopExited runs as each bridge accept loop returns. It does nothing; it
+// is a variable so the suite can hold a loop's exit and pin that close waits for
+// it — the property that keeps a bridge connection from joining the daemon's
+// drain group after the drain has begun.
+var bridgeLoopExited = func() {}
+
 // bind binds the MCP socket of every legacy location this daemon holds the
 // lifetime lock of, then publishes them. A path it cannot bind — a live listener
 // that is not ours, an unwritable directory, a path too long for a unix socket —
@@ -161,6 +167,7 @@ func (b *legacyBridge) serve(wg *sync.WaitGroup, handle func(net.Conn)) {
 	b.mu.Unlock()
 	for _, s := range sockets {
 		b.loops.Go(func() {
+			defer bridgeLoopExited()
 			for {
 				conn, err := s.guard.Accept()
 				if err != nil {

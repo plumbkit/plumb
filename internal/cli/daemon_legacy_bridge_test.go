@@ -484,3 +484,55 @@ func TestCtrlSocketUnavailable_DoesNotPointAtOurOwnBridge(t *testing.T) {
 		t.Fatalf("log-level named the account's own bridge as a daemon running elsewhere: %s", msg)
 	}
 }
+
+// TestLegacyBridge_CloseWaitsForItsAcceptLoops pins that close does not return
+// while a bridge accept loop is still running: the daemon closes the bridge and
+// then starts its drain, and a loop still able to accept could add a connection
+// to the group after the drain began. Each loop's exit is held until the test
+// releases it, so a close that does not wait is caught deterministically.
+func TestLegacyBridge_CloseWaitsForItsAcceptLoops(t *testing.T) {
+	// The hook is set BEFORE the fixture starts the accept loops: each loop reads
+	// it when it starts, so setting it afterwards would race that read.
+	release := make(chan struct{})
+	old := bridgeLoopExited
+	t.Cleanup(func() { bridgeLoopExited = old })
+	bridgeLoopExited = func() { <-release }
+	f := newBridgeFixture(t)
+
+	closed := make(chan struct{})
+	go func() { f.bridge.close(); close(closed) }()
+	select {
+	case <-closed:
+		close(release)
+		t.Fatal("close returned while a bridge accept loop had not exited")
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close did not return once the accept loops exited")
+	}
+}
+
+// TestSocketGuard_RepublishSkipsAClosedGuard: once the account socket's guard is
+// closed (shutdown), a late bridge change must not rewrite the authority record.
+func TestSocketGuard_RepublishSkipsAClosedGuard(t *testing.T) {
+	withShortTempRuntime(t)
+	var published atomic.Int64
+	guard, err := newSocketGuard(daemonSocketPath(), func() bool { return true }, func(string, fileIdentity) { published.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.removeSocketIfOurs("test socket")
+	guard.republish()
+	open := published.Load()
+	if open < 2 {
+		t.Fatalf("control: republish on an open guard did not publish (count %d)", open)
+	}
+	guard.close()
+	guard.republish()
+	if got := published.Load(); got != open {
+		t.Fatalf("a closed guard republished the record (count %d -> %d)", open, got)
+	}
+}
