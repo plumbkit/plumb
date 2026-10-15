@@ -29,20 +29,19 @@ func contextForTaskTool(t *testing.T) (*connSession, contextTool) {
 	return s, tool
 }
 
-// context_for_task ships experimental: found by name, never pushed. Pinning it
-// would pay its schema on every connection, and putting it in the lean set would
-// advertise it to clients that have not asked.
-func TestContextForTask_IsRegisteredUnpinnedAndHiddenUnderLean(t *testing.T) {
+// context_for_task is the one-call start for a task: pinned, so its schema is in
+// every Claude Code context, and lean, so a lean client is advertised it too.
+func TestContextForTask_IsRegisteredPinnedAndAdvertisedUnderLean(t *testing.T) {
 	s, _ := contextForTaskTool(t)
-	if tools.IsPinned("context_for_task") {
-		t.Error("context_for_task must not be pinned")
+	if !tools.IsPinned("context_for_task") {
+		t.Error("context_for_task must be pinned")
 	}
-	if slices.Contains(tools.LeanToolNames(), "context_for_task") {
-		t.Error("context_for_task must not be in the lean set")
+	if !slices.Contains(tools.LeanToolNames(), "context_for_task") {
+		t.Error("context_for_task must be in the lean set")
 	}
 	s.mutate(func(v *sessionView) { v.tools.Profile = "lean" })
-	if s.toolVisible("context_for_task") {
-		t.Error("a lean client must not be advertised context_for_task")
+	if !s.toolVisible("context_for_task") {
+		t.Error("a lean client must be advertised context_for_task")
 	}
 }
 

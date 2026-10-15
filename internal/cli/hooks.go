@@ -66,6 +66,12 @@ unavailable daemon, an ambiguous session or a daemon that predates the identity
 channel all leave the turn and the call exactly as the client sent them, and
 none ever carries a message body.
 
+Both clients also get the advisory context-hint handlers (UserPromptSubmit and
+SubagentStart, plus a hint on SessionStart): a few selectors and locations,
+never source, when a prompt names code, after a resume or compaction, and when
+a subagent starts. --no-context leaves them out; it does not remove ones already
+installed, which plumb hooks uninstall --only context does.
+
 Existing entries are merged, never replaced wholesale: hooks the user wrote
 survive, the file is backed up first, and re-running refreshes plumb's own
 entries after the binary moves.`,
@@ -95,14 +101,18 @@ silences the hint it adds.`,
 // hooksUninstallOnly narrows `plumb hooks uninstall` to one group of handlers.
 var hooksUninstallOnly string
 
-// hooksInstallContext opts a client into the advisory context-hint handlers.
-var hooksInstallContext bool
+// hooksInstallNoContext leaves the advisory context-hint handlers out of an
+// install. hooksInstallContext is the retired opt-in, still accepted so a script
+// that passes it keeps working.
+var hooksInstallNoContext, hooksInstallContext bool
 
 func init() {
 	hooksUninstallCmd.Flags().StringVar(&hooksUninstallOnly, "only", "",
 		"remove only this group of plumb's handlers: context")
-	hooksInstallCmd.Flags().BoolVar(&hooksInstallContext, "context", false,
-		"also install the experimental advisory context-hint handlers (then turn hints on with [context] hints = true or PLUMB_CONTEXT_HINTS=on)")
+	hooksInstallCmd.Flags().BoolVar(&hooksInstallNoContext, "no-context", false,
+		"leave out the advisory context-hint handlers (already-installed ones stay; `plumb hooks uninstall --only context` removes them)")
+	hooksInstallCmd.Flags().BoolVar(&hooksInstallContext, "context", false, "the context-hint handlers are now installed by default")
+	_ = hooksInstallCmd.Flags().MarkDeprecated("context", "the context-hint handlers are installed by default; use --no-context to leave them out")
 	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd)
 }
 
@@ -154,7 +164,7 @@ func runHooksInstall(args []string) error {
 		report.note(fmt.Sprintf("Could not create the resume proof key (%v); a replacement serve will resume by name only.", err))
 	}
 	for _, t := range targets {
-		path, entries, before, err := hookPlan(t, plumbBin, hooksInstallContext)
+		path, entries, before, err := installPlan(t, plumbBin)
 		if err != nil {
 			report.clientError(t, err)
 			continue
@@ -172,6 +182,12 @@ func runHooksInstall(args []string) error {
 	}
 	report.render(skips, nil)
 	return nil
+}
+
+// installPlan is the plan `plumb hooks install` writes: every handler, the
+// context-hint ones included unless --no-context was given.
+func installPlan(t hooksTarget, plumbBin string) (path string, entries []hookEntry, before []hookState, err error) {
+	return hookPlan(t, plumbBin, !hooksInstallNoContext)
 }
 
 // runHooksUninstall removes plumb's hooks. It is deliberately ungated on

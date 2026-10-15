@@ -384,23 +384,25 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 
 ```
 plumb hooks                      # read-only status, per client, per hook
-plumb hooks install [client]     # install or refresh
-plumb hooks install [client] --context          # also add the experimental context-hint handlers
+plumb hooks install [client]     # install or refresh, context-hint handlers included
+plumb hooks install [client] --no-context       # leave the context-hint handlers out
 plumb hooks uninstall [client]   # remove plumb's handlers, and only those
 plumb hooks uninstall [client] --only context   # remove just the context-hint handlers
 plumb hooks uptake [--since 168h] [--json]       # are context hints configured, trusted, invoked, consumed
 ```
 
-**Experimental context hints.** `--context` adds two advisory hint handlers,
-UserPromptSubmit and SubagentStart, for Claude Code and for Codex (which asks you
-to trust them in `/hooks` before they run); with hints turned on
-(`[context] hints = true` or `PLUMB_CONTEXT_HINTS=on`) the client's SessionStart
-handler also appends a hint after the linkage sentence. Once added, a later plain
-`install` keeps them current. A hint names code (selectors and locations, never source) when a
+**Context hints.** `install` adds two advisory hint handlers, UserPromptSubmit
+and SubagentStart, for Claude Code and for Codex (which asks you to trust them in
+`/hooks` before they run), unless given `--no-context`; with hints on (the
+default, `[context] hints = true`, overridden by `PLUMB_CONTEXT_HINTS`) the
+client's SessionStart handler also appends a hint after the linkage sentence.
+`--no-context` does not remove handlers already installed, and a later plain
+`install` keeps them current. The old `--context` flag is still accepted and
+deprecated. A hint names code (selectors and locations, never source) when a
 prompt names files or symbols explicitly, after a resume or compaction, and when
 a subagent starts; it is capped at 1 KiB a turn and 8 KiB per agent, and never
-counts as reading a file. Hints are off by default; `--only context` removes the
-two hint-only handlers. `plumb hooks
+counts as reading a file. `hooks uninstall --only context` removes the two
+hint-only handlers. `plumb hooks
 uptake` reports configured (handlers on disk), trusted (Codex's own approval
 record), invoked (the daemon's bounded hint ledger, by outcome and reason) and
 consumed (a later plumb call by the same agent named what the hint named: a

@@ -261,6 +261,7 @@ var leanConstructors = map[string]string{
 	"NewTopologySearch":        "topology_search",
 	"NewTopologyExplore":       "topology_explore",
 	"NewTopologyAffected":      "topology_affected",
+	"NewContextForTask":        "context_for_task",
 	"NewSearchMemories":        "search_memories",
 	"NewTasks":                 "run_task",
 }

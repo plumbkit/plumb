@@ -90,8 +90,8 @@ func TestContextForTask_Schema(t *testing.T) {
 func TestContextForTask_DescriptionStatesTheContract(t *testing.T) {
 	desc := strings.ToLower(NewContextForTask(nil).Description())
 	for _, must := range []string{
-		"experimental", "read-only", "at least one file or symbol", "never seeds",
-		"1024-byte reserve", "whole response", "workspace_search", "unpinned call is refused",
+		"read-only", "only task prose", "proposes up to 3 labelled seeds", "never guesses",
+		"directories are scope", "whole response", "1024 reserved",
 	} {
 		if !strings.Contains(desc, must) {
 			t.Errorf("description does not say %q", must)
@@ -100,7 +100,7 @@ func TestContextForTask_DescriptionStatesTheContract(t *testing.T) {
 }
 
 func TestContextForTask_WireBytesWithinTarget(t *testing.T) {
-	const target = 2000
+	const target = 1300
 	tool := NewContextForTask(nil)
 	entry, err := json.Marshal(toolDef{Name: tool.Name(), Description: tool.Description(), InputSchema: tool.InputSchema()})
 	if err != nil {
@@ -112,12 +112,15 @@ func TestContextForTask_WireBytesWithinTarget(t *testing.T) {
 	}
 }
 
-func TestContextForTask_UnpinnedUnleanAndCollectorTracksNoReads(t *testing.T) {
-	if IsPinned("context_for_task") {
-		t.Error("context_for_task must not be in PinnedTools: it ships unpinned")
+// context_for_task is the one-call start for a task (PLAN-462 promotion): pinned
+// so its schema is in every Claude Code context, and lean so a lean client is
+// advertised it.
+func TestContextForTask_PinnedLeanAndCollectorTracksNoReads(t *testing.T) {
+	if !IsPinned("context_for_task") {
+		t.Error("context_for_task must be in PinnedTools")
 	}
-	if slices.Contains(LeanToolNames(), "context_for_task") {
-		t.Error("context_for_task must not be in LeanTools: a lean client reports it unavailable")
+	if !slices.Contains(LeanToolNames(), "context_for_task") {
+		t.Error("context_for_task must be in LeanTools")
 	}
 	// Gathering a pack never records a read, so the collector may not be able to:
 	// no field of it mentions the read tracker. Recording belongs to the tool, and
@@ -343,8 +346,9 @@ func TestContextForTask_Refusals(t *testing.T) {
 		kind     toolerror.Kind // expected classification; empty skips the check
 		boundary bool
 	}{
-		{"no seeds", map[string]any{}, []string{"at least one file or symbol", "workspace_search"}, toolerror.KindInvalidArguments, false},
-		{"prose alone", map[string]any{"task": "fix the cart"}, []string{"at least one file or symbol", "workspace_search"}, toolerror.KindInvalidArguments, false},
+		{"no seeds", map[string]any{}, []string{"give files, symbols or task prose"}, toolerror.KindInvalidArguments, false},
+		{"blank prose", map[string]any{"task": "  \n "}, []string{"give files, symbols or task prose"}, toolerror.KindInvalidArguments, false},
+		{"prose over the limit", map[string]any{"task": strings.Repeat("cart ", 801)}, []string{"over the 4000-byte limit"}, toolerror.KindInvalidArguments, false},
 		{"empty file entry", map[string]any{"files": []string{" "}}, []string{"files[0] is empty"}, toolerror.KindInvalidArguments, false},
 		{"relative directory", map[string]any{"files": []string{"cart"}}, []string{"a directory is scope, not a seed"}, toolerror.KindInvalidArguments, false},
 		{"absolute directory", map[string]any{"files": []string{s.root}}, []string{"a directory is scope, not a seed"}, toolerror.KindInvalidArguments, false},

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.26.0 (unreleased)
+
+### Added
+
+- **`context_for_task` is a core tool: pinned, lean, and it starts from task
+  prose (PLAN-462).** A request may now give only `task`: the tool proposes up
+  to 3 seeds, first the code the text names outright (a backticked selector, a
+  path to an existing file), then the functions, methods, types and classes
+  whose names carry the task's words. Each proposed seed says how it was found,
+  the next-best matches are listed as candidates, and a proposal the boundary
+  guard refuses is reported rather than failing the call. With explicit
+  `files` or `symbols`, prose still only re-ranks. The tool takes
+  `topology_search`'s pinned slot (which stays lean and callable), joins the
+  lean profile, and drops its experimental label; its description was cut so
+  the pinned set still fits its unchanged 31,500-byte cap. Session guidance
+  names it first. `task` is limited to 4000 bytes.
+- **Context hints are on by default.** `[context] hints` defaults to `true`,
+  and `plumb hooks install` adds the hint-only handlers unless given
+  `--no-context`; `--context` is still accepted and deprecated. An unreadable
+  config still reads as off. The hook and the tool share one prompt parser
+  (`tools.PromptSelectors`).
+
 ## 0.25.0 (2026-10-15)
 
 ### Removed

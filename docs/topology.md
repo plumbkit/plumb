@@ -182,7 +182,7 @@ treat it as an optional, rebuildable index.
 | Understand a symbol's neighbourhood | `topology_explore` |
 | Assess the blast radius of a change | `topology_impact` |
 | Know which tests a change might affect | `topology_affected` |
-| Gather a task's seeds, bodies, neighbourhood, affected tests and constraints in one bounded call (experimental, unpinned) | `context_for_task` |
+| Gather a task's seeds, bodies, neighbourhood, affected tests and constraints in one bounded call, from known seeds or from task prose | `context_for_task` |
 | Find entry points: route → handler registrations and the Cobra command tree | `topology_routes` |
 | Jump to a definition with certainty | `get_definition` (LSP) |
 | Find every real call site | `find_references` (LSP) |
@@ -222,7 +222,7 @@ See [Tools → Topology](tools.md#topology) for full inputs. In brief:
   Python Flask/FastAPI decorators, and the Cobra command tree (`Use` → `Run`/`RunE`,
   linked through `AddCommand`). See [Route recovery](#route-recovery) below.
 
-`context_for_task` ([Tools](tools.md#context_for_task); experimental and unpinned) is a
+`context_for_task` ([Tools](tools.md#context_for_task); pinned and lean) is a
 consumer of the index rather than a seventh topology tool. It reads the index of the
 *calling agent's* canonical root, not the connection's, and it uses the same facts the
 tools above do: nodes and edges for the walk, the evidence class of each edge (extractor,

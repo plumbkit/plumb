@@ -85,7 +85,11 @@ func headerSafe(s string) string {
 }
 
 func (p *contextPack) seedHeading() string {
-	return fmt.Sprintf("seeds (%d resolved, %d unresolved):", len(p.Seeds), len(p.Misses))
+	h := fmt.Sprintf("seeds (%d resolved, %d unresolved)", len(p.Seeds), len(p.Misses))
+	if p.Discovery != nil {
+		h += " — proposed from the task prose, none were given; pass files or symbols to choose your own"
+	}
+	return h + ":"
 }
 
 func (p *contextPack) seedLines() []packLine {
@@ -102,6 +106,40 @@ func (p *contextPack) seedLines() []packLine {
 	}
 	for _, m := range p.Misses {
 		ls = append(ls, missLines(m)...)
+	}
+	return append(ls, p.discoveryLines()...)
+}
+
+// discoveryLines says what prose discovery searched with and lists the matches it
+// did not take, as candidates to pass back as symbols.
+func (p *contextPack) discoveryLines() []packLine {
+	d := p.Discovery
+	if d == nil {
+		return nil
+	}
+	var ls []packLine
+	note := d.Note
+	switch {
+	case note != "":
+	case len(p.Seeds) > 0:
+	case len(d.Terms) == 0:
+		note = "the task prose has no searchable words; name a file or symbol, or use workspace_search"
+	default:
+		note = fmt.Sprintf("no declaration name carries the task's words (%s); name a file or symbol, or use workspace_search",
+			strings.Join(d.Terms, " "))
+	}
+	if note != "" {
+		ls = append(ls, packLine{text: "  " + textfmt.TerminalSafeLine(note), prio: prioSeed, section: secSeeds, class: classSeed})
+	}
+	if len(d.Others) == 0 {
+		return ls
+	}
+	ls = append(ls, packLine{text: "  other matches (candidates, not seeds):", prio: prioDetail, section: secSeeds, class: classCandidate})
+	for _, c := range d.Others {
+		ls = append(ls, packLine{
+			text: fmt.Sprintf("    %s#%s (%s, line %d)", textfmt.TerminalSafeLine(c.Path), textfmt.TerminalSafeLine(c.Selector), c.NodeKind, c.Line),
+			prio: prioDetail, section: secSeeds, class: classCandidate,
+		})
 	}
 	return ls
 }
@@ -122,6 +160,12 @@ func seedText(s contextSeed) string {
 	}
 	if s.Coverage != "" {
 		fmt.Fprintf(&sb, " — coverage gap: %s", s.Coverage)
+	}
+	switch s.Origin {
+	case originNamed:
+		sb.WriteString(" — " + originNamed)
+	case originFound:
+		fmt.Fprintf(&sb, " — %s on: %s", originFound, textfmt.TerminalSafeLine(s.Matched))
 	}
 	return sb.String()
 }

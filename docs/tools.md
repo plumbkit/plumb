@@ -994,11 +994,10 @@ Results are `source=topology` (approximate). Returns a clear message when the
 index is disabled or empty.
 
 ### `context_for_task`
-**Experimental**, read-only context pack that starts from explicit **seeds**.
-It is unpinned and outside the lean profile: discover it by name (a client that
-hides it should say it is unavailable, not that plumb lacks it). At least one
-file or symbol is required; `task` prose only re-ranks and never seeds, and
-prose alone is refused with a handoff to `workspace_search`. It runs no LLM, no
+Read-only context pack for a task, grown from **seeds**: the one-call start for
+a task. It is pinned and in the lean profile. Pass the files and symbols you
+know, or only `task` prose (see *Seeds from task prose* below); with explicit
+seeds, `task` only re-ranks. A request with neither is refused. It runs no LLM, no
 network call and no mutation, and never attaches or moves the connection's
 workspace pin: relative paths resolve against the calling agent's pinned
 workspace, and an unpinned call is refused with a `session_start` handoff. Each
@@ -1017,6 +1016,21 @@ matches from any depth; an entry outside the workspace is refused), `corpora`
 (default 12000, cap 32000; a larger value is clamped and the header says so; a
 value below 1536 is refused) and `have` (`[{symbol, content_sha256}]`, bodies you
 still hold; see *Acknowledgements* below).
+
+**Seeds from task prose.** A request with no `files` or `symbols` proposes up to
+3 seeds from `task` (at most 4000 bytes). Code the text names outright comes
+first: a backticked selector such as `` `Cart.Total` `` and a path to an
+existing file (`api/checkout.go`, with or without backticks). The rest come from
+a lexical search of the index for functions, methods, types and classes whose
+**names** carry the task's words (stop words dropped, identifiers split at case
+boundaries); a match in a docstring or a path alone is not enough to seed. Each
+proposed seed says how it was found (`named in the task`, or `found by search
+on:` the words it matched), the seeds heading says they were proposed, and up to
+5 next-best matches are listed as candidates, never seeds. `within` and
+`corpora` narrow the search as they narrow the walk. A proposal the boundary
+guard would refuse is reported as unresolved, with the reason, rather than
+failing the call. When nothing matches, the pack says so and names the
+alternatives.
 
 **Limits.** Up to 8 seeds (further ones are reported unresolved); a walk of two
 hops and 60 nodes under a 2 s deadline, with the scope filter (`within`,

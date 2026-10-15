@@ -15,49 +15,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/tools"
 )
 
 // contextHintHookBudget is the hook's whole wait, the daemon's own budget plus
 // the round trip, well inside the 5 s hook timeout.
 const contextHintHookBudget = contextHintBudget + 200*time.Millisecond
 
-var (
-	// backtickRe: `Cart.Total`, `(*Cart).Total`, `internal/x/y.go`.
-	backtickRe = regexp.MustCompile("`([^`\\s]{1,200})`")
-	// pathTokenRe: a bare token with a slash and a file extension.
-	pathTokenRe = regexp.MustCompile(`(?:^|[\s(\[{"'])((?:\.{0,2}/)?[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+\.[A-Za-z0-9]{1,8})(?::\d+(?:-\d+)?)?`)
-	// selectorShapeRe: what a backticked token must look like to be a selector
-	// rather than a command, a flag or a value.
-	selectorShapeRe = regexp.MustCompile(`^(?:[A-Za-z0-9_.\-]+/)*[A-Za-z0-9_.\-]+\.[A-Za-z0-9]{1,8}$|^\(?\*?[A-Za-z_][A-Za-z0-9_]*\)?(?:\.[A-Za-z_][A-Za-z0-9_]*)+$`)
-)
-
 // promptSelectors lifts at most maxContextHintSelectors explicit selectors out
-// of a prompt, in order of appearance, without duplicates. A bare word is never
-// a selector: "fix the cart total" names nothing.
+// of a prompt (tools.PromptSelectors, which context_for_task's prose discovery
+// also reads a task with). A bare word is never a selector: "fix the cart
+// total" names nothing.
 func promptSelectors(prompt string) []string {
-	var out []string
-	seen := map[string]bool{}
-	add := func(s string) {
-		s = strings.TrimRight(s, ".,;:")
-		if s == "" || seen[s] || len(out) == maxContextHintSelectors {
-			return
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	for _, m := range backtickRe.FindAllStringSubmatch(prompt, -1) {
-		if tok := strings.TrimSuffix(m[1], "()"); selectorShapeRe.MatchString(tok) {
-			add(tok)
-		}
-	}
-	for _, m := range pathTokenRe.FindAllStringSubmatch(prompt, -1) {
-		add(m[1])
-	}
-	return out
+	return tools.PromptSelectors(prompt, maxContextHintSelectors)
 }
 
 // claudeContextHintOutput is what Claude Code's hook prints for a context-hint

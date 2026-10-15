@@ -54,15 +54,15 @@ func runHooksStatus(cmd *cobra.Command) error {
 }
 
 // configHintsOn reads [context] hints from the global config; an unreadable
-// config reads as the default, off.
+// config reads as off, so a hint never rides a config plumb could not read.
 func configHintsOn() bool {
 	cfg, err := config.Load()
 	return err == nil && cfg.Context.Hints
 }
 
-// contextHintStatusNote says where a client's experimental context hints stand:
-// not installed, installed but off, or on. It is one line, not table rows,
-// because an opt-in feature a user never installed is not a missing hook.
+// contextHintStatusNote says where a client's context hints stand: not
+// installed, installed but off, or on. It is one line, not table rows, because
+// handlers a user left out with --no-context are not a missing hook.
 func contextHintStatusNote(t hooksTarget, states []hookState, configOn func() bool) string {
 	if t.contextEntries == nil {
 		return ""
@@ -72,11 +72,11 @@ func contextHintStatusNote(t hooksTarget, states []hookState, configOn func() bo
 	})
 	switch {
 	case !installed:
-		return fmt.Sprintf("%s — context hints (experimental): not installed. `plumb hooks install %s --context` adds them.", t.name, t.use)
+		return fmt.Sprintf("%s — context hints: not installed. `plumb hooks install %s` adds them.", t.name, t.use)
 	case contextHintsEnabled(configOn):
-		return t.name + " — context hints (experimental): on."
+		return t.name + " — context hints: on."
 	default:
-		return t.name + " — context hints (experimental): installed, off. Turn on with [context] hints = true or PLUMB_CONTEXT_HINTS=on."
+		return t.name + " — context hints: installed, off. Turn on with [context] hints = true or PLUMB_CONTEXT_HINTS=on."
 	}
 }
 
