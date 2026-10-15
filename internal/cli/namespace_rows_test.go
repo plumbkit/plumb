@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 )
 
@@ -157,5 +159,116 @@ func TestMailWaitingNS_CountsOnlyTheNamespace(t *testing.T) {
 	}
 	if ages, _ := mailWaitingNS(who, "ns-1", noGlobalMailbox); len(ages) != 1 {
 		t.Fatalf("ns-1 counts %d of its own notes, want 1", len(ages))
+	}
+}
+
+// TestHookInbox_ReadersAreTheNamespaces: the Stop hook's mail probe reads the
+// connection's namespace only.
+func TestHookInbox_ReadersAreTheNamespaces(t *testing.T) {
+	world := newIdentityWorld(t)
+	conn := world.conn("")
+	root := identityRepo(t)
+	conn.start("owner", root, "owner", nil)
+	world.pool.acquire(root) // the probe reads an existing store only
+	conn.s.mutate(func(v *sessionView) { v.namespace = "ns-hook" })
+	inbox, ok := conn.s.hookInbox("owner")
+	if !ok {
+		t.Fatal("owner not resolved")
+	}
+	st, err := inbox.WorkspaceReader()
+	if err != nil || st == nil || st.Namespace() != "ns-hook" {
+		t.Fatalf("hook workspace reader = %v, %v; want the namespace's view", st, err)
+	}
+}
+
+// TestRegisteredTools_UseTheConnectionsNamespace: the tools a connection
+// registers scope by its namespace even when its session row is not (yet)
+// stamped — the fail-open fallback to the row is not what they rely on.
+func TestRegisteredTools_UseTheConnectionsNamespace(t *testing.T) {
+	world := newIdentityWorld(t)
+	conn := world.conn("")
+	root := identityRepo(t)
+	conn.start("owner", root, "owner", nil)
+	conn.s.mutate(func(v *sessionView) { v.namespace = "ns-tools" }) // the row stays unstamped
+	ws := conn.s.workspace()
+	if ws == "" {
+		ws = root
+	}
+	inNS, err := session.Register(session.Info{Folder: ws, Namespace: "ns-tools"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second namespaced peer: with the caller's own row unstamped, a lone
+	// peer would read as the caller itself.
+	if _, err := session.Register(session.Info{Folder: ws, Namespace: "ns-tools"}); err != nil {
+		t.Fatal(err)
+	}
+	outside, err := session.Register(session.Info{Folder: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := conn.call("", "workspace_sessions", nil)
+	if !strings.Contains(out, inNS.Name) {
+		t.Fatalf("control: the namespace's peer is missing:\n%s", out)
+	}
+	if strings.Contains(out, outside.Name) {
+		t.Fatalf("a default-namespace peer appears for a namespaced connection:\n%s", out)
+	}
+}
+
+// TestStartNamespaces_WiresTheMailAndStatsPurge: the daemon's registry purges a
+// namespace's mail and stats rows, not just its session state.
+func TestStartNamespaces_WiresTheMailAndStatsPurge(t *testing.T) {
+	_, ss := newOriginStore(t)
+	conns := newConnRegistry()
+	st := newStatsStore()
+	pool := newCollabPool()
+	t.Cleanup(pool.closeAll)
+	ctx := t.Context() // the daemon's context: live while the test runs
+	startNamespaces(ctx, ss, conns, st, pool)
+	r := conns.namespaces
+	if r == nil {
+		t.Fatal("startNamespaces gave the registry no namespace registry")
+	}
+	_, ns, err := r.create(time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := freshTempDir(t)
+	if err := ss.AddNamespaceRoot(ns.ID, root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.acquire(root).InNamespace(ns.ID).PutNote(ctx, collab.NoteInput{AuthorSession: "a", AuthorID: "a", Body: "e2e", Addressee: "peer", TTL: time.Hour}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	st.Record(root, stats.Call{Namespace: ns.ID, SessionID: "sid", Tool: "write_file", CalledAt: time.Now(), Success: true})
+
+	r.purge(ns.ID)
+	st.Close() // drains the writer, purge included
+	if n, _ := pool.get(root).InNamespace(ns.ID).PendingCount(context.Background(), collab.Claimant{Name: "peer"}, time.Now()); n != 0 {
+		t.Fatalf("%d namespaced notes survived the daemon's purge", n)
+	}
+	db, err := stats.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if n := db.TotalCalls(stats.Filter{Namespace: ns.ID}); n != 0 {
+		t.Fatalf("%d namespaced stats rows survived the daemon's purge", n)
+	}
+}
+
+// TestLatestEpisodic_IsTheNamespaces: session_start's "last session" summary
+// comes from the caller's namespace only.
+func TestLatestEpisodic_IsTheNamespaces(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	s, root := namespacedAttached(t, r, token, "psid-epi")
+	w := newStatsStore()
+	w.RecordEpisodic(stats.Episodic{Workspace: root, SessionID: "d", Summary: "default work", GeneratedAt: time.Now()})
+	w.RecordEpisodic(stats.Episodic{Namespace: ns.ID, Workspace: root, SessionID: "n", Summary: "e2e work", GeneratedAt: time.Now().Add(-time.Hour)})
+	w.Close()
+	if got, ok := s.latestEpisodic(root); !ok || got != "e2e work" {
+		t.Fatalf("a namespaced session's last-session summary = %q, want its own namespace's", got)
 	}
 }

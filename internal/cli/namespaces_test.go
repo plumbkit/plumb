@@ -547,10 +547,10 @@ func TestNamespaces_ShortTTLSurvivesContinuousUse(t *testing.T) {
 	if _, err := r.gate(token, "psid-short"); err != nil {
 		t.Fatal(err)
 	}
-	for range 30 { // 2.5 minutes of a call every 5 s, a tick every 5 s
+	for range 30 { // 2.5 minutes of a call every 5 s, the tick landing just before each call
 		clock.advance(5 * time.Second)
-		r.touch(ns.ID)
 		r.tick()
+		r.touch(ns.ID)
 	}
 	if got, _ := ss.NamespaceByID(ns.ID); got.State != sessionstate.NamespaceActive {
 		t.Fatalf("a namespace in continuous use expired (state %s)", got.State)
