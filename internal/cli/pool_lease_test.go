@@ -303,14 +303,14 @@ func TestPool_OverBudgetSkipsABusyEntry(t *testing.T) {
 
 	_, doneOld := older.proxy.begin()
 	pool.mu.Lock()
-	victim := pool.overBudgetVictimLocked("go", 2)
+	victim := pool.overBudgetVictimLocked("go", 2, nil)
 	pool.mu.Unlock()
 	if victim != newer {
 		t.Fatalf("victim = %v, want the idle newer entry, not the busy LRU one", victim)
 	}
 	_, doneNew := newer.proxy.begin()
 	pool.mu.Lock()
-	victim = pool.overBudgetVictimLocked("go", 2)
+	victim = pool.overBudgetVictimLocked("go", 2, nil)
 	pool.mu.Unlock()
 	if victim != nil {
 		t.Fatalf("victim = %s with every entry busy, want none", victim.root)

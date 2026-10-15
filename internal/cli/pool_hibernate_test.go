@@ -110,13 +110,13 @@ func TestPool_OverBudgetVictim(t *testing.T) {
 	p.lookup("/a", "java").proxy.lastUsed.Store(now.Add(-10 * time.Minute).UnixNano()) // oldest
 	p.lookup("/b", "java").proxy.lastUsed.Store(now.UnixNano())
 
-	if v := p.overBudgetVictimLocked("java", 0); v != nil {
+	if v := p.overBudgetVictimLocked("java", 0, nil); v != nil {
 		t.Fatal("unlimited cap (0) must select no victim")
 	}
-	if v := p.overBudgetVictimLocked("java", 3); v != nil {
+	if v := p.overBudgetVictimLocked("java", 3, nil); v != nil {
 		t.Fatal("under budget (2 running < 3) must select no victim")
 	}
-	v := p.overBudgetVictimLocked("java", 2)
+	v := p.overBudgetVictimLocked("java", 2, nil)
 	if v == nil || v.root != "/a" {
 		t.Fatalf("victim = %v, want the LRU entry /a", v)
 	}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/monitor"
 )
 
@@ -30,21 +31,36 @@ import (
 // warming); an empty diag mode (`diag=`) means it is not yet resolved. The map
 // is snapshotted under p.mu; RSS sampling (which may shell out on macOS) runs
 // after the lock is released.
-func (p *workspacePool) lspStatusReport() string {
+func (p *workspacePool) lspStatusReport() string { return p.lspStatusReportV(false) }
+
+// lspStatusReportV2 is lsp-status-v2: the seven lsp-status fields plus refs,
+// in-flight calls and whether the language is over its max_workspaces (0/1)
+// — PLAN-534. A separate command so a CLI that predates it, which reads exactly
+// seven fields, keeps reading lsp-status.
+func (p *workspacePool) lspStatusReportV2() string { return p.lspStatusReportV(true) }
+
+func (p *workspacePool) lspStatusReportV(v2 bool) string {
 	type row struct {
 		lang, root, state string
 		pid               int
 		lastUsed          int64
 		diag              string
+		refs              int
+		inflight          int64
+		overCap           bool
 	}
 	p.mu.Lock()
+	overCap := p.overCapLocked()
 	rows := make([]row, 0, len(p.entries))
 	for k, e := range p.entries {
 		pid := 0
 		if e.sup != nil {
 			pid = e.sup.PID()
 		}
-		rows = append(rows, row{k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load(), e.diagMode})
+		rows = append(rows, row{
+			k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load(), e.diagMode,
+			e.refs, e.proxy.inflight.Load(), overCap[k.language] && e.state.running(),
+		})
 	}
 	p.mu.Unlock()
 	sort.Slice(rows, func(i, j int) bool {
@@ -64,9 +80,25 @@ func (p *workspacePool) lspStatusReport() string {
 			}
 		}
 		idle := (now - r.lastUsed) / int64(time.Second)
-		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\tdiag=%s\n", r.lang, r.root, r.state, pidStr, rssStr, idle, r.diag)
+		fmt.Fprintf(&b, "%s\t%s\t%s\t%s\t%s\t%d\tdiag=%s", r.lang, r.root, r.state, pidStr, rssStr, idle, r.diag)
+		if v2 {
+			over := 0
+			if r.overCap {
+				over = 1
+			}
+			fmt.Fprintf(&b, "\t%d\t%d\t%d", r.refs, r.inflight, over)
+		}
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// janitorTick is one idle-ticker pass: hibernate idle servers, trim long-
+// hibernated entries, and sample the advisory budget (PLAN-534).
+func (p *workspacePool) janitorTick(now time.Time) {
+	p.hibernateIdle()
+	p.trimLongHibernated(now)
+	p.sampleBudget(now)
 }
 
 // startJanitor launches the hibernation janitor on ctx (the daemon-lifetime
@@ -86,8 +118,8 @@ func (p *workspacePool) janitor(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-idleTicker.C:
-			p.hibernateIdle()
+		case now := <-idleTicker.C:
+			p.janitorTick(now)
 		case <-pruneTicker.C:
 			p.pruneServerStateCaches()
 		}
@@ -178,13 +210,13 @@ func (p *workspacePool) hibernateIdle() {
 // overBudgetVictimLocked returns the least-recently-used running entry of
 // language when starting one more would exceed max running servers, or nil when
 // max is unlimited (<=0) or the budget is not yet reached. Caller holds p.mu.
-func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) *poolEntry {
+func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int, exclude *poolEntry) *poolEntry {
 	if maxRunning <= 0 {
 		return nil
 	}
 	var running []*poolEntry
 	for k, e := range p.entries {
-		if k.language == language && e.state.running() {
+		if k.language == language && e != exclude && e.state.running() {
 			running = append(running, e)
 		}
 	}
@@ -192,17 +224,28 @@ func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) 
 		return nil
 	}
 	// A server with a call in progress is never the victim; when every one is
-	// busy there is none, and the new server starts over budget.
+	// busy there is none, and the new server starts over budget. Among the idle
+	// ones an unpinned server (no session leases it) goes first, then a pinned
+	// one, least recently used within each tier (PLAN-534).
 	var victim *poolEntry
 	for _, e := range running {
 		if e.proxy.inflight.Load() > 0 {
 			continue
 		}
-		if victim == nil || e.proxy.lastUsed.Load() < victim.proxy.lastUsed.Load() {
+		if victim == nil || victimBefore(e, victim) {
 			victim = e
 		}
 	}
 	return victim
+}
+
+// victimBefore orders eviction candidates: unpinned before pinned, then least
+// recently used.
+func victimBefore(a, b *poolEntry) bool {
+	if (a.refs == 0) != (b.refs == 0) {
+		return a.refs == 0
+	}
+	return a.proxy.lastUsed.Load() < b.proxy.lastUsed.Load()
 }
 
 // hibernateEntry stops an active entry's language-server process to reclaim its
@@ -216,9 +259,21 @@ func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) 
 // to fully tear the entry down.
 func (p *workspacePool) hibernateEntry(e *poolEntry) {
 	p.mu.Lock()
+	teardown := p.beginHibernateLocked(e)
+	p.mu.Unlock()
+	if teardown != nil {
+		teardown()
+	}
+}
+
+// beginHibernateLocked is hibernateEntry's under-lock half: it moves a running
+// entry with no call in progress to hibernating and returns the out-of-lock
+// teardown that stops its process and finishes the transition, or nil when the
+// entry is not hibernated. Admission (admitLocked) calls it so the slot frees in
+// the same p.mu section that admits the newcomer. Caller holds p.mu.
+func (p *workspacePool) beginHibernateLocked(e *poolEntry) func() {
 	if !e.state.running() {
-		p.mu.Unlock()
-		return
+		return nil
 	}
 	// Clear first, then look for a call lease, restoring the client if one is
 	// held: the mirror image of clientProxy.begin, so a call either keeps the
@@ -227,17 +282,19 @@ func (p *workspacePool) hibernateEntry(e *poolEntry) {
 	e.proxy.clear()
 	if e.proxy.inflight.Load() > 0 {
 		e.proxy.set(client)
-		p.mu.Unlock()
 		slog.Debug("pool: hibernation skipped — a call is in progress", "root", e.root, "language", e.language)
-		return
+		return nil
 	}
 	e.state = poolHibernating
 	sup := e.sup
 	watcher := e.watcher
 	e.watcher = nil
-	root, language := e.root, e.language
-	p.mu.Unlock()
+	return func() { p.finishHibernate(e, client, sup, watcher) }
+}
 
+// finishHibernate is the out-of-lock teardown beginHibernateLocked returns.
+func (p *workspacePool) finishHibernate(e *poolEntry, client lsp.Client, sup *lsp.Supervisor, watcher *lspFSWatcher) {
+	root, language := e.root, e.language
 	slog.Info("pool: hibernating idle LS", "root", root, "language", language)
 	ctx, cancel := context.WithTimeout(context.Background(), poolCloseGrace)
 	if client != nil {
@@ -255,6 +312,7 @@ func (p *workspacePool) hibernateEntry(e *poolEntry) {
 	p.mu.Lock()
 	if e.state == poolHibernating {
 		e.state = poolHibernated
+		e.hibernatedAt = time.Now()
 	}
 	p.mu.Unlock()
 }
@@ -274,6 +332,8 @@ func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
 	// p.mu, so the caller attaches it after the unlock (attachWatcher).
 	e.state = poolWaking
 	e.startedAt = time.Now()
+	e.hibernatedAt = time.Time{}
+	e.trimmed = false
 	e.proxy.touch()
 	return readyCh, nil
 }

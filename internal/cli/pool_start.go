@@ -25,14 +25,18 @@ func (p *workspacePool) reuseUnlock(e *poolEntry, pin, call bool) (*poolEntry, <
 	// cancel the grace timer on an entry that stays hibernated.
 	switch e.state {
 	case poolHibernated:
+		// A wake joins its language's cap like a new server (PLAN-534).
+		teardown := p.admitLocked(e.language, e.lspCfg.MaxWorkspaces, e)
 		readyCh, err := p.wakeLocked(e)
 		if err != nil {
 			p.mu.Unlock()
+			runTeardown(teardown)
 			return nil, nil, err
 		}
 		p.leaseLocked(e, pin, call)
 		slog.Info("pool: waking hibernated LS", "root", e.root, "language", e.language, "refs", e.refs)
 		p.mu.Unlock()
+		runTeardown(teardown)
 		p.attachWatcher(e)
 		return e, readyCh, nil
 	case poolHibernating:
@@ -61,14 +65,11 @@ func (p *workspacePool) reuseUnlock(e *poolEntry, pin, call bool) (*poolEntry, <
 // (attachWatcher).
 func (p *workspacePool) startLocked(key poolKey, lspCfg config.LSPConfig, env []string, goWorkOff string) (*poolEntry, <-chan error, error) {
 	root, language := key.root, key.language
-	// LRU eviction: before starting a new server, if this language is at its
-	// max_workspaces budget, hibernate its least-recently-used running entry.
-	// hibernateEntry re-takes p.mu and does blocking teardown, so it runs in a
-	// goroutine that parks until the caller releases the lock; the new server
-	// starts immediately and the victim's JVM is reclaimed concurrently.
-	if victim := p.overBudgetVictimLocked(language, lspCfg.MaxWorkspaces); victim != nil {
-		slog.Info("pool: max_workspaces reached — evicting LRU", "language", language, "victim_root", victim.root, "max", lspCfg.MaxWorkspaces)
-		go p.hibernateEntry(victim)
+	// Admission (PLAN-534): at the language's max_workspaces, the victim's slot
+	// is freed here, under this lock; its process teardown runs concurrently
+	// (it re-takes p.mu at the end, so it parks until the caller unlocks).
+	if teardown := p.admitLocked(language, lspCfg.MaxWorkspaces, nil); teardown != nil {
+		go teardown()
 	}
 
 	rootURI := protocol.FileURI(root)
@@ -96,6 +97,14 @@ func (p *workspacePool) startLocked(key poolKey, lspCfg config.LSPConfig, env []
 	e.sup = sup
 	p.entries[key] = e
 	return e, readyCh, nil
+}
+
+// runTeardown runs a victim's teardown from admitLocked, if any, in the
+// background: it stops a process and must not hold up the caller.
+func runTeardown(teardown func()) {
+	if teardown != nil {
+		go teardown()
+	}
 }
 
 // newWatcher builds a file watcher for root through the pool's factory.

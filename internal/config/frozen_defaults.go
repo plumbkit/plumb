@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -137,7 +138,42 @@ func checkLSPServer(lang string, table map[string]any, def LSPConfig, hasDef boo
 			out = append(out, "lsp."+lang+".weak_root_markers")
 		}
 	}
+	// A zero idle_timeout or max_workspaces was the compiled default before
+	// PLAN-534, so the old whole-struct save wrote it into every [lsp.x] table it
+	// touched — where it now pins hibernation or the cap off. A zero is frozen
+	// only beside other frozen keys in the same table (that save's signature): on
+	// its own it may well be a deliberate "off".
+	if len(out) > 0 && hasDef {
+		out = append(out, frozenZeroKnobs(lang, table, def)...)
+	}
 	return out
+}
+
+// frozenZeroKnobs names the zero idle_timeout / max_workspaces in a table the
+// whole-struct save wrote, where the compiled default is now non-zero.
+func frozenZeroKnobs(lang string, table map[string]any, def LSPConfig) []string {
+	var out []string
+	if v, ok := table["idle_timeout"]; ok && isZeroTOML(v) && def.IdleTimeout.Duration > 0 {
+		out = append(out, "lsp."+lang+".idle_timeout")
+	}
+	if v, ok := table["max_workspaces"]; ok && isZeroTOML(v) && def.MaxWorkspaces > 0 {
+		out = append(out, "lsp."+lang+".max_workspaces")
+	}
+	return out
+}
+
+// isZeroTOML reports whether a decoded TOML value is a zero duration or number.
+func isZeroTOML(v any) bool {
+	switch x := v.(type) {
+	case string:
+		d, err := time.ParseDuration(x)
+		return x == "0" || (err == nil && d == 0)
+	case int64:
+		return x == 0
+	case float64:
+		return x == 0
+	}
+	return false
 }
 
 // PruneFrozenDefaults removes any keys detected as frozen defaults from rawTOML,

@@ -11,6 +11,24 @@
   is closed after ten minutes without use: its file watcher, indexer and memory
   reindex are stopped and joined, and the next use simply re-opens it. A
   session's topology handle re-acquires instead of reading a closed database.
+- **Idle language servers are hibernated by default, and a cap never stops a
+  server in use** (PLAN-534). Every language now hibernates its server after
+  30 minutes without a tool call (Java keeps 20 m; `idle_timeout = 0` turns it
+  off), and a server hibernated for 4 hours is trimmed — removed when no session
+  holds it, otherwise its cache is dropped. A config saved by an older plumb's
+  whole-struct save pins `idle_timeout = '0s'` and keeps hibernation off;
+  `plumb doctor` now names those keys; delete those lines to take the new
+  default.
+  `max_workspaces` is now enforced when a server starts *and* when one wakes,
+  and frees the slots synchronously — every idle server it takes to get back
+  under the cap, one no session holds first, then the least recently used. A
+  server a call is using is still never stopped: with every one busy, the
+  newcomer runs over the cap and the language is reported over it until it is
+  back under. `daemon_info` gains an
+  `lsp pool` row (active and hibernated servers, an estimated RSS against an
+  advisory target of 12 servers and 6 GiB — reported, not enforced), and
+  `plumb debug lsp` gains REFS, CALLS and OVER CAP columns.
+
 - **A language server's helper processes no longer outlive it.** Each server
   now runs as the leader of its own process group, so stopping it (a pool
   close, hibernation, an idle teardown) sends SIGTERM to the whole group,

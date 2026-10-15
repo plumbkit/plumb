@@ -117,14 +117,16 @@ var debugLSPCmd = &cobra.Command{
 	Short: "List the running daemon's language servers with PID, RSS, and idle time",
 	Long: `List every language server the daemon currently pools, with its lifecycle
 state (active / hibernating / hibernated), child-process PID, resident memory,
-and time since its last tool call.
+time since its last tool call, the sessions holding it (REFS), the calls in
+progress (CALLS), and whether its language is running more servers than its
+max_workspaces (OVER CAP).
 
 Hibernated servers show no PID or RSS — their process was stopped to reclaim
 memory after going idle past the language's idle_timeout, and the next tool call
 restarts them transparently.`,
 	Args: cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		resp, err := dialDaemonCtrlFull("lsp-status")
+		resp, err := dialLSPStatus()
 		if err != nil {
 			return err
 		}
@@ -134,8 +136,10 @@ restarts them transparently.`,
 }
 
 // renderLSPStatus turns the daemon's tab-separated lsp-status reply
-// (language, root, state, pid, rss_bytes, idle_seconds, diag=<mode> per line)
-// into an aligned table. Presentation lives here, not in the daemon, so the wire
+// (language, root, state, pid, rss_bytes, idle_seconds, diag=<mode>, then —
+// from PLAN-534's daemons — refs, in-flight calls, over-cap 0/1 per line) into
+// an aligned table. A seven-field line from an older daemon shows "-" for the
+// newer columns. Presentation lives here, not in the daemon, so the wire
 // format stays raw values.
 func renderLSPStatus(resp string) string {
 	resp = strings.TrimRight(resp, "\n")
@@ -144,17 +148,35 @@ func renderLSPStatus(resp string) string {
 	}
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG")
+	fmt.Fprintln(w, "LANGUAGE\tROOT\tSTATE\tPID\tRSS\tIDLE\tDIAG\tREFS\tCALLS\tOVER CAP")
 	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 7 {
+		if len(f) < 7 {
 			continue
 		}
 		diag := dashIfEmpty(strings.TrimPrefix(f[6], "diag="))
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]), diag)
+		refs, calls, over := "-", "-", "-"
+		if len(f) >= 10 {
+			refs, calls = f[7], f[8]
+			over = map[string]string{"1": "yes", "0": "no"}[f[9]]
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", f[0], f[1], f[2], dashIfEmpty(f[3]), formatRSSField(f[4]), formatIdleField(f[5]), diag, refs, calls, dashIfEmpty(over))
 	}
 	_ = w.Flush()
 	return b.String()
+}
+
+// dialLSPStatus asks for lsp-status-v2 (with refs, calls and over-cap) and
+// falls back to lsp-status on a daemon that predates it.
+func dialLSPStatus() (string, error) {
+	resp, err := dialDaemonCtrlFull("lsp-status-v2")
+	if err != nil {
+		return "", err
+	}
+	if strings.HasPrefix(resp, "error: unknown command") {
+		return dialDaemonCtrlFull("lsp-status")
+	}
+	return resp, nil
 }
 
 func dashIfEmpty(s string) string {

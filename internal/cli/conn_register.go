@@ -226,6 +226,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		}).
 		WithPinProvenanceFor(s.pinProvenanceFor).
 		WithDaemonCensus(daemonCensusRow).
+		WithLSPPool(s.lspPoolSummary).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewToolFeedback())
