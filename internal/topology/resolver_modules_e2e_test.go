@@ -309,12 +309,13 @@ func TestModuleResolver_ScopedReindexOfACallee(t *testing.T) {
 		"pkg/__init__.py": "",
 		"pkg/m.py":        py,
 		"pkg/util.py":     "def other():\n    return 0\n",
-		"app/main.py": "from pkg.m import A, fresh\nfrom pkg import util\n\ndef caller():\n    return A.run(None)\n\ndef uses_fresh():\n    return fresh()\n\n" +
-			"def via_util():\n    return util.later()\n",
-		"src/m.ts":    ts,
-		"web/main.ts": "import { A, fresh } from \"../src/m\";\nexport function caller() { return A.run(); }\nexport function usesFresh() { return fresh(); }\n",
+		"app/main.py":     "from pkg.m import A, fresh\n\ndef caller():\n    return A.run(None)\n\ndef uses_fresh():\n    return fresh()\n",
+		// Imports only the submodule, so nothing else puts it in the scope.
+		"tools/only_util.py": "from pkg import util\n\ndef via_util():\n    return util.later()\n",
+		"src/m.ts":           ts,
+		"web/main.ts":        "import { A, fresh } from \"../src/m\";\nexport function caller() { return A.run(); }\nexport function usesFresh() { return fresh(); }\n",
 	})
-	store := openIndexed(t, ws, 6, treesitter.NewPython(), treesitter.NewTypeScript())
+	store := openIndexed(t, ws, 7, treesitter.NewPython(), treesitter.NewTypeScript())
 	check := func(when string) {
 		t.Helper()
 		if got := qualifiedCallees(t, store, "app/main.py", "caller"); !slices.Equal(got, []string{"A.run"}) {
@@ -328,14 +329,14 @@ func TestModuleResolver_ScopedReindexOfACallee(t *testing.T) {
 	if got := qualifiedCallees(t, store, "app/main.py", "uses_fresh"); len(got) != 0 {
 		t.Fatalf("control: fresh does not exist yet, but uses_fresh resolves to %v", got)
 	}
-	if got := qualifiedCallees(t, store, "app/main.py", "via_util"); len(got) != 0 {
+	if got := qualifiedCallees(t, store, "tools/only_util.py", "via_util"); len(got) != 0 {
 		t.Fatalf("control: util.later does not exist yet, but via_util resolves to %v", got)
 	}
 	reindex(t, store, ws, "pkg/m.py", py+"\n\ndef fresh():\n    return 3\n")
 	// A submodule a from-import named (from pkg import util) makes its importer
 	// part of the scope too.
 	reindex(t, store, ws, "pkg/util.py", "def other():\n    return 0\n\n\ndef later():\n    return 5\n")
-	if got := qualifiedCallees(t, store, "app/main.py", "via_util"); !slices.Equal(got, []string{"later"}) {
+	if got := qualifiedCallees(t, store, "tools/only_util.py", "via_util"); !slices.Equal(got, []string{"later"}) {
 		t.Errorf("python via_util resolves to %v after util.later was added, want [later]", got)
 	}
 	reindex(t, store, ws, "src/m.ts", ts+"export function fresh() { return 3; }\n")
