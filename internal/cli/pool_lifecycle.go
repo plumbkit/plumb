@@ -186,8 +186,10 @@ func (p *workspacePool) close() {
 // closeEntry shuts down a single pool entry: a best-effort bounded LSP
 // Shutdown/Exit handshake, then sup.Stop() to kill the process regardless of
 // whether the handshake completed. The handshake is politeness; sup.Stop()
-// (which cancels the supervisor's exec.CommandContext, killing the process) is
-// the real guarantee the language server dies.
+// (which signals the server's whole process group, SIGTERM then SIGKILL after
+// lsp's groupTermGrace, so its helper processes die with it) is the real
+// guarantee the language server dies. It returns within about that grace, well
+// inside supStopGrace.
 func closeEntry(ctx context.Context, e *poolEntry) {
 	closeEntryClient(ctx, e, e.proxy.get())
 }

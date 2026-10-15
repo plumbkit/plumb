@@ -105,6 +105,7 @@ var Layers = map[string]Layer{
 	"internal/clientcaps":           LayerFoundation, // static client capability data
 	"internal/clienttemplates":      LayerFoundation, // shared per-client instruction template bodies (embedded)
 	"internal/textdiff":             LayerFoundation, // stdlib-only diff/apply
+	"internal/procgroup":            LayerFoundation, // stdlib-only process-group signalling for child processes
 
 	// ── Transport ──
 	"internal/mcp":                     LayerTransport,

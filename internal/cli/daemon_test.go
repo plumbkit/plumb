@@ -409,7 +409,7 @@ func TestReapAfterExit(t *testing.T) {
 func TestArmShutdownWatchdog_ForcesExitAfterDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	exited := make(chan int, 1)
-	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code })
+	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code }, func() {})
 
 	// No signal yet: the watchdog must stay dormant.
 	select {
@@ -435,7 +435,7 @@ func TestArmShutdownWatchdog_NoExitWhileServing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	exited := make(chan int, 1)
-	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code })
+	armShutdownWatchdog(ctx, 50*time.Millisecond, func(code int) { exited <- code }, func() {})
 
 	select {
 	case <-exited:

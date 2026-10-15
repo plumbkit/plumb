@@ -4,14 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
+	"github.com/plumbkit/plumb/internal/procgroup"
 )
+
+// groupTermGrace is how long a server has to exit after its process group is
+// sent SIGTERM (a Stop, or cancellation of the supervisor's context) before the
+// leader is killed outright. It is deliberately short: the pool has already run
+// the LSP shutdown handshake by the time it stops a supervisor, and the pool's
+// per-entry stop budget (supStopGrace in internal/cli) is one second, so a
+// longer grace here would be abandoned by the daemon and leave the escalation to
+// the watchdog.
+const groupTermGrace = 500 * time.Millisecond
 
 // State is the lifecycle state of a supervised process.
 type State int
@@ -65,6 +75,21 @@ var errSupervisorStop = errors.New("supervisor: stopped")
 
 // Supervisor manages the lifecycle of an LSP server subprocess.
 // It monitors the process and restarts it with exponential backoff on crash.
+//
+// Each server leads its own process group, so stopping it (Stop, or cancelling
+// the lifetime context) takes its descendants too: SIGTERM to the group, then
+// SIGKILL to the leader after groupTermGrace, then SIGKILL to whatever the
+// group still holds once the leader has been reaped. Without that a server's
+// helper processes (gopls's telemetry child, a build tool's workers) outlive it,
+// reparented to init. The same sweep runs after a server crashes, before its
+// restart. A descendant that starts a group of its own (sourcekit-lsp's
+// background swift-build) is outside this reach.
+//
+// If the daemon itself dies without running any of this, the server is reclaimed
+// only by the platform: on Linux the kernel SIGKILLs the direct child
+// (Pdeathsig, see procgroup.DieWithParent); on Darwin, which has no equivalent,
+// the server exits only if it notices that its stdin has closed. That Darwin
+// residual is why a SIGKILLed daemon can leave servers running there.
 //
 // Concurrency: all exported methods are safe for concurrent use.
 type Supervisor struct {
@@ -158,8 +183,11 @@ func (s *Supervisor) Start(ctx context.Context) error {
 	}
 }
 
-// Stop cleanly stops the supervisor loop.  The supervised process is not
-// explicitly killed here — callers should call Client.Shutdown + Exit first.
+// Stop stops the supervisor loop and the server's whole process group: SIGTERM
+// at once, SIGKILL for anything still alive after groupTermGrace. It returns
+// once the leader has been reaped and its group swept, so it is bounded by
+// roughly groupTermGrace. Callers should still run Client.Shutdown + Exit first;
+// that handshake is what lets a well-behaved server flush its state.
 func (s *Supervisor) Stop() {
 	s.mu.RLock()
 	cancel := s.cancel
@@ -278,11 +306,11 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 			if err := s.opts.OnStart(ctx, conn); err != nil {
 				slog.Error("supervisor: OnStart failed", "err", err)
 				_ = conn.Close()
-				_ = proc.Process.Kill()
+				_ = procgroup.Kill(proc.Process.Pid)
 				// exec.Cmd.Wait (not os.Process.Wait) so the cmd's stdin/stdout pipe
 				// parent ends are closed and its IO goroutines joined, matching the
 				// normal-exit path — os.Process.Wait leaks both until GC.
-				_ = proc.Wait()
+				_ = waitAndReap(proc)
 				var retry bool
 				backoff, retry = s.retryAfterStartFailure(ctx, readyCh, first, backoff,
 					fmt.Errorf("supervisor: OnStart: %w", err))
@@ -300,7 +328,7 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 		}
 
 		// Wait for the process to exit.
-		err = proc.Wait()
+		err = waitAndReap(proc)
 		if ctx.Err() != nil {
 			s.setState(StateStopped)
 			return
@@ -315,8 +343,9 @@ func (s *Supervisor) loop(ctx context.Context, readyCh chan<- error) {
 	}
 }
 
-// spawn starts the subprocess and returns a Conn wired to its stdio.
-func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error) {
+// newCommand builds the server's command. It is the one place the process-group
+// policy is applied, so a test can pin it without spawning anything.
+func (s *Supervisor) newCommand(ctx context.Context) *exec.Cmd {
 	// The previous justification here claimed s.command and s.args were "not from
 	// user input". That was false, and it was load-bearing: until
 	// config.LoadProject forced [lsp.<lang>] exec fields back to the global config,
@@ -332,6 +361,33 @@ func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error
 		cmd.Dir = s.opts.Dir
 	}
 
+	// Lead a process group of our own, so the signals below reach the server's
+	// descendants and not just the server.
+	procgroup.Set(cmd)
+	procgroup.DieWithParent(cmd)
+	// Cancelling ctx (Stop, daemon shutdown) asks the whole group to exit rather
+	// than SIGKILLing only the leader, as exec.CommandContext does by default;
+	// WaitDelay then kills the leader if the request is ignored. The sweep in
+	// waitAndReap handles whatever is left once the leader is gone.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		return procgroup.Terminate(cmd.Process.Pid)
+	}
+	cmd.WaitDelay = groupTermGrace
+	// Stderr stays nil, which connects it to the null device: nothing to read and
+	// nothing to block on. A pipe drained into io.Discard would instead stay open
+	// for as long as any descendant holds it, and Wait would not return for a
+	// crashed server until they exited (or WaitDelay ran out), delaying the sweep
+	// that is meant to kill them.
+	return cmd
+}
+
+// spawn starts the subprocess and returns a Conn wired to its stdio.
+func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error) {
+	cmd := s.newCommand(ctx)
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, fmt.Errorf("stdin pipe: %w", err)
@@ -340,15 +396,31 @@ func (s *Supervisor) spawn(ctx context.Context) (*jsonrpc.Conn, *exec.Cmd, error
 	if err != nil {
 		return nil, nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	// Discard stderr to avoid blocking.
-	cmd.Stderr = io.Discard
 
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("starting %q: %w", s.command, err)
 	}
+	if !liveGroups.add(cmd.Process.Pid) {
+		// KillAllGroups already ran: the daemon is exiting, and this server
+		// must not outlive it.
+		_ = procgroup.Kill(cmd.Process.Pid)
+		_ = waitAndReap(cmd)
+		return nil, nil, errors.New("not starting a language server: the daemon is shutting down")
+	}
 
 	conn := jsonrpc.NewConn(stdout, stdin)
 	return conn, cmd, nil
+}
+
+// waitAndReap waits for the server to exit, then SIGKILLs whatever it left in
+// its process group and drops the group from the registry. The group is swept
+// even when the server exited on its own: a crashed server's helpers are
+// orphans nothing will ever talk to again.
+func waitAndReap(proc *exec.Cmd) error {
+	pgid := proc.Process.Pid
+	err := proc.Wait()
+	reapGroup(pgid)
+	return err
 }
 
 func (s *Supervisor) setState(state State) {

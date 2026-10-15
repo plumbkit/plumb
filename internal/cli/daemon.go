@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/monitor"
 	"github.com/plumbkit/plumb/internal/sessionstate"
@@ -131,15 +132,34 @@ const shutdownHardDeadline = acceptDrainGrace + gitWriteDrainGrace + poolCloseGr
 // is injectable for tests; production passes os.Exit. On a clean shutdown
 // runDaemon returns and the process exits before the timer fires, so exit is
 // never actually called.
-func armShutdownWatchdog(ctx context.Context, deadline time.Duration, exit func(int)) {
+//
+// killChildren runs immediately before exit and takes the daemon's child
+// processes down with it: the watchdog fires only when an orderly stop wedged,
+// which is exactly when a language server (and its helpers) is still alive, and
+// os.Exit runs no deferred cleanup. Production passes killLSPGroups; it is a
+// parameter so a test can observe the order without killing the test binary's
+// own children.
+func armShutdownWatchdog(ctx context.Context, deadline time.Duration, exit func(int), killChildren func()) {
 	go func() {
 		<-ctx.Done()
 		timer := time.NewTimer(deadline)
 		defer timer.Stop()
 		<-timer.C
 		slog.Error("daemon: shutdown exceeded hard deadline; forcing exit", "deadline", deadline)
+		killChildren()
 		exit(0)
 	}()
+}
+
+// killLSPGroups SIGKILLs every language-server process group the daemon still
+// owns. It is the daemon's last act on both exit paths: the shutdown watchdog
+// (the orderly stop wedged) and the end of runDaemon, after the pool has closed
+// (an entry abandoned at its budget has left a server running that nothing else
+// will ever signal). It finds nothing to do on a clean shutdown.
+func killLSPGroups() {
+	if n := lsp.KillAllGroups(); n > 0 {
+		slog.Warn("daemon: killed language-server process groups left running at exit", "groups", n)
+	}
 }
 
 // drainConnections waits up to d for the in-flight connection WaitGroup to
@@ -236,7 +256,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// Last-resort backstop: guarantee the daemon exits within a bounded time of a
 	// shutdown signal even if some teardown step wedges, so it releases the
 	// lifetime lock and a restart's fresh daemon can bind the socket.
-	armShutdownWatchdog(ctx, shutdownHardDeadline, os.Exit)
+	armShutdownWatchdog(ctx, shutdownHardDeadline, os.Exit, killLSPGroups)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -344,6 +364,9 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// with connected sessions exempt (issue #525).
 	maintainSessionStateAtStart(sessState)
 
+	// Registered before pool.close so it runs after it (defers are LIFO): whatever
+	// the orderly close abandoned at its budget is killed before the process exits.
+	defer killLSPGroups()
 	pool := newWorkspacePool(ctx, cfg)
 	defer pool.close()
 	pool.startJanitor(ctx)
