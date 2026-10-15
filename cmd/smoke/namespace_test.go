@@ -80,9 +80,18 @@ func TestSmoke_Namespace_IsolatesAnEndToEndRun(t *testing.T) {
 
 	// The recent-writes feed: a default-namespace write shows in the default
 	// roster (the control) and not in the namespace's.
+	// The stats writer batches its inserts, so the row lands within a flush
+	// interval, not synchronously: poll for it (bounded) before the negative
+	// check, which is only meaningful once the row is known to be stored.
 	def.call(t, "write_file", map[string]any{"file_path": fixture + "/ns_smoke_default.txt", "content": "default\n"}, toolTimeout)
-	if out := def.call(t, "workspace_sessions", map[string]any{}, toolTimeout); !strings.Contains(out, "ns_smoke_default.txt") {
-		t.Fatalf("control: the default feed does not show its own write:\n%s", out)
+	var feed string
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+		if feed = def.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(feed, "ns_smoke_default.txt") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("control: the default feed does not show its own write:\n%s", feed)
+		}
 	}
 	if out := nsc.call(t, "workspace_sessions", map[string]any{}, toolTimeout); strings.Contains(out, "ns_smoke_default.txt") {
 		t.Fatalf("the namespaced feed shows a default-namespace write:\n%s", out)
