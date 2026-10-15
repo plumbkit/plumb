@@ -45,7 +45,7 @@ func checkDaemon() []checkResult {
 		// command reads — version file, control socket, pid — comes from the
 		// same directory as the socket, so doctor deliberately does NOT dial
 		// the other one and report a mix of the two.
-		if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) {
+		if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) && !ourBridgeAt(legacy) {
 			result.detail += " — but a daemon is running at " + render.ContractPath(legacy)
 			result.fix = "run `plumb stop`, then reconnect; the daemon restarts under " + render.ContractPath(paths.RuntimeDir())
 		}

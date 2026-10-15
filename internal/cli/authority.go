@@ -73,6 +73,11 @@ type authorityMetadata struct {
 	// record written before that field existed; a reader then compares device and
 	// inode alone, which is all such a record can support.
 	SocketCtime int64 `json:"socket_ctime,omitempty"`
+	// Bridges are the legacy MCP socket paths this holder also answers on
+	// (PLAN-549), each with the identity of the file it bound and when an old
+	// client first used it. A reader compares the identity with the file at the
+	// path, so the holder's own bridge is never read as a legacy daemon.
+	Bridges []bridgeRecord `json:"bridges,omitempty"`
 }
 
 // authorityPath returns the account authority lock path.
@@ -166,7 +171,7 @@ func publishAuthority(f *os.File, m authorityMetadata) error {
 // A failure is a warning, not fatal. The record is what lets a differently
 // rooted client attach; the daemon still serves every client whose environment
 // resolves as its own does, which is what it did before there was a record.
-func publishAuthorityMetadata(locks daemonLocks, socketPath string, socketID fileIdentity) {
+func publishAuthorityMetadata(locks daemonLocks, socketPath string, socketID fileIdentity, bridges []bridgeRecord) {
 	if locks.Authority == nil {
 		return
 	}
@@ -182,6 +187,7 @@ func publishAuthorityMetadata(locks daemonLocks, socketPath string, socketID fil
 		SocketDev:   socketID.dev,
 		SocketIno:   socketID.ino,
 		SocketCtime: socketID.ctime,
+		Bridges:     bridges,
 	}); err != nil {
 		slog.Warn("daemon: could not publish the authority metadata", "err", err)
 	}

@@ -74,7 +74,7 @@ func runLogLevel(_ *cobra.Command, args []string) error {
 // log-level` says there is none.
 func ctrlSocketUnavailable(err error) error {
 	hint := ""
-	if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) {
+	if legacy := legacyDaemonSocketPath(); legacy != "" && socketAlive(legacy) && !ourBridgeAt(legacy) {
 		hint = fmt.Sprintf("\n  a daemon IS running at %s, but this plumb uses %s"+
 			"\n  run `plumb stop`, then reconnect", legacy, paths.RuntimeDir())
 	}

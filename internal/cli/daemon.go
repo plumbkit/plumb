@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -290,9 +289,12 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// authority metadata as it binds, which is what lets a launcher whose own
 	// environment resolved elsewhere dial THIS daemon (PLAN-527) and what lets
 	// doctor and `plumb debug daemons` report a replaced path from outside.
+	bridge := newLegacyBridge()
+	// Every rewrite of the record goes through the guard's own lock — its checks
+	// and the bridge's republish alike — so two writers never interleave.
 	guard, err := newSocketGuard(socketPath,
 		func() bool { return daemonHoldsAuthority(locks) },
-		func(path string, id fileIdentity) { publishAuthorityMetadata(locks, path, id) })
+		func(path string, id fileIdentity) { publishAuthorityMetadata(locks, path, id, bridge.records()) })
 	if err != nil {
 		return fmt.Errorf("daemon: %w", err)
 	}
@@ -301,6 +303,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	defer guard.removeSocketIfOurs("daemon socket")
 	defer guard.close()
 	go guard.run(ctx)
+	// Old clients at the legacy socket paths whose locks this daemon holds
+	// (PLAN-549), published in the authority record as soon as they are bound.
+	bridge.bind(ctx, locks.Legacy, socketPath, guard.republish)
+	defer bridge.close()
 
 	pidPath := daemonPIDPath()
 	if err := publishDaemonPID(os.WriteFile); err != nil {
@@ -468,7 +474,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// their last session disconnects. See bindWriteLimiterParent and sharedBudgets.
 	budgets := newSharedBudgets()
 
-	runDaemonAcceptLoop(ctx, guard, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
+	runDaemonAcceptLoop(ctx, guard, bridge, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
 	return nil
 }
 
@@ -482,62 +488,6 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 // suspended), so a 22 h-old daemon reported 5 h of uptime. Wall-clock semantics
 // match `ps`. Extracted from runDaemon so the strip is pinned by a test.
 func daemonStartTime() time.Time { return time.Now().Round(0) }
-
-func runDaemonAcceptLoop(ctx context.Context, guard *socketGuard, pool *workspacePool, topoPool *topologyPool, memPool *memoryIndexPool, collabPool *collabPool, store *config.Store, statsStore *statsStore, historyStore *historyStore, sessState *sessionstate.Store, daemonStartedAt time.Time, budgets *sharedBudgets, registry *connRegistry, projCfgWatches *projectConfigWatchManager) {
-	var wg sync.WaitGroup
-
-	// Idle-session reaper: cancel connections that have not called any tool
-	// for longer than the configured eviction TTL, prune expired persisted
-	// per-connection state, and prune expired collab intents/notes on the same tick.
-	go func() {
-		ticker := time.NewTicker(reaperInterval)
-		defer ticker.Stop()
-		runIdleReaper(ctx, store, registry, sessState, collabPool, ticker.C)
-	}()
-
-	go func() {
-		<-ctx.Done()
-		// Stop admitting new git writes the instant shutdown begins, so the
-		// shutdown window cannot spawn a git child that a forced exit would
-		// strand mid-commit. In-flight writes finish under their decoupled
-		// context (see tools.runGit).
-		tools.BeginGitWriteDrain()
-		guard.close()
-	}()
-
-	for {
-		conn, err := guard.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				if !drainConnections(&wg, acceptDrainGrace) {
-					slog.Warn("daemon: in-flight requests did not drain before the shutdown deadline; proceeding")
-				}
-				// Give an in-flight git write a brief, bounded chance to finish
-				// (and release index.lock) before the process exits, so a quick
-				// commit is not orphaned. A slower one still completes under its
-				// decoupled context past exit.
-				if !tools.WaitGitWritesDrained(gitWriteDrainGrace) {
-					slog.Warn("daemon: a git write was still in flight at shutdown; it continues under its decoupled context")
-				}
-				return
-			default:
-				slog.Error("daemon: accept", "err", err)
-				continue
-			}
-		}
-		wg.Go(func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("daemon: connection goroutine panic — daemon kept alive",
-						"err", r,
-						"stack", string(debug.Stack()))
-				}
-			}()
-			handleConn(ctx, conn, pool, topoPool, memPool, collabPool, store, statsStore, historyStore, sessState, daemonStartedAt, budgets, registry, projCfgWatches)
-		})
-	}
-}
 
 // newConnHandle is what the registry holds for a connection: the hooks the
 // reaper, the control socket and the hook handlers reach it through.

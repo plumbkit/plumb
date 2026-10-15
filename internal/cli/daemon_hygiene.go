@@ -202,6 +202,16 @@ func bindOwnUnixSocket(path string) (*net.UnixListener, error) {
 	// markers do the removal instead, so the unlink is switched off at bind time
 	// and every removal goes through the identity check.
 	ln.SetUnlinkOnClose(false)
+	// Private whatever the umask: the directory's mode is the first fence, and a
+	// socket left group- or world-connectable is a second way in if that fence is
+	// ever weaker than it should be (PLAN-549's bridge binds in legacy
+	// directories). Done before the guard marks it, so the change time recorded is
+	// the final one.
+	if err := os.Chmod(path, 0o600); err != nil {
+		_ = ln.Close()
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("making the socket %s private: %w", path, err)
+	}
 	return ln, nil
 }
 
@@ -445,6 +455,17 @@ func (g *socketGuard) clearForeign() {
 func (g *socketGuard) refreshPublication() {
 	if g.publish != nil {
 		g.publish(g.path, g.marker.id)
+	}
+}
+
+// republish rewrites the authority record now, for a change it would otherwise
+// only carry at the next check (the legacy bridge's bind, re-bind or first
+// client, PLAN-549).
+func (g *socketGuard) republish() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.closed {
+		g.refreshPublication()
 	}
 }
 

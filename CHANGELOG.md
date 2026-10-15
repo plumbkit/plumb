@@ -37,6 +37,19 @@
   `service.toml.bak`. A shell variable that is not valid UTF-8 is skipped (and
   said) rather than failing the install, and the profile is made 0600 on every
   write, whatever mode an older file had (PLAN-554).
+- **An old `plumb serve` reaches the account's daemon through its legacy socket
+  path.** A proxy from before the account authority knows only its legacy
+  runtime directory; after a migration its daemon is gone and it cannot start
+  another (the canonical daemon holds that location's lock), so it was left with
+  the `plumb restart` instruction until someone restarted the client. The
+  canonical daemon now also answers on the MCP socket — never the control socket
+  — of every legacy location whose lifetime lock it holds (the legacy bridge).
+  It never displaces a live socket that is not its own, records and removes each
+  bridge socket by identity, and publishes them in the authority record so
+  `plumb doctor`, the legacy probe and `plumb debug daemons` see one daemon, not
+  a legacy one. The first client through each path is logged with the remedy,
+  and `plumb debug daemons` shows whether any old client still uses it. The
+  bridge is temporary: docs/architecture.md gives the removal horizon (PLAN-549).
 - **`plumb service install` records what the account's one daemon is.** A launch
   used to mean "whatever binary the client happened to be, with whatever
   environment it happened to have", so a branch build, a worktree checkout or a
