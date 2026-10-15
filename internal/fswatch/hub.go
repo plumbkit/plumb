@@ -278,6 +278,24 @@ func privateSubscription(root string, opts Options, re *regexp.Regexp) (*Subscri
 	return s, nil
 }
 
+// Subscriptions reports how many live subscriptions the hub's watchers have (a
+// test and diagnostics seam).
+func (h *Hub) Subscriptions() int {
+	h.mu.Lock()
+	watches := make([]*sharedWatch, 0, len(h.watches))
+	for _, sw := range h.watches {
+		watches = append(watches, sw)
+	}
+	h.mu.Unlock()
+	n := 0
+	for _, sw := range watches {
+		sw.mu.Lock()
+		n += len(sw.subs)
+		sw.mu.Unlock()
+	}
+	return n
+}
+
 // Watches reports how many OS watchers the hub holds open (a test and
 // diagnostics seam).
 func (h *Hub) Watches() int {

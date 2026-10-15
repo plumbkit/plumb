@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/fswatch"
@@ -15,16 +16,18 @@ import (
 // to run three OS watchers over the same tree; through the hub they share one,
 // and it closes with the last of them.
 func TestWatchHub_APolyglotRootRunsOneOSWatcher(t *testing.T) {
-	hub := fswatch.NewHub()
 	ws := t.TempDir()
+	if probe, err := fswatch.New(ws, fswatch.Options{}); err != nil {
+		t.Skipf("no file watcher on this platform: %v", err)
+	} else {
+		probe.Close()
+	}
+	hub := fswatch.NewHub()
 	cfg := config.Defaults().Topology
 	cfg.Enabled, cfg.Watch = true, true
 	store, err := topology.OpenWith(ws, cfg, nil, hub)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if hub.Watches() == 0 {
-		t.Skip("no file watcher on this platform")
 	}
 	goW, err := newLSPFSWatcherVia(hub, ws, &clientProxy{})
 	if err != nil {
@@ -34,8 +37,8 @@ func TestWatchHub_APolyglotRootRunsOneOSWatcher(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := hub.Watches(); n != 1 {
-		t.Fatalf("OS watchers for one root with three consumers = %d, want 1", n)
+	if n, subs := hub.Watches(), hub.Subscriptions(); n != 1 || subs != 3 {
+		t.Fatalf("one root with three consumers: %d OS watchers, %d subscriptions; want 1 and 3", n, subs)
 	}
 	goW.Start()
 	tsW.Start()
@@ -67,5 +70,25 @@ func TestLSPWatchExclusion_SharedPlusExtraIsTheLanguageServersSet(t *testing.T) 
 		if got != want.MatchString(p) {
 			t.Errorf("%s: shared+extra excludes %v, the language servers' set %v", rel, got, !got)
 		}
+	}
+}
+
+// TestPool_AStartedServerWatchesThroughTheHub pins the pool's wiring: a
+// language server's file watcher is a subscription to the pool's hub.
+func TestPool_AStartedServerWatchesThroughTheHub(t *testing.T) {
+	root := goModRoot(t)
+	if probe, err := fswatch.New(root, fswatch.Options{}); err != nil {
+		t.Skipf("no file watcher on this platform: %v", err)
+	} else {
+		probe.Close()
+	}
+	pool, ctx := fastWarmingPool(t, time.Minute)
+	defer pool.close()
+	pool.watchHub = fswatch.NewHub()
+	if _, err := pool.acquireLang(ctx, root, "go", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := pool.watchHub.Subscriptions(); n != 1 {
+		t.Fatalf("hub subscriptions after a server started = %d, want 1", n)
 	}
 }
