@@ -63,23 +63,21 @@ type drainSet[S any] struct {
 // mutex — ending the flight even if the close panics. Returns how many it closed.
 func drainIdle[S any](d drainSet[S], now time.Time, held func(root string) bool) int {
 	d.mu.Lock()
-	var cands []string
+	roots := make([]string, 0, len(*d.stores))
 	for root := range *d.stores {
-		if idleSince(*d.used, root, now) {
-			cands = append(cands, root)
+		roots = append(roots, root)
+	}
+	d.mu.Unlock()
+	// Every held root is re-stamped, idle or not, so its stamp is never older
+	// than one pass and its full grace starts when it is released.
+	free, kept := splitHeld(roots, held)
+	d.mu.Lock()
+	for _, root := range kept {
+		if _, ok := (*d.stores)[root]; ok {
+			*d.used = stampUsedLocked(*d.used, root)
 		}
 	}
 	d.mu.Unlock()
-	free, kept := splitHeld(cands, held)
-	if len(kept) > 0 {
-		d.mu.Lock()
-		for _, root := range kept {
-			if _, ok := (*d.stores)[root]; ok {
-				*d.used = stampUsedLocked(*d.used, root) // the grace restarts on release
-			}
-		}
-		d.mu.Unlock()
-	}
 	n := 0
 	for _, root := range free {
 		d.mu.Lock()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -437,5 +438,50 @@ func TestTopologyStoreForRoot_SkipsAClosedHandle(t *testing.T) {
 	s.topologyPool.StopAll() // closes and unpublishes it; the view keeps the handle
 	if got := s.topologyStoreForRoot(root); got != nil {
 		t.Fatal("the root-keyed accessor answered with a closed store")
+	}
+}
+
+// TestDrainIdle_AHeldRootNearItsGraceStillGetsTheWholeGrace: a held root is
+// re-stamped every pass even when it is not yet idle, so release always leaves
+// it the full grace (a stamp 9m50s old held one pass must not drain the next).
+func TestDrainIdle_AHeldRootNearItsGraceStillGetsTheWholeGrace(t *testing.T) {
+	p := newTopologyPool(topoCfg())
+	defer p.StopAll()
+	root := t.TempDir()
+	if p.Acquire(root, topoCfg()) == nil {
+		t.Fatal("control: could not open")
+	}
+	p.mu.Lock()
+	ageUse(p.used, root, storeIdleGrace-10*time.Second)
+	p.mu.Unlock()
+	p.reapIdle(time.Now(), func(string) bool { return true }) // held this pass
+	if n := p.reapIdle(time.Now().Add(time.Minute), nil); n != 0 {
+		t.Fatal("a root released one pass after it was held was drained before its full grace")
+	}
+}
+
+// TestRunStoreDrain_RebuildsHeldEachPass: the held predicate is built afresh
+// every pass (connections come and go between ticks).
+func TestRunStoreDrain_RebuildsHeldEachPass(t *testing.T) {
+	topo, mem, collabs := newTopologyPool(topoCfg()), newMemoryIndexPool(), newCollabPool()
+	defer topo.StopAll()
+	var builds atomic.Int32
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runStoreDrain(ctx, 5*time.Millisecond, topo, mem, collabs, func() func(string) bool {
+			builds.Add(1)
+			return nil
+		})
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for builds.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if builds.Load() < 3 {
+		t.Fatalf("held predicate built %d times over several ticks, want once per pass", builds.Load())
 	}
 }

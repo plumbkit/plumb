@@ -101,10 +101,6 @@ func (r *connRegistry) cancelNamespace(id string) int {
 	return len(cancels)
 }
 
-// liveProxyIDs returns the non-empty proxy session IDs of every live
-// connection. Handed to pruneSessionState so the TTL sweep never reclaims the
-// pin or name of a conversation that is still running (they are written once at
-// initialize, so age alone does not mean abandoned).
 // heldRoots is the canonical set of roots some live connection holds — its own
 // workspace or a logical agent's (PLAN-535). The handles are snapshotted under
 // r.mu and asked outside it.
@@ -128,6 +124,10 @@ func (r *connRegistry) heldRoots() map[string]bool {
 	return out
 }
 
+// liveProxyIDs returns the non-empty proxy session IDs of every live
+// connection. Handed to pruneSessionState so the TTL sweep never reclaims the
+// pin or name of a conversation that is still running (they are written once at
+// initialize, so age alone does not mean abandoned).
 func (r *connRegistry) liveProxyIDs() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
