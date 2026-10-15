@@ -51,10 +51,14 @@ func TestPool_SlowWatcherDoesNotBlockAnotherRoot(t *testing.T) {
 	defer pool.close()
 	rootA, rootB := goModRoot(t), goModRoot(t)
 	var probe lockProbe
+	var builtB atomic.Int32
 	release := make(chan struct{})
 	entered := make(chan struct{}, 4)
 	pool.watcherFactory = func(root string, _ *clientProxy) (*lspFSWatcher, error) {
 		probe.probe(&pool.mu)
+		if root == rootB {
+			builtB.Add(1)
+		}
 		if root == rootA {
 			entered <- struct{}{}
 			<-release
@@ -82,6 +86,9 @@ func TestPool_SlowWatcherDoesNotBlockAnotherRoot(t *testing.T) {
 	}
 	if probe.heldOnce.Load() {
 		t.Fatal("the watcher was rebuilt under the pool mutex on wake")
+	}
+	if n := builtB.Load(); n != 2 {
+		t.Fatalf("root B's watcher was built %d times, want 2 (the start and the wake)", n)
 	}
 }
 
