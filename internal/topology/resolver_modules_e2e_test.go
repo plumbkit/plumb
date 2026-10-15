@@ -308,10 +308,12 @@ func TestModuleResolver_ScopedReindexOfACallee(t *testing.T) {
 	ws := writeTree(t, map[string]string{
 		"pkg/__init__.py": "",
 		"pkg/m.py":        py,
-		"pkg/util.py":     "def other():\n    return 0\n",
+		"nspkg/util.py":   "def other():\n    return 0\n",
 		"app/main.py":     "from pkg.m import A, fresh\n\ndef caller():\n    return A.run(None)\n\ndef uses_fresh():\n    return fresh()\n",
-		// Imports only the submodule, so nothing else puts it in the scope.
-		"tools/only_util.py": "from pkg import util\n\ndef via_util():\n    return util.later()\n",
+		// A namespace package (no __init__.py) imported only for its submodule: the
+		// spec names no file, so only the submodule route puts this importer in
+		// the scope.
+		"tools/only_util.py": "from nspkg import util\n\ndef via_util():\n    return util.later()\n",
 		"src/m.ts":           ts,
 		"web/main.ts":        "import { A, fresh } from \"../src/m\";\nexport function caller() { return A.run(); }\nexport function usesFresh() { return fresh(); }\n",
 	})
@@ -333,9 +335,9 @@ func TestModuleResolver_ScopedReindexOfACallee(t *testing.T) {
 		t.Fatalf("control: util.later does not exist yet, but via_util resolves to %v", got)
 	}
 	reindex(t, store, ws, "pkg/m.py", py+"\n\ndef fresh():\n    return 3\n")
-	// A submodule a from-import named (from pkg import util) makes its importer
+	// A submodule a from-import named (from nspkg import util) makes its importer
 	// part of the scope too.
-	reindex(t, store, ws, "pkg/util.py", "def other():\n    return 0\n\n\ndef later():\n    return 5\n")
+	reindex(t, store, ws, "nspkg/util.py", "def other():\n    return 0\n\n\ndef later():\n    return 5\n")
 	if got := qualifiedCallees(t, store, "tools/only_util.py", "via_util"); !slices.Equal(got, []string{"later"}) {
 		t.Errorf("python via_util resolves to %v after util.later was added, want [later]", got)
 	}
