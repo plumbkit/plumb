@@ -184,7 +184,8 @@ func TestApplyGlobalLSP_KeepsALiveEnable(t *testing.T) {
 // has its servers stopped, and they stay stopped.
 func TestApplyGlobalLSP_DisabledLanguageStops(t *testing.T) {
 	p, cfg := reconfigPool(t)
-	e, err := p.acquireLang(context.Background(), markedRoot(t, "go.mod"), "go", true)
+	root := markedRoot(t, "go.mod")
+	e, err := p.acquireLang(context.Background(), root, "go", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +197,10 @@ func TestApplyGlobalLSP_DisabledLanguageStops(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, _, state := entryNow(p, e); state == poolHibernated {
+			waitIdle(t, p, e)
+			if n := p.reconfigureRoot(root); n != 0 {
+				t.Fatalf("a stopped, disabled server was restarted again (%d)", n)
+			}
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -466,4 +471,20 @@ func TestApplyGlobalLSP_ReachesProjectGovernedRoots(t *testing.T) {
 		t.Fatalf("restarts started = %d, want 1 for the project-governed root", n)
 	}
 	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"42"}) })
+}
+
+// waitIdle waits for e's running restart, if any, to finish.
+func waitIdle(t *testing.T, p *workspacePool, e *poolEntry) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		p.mu.Lock()
+		busy := e.reconfiguring
+		p.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the restart never finished")
 }
