@@ -16,6 +16,12 @@ import (
 type memoryIndexPool struct {
 	mu      sync.Mutex
 	indexes map[string]*memory.Index
+	// flight lets an index be opened without p.mu (PLAN-536); closed marks the
+	// pool shut, so an open that finishes afterwards closes its index.
+	flight keyedFlight
+	closed bool
+	// openIndex opens an index; nil means memory.OpenIndex. A test seam.
+	openIndex func(workspace string) (*memory.Index, error)
 }
 
 func newMemoryIndexPool() *memoryIndexPool {
@@ -29,17 +35,54 @@ func (p *memoryIndexPool) Acquire(workspace string) *memory.Index {
 	if workspace == "" {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if ix, ok := p.indexes[workspace]; ok {
-		return ix
+	for {
+		p.mu.Lock()
+		if ix, ok := p.indexes[workspace]; ok {
+			p.mu.Unlock()
+			return ix
+		}
+		wait, leader := p.flight.begin(workspace)
+		p.mu.Unlock()
+		if !leader {
+			<-wait
+			continue
+		}
+		return p.openAndPublish(workspace)
 	}
-	ix, err := memory.OpenIndex(workspace)
+}
+
+// openAndPublish opens workspace's index without p.mu, publishes it and ends the
+// flight, and starts the one-shot background reindex. Caller holds the flight.
+func (p *memoryIndexPool) openAndPublish(workspace string) *memory.Index {
+	open := p.openIndex
+	if open == nil {
+		open = memory.OpenIndex
+	}
+	ended := false
+	defer func() { // a panicking open must not wedge every later Get for workspace
+		if !ended {
+			p.mu.Lock()
+			p.flight.end(workspace)
+			p.mu.Unlock()
+		}
+	}()
+	ix, err := open(workspace)
+	p.mu.Lock()
+	p.flight.end(workspace)
+	ended = true
+	closed := p.closed
+	if err == nil && !closed {
+		p.indexes[workspace] = ix
+	}
+	p.mu.Unlock()
 	if err != nil {
 		slog.Warn("memory: open index", "workspace", workspace, "err", err)
 		return nil
 	}
-	p.indexes[workspace] = ix
+	if closed {
+		_ = ix.Close()
+		return nil
+	}
 	go func() {
 		if _, rerr := ix.Reindex(workspace); rerr != nil {
 			slog.Debug("memory: initial reindex", "workspace", workspace, "err", rerr)
@@ -52,6 +95,7 @@ func (p *memoryIndexPool) Acquire(workspace string) *memory.Index {
 func (p *memoryIndexPool) CloseAll() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for _, ix := range p.indexes {
 		_ = ix.Close()
 	}

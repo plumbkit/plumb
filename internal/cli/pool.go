@@ -15,7 +15,6 @@ import (
 	"github.com/plumbkit/plumb/internal/config"
 	"github.com/plumbkit/plumb/internal/lsp"
 	"github.com/plumbkit/plumb/internal/lsp/jsonrpc"
-	"github.com/plumbkit/plumb/internal/lsp/protocol"
 )
 
 // The pool is split across files by concern: workspace detection + the CLI
@@ -119,6 +118,15 @@ type workspacePool struct {
 	// remediation message would otherwise flood the log while the residue sits
 	// there.
 	homePlumbWarn sync.Once
+
+	// watcherFactory builds an entry's file watcher; nil means newLSPFSWatcher.
+	// A test seam: a slow or probing factory shows the watcher is built without
+	// p.mu (PLAN-536).
+	watcherFactory func(root string, proxy *clientProxy) (*lspFSWatcher, error)
+
+	// closed is set by close(), under mu: a watcher whose build finishes after
+	// it is stopped rather than attached (attachWatcher).
+	closed bool
 }
 
 type langConfig struct {
@@ -357,16 +365,21 @@ func existingDir(dir string) string {
 // begins warming its language server in the background. For a reused entry the
 // returned channel is nil (nothing to wait on); for a freshly started one it
 // delivers the first-start outcome (see Supervisor.StartAsync). The pool mutex
-// is never held across the warm-up: the entry is published into the map before
-// the lock is released, so concurrent callers for the same root reuse it and a
-// language server is never spawned twice.
+// is held only to look up, publish and lease the entry: the language and config
+// resolution, the Go environment and the file watcher's initial walk run
+// without it, and the server's warm-up runs on its own goroutine. The entry is
+// published into the map before the lock is released, so concurrent callers for
+// the same root reuse it and a language server is never spawned twice.
 //
 // pin takes a session lease (refs) and call takes a call lease (inflight), both
 // under the lock and only once the entry is known good; see leaseLocked.
 func (p *workspacePool) startOrReuse(root, language string, pin, call bool) (*poolEntry, <-chan error, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
+	// Everything slow runs OUTSIDE p.mu (PLAN-536): language detection and the
+	// per-workspace config walk the tree and may parse project TOML, the Go
+	// environment reads go.work / go.mod / go.env, and a file watcher's initial
+	// walk can take up to a minute on Linux. Holding the pool-wide mutex across
+	// any of them stalled every other root's acquire behind one slow root.
+	//
 	// Resolve the language BEFORE building the reuse key: an acquire with an
 	// empty language (detect-from-markers) and one with the explicit primary
 	// language must collapse to the SAME (root, language) entry, never two
@@ -393,77 +406,31 @@ func (p *workspacePool) startOrReuse(root, language string, pin, call bool) (*po
 	if !ok {
 		return nil, nil, fmt.Errorf("language %q not configured or not enabled for %s", language, root)
 	}
+	key := poolKey{root, language}
 
-	if e, ok := p.entries[poolKey{root, language}]; ok {
-		// Pin only AFTER any fallible step (wakeLocked): pinning before a wake that
-		// errors would leak a reference (refs incremented, no matching release) and
-		// cancel the grace timer on an entry that stays hibernated.
-		switch e.state {
-		case poolHibernated:
-			readyCh, err := p.wakeLocked(e)
-			if err != nil {
-				return nil, nil, err
-			}
-			p.leaseLocked(e, pin, call)
-			slog.Info("pool: waking hibernated LS", "root", root, "language", e.language, "refs", e.refs)
-			return e, readyCh, nil
-		case poolHibernating:
-			// Teardown in flight; the server is not restartable until it settles.
-			// Return the not-yet-ready entry so the caller retries (route surfaces
-			// "LSP server not yet ready"); the next acquire finds it hibernated and
-			// wakes it.
-			p.leaseLocked(e, pin, call)
-			return e, nil, nil
-		default:
-			p.leaseLocked(e, pin, call)
-			slog.Info("pool: reusing LS", "root", root, "language", e.language, "refs", e.refs)
-			return e, nil, nil
-		}
+	p.mu.Lock()
+	if e, ok := p.entries[key]; ok {
+		return p.reuseUnlock(e, pin, call)
 	}
+	p.mu.Unlock()
 
-	// LRU eviction: before starting a new server, if this language is at its
-	// max_workspaces budget, hibernate its least-recently-used running entry.
-	// hibernateEntry re-takes p.mu and does blocking teardown, so it runs in a
-	// goroutine that parks until startOrReuse releases the lock; the new server
-	// starts immediately and the victim's JVM is reclaimed concurrently.
-	if victim := p.overBudgetVictimLocked(language, lspCfg.MaxWorkspaces); victim != nil {
-		slog.Info("pool: max_workspaces reached — evicting LRU", "language", language, "victim_root", victim.root, "max", lspCfg.MaxWorkspaces)
-		go p.hibernateEntry(victim)
-	}
-
-	rootURI := protocol.FileURI(root)
-	c := cache.New(p.cacheTTL, p.cacheMaxSize)
-	inv := cache.NewInvalidator(c)
-	proxy := &clientProxy{}
+	// A miss: compute the start environment unlocked, then re-check — another
+	// acquire may have started the server meanwhile, and a server is never
+	// spawned twice for one key.
 	env, goWorkOff := goLSPEnv(language, root, lspCfg, envFor(lspCfg))
-	e := &poolEntry{root: root, language: language, lspCfg: lspCfg, proxy: proxy, inv: inv, cache: c, state: poolStarting, startedAt: time.Now(), goWorkOff: goWorkOff}
-	proxy.onIdle = func() { go p.scheduleIdleReap(e) }
-	proxy.touch()
-
-	sup := lsp.NewSupervisor(lspCfg.Command, argsFor(language, root, lspCfg), env, lsp.SupervisorOptions{
-		OnStart: p.poolOnStart(e, rootURI, lspCfg),
-		// Run the server from the workspace it serves, not from the daemon's cwd
-		// (which is "/"). Skipped when root is not an existing directory, so a root
-		// deleted under a live session degrades to the daemon's cwd rather than
-		// failing the spawn outright with ENOENT from chdir.
-		Dir: existingDir(root),
-	})
-	// Warm up on the pool's base (daemon-lifetime) context, not a request ctx.
-	readyCh, err := sup.StartAsync(p.baseCtx)
-	if err != nil {
-		c.Close()
-		return nil, nil, fmt.Errorf("starting %s for %s: %w", language, root, err)
+	p.mu.Lock()
+	if e, ok := p.entries[key]; ok {
+		return p.reuseUnlock(e, pin, call)
 	}
-	e.sup = sup
-	if watcher, err := newLSPFSWatcher(root, proxy); err != nil {
-		slog.Warn("lsp: file watcher unavailable", "root", root, "language", language, "err", err)
-	} else {
-		e.watcher = watcher
-		watcher.Start()
+	e, readyCh, err := p.startLocked(key, lspCfg, env, goWorkOff)
+	if err != nil {
+		p.mu.Unlock()
+		return nil, nil, err
 	}
 	p.leaseLocked(e, pin, call)
-	p.entries[poolKey{root, language}] = e
 	slog.Info("pool: new workspace (warming)", "root", root, "language", language, "refs", e.refs)
+	p.mu.Unlock()
+	p.attachWatcher(e)
 	return e, readyCh, nil
 }
 

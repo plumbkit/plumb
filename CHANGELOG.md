@@ -20,6 +20,17 @@
   (the background `swift-build` that `sourcekit-lsp` launches) is outside a
   group signal's reach (PLAN-537).
 
+### Changed
+
+- **One slow workspace no longer stalls every other** (PLAN-536). Starting or
+  waking a language server, opening a topology index, a memory index or a
+  collab mailbox now runs without the pool-wide lock: the per-workspace config
+  and language are resolved, the Go environment is read and the file watcher's
+  initial walk (up to a minute on Linux) runs unlocked. A second request for the
+  same index or mailbox waits for the first's open instead of opening twice, and
+  one for the same language server re-checks under the lock and reuses it. A
+  global topology retune re-opens each index the same way.
+
 ## 0.25.1 (2026-10-15)
 
 ### Changed

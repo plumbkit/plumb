@@ -32,7 +32,19 @@ type collabPool struct {
 	// It lives on the pool because it must be shared by every connection,
 	// including connections pinned to different workspaces.
 	notify *collab.Notifier
+	// flight lets a store be opened without p.mu (PLAN-536): an open runs the
+	// schema migration. closed marks the pool shut, so an open that finishes
+	// afterwards closes its store.
+	flight keyedFlight
+	closed bool
+	// openStore opens a store (workspace "" with global set: the daemon-level
+	// one); nil means collab.Open / collab.OpenGlobal. A test seam.
+	openStore func(workspace string, global bool) (*collab.Store, error)
 }
+
+// collabGlobalKey is the flight key of the daemon-level store: not a path, so
+// it can never collide with a workspace.
+const collabGlobalKey = "\x00global"
 
 func newCollabPool() *collabPool {
 	return &collabPool{stores: make(map[string]*collab.Store), notify: collab.NewNotifier()}
@@ -55,9 +67,11 @@ func (p *collabPool) acquireGlobal() *collab.Store {
 	if p == nil {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.openGlobalLocked()
+	s, err := p.open("", true, true)
+	if err != nil {
+		slog.Warn("collab: open cross-project store", "err", err)
+	}
+	return s
 }
 
 // getGlobal returns the daemon-level store ONLY when it already exists on disk,
@@ -75,22 +89,7 @@ func (p *collabPool) getGlobalResult() (*collab.Store, error) {
 	if p == nil {
 		return nil, errors.New("collab: mailbox pool unavailable")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.global != nil {
-		return p.global, nil
-	}
-	if _, err := os.Stat(collab.GlobalDBPath()); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	store, err := collab.OpenGlobal()
-	if err == nil {
-		p.global = store
-	}
-	return store, err
+	return p.open("", true, false)
 }
 
 // probeGlobalResult observes only an already pooled handle. A cache miss checks
@@ -104,19 +103,96 @@ func (p *collabPool) probeGlobalResult() (*collab.Store, error) {
 	return probeCachedStore(store, collab.GlobalDBPath())
 }
 
-// openGlobalLocked returns the cached global store or opens a new one. Must hold
-// p.mu.
-func (p *collabPool) openGlobalLocked() *collab.Store {
-	if p.global != nil {
+// open returns the cached store for workspace (or, with global, the
+// daemon-level one), opening it on a miss WITHOUT p.mu. With create false an
+// absent database is not created: (nil, nil) means "never used". A concurrent
+// open of the same store waits for the first; other stores never wait.
+func (p *collabPool) open(workspace string, global, create bool) (*collab.Store, error) {
+	key := workspace
+	if global {
+		key = collabGlobalKey
+	}
+	for {
+		p.mu.Lock()
+		if s := p.cachedLocked(key); s != nil {
+			p.mu.Unlock()
+			return s, nil
+		}
+		wait, leader := p.flight.begin(key)
+		p.mu.Unlock()
+		if !leader {
+			<-wait
+			continue
+		}
+		return p.openAsLeader(key, workspace, global, create)
+	}
+}
+
+// openAsLeader opens key's store without p.mu, publishes it and ends the flight.
+// Caller holds key's flight. A panicking open still ends it, so the panic cannot
+// wedge every later open of key.
+func (p *collabPool) openAsLeader(key, workspace string, global, create bool) (*collab.Store, error) {
+	ended := false
+	defer func() {
+		if !ended {
+			p.mu.Lock()
+			p.flight.end(key)
+			p.mu.Unlock()
+		}
+	}()
+	s, err := p.openUnlocked(workspace, global, create)
+	p.mu.Lock()
+	p.flight.end(key)
+	ended = true
+	closed := p.closed
+	if s != nil && err == nil && !closed {
+		p.publishLocked(key, s)
+	}
+	p.mu.Unlock()
+	if s != nil && closed {
+		_ = s.Close()
+		return nil, errors.New("collab: mailbox pool closed")
+	}
+	return s, err
+}
+
+func (p *collabPool) cachedLocked(key string) *collab.Store {
+	if key == collabGlobalKey {
 		return p.global
 	}
-	s, err := collab.OpenGlobal()
-	if err != nil {
-		slog.Warn("collab: open cross-project store", "err", err)
-		return nil
+	return p.stores[key]
+}
+
+func (p *collabPool) publishLocked(key string, s *collab.Store) {
+	if key == collabGlobalKey {
+		p.global = s
+		return
 	}
-	p.global = s
-	return s
+	p.stores[key] = s
+}
+
+// openUnlocked opens a store, or reports (nil, nil) for an absent database when
+// create is false. Runs without p.mu.
+func (p *collabPool) openUnlocked(workspace string, global, create bool) (*collab.Store, error) {
+	if !create {
+		path := collab.DBPath(workspace)
+		if global {
+			path = collab.GlobalDBPath()
+		}
+		if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	if p.openStore != nil {
+		return p.openStore(workspace, global)
+	}
+	if global {
+		return collab.OpenGlobal()
+	}
+	return collab.Open(workspace)
 }
 
 // acquire returns the workspace's collab store, opening (and CREATING collab.db
@@ -126,9 +202,11 @@ func (p *collabPool) acquire(workspace string) *collab.Store {
 	if workspace == "" {
 		return nil
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.openLocked(workspace)
+	s, err := p.open(workspace, false, true)
+	if err != nil {
+		slog.Warn("collab: open store", "workspace", workspace, "err", err)
+	}
+	return s
 }
 
 // get returns the workspace's collab store ONLY when a collab.db already exists,
@@ -147,22 +225,7 @@ func (p *collabPool) getResult(workspace string) (*collab.Store, error) {
 	if p == nil || workspace == "" {
 		return nil, errors.New("collab: mailbox workspace unavailable")
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if store, ok := p.stores[workspace]; ok {
-		return store, nil
-	}
-	if _, err := os.Stat(collab.DBPath(workspace)); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	store, err := collab.Open(workspace)
-	if err == nil {
-		p.stores[workspace] = store
-	}
-	return store, err
+	return p.open(workspace, false, false)
 }
 
 // probeResult never waits for a concurrent pool open or opens its own handle.
@@ -190,20 +253,6 @@ func probeCachedStore(store *collab.Store, dbPath string) (*collab.Store, error)
 	return nil, errors.New("collab: mailbox handle not pooled")
 }
 
-// openLocked returns the cached store or opens a new one. Must hold p.mu.
-func (p *collabPool) openLocked(workspace string) *collab.Store {
-	if s, ok := p.stores[workspace]; ok {
-		return s
-	}
-	s, err := collab.Open(workspace)
-	if err != nil {
-		slog.Warn("collab: open store", "workspace", workspace, "err", err)
-		return nil
-	}
-	p.stores[workspace] = s
-	return s
-}
-
 // openStores returns a snapshot of the currently-open stores, for the reaper's
 // prune pass. A store enters the pool only once the workspace has used a collab
 // feature this daemon lifetime, so pruning the open set covers every workspace
@@ -225,6 +274,7 @@ func (p *collabPool) openStores() []*collab.Store {
 func (p *collabPool) closeAll() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	for _, s := range p.stores {
 		_ = s.Close()
 	}
