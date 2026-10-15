@@ -3,6 +3,9 @@ package fswatch
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -147,11 +150,8 @@ func TestHub_LostAndFailedReachEverySubscriber(t *testing.T) {
 	if !signalled(a.Failed()) || !signalled(b.Failed()) {
 		t.Fatal("Failed did not reach every subscriber")
 	}
-	late, _ := h.Subscribe("/ws", Options{}, "")
-	defer late.Close()
-	if !signalled(late.Failed()) {
-		t.Fatal("a subscriber joining a failed watcher was not told")
-	}
+	// A subscriber arriving after Failed gets a fresh watcher instead
+	// (TestHub_AFailedWatcherIsReplacedForANewSubscriber).
 }
 
 func TestHub_TheLastCloseClosesTheOSWatcher(t *testing.T) {
@@ -257,4 +257,142 @@ func TestHub_NilHubOpensAPrivateWatcher(t *testing.T) {
 		t.Skipf("no watcher on this platform: %v", err)
 	}
 	s.Close()
+}
+
+// TestHub_AFailedWatcherIsReplacedForANewSubscriber: a consumer opening again
+// after Failed gets a fresh OS watcher; the old one's subscribers keep it until
+// they leave, and their leaving does not drop the successor.
+func TestHub_AFailedWatcherIsReplacedForANewSubscriber(t *testing.T) {
+	h := newCountingHub()
+	old, _ := h.Subscribe("/ws", Options{}, "")
+	first := h.last()
+	close(first.failed)
+	if !signalled(old.Failed()) {
+		t.Fatal("control: Failed did not reach the subscriber")
+	}
+	fresh, err := h.Subscribe("/ws", Options{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if h.opens.Load() != 2 || h.last() == first {
+		t.Fatal("a subscriber after Failed was handed the failed watcher")
+	}
+	select {
+	case <-fresh.Failed():
+		t.Fatal("the fresh subscription starts out failed")
+	default:
+	}
+	old.Close()
+	select {
+	case <-first.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the failed watcher was not closed with its last subscriber")
+	}
+	if h.Watches() != 1 {
+		t.Fatal("the old watcher's last Close dropped its successor from the hub")
+	}
+}
+
+// TestHub_TheLastCloseRacingAJoinNeverLeavesADeafSubscription: with no anchor,
+// every last Close races another Subscribe's join; a join must never land on a
+// watcher the hub no longer lists (its subscriber would hear nothing, ever).
+func TestHub_TheLastCloseRacingAJoinNeverLeavesADeafSubscription(t *testing.T) {
+	h := newCountingHub()
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 300 {
+				s, err := h.Subscribe("/ws", Options{}, "")
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				h.mu.Lock()
+				live := h.watches[s.key] == s.sw
+				h.mu.Unlock()
+				if !live {
+					t.Error("joined a watcher the hub no longer lists")
+				}
+				s.Close()
+			}
+		})
+	}
+	wg.Wait()
+	if h.Watches() != 0 || h.Subscriptions() != 0 {
+		t.Fatalf("leak: %d watches, %d subscriptions", h.Watches(), h.Subscriptions())
+	}
+}
+
+// TestHub_DifferentOptionsGetDifferentWatchers: only identical options share.
+func TestHub_DifferentOptionsGetDifferentWatchers(t *testing.T) {
+	h := newCountingHub()
+	a, _ := h.Subscribe("/ws", Options{Cooldown: time.Millisecond}, "")
+	defer a.Close()
+	b, _ := h.Subscribe("/ws", Options{Cooldown: 2 * time.Millisecond}, "")
+	defer b.Close()
+	if h.opens.Load() != 2 {
+		t.Fatal("subscriptions with different options shared one watcher")
+	}
+}
+
+// TestHub_CloseClosesLostAndIsSafeTwice.
+func TestHub_CloseClosesLostAndIsSafeTwice(t *testing.T) {
+	h := newCountingHub()
+	keep, _ := h.Subscribe("/ws", Options{}, "")
+	defer keep.Close()
+	s, _ := h.Subscribe("/ws", Options{}, "")
+	s.Close()
+	s.Close()
+	if _, ok := <-s.Lost(); ok {
+		t.Fatal("a closed subscription's Lost is still open")
+	}
+}
+
+// TestHub_APrivateSubscriptionFiltersAndClosesItsChannels: a nil hub's
+// subscription delivers through its own exclusion and, by the time Close
+// returns, has closed Events and Lost.
+func TestHub_APrivateSubscriptionFiltersAndClosesItsChannels(t *testing.T) {
+	ws := t.TempDir()
+	var h *Hub
+	s, err := h.Subscribe(ws, Options{}, ExcludeDirsRegex(ws, "skipped"))
+	if err != nil {
+		t.Skipf("no watcher on this platform: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, "skipped"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "skipped", "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "kept"), []byte("k"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(5 * time.Second)
+	sawKept := false
+	for !sawKept {
+		select {
+		case ev := <-s.Events():
+			if strings.Contains(ev.Path, "skipped") {
+				t.Fatalf("an excluded path came through: %s", ev.Path)
+			}
+			sawKept = strings.HasSuffix(ev.Path, "kept")
+		case <-deadline:
+			t.Fatal("the private subscription delivered nothing")
+		}
+	}
+	s.Close()
+	// A signal buffered before Close may still be read; after it, the channel
+	// must already be closed — never blocking.
+	for range 2 {
+		select {
+		case _, ok := <-s.Lost():
+			if !ok {
+				return
+			}
+		default:
+			t.Fatal("Close returned before closing Lost")
+		}
+	}
+	t.Fatal("Lost still open after Close")
 }

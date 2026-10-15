@@ -98,6 +98,15 @@ func (h *Hub) Subscribe(root string, opts Options, exclude string) (*Subscriptio
 	for {
 		h.mu.Lock()
 		sw, ok := h.watches[key]
+		if ok && sw.hasFailed() {
+			// A watcher that can no longer see every change is not handed to a
+			// new subscriber: a consumer that opens again (an LSP wake, a
+			// topology re-open) gets a fresh one, as a private watcher did. Its
+			// existing subscribers keep it until they leave (Close never deletes
+			// a successor from the map).
+			delete(h.watches, key)
+			ok = false
+		}
 		if !ok {
 			sw = &sharedWatch{ready: make(chan struct{}), subs: make(map[*Subscription]struct{}), done: make(chan struct{})}
 			h.watches[key] = sw
@@ -137,6 +146,19 @@ func (h *Hub) openShared(key hubKey, sw *sharedWatch) {
 	sw.w = w
 	close(sw.ready)
 	go sw.fanOut()
+}
+
+// hasFailed reports whether sw's OS watcher has closed Failed. Caller may hold
+// h.mu (sw.mu nests inside it, as in join).
+func (sw *sharedWatch) hasFailed() bool {
+	select {
+	case <-sw.ready:
+	default:
+		return false // still opening
+	}
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return sw.failed
 }
 
 // join adds a subscription to a ready, open watcher. It fails when the watcher
@@ -226,8 +248,13 @@ func (s *Subscription) fail() { s.failOnce.Do(func() { close(s.failed) }) }
 func (s *Subscription) Close() {
 	s.closeOnce.Do(func() {
 		if s.hub == nil { // a private subscription owns its watcher
-			s.sw.w.Close()
+			s.sw.w.Close() // ends the fan-out: Events closes
 			<-s.sw.done
+			s.sw.mu.Lock()
+			delete(s.sw.subs, s)
+			close(s.events)
+			close(s.lost)
+			s.sw.mu.Unlock()
 			return
 		}
 		s.hub.mu.Lock()
@@ -265,16 +292,7 @@ func privateSubscription(root string, opts Options, re *regexp.Regexp) (*Subscri
 		failed: make(chan struct{}),
 	}
 	sw.subs[s] = struct{}{}
-	go func() {
-		sw.fanOut()
-		// The private watcher closed: close the subscription's channels, as
-		// the watcher's own would have been.
-		sw.mu.Lock()
-		delete(sw.subs, s)
-		close(s.events)
-		close(s.lost)
-		sw.mu.Unlock()
-	}()
+	go sw.fanOut() // only Close ends the watcher, and Close closes the channels
 	return s, nil
 }
 

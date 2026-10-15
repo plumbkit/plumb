@@ -36,7 +36,6 @@
   opened on first use and closed with its last consumer. Each consumer keeps
   its own buffer, so a slow one reports lost changes for itself without holding
   up the others.
-
 - **A language server's helper processes no longer outlive it.** Each server
   now runs as the leader of its own process group, so stopping it (a pool
   close, hibernation, an idle teardown) sends SIGTERM to the whole group,

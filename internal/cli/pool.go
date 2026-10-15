@@ -121,7 +121,8 @@ type workspacePool struct {
 	// there.
 	homePlumbWarn sync.Once
 
-	// watcherFactory builds an entry's file watcher; nil means newLSPFSWatcher.
+	// watcherFactory builds an entry's file watcher; nil subscribes to watchHub
+	// (newLSPFSWatcherVia).
 	// A test seam: a slow or probing factory shows the watcher is built without
 	// p.mu (PLAN-536).
 	watcherFactory func(root string, proxy *clientProxy) (*lspFSWatcher, error)
