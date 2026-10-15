@@ -11,6 +11,20 @@
   is closed after ten minutes without use: its file watcher, indexer and memory
   reindex are stopped and joined, and the next use simply re-opens it. A
   session's topology handle re-acquires instead of reading a closed database.
+- **Idle language servers are hibernated by default, and a cap never stops a
+  server in use** (PLAN-534). Every language now hibernates its server after
+  30 minutes without a tool call (Java keeps 20 m; `idle_timeout = 0` turns it
+  off), and a server hibernated for 4 hours is trimmed — removed when no session
+  holds it, otherwise its cache is dropped. `max_workspaces` is now enforced when
+  a server starts *and* when one wakes, and frees the slot synchronously: an idle
+  server no session holds goes first, then the least recently used. When every
+  server of the language is busy, the newcomer is admitted over the cap instead
+  of a busy one being stopped — a change from before, when eviction ignored work
+  in flight — and the language is reported over its cap. `daemon_info` gains an
+  `lsp pool` row (active and hibernated servers, an estimated RSS against an
+  advisory target of 12 servers and 6 GiB — reported, not enforced), and
+  `plumb debug lsp` gains REFS, CALLS and OVER CAP columns.
+
 - **A language server's helper processes no longer outlive it.** Each server
   now runs as the leader of its own process group, so stopping it (a pool
   close, hibernation, an idle teardown) sends SIGTERM to the whole group,

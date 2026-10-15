@@ -186,7 +186,7 @@ func checkActiveLSPProcesses() []checkResult {
 	var results []checkResult
 	for line := range strings.SplitSeq(resp, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 7 {
+		if len(f) < 7 { // newer daemons append fields (PLAN-534)
 			continue
 		}
 		results = append(results, checkResult{

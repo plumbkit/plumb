@@ -166,7 +166,7 @@ var defaults = Config{
 		RerankCandidates: 50,
 		Timeout:          Duration{10 * time.Second},
 	},
-	LSP: map[string]LSPConfig{
+	LSP: withLSPIdleDefault(map[string]LSPConfig{
 		"go": {
 			Command: "gopls",
 			Args:    []string{},
@@ -283,7 +283,7 @@ var defaults = Config{
 			WeakRootMarkers: []string{"index.html"},
 			Enabled:         true,
 		},
-	},
+	}),
 	Tasks: defaultTasks(),
 	// No Commands. A shipped [[command]] allow-list was tried and reverted; the
 	// header comment above TargetToken in config_commands.go records why, and what
@@ -297,6 +297,23 @@ var defaults = Config{
 
 // Defaults returns a copy of the compiled-in defaults. Useful for CLI tools
 // that want to compare what's in the resolved config against the baseline.
+// defaultLSPIdleTimeout is how long a language server may go without a tool
+// call before it is hibernated (its process stopped, its warm cache kept), for
+// every language that sets no timeout of its own (PLAN-534). An initial target,
+// not a measured optimum; per-language configurable, and 0 disables.
+const defaultLSPIdleTimeout = 30 * time.Minute
+
+// withLSPIdleDefault gives each language without an idle timeout the default.
+func withLSPIdleDefault(m map[string]LSPConfig) map[string]LSPConfig {
+	for name, l := range m {
+		if l.IdleTimeout.Duration == 0 {
+			l.IdleTimeout = Duration{defaultLSPIdleTimeout}
+			m[name] = l
+		}
+	}
+	return m
+}
+
 func Defaults() Config {
 	return cloneConfig(defaults)
 }

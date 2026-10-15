@@ -63,6 +63,7 @@ type daemonInfo struct {
 	sourceRev     sourceRevision                                     // zero value means "not stamped"; renders as unknown
 	proxyVersion  func() string                                      // optional; nil when no serve proxy declared one
 	daemonCensus  func() string                                      // optional; nil when no daemon-census accessor is wired
+	lspPool       func() string                                      // optional; nil when no pool-budget accessor is wired
 }
 
 // sourceRevision is the build-time provenance of the running daemon binary: the
@@ -226,6 +227,15 @@ func (t *daemonInfo) WithDaemonCensus(fn func() string) *daemonInfo {
 // NewDaemonInfo creates a tool that exposes session and daemon metadata.
 // sessID and sessName identify the current MCP connection; daemonVersion and
 // startedAt describe the daemon process itself.
+// WithLSPPool wires the daemon-wide language-server pool's one-line budget
+// summary (active and hibernated servers against the advisory target, any
+// language over its max_workspaces — PLAN-534). Per-entry detail is
+// `plumb debug lsp`.
+func (t *daemonInfo) WithLSPPool(fn func() string) *daemonInfo {
+	t.lspPool = fn
+	return t
+}
+
 func NewDaemonInfo(sessID, sessName, daemonVersion string, startedAt time.Time) *daemonInfo {
 	return NewDaemonInfoFunc(func() string { return sessID }, func() string { return sessName }, daemonVersion, startedAt)
 }
@@ -324,8 +334,22 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 			}
 		}
 	}
+	out += t.serverRows()
+	out += formatSessionLatency(t.sessID())
+	return out, nil
+}
+
+// serverRows renders the optional language-server, config and tool-profile
+// rows, each present only when its accessor is wired.
+func (t *daemonInfo) serverRows() string {
+	var out string
 	if t.lspStatus != nil {
 		out += "\nlsp:            " + formatLSPStatusRow(t.lspStatus())
+	}
+	if t.lspPool != nil {
+		if row := t.lspPool(); row != "" {
+			out += "\nlsp pool:       " + row
+		}
 	}
 	if t.configStatus != nil {
 		out += t.configStatusRows()
@@ -333,8 +357,7 @@ func (t *daemonInfo) Execute(ctx context.Context, _ json.RawMessage) (string, er
 	if t.toolProfile != nil {
 		out += t.profileRow()
 	}
-	out += formatSessionLatency(t.sessID())
-	return out, nil
+	return out
 }
 
 // configStatusRows renders the live config-store rows, which is a block of its

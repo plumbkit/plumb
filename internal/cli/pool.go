@@ -129,6 +129,12 @@ type workspacePool struct {
 	// it is stopped rather than attached (attachWatcher).
 	closed bool
 
+	// overCap names the languages admitted beyond their max_workspaces because
+	// every server was busy; budget is the janitor's last sample of the
+	// advisory global target (pool_budget.go, PLAN-534). Guarded by mu.
+	overCap map[string]bool
+	budget  poolBudget
+
 	// liveEnabled names the languages `plumb enable-lsp` turned on in this
 	// daemon. A later global config reload keeps them enabled — the enable is a
 	// deliberate pool-local act the config file does not record. Guarded by mu.
@@ -251,6 +257,11 @@ type poolEntry struct {
 	// the running restart re-resolves the config and goes again. Guarded by
 	// workspacePool.mu.
 	reconfigureAgain bool
+	// hibernatedAt is when the entry last finished hibernating (zero while it
+	// runs); trimmed marks a long-hibernated leased entry whose cache the
+	// janitor already dropped (pool_budget.go). Guarded by workspacePool.mu.
+	hibernatedAt time.Time
+	trimmed      bool
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that
