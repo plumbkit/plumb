@@ -22,7 +22,8 @@ import (
 // per-project config the caller passes; subsequent calls return the existing
 // instance, re-opening it when the caller's config changed (so per-project
 // tuning takes effect on attach and after a config reload). Stores run until
-// StopAll.
+// StopAll, or until the store drain closes an idle, unattached root
+// (store_drain.go, PLAN-535).
 //
 // cfg is the global topology config, used only by Reconcile on a global reload.
 // cfgs records the effective config each open store was opened with, so Acquire
@@ -192,9 +193,12 @@ func (p *topologyPool) forRoot(root string) *topology.Store {
 	for _, key := range slices.Sorted(maps.Keys(open)) {
 		if paths.Canonical(key) == root {
 			p.mu.Lock()
-			p.used = stampUsedLocked(p.used, key)
-			p.mu.Unlock()
-			return open[key]
+			defer p.mu.Unlock()
+			if s, ok := p.stores[key]; ok && s == open[key] { // still published
+				p.used = stampUsedLocked(p.used, key)
+				return s
+			}
+			return nil
 		}
 	}
 	return nil

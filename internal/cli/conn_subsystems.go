@@ -101,7 +101,7 @@ func (s *connSession) topologyStoreForRoot(root string) *topology.Store {
 			return st
 		}
 	}
-	if st := s.view().topologyStore; st != nil && paths.Canonical(st.Root()) == root {
+	if st := s.view().topologyStore; st != nil && !st.Closed() && paths.Canonical(st.Root()) == root {
 		return st
 	}
 	return nil

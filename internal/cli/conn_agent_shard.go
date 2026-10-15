@@ -31,6 +31,25 @@ import (
 // guarded by mu — the re-pin path mutates them, readers resolve them lock-free
 // via the shard pointer. The trackers/limiter/undo carry their own internal
 // locks and are never swapped after creation.
+// heldRoots lists the roots this connection holds: its workspace and every
+// logical agent shard's (PLAN-535's store drain keeps their databases open).
+func (s *connSession) heldRoots() []string {
+	s.shardsMu.Lock()
+	shards := make([]*agentShard, 0, len(s.shards))
+	for _, sh := range s.shards {
+		shards = append(shards, sh)
+	}
+	s.shardsMu.Unlock()
+	roots := make([]string, 0, 1+len(shards))
+	roots = append(roots, s.workspace())
+	for _, sh := range shards {
+		sh.mu.RLock()
+		roots = append(roots, sh.root)
+		sh.mu.RUnlock()
+	}
+	return roots
+}
+
 type agentShard struct {
 	id       string // the logical-agent identity this shard is keyed on
 	mu       sync.RWMutex

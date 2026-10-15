@@ -19,11 +19,13 @@ import (
 // stops and joins its background work (topology's watcher and indexer, memory's
 // reindex) — all outside the pool mutex.
 //
-// "Held" is a connection attached to the root (its project-config watch
-// reference, which every attach, re-pin and close keeps in step). A root reached
-// only by an agent pinned elsewhere, by a cross-project note, or by a health
-// probe is kept alive by use alone. The collab pool's daemon-level store is
-// never drained.
+// "Held" is a live connection on the root: its workspace or one of its logical
+// agents' (connRegistry.heldRoots), or a project-config watch reference. A held
+// root is re-stamped on every pass, so its grace starts when it is released,
+// not at its last pool lookup — an attached session reads its cached handle
+// without one. A root reached only by a cross-project note or a health probe is
+// kept alive by use alone. The collab pool's daemon-level store is never
+// drained.
 //
 // A caller that kept a store across a drain gets a clean error from the closed
 // database, never a crash; the topology session handle re-acquires (see
@@ -34,6 +36,11 @@ import (
 const (
 	storeIdleGrace  = 10 * time.Minute
 	storeDrainEvery = time.Minute
+	// storeCloseGrace bounds how long a pass waits on one store's close: a
+	// wedged indexer must not stall every other drain (StopAll's same rule).
+	// The flight stays claimed until the close returns, so that root's next
+	// open still waits for it.
+	storeCloseGrace = 2 * time.Second
 )
 
 // drainSet is one pool's view for drainIdle: its mutex, its published stores,
@@ -63,8 +70,18 @@ func drainIdle[S any](d drainSet[S], now time.Time, held func(root string) bool)
 		}
 	}
 	d.mu.Unlock()
+	free, kept := splitHeld(cands, held)
+	if len(kept) > 0 {
+		d.mu.Lock()
+		for _, root := range kept {
+			if _, ok := (*d.stores)[root]; ok {
+				*d.used = stampUsedLocked(*d.used, root) // the grace restarts on release
+			}
+		}
+		d.mu.Unlock()
+	}
 	n := 0
-	for _, root := range unheld(cands, held) {
+	for _, root := range free {
 		d.mu.Lock()
 		s, ok := (*d.stores)[root]
 		if !ok || !idleSince(*d.used, root, now) {
@@ -81,7 +98,9 @@ func drainIdle[S any](d drainSet[S], now time.Time, held func(root string) bool)
 			d.forget(root)
 		}
 		d.mu.Unlock()
-		func() {
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
 			defer func() {
 				d.mu.Lock()
 				d.flight.end(root)
@@ -89,6 +108,11 @@ func drainIdle[S any](d drainSet[S], now time.Time, held func(root string) bool)
 			}()
 			d.close(root, s)
 		}()
+		select {
+		case <-closed:
+		case <-time.After(storeCloseGrace):
+			slog.Warn("stores: an idle store is slow to close; moving on", "root", root)
+		}
 		n++
 	}
 	return n
@@ -109,32 +133,34 @@ func idleSince(used map[string]time.Time, root string, now time.Time) bool {
 	return now.Sub(used[root]) >= storeIdleGrace
 }
 
-// unheld drops the candidates a connection still holds. held runs outside every
-// pool mutex: it canonicalises paths, which touches the file system.
-func unheld(cands []string, held func(root string) bool) []string {
+// splitHeld parts the candidates into those no connection holds and those one
+// does. held runs outside every pool mutex: it canonicalises paths, which
+// touches the file system.
+func splitHeld(cands []string, held func(root string) bool) (free, kept []string) {
 	if held == nil {
-		return cands
+		return cands, nil
 	}
-	out := cands[:0]
 	for _, root := range cands {
-		if !held(root) {
-			out = append(out, root)
+		if held(root) {
+			kept = append(kept, root)
+		} else {
+			free = append(free, root)
 		}
 	}
-	return out
+	return free, kept
 }
 
 // runStoreDrain is the daemon's janitor: every storeDrainEvery it drains the
 // idle, unheld roots of each pool, until ctx ends.
-func runStoreDrain(ctx context.Context, topo *topologyPool, mem *memoryIndexPool, collabs *collabPool, held func(root string) bool) {
-	t := time.NewTicker(storeDrainEvery)
+func runStoreDrain(ctx context.Context, every time.Duration, topo *topologyPool, mem *memoryIndexPool, collabs *collabPool, held func() func(root string) bool) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case now := <-t.C:
-			drainIdleStores(now, topo, mem, collabs, held)
+			drainIdleStores(now, topo, mem, collabs, held())
 		}
 	}
 }
@@ -147,13 +173,19 @@ func drainIdleStores(now time.Time, topo *topologyPool, mem *memoryIndexPool, co
 	}
 }
 
-// heldByAConnection is the daemon's held predicate: a root is held while any
-// connection's project-config watch references it.
-func heldByAConnection(watches *projectConfigWatchManager) func(root string) bool {
-	if watches == nil {
-		return nil
-	}
-	return func(root string) bool {
-		return watches.refs(paths.Canonical(root)) > 0
+// heldRootsOf builds the daemon's held predicate once per janitor pass: a root
+// is held while a live connection's workspace or logical agent is on it
+// (registry.heldRoots, snapshotted per pass) or its project-config watch is
+// referenced.
+func heldRootsOf(registry *connRegistry, watches *projectConfigWatchManager) func() func(root string) bool {
+	return func() func(root string) bool {
+		var live map[string]bool
+		if registry != nil {
+			live = registry.heldRoots()
+		}
+		return func(root string) bool {
+			canon := paths.Canonical(root)
+			return live[canon] || (watches != nil && watches.refs(canon) > 0)
+		}
 	}
 }

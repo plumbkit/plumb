@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -156,27 +158,145 @@ func TestDrainIdleStores_SparesARecentUse(t *testing.T) {
 	}
 }
 
-// TestHeldByAConnection: a root is held exactly while a connection's
-// project-config watch references it.
-func TestHeldByAConnection(t *testing.T) {
-	if heldByAConnection(nil) != nil {
-		t.Fatal("no watch manager must mean no held predicate")
-	}
+// TestHeldRootsOf: a root is held while a live connection's workspace or a
+// logical agent is on it, or a project-config watch references it.
+func TestHeldRootsOf(t *testing.T) {
 	m := newProjectConfigWatchManager(t.Context(), func(string) {})
 	defer m.close()
+	reg := &connRegistry{conns: map[string]connHandle{}}
+	conn, agent, watched, free := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	reg.add("s1", connHandle{heldRoots: func() []string { return []string{conn, agent} }})
+	m.acquire(watched)
+	defer m.release(watched)
+	held := heldRootsOf(reg, m)()
+	for root, want := range map[string]bool{conn: true, agent: true, watched: true, free: false} {
+		if got := held(root); got != want {
+			t.Errorf("held(%s) = %v, want %v", root, got, want)
+		}
+	}
+	reg.remove("s1")
+	if heldRootsOf(reg, m)()(conn) {
+		t.Error("a root whose connection left is still held")
+	}
+}
+
+// TestDrainIdle_ARootHeldRestartsItsGraceOnRelease: an attached session reads
+// its cached handle without a pool lookup, so a held root's stamp is refreshed
+// each pass — released, it gets the whole grace, not an immediate close.
+func TestDrainIdle_ARootHeldRestartsItsGraceOnRelease(t *testing.T) {
+	p := newTopologyPool(topoCfg())
+	defer p.StopAll()
 	root := t.TempDir()
-	held := heldByAConnection(m)
-	if held(root) {
-		t.Fatal("control: an unwatched root is held")
+	if p.Acquire(root, topoCfg()) == nil {
+		t.Fatal("control: could not open")
 	}
-	m.acquire(root)
-	if !held(root) {
-		t.Fatal("a root a connection watches is not held")
+	p.mu.Lock()
+	ageUse(p.used, root, 3*time.Hour) // attached for hours, no pool lookups
+	p.mu.Unlock()
+	if n := p.reapIdle(time.Now(), func(string) bool { return true }); n != 0 {
+		t.Fatal("a held root was drained")
 	}
-	m.release(root)
-	if held(root) {
-		t.Fatal("a released root is still held")
+	if n := p.reapIdle(time.Now().Add(time.Minute), nil); n != 0 {
+		t.Fatal("a root released one pass ago was drained before its grace")
 	}
+	if n := p.reapIdle(time.Now().Add(storeIdleGrace+time.Minute), nil); n != 1 {
+		t.Fatal("control: the released root was not drained after its grace")
+	}
+}
+
+// TestDrainIdle_ASlowCloseDoesNotStallThePass: a wedged close is abandoned
+// after storeCloseGrace (the flight stays claimed until it returns); the pass
+// goes on to the next root.
+func TestDrainIdle_ASlowCloseDoesNotStallThePass(t *testing.T) {
+	var mu sync.Mutex
+	var flight keyedFlight
+	old := time.Now().Add(-storeIdleGrace)
+	stores := map[string]int{"/slow": 1, "/fast": 2}
+	used := map[string]time.Time{"/slow": old, "/fast": old}
+	release := make(chan struct{})
+	defer close(release)
+	var fastClosed bool
+	start := time.Now()
+	n := drainIdle(drainSet[int]{
+		mu: &mu, stores: &stores, used: &used, flight: &flight,
+		close: func(root string, _ int) {
+			if root == "/slow" {
+				<-release
+				return
+			}
+			fastClosed = true
+		},
+	}, time.Now(), nil)
+	if n != 2 || !fastClosed {
+		t.Fatalf("drained %d (fast closed %v), want 2 with the fast one closed", n, fastClosed)
+	}
+	if time.Since(start) > storeCloseGrace+2*time.Second {
+		t.Fatal("the pass waited on the wedged close")
+	}
+	mu.Lock()
+	_, leader := flight.begin("/slow")
+	mu.Unlock()
+	if leader {
+		t.Fatal("the wedged root's flight was released before its close returned")
+	}
+}
+
+// TestRunStoreDrain_DrainsEachPoolUntilCancelled pins the janitor: each tick
+// drains all three pools with that tick's held predicate, and it stops with ctx.
+func TestRunStoreDrain_DrainsEachPoolUntilCancelled(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	topo, mem, collabs := newTopologyPool(topoCfg()), newMemoryIndexPool(), newCollabPool()
+	defer topo.StopAll()
+	defer mem.CloseAll()
+	defer collabs.closeAll()
+	tRoot, mRoot, cRoot, kept := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	if topo.Acquire(tRoot, topoCfg()) == nil || mem.Acquire(mRoot) == nil || collabs.acquire(cRoot) == nil || topo.Acquire(kept, topoCfg()) == nil {
+		t.Fatal("control: could not open the stores")
+	}
+	for _, age := range []func(){
+		func() {
+			topo.mu.Lock()
+			ageUse(topo.used, tRoot, storeIdleGrace)
+			ageUse(topo.used, kept, storeIdleGrace)
+			topo.mu.Unlock()
+		},
+		func() { mem.mu.Lock(); ageUse(mem.used, mRoot, storeIdleGrace); mem.mu.Unlock() },
+		func() { collabs.mu.Lock(); ageUse(collabs.used, cRoot, storeIdleGrace); collabs.mu.Unlock() },
+	} {
+		age()
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runStoreDrain(ctx, 10*time.Millisecond, topo, mem, collabs, func() func(string) bool {
+			return func(root string) bool { return root == kept }
+		})
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && (topo.isOpen(tRoot) || mem.indexCount() != 0 || collabs.storeCount() != 0) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if topo.isOpen(tRoot) || mem.indexCount() != 0 || collabs.storeCount() != 0 {
+		t.Fatalf("the janitor did not drain every pool: topo %v mem %d collab %d", topo.isOpen(tRoot), mem.indexCount(), collabs.storeCount())
+	}
+	if !topo.isOpen(kept) {
+		t.Fatal("the janitor ignored the held predicate")
+	}
+}
+
+func (p *memoryIndexPool) indexCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.indexes)
+}
+
+func (p *collabPool) storeCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.stores)
 }
 
 // TestDrainIdle_HoldsTheFlightWhileClosing: an open of a root being drained
@@ -239,5 +359,48 @@ func TestPools_ALookupKeepsARootAlive(t *testing.T) {
 	collabs.get(ws)
 	if n := collabs.reapIdle(time.Now(), nil); n != 0 {
 		t.Fatal("a collab store just looked up was drained")
+	}
+
+	topo.mu.Lock()
+	ageUse(topo.used, root, storeIdleGrace)
+	topo.mu.Unlock()
+	if topo.forRoot(root) == nil {
+		t.Fatal("control: forRoot did not find the store")
+	}
+	if n := topo.reapIdle(time.Now(), nil); n != 0 {
+		t.Fatal("a topology root just reached through forRoot was drained")
+	}
+
+	mem := newMemoryIndexPool()
+	defer mem.CloseAll()
+	mws := t.TempDir()
+	if mem.Acquire(mws) == nil {
+		t.Fatal("control: could not open the memory index")
+	}
+	mem.mu.Lock()
+	ageUse(mem.used, mws, storeIdleGrace)
+	mem.mu.Unlock()
+	mem.Acquire(mws)
+	if n := mem.reapIdle(time.Now(), nil); n != 0 {
+		t.Fatal("a memory index just acquired was drained")
+	}
+}
+
+// isOpen reports whether root's store is published, without stamping a use.
+func (p *topologyPool) isOpen(root string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.stores[root]
+	return ok
+}
+
+// TestConnSession_HeldRootsIncludesItsAgents: a connection holds its own
+// workspace and every logical agent's root.
+func TestConnSession_HeldRootsIncludesItsAgents(t *testing.T) {
+	s := &connSession{shards: map[string]*agentShard{"a1": {id: "a1", root: "/agent/root"}}}
+	s.mutate(func(v *sessionView) { v.acquiredRoot = "/conn/root" })
+	got := s.heldRoots()
+	if !slices.Contains(got, "/conn/root") || !slices.Contains(got, "/agent/root") {
+		t.Fatalf("heldRoots = %v, want the connection's and the agent's roots", got)
 	}
 }

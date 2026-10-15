@@ -420,7 +420,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	// Close the topology, memory and collab databases of a workspace no
 	// connection holds once it has been idle for a while (PLAN-535); before,
 	// they stayed open until the daemon stopped. Ends with ctx.
-	go runStoreDrain(ctx, topoPool, memPool, collabPool, heldByAConnection(projCfgWatches))
+	go runStoreDrain(ctx, storeDrainEvery, topoPool, memPool, collabPool, heldRootsOf(registry, projCfgWatches))
 
 	daemonStartedAt := daemonStartTime()
 
@@ -526,6 +526,7 @@ func newConnHandle(s *connSession) connHandle {
 		mailboxInbox:   s.hookInbox,
 		hintRoot:       s.hookHintRoot,
 		sensitive:      s.changeSensitive,
+		heldRoots:      s.heldRoots,
 	}
 }
 

@@ -255,6 +255,9 @@ func (ix *Index) Fresh(workspace string) (bool, error) {
 // memories whose content drifted or that are absent from the index. An unchanged
 // memory therefore costs the single List read, not a second read plus a re-hash.
 func (ix *Index) Reindex(workspace string) (int, error) {
+	if ix.stop.Load() {
+		return 0, ErrIndexClosing
+	}
 	mems, err := List(workspace)
 	if err != nil {
 		return 0, err

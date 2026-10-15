@@ -60,3 +60,17 @@ func TestIndex_ReindexStopsWhenClosing(t *testing.T) {
 		t.Fatalf("Reindex on a closing index = %v, want ErrIndexClosing", err)
 	}
 }
+
+// TestIndex_ReindexAfterCloseReportsClosing: Close itself raises the stop flag,
+// so a Reindex after it reports ErrIndexClosing.
+func TestIndex_ReindexAfterCloseReportsClosing(t *testing.T) {
+	ws := t.TempDir()
+	ix, err := OpenIndex(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ix.Close()
+	if _, err := ix.Reindex(ws); !errors.Is(err, ErrIndexClosing) {
+		t.Fatalf("Reindex after Close = %v, want ErrIndexClosing", err)
+	}
+}
