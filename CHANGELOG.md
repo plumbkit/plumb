@@ -83,7 +83,8 @@
   longer share each other's intra-file call edges. Python, TypeScript and
   JavaScript members are now qualified by their container (`Store.save`, a
   nested `outer.inner`), as Go's are, so selectors and the pack name them that
-  way.
+  way. The topology index schema moves to 9, so an existing index is rebuilt
+  once, on the first attach after upgrading.
 - **`context_for_task` for Python, TypeScript and JavaScript.** Packs word what
   each language's call graph follows; the `uses` record serves them (class and
   enum members excluded, per-language shadowing); a pytest-style test target gets

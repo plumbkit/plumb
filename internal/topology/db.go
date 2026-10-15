@@ -182,7 +182,13 @@ CREATE TABLE IF NOT EXISTS topology_embeddings (
 //	8 — topology_call_sites.outcome, the resolver's per-site outcome, and an index
 //	    on (language, callee). CREATE IF NOT EXISTS cannot add a column to an
 //	    existing table, so the table is recreated.
-const SchemaVersion = 8
+//	9 — Python, TypeScript and JavaScript call and import-binding sites (site_kind
+//	    'call' and 'binding') for the module resolver, and their members qualified
+//	    by container (Class.method). An unchanged file is never re-extracted, so
+//	    without the bump its rows would keep no sites and unqualified names, whose
+//	    shared identities the cross-file edge restore cannot tell apart. Same
+//	    reasoning as 2.
+const SchemaVersion = 9
 
 // topologyTables are the topology tables/virtual tables, listed so the version
 // gate can DROP them in dependency order (children before parents). The
