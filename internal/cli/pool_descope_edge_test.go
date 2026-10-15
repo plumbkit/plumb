@@ -268,4 +268,39 @@ func TestCollabPool_CoalescedAndClosedAfterShutdown(t *testing.T) {
 	if s := <-late; s != nil {
 		t.Fatal("a store opened after closeAll was handed out")
 	}
+	p.mu.Lock()
+	cached := p.cachedLocked(other)
+	p.mu.Unlock()
+	if cached != nil {
+		t.Fatal("a store opened after closeAll was published")
+	}
+}
+
+// TestPool_AttachWatcherSkipsAnEntryTornDown: a watcher built for an entry that
+// was torn down meanwhile (removed from the map, state untouched) is stopped,
+// not attached.
+func TestPool_AttachWatcherSkipsAnEntryTornDown(t *testing.T) {
+	pool, ctx := fastWarmingPool(t, time.Minute)
+	defer pool.close()
+	pool.watcherFactory = func(string, *clientProxy) (*lspFSWatcher, error) { return nil, errSeam }
+	root := goModRoot(t)
+	e, err := pool.acquireLang(ctx, root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := newLSPFSWatcher(root, e.proxy)
+	if err != nil {
+		t.Skipf("no file watcher on this platform: %v", err)
+	}
+	pool.mu.Lock()
+	delete(pool.entries, poolKey{root, "go"})
+	pool.mu.Unlock()
+	pool.watcherFactory = func(string, *clientProxy) (*lspFSWatcher, error) { return w, nil }
+	pool.attachWatcher(e)
+	pool.mu.Lock()
+	attached := e.watcher
+	pool.mu.Unlock()
+	if attached != nil || !watcherStopped(w) {
+		t.Fatalf("a torn-down entry got a watcher (attached %v, stopped %v)", attached != nil, watcherStopped(w))
+	}
 }
