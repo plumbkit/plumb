@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
+	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
 func registerNSRow(t *testing.T, folder, ns string) session.Info {
@@ -72,8 +74,19 @@ func TestSessionStartStats_AreTheCallersNamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Record(stats.Call{SessionID: "d", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true}); err != nil {
-		t.Fatal(err)
+	// The default namespace has tool use, savings and a guard refusal; ns-1 has
+	// one plain call of its own (so its stats block renders at all).
+	for _, c := range []stats.Call{
+		{
+			SessionID: "d", Workspace: "/w", Tool: "read_file", CalledAt: time.Now(), Success: true,
+			SavingsModelVersion: clientcaps.ModelVersion, CapabilityTokens: 5000,
+		},
+		{SessionID: "d", Workspace: "/w", Tool: "edit_file", CalledAt: time.Now(), ErrorKind: toolerror.KindUnreadOrStale},
+		{SessionID: "n", Namespace: "ns-1", Workspace: "/w", Tool: "list_memories", CalledAt: time.Now(), Success: true},
+	} {
+		if err := db.Record(c); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db.Close()
 	render := func(ns string) string {
@@ -81,10 +94,17 @@ func TestSessionStartStats_AreTheCallersNamespaces(t *testing.T) {
 		(&SessionStart{namespaceFn: func() string { return ns }}).writeSessionStats(&sb, "/w")
 		return sb.String()
 	}
-	if out := render(""); !strings.Contains(out, "read_file") {
-		t.Fatalf("control: the default namespace's own stats are missing:\n%s", out)
+	const savings, refusals = "estimated read savings", "guard refusals"
+	if out := render(""); !strings.Contains(out, "read_file") || !strings.Contains(out, savings) || !strings.Contains(out, refusals) {
+		t.Fatalf("control: the default namespace's own stats, savings and refusals are missing:\n%s", out)
 	}
-	if out := render("ns-1"); strings.Contains(out, "read_file") {
-		t.Fatalf("a namespaced session_start reports the default namespace's tool use:\n%s", out)
+	out := render("ns-1")
+	if !strings.Contains(out, "list_memories") {
+		t.Fatalf("control: the namespace's own tool use is missing:\n%s", out)
+	}
+	for _, leaked := range []string{"read_file", savings, refusals} {
+		if strings.Contains(out, leaked) {
+			t.Fatalf("a namespaced session_start reports the default namespace's %q:\n%s", leaked, out)
+		}
 	}
 }
