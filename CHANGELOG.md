@@ -67,6 +67,25 @@
   the call record keeps it and `plumb stats --context` lists it. A
   `context_for_task` pack ends with a one-line pointer to it when it has room
   left; the pointer never takes a line's place.
+- **Cross-file call edges for Python, TypeScript and JavaScript.** Their
+  extractors now record every call inside a function and what each import binds,
+  and a module resolver writes `call-resolver` edges for the calls an import
+  names: a bound name (`from .a import f`, `import { f } from "./a"`), a member of
+  an imported module (`a.f()`, `u.f()` after `import * as u`, `require`), a method
+  of an imported class and `new` of it, and a method of the enclosing class
+  through `self`/`cls`/`this`. Python resolves relative and absolute modules;
+  TypeScript and JavaScript resolve relative specifiers, with extension, `index`
+  and `.js`-to-`.ts` probing. A call it cannot name an import for makes no edge,
+  so these graphs make no completeness claim and reachability stays Go-only.
+  Traversals (`context_for_task`, `call_hierarchy`'s topology fallback,
+  `topology_affected`, `minimal_diff_review`) follow the edges. A call's enclosing
+  function is now found by position, so two classes' same-named methods no
+  longer share each other's intra-file call edges.
+- **`context_for_task` for Python, TypeScript and JavaScript.** Packs word what
+  each language's call graph follows; the `uses` record serves them (class and
+  enum members excluded, per-language shadowing); a pytest-style test target gets
+  a `run_task` line selecting the reached `test_*` functions with `-k`; and more
+  JavaScript/TypeScript test-file spellings are recognised.
 
 ## 0.25.0 (2026-10-15)
 
