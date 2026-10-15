@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,6 +62,11 @@ func waitReconfigured(t *testing.T, p *workspacePool, e *poolEntry, ok func(conf
 
 func TestApplyGlobalLSP_RestartsOnlyTheChangedLanguage(t *testing.T) {
 	p, cfg := reconfigPool(t)
+	var watchers atomic.Int32
+	p.watcherFactory = func(string, *clientProxy) (*lspFSWatcher, error) {
+		watchers.Add(1)
+		return nil, errSeam
+	}
 	ctx := context.Background()
 	goEntry, err := p.acquireLang(ctx, markedRoot(t, "go.mod"), "go", true)
 	if err != nil {
@@ -72,6 +78,7 @@ func TestApplyGlobalLSP_RestartsOnlyTheChangedLanguage(t *testing.T) {
 	}
 	goSup, _, _ := entryNow(p, goEntry)
 	pySup, _, _ := entryNow(p, pyEntry)
+	builtBefore := watchers.Load()
 
 	next := cfg
 	next.LSP = map[string]config.LSPConfig{"go": cfg.LSP["go"], "python": cfg.LSP["python"]}
@@ -84,6 +91,13 @@ func TestApplyGlobalLSP_RestartsOnlyTheChangedLanguage(t *testing.T) {
 	waitReconfigured(t, p, goEntry, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"32"}) })
 	if sup, _, state := entryNow(p, goEntry); sup == goSup || !state.running() {
 		t.Fatalf("the Go server was not restarted in place and woken (same supervisor %v, state %s)", sup == goSup, state)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for watchers.Load() == builtBefore && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if watchers.Load() == builtBefore {
+		t.Fatal("the woken server's file watcher was not rebuilt")
 	}
 	if sup, c, _ := entryNow(p, pyEntry); sup != pySup || !slices.Equal(c.Args, []string{"31"}) {
 		t.Fatal("the Python server was restarted by a Go-only change")

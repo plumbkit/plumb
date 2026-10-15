@@ -138,9 +138,11 @@ func (p *workspacePool) restartWithConfig(e *poolEntry, cfg config.LSPConfig, en
 		return
 	}
 	// p.mu is held from here (hibernateWhenIdle returns with it).
-	if p.entries[poolKey{e.root, e.language}] != e || !enabled {
+	if p.closed || p.entries[poolKey{e.root, e.language}] != e || !enabled {
 		p.mu.Unlock()
-		slog.Info("pool: language disabled by config — its server stays stopped", "root", e.root, "language", e.language)
+		if !enabled {
+			slog.Info("pool: language disabled by config — its server stays stopped", "root", e.root, "language", e.language)
+		}
 		return
 	}
 	e.lspCfg = cfg
@@ -162,6 +164,11 @@ func (p *workspacePool) restartWithConfig(e *poolEntry, cfg config.LSPConfig, en
 		slog.Warn("pool: waking a reconfigured language server failed; the next acquire retries", "root", e.root, "language", e.language, "err", err)
 		return
 	}
+	if held {
+		// The wake does not rebuild the file watcher hibernation dropped; it is
+		// attached here, after the unlock (attachWatcher, PLAN-536).
+		p.attachWatcher(e)
+	}
 	if readyCh != nil {
 		go p.reapOnLateStartFailure(e, readyCh)
 	}
@@ -182,7 +189,11 @@ func (p *workspacePool) hibernateWhenIdle(e *poolEntry) error {
 		if e.state == poolHibernated {
 			return nil
 		}
+		gone := p.closed || p.entries[poolKey{e.root, e.language}] != e
 		p.mu.Unlock()
+		if gone {
+			return errors.New("the server was torn down meanwhile")
+		}
 		if !time.Now().Before(deadline) {
 			return errors.New("calls still in progress after the wait")
 		}
