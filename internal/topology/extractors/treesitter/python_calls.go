@@ -14,6 +14,24 @@ import (
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
+// qualify is name prefixed by the names of the classes and functions that
+// lexically enclose n (Outer.Inner.method, outer.inner), so two classes'
+// same-named methods and a nested function have distinct identities: the
+// cross-file edge restore matches targets by path and qualified name, and a
+// shared one would re-attach an edge to every same-named declaration.
+func (w *pyWalk) qualify(n *tsg.Node, name string) string {
+	q := name
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		switch p.Type(w.lang) {
+		case "class_definition", "function_definition":
+			if outer := w.fieldName(p); outer != "" {
+				q = outer + "." + q
+			}
+		}
+	}
+	return q
+}
+
 // scopeByStart is the enclosing function of a call, found by the definition's
 // start byte rather than its name, so two methods that share a name in one file
 // (A.run and B.run) each keep their own calls.
@@ -56,10 +74,32 @@ func (w *pyWalk) addCallSite(call *tsg.Node, curFunc int64) {
 	default:
 		return
 	}
-	if site.Callee == "" {
+	if site.Callee == "" || !w.resolvable(site) {
 		return
 	}
 	w.sites = append(w.sites, site)
+}
+
+// resolvable reports whether the module resolver could follow a call: its name
+// or its qualifier's root is a name an import binds, or it is a method call on
+// self or cls. Anything else (print(x), a local's method) could never become an
+// edge, so it is not recorded; most calls are of that kind. The bindings are
+// complete by now: callEdges runs after the walk that records them.
+func (w *pyWalk) resolvable(site topology.CallSite) bool {
+	if w.bound == nil {
+		w.bound = map[string]bool{}
+		for _, s := range w.sites {
+			if s.Kind == topology.CallSiteBinding {
+				root, _, _ := strings.Cut(s.Callee, ".")
+				w.bound[s.Callee], w.bound[root] = true, true
+			}
+		}
+	}
+	if site.Qualifier == "" {
+		return w.bound[site.Callee]
+	}
+	root, _, _ := strings.Cut(site.Qualifier, ".")
+	return root == "self" || root == "cls" || w.bound[root]
 }
 
 // dottedChain is the text of a plain name chain (`self`, `pkg.mod`), or

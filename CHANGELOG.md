@@ -80,7 +80,10 @@
   Traversals (`context_for_task`, `call_hierarchy`'s topology fallback,
   `topology_affected`, `minimal_diff_review`) follow the edges. A call's enclosing
   function is now found by position, so two classes' same-named methods no
-  longer share each other's intra-file call edges.
+  longer share each other's intra-file call edges. Python, TypeScript and
+  JavaScript members are now qualified by their container (`Store.save`, a
+  nested `outer.inner`), as Go's are, so selectors and the pack name them that
+  way.
 - **`context_for_task` for Python, TypeScript and JavaScript.** Packs word what
   each language's call graph follows; the `uses` record serves them (class and
   enum members excluded, per-language shadowing); a pytest-style test target gets

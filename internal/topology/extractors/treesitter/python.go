@@ -73,6 +73,7 @@ type pyWalk struct {
 	funcByStart map[uint32]int64 // function definition start byte → node index, for enclosing scopes
 	nameCounts  map[string]int   // callable Name → count, for ambiguous-call down-weight (#30)
 	sites       []topology.CallSite
+	bound       map[string]bool // names the file's imports bind, and their roots (resolvable)
 }
 
 func line(p tsg.Point) int { return int(p.Row) + 1 }
@@ -254,7 +255,7 @@ func (w *pyWalk) maybeAssignment(asn *tsg.Node, enclosingClass int64) {
 	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
-		Qualified: name,
+		Qualified: w.qualify(asn, name),
 		StartLine: line(asn.StartPoint()),
 		EndLine:   line(asn.EndPoint()),
 		Language:  "python",
@@ -294,7 +295,7 @@ func (w *pyWalk) addClass(n *tsg.Node) int64 {
 	node := topology.Node{
 		Kind:      topology.KindClass,
 		Name:      name,
-		Qualified: name,
+		Qualified: w.qualify(n, name),
 		StartLine: line(n.StartPoint()),
 		EndLine:   line(n.EndPoint()),
 		Language:  "python",
@@ -373,7 +374,7 @@ func (w *pyWalk) addFunc(n *tsg.Node, enclosingClass int64) {
 	node := topology.Node{
 		Kind:      kind,
 		Name:      name,
-		Qualified: name,
+		Qualified: w.qualify(n, name),
 		StartLine: line(n.StartPoint()),
 		EndLine:   line(n.EndPoint()),
 		Language:  "python",

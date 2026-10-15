@@ -21,10 +21,11 @@ type jsSites struct {
 	src     []byte
 	byStart map[uint32]int64
 	sites   []topology.CallSite
+	bound   map[string]bool // names the file's imports bind
 }
 
 func newJSSites(lang *tsg.Language, src []byte) *jsSites {
-	return &jsSites{lang: lang, src: src, byStart: map[uint32]int64{}}
+	return &jsSites{lang: lang, src: src, byStart: map[uint32]int64{}, bound: map[string]bool{}}
 }
 
 // register records that the declaration starting at n is node idx.
@@ -79,9 +80,22 @@ func (s *jsSites) addCall(n *tsg.Node, cur int64) {
 	default:
 		return
 	}
-	if site.Callee != "" {
+	if site.Callee != "" && s.resolvable(site) {
 		s.sites = append(s.sites, site)
 	}
+}
+
+// resolvable reports whether the module resolver could follow a call: its name
+// or its qualifier's root is a name an import binds, or it is a method call on
+// this. Anything else (console.log, a local's method) could never become an
+// edge, so it is not recorded; most calls are of that kind. Imports are
+// top-level declarations, recorded before callEdges runs.
+func (s *jsSites) resolvable(site topology.CallSite) bool {
+	if site.Qualifier == "" {
+		return s.bound[site.Callee]
+	}
+	root, _, _ := strings.Cut(site.Qualifier, ".")
+	return root == "this" || s.bound[root]
 }
 
 // chain is the text of a plain name chain (`this`, `api.users`), or
@@ -149,6 +163,7 @@ func (s *jsSites) addBinding(at *tsg.Node, local, spec, imported string) {
 	if local == "" || spec == "" {
 		return
 	}
+	s.bound[local] = true
 	s.sites = append(s.sites, topology.CallSite{
 		EnclosingIdx: -1, Kind: topology.CallSiteBinding, Callee: local, Qualifier: spec,
 		StartByte: clampU32(at.StartByte()), StartLine: line(at.StartPoint()),

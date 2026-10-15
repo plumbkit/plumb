@@ -343,7 +343,12 @@ func (w *tsWalk) appendNode(kind topology.NodeKind, name string, rng *tsg.Node) 
 	return idx
 }
 
+// containment records that from lexically contains to, and qualifies to by its
+// container (Cart.total), so two classes' same-named members have distinct
+// identities: the cross-file edge restore matches targets by path and qualified
+// name, and a shared one would re-attach an edge to every same-named member.
 func (w *tsWalk) containment(from, to int64) {
+	w.nodes[to].Qualified = w.nodes[from].Name + "." + w.nodes[to].Name
 	w.edges = append(w.edges, topology.Edge{
 		FromID:     from,
 		ToID:       to,

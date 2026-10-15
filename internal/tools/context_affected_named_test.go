@@ -270,7 +270,7 @@ func TestRunnableTestName_PerLanguage(t *testing.T) {
 		{"ExampleCart", "go", true},
 		{"BenchmarkCart", "go", false},
 		{"test_cart", "python", true},
-		{"test", "python", true},
+		{"test", "python", false},
 		{"testcart", "python", false},
 		{"TestCart", "python", false},
 		{"adds an item", "typescript", false},

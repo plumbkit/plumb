@@ -8,13 +8,19 @@ package topology
 // `a.f()`, `import * as m from "./a"` then `m.f()`, and a method call on
 // `self`/`cls`/`this` to a method of the enclosing class. Everything else (calls
 // through untyped variables, dynamic dispatch, re-exports, package aliases from a
-// bundler or tsconfig) is left alone: no edge, never a guessed one. That is why it
-// makes no completeness claim and why the Go-only census and caller-completeness
-// answers stay Go-only; what it adds is derived edges a traversal may follow.
+// bundler or tsconfig, a name bound twice to different things) is left alone: no
+// edge, never a guessed one. That is why it makes no completeness claim and why
+// the Go-only census and caller-completeness answers stay Go-only; what it adds is
+// derived edges a traversal may follow.
 //
 // It runs in the same transaction as the Go resolver (resolveCallsContext), after
-// it, over the same rebuild scope, and writes edges with the same source, so the
-// scoped clear and the re-index capture/restore by target identity cover it.
+// it, and writes edges with the same source, so the scoped clear and the re-index
+// capture/restore by target identity cover it. A scoped pass resolves the rebuild
+// scope plus every file that imports a file in it, so a declaration added to a
+// callee is found by its importers without waiting for a full rebuild. The
+// extractors qualify members by their container (Class.method), which keeps each
+// target's identity unique, so a restore never re-attaches an edge to a
+// same-named declaration.
 
 import (
 	"context"
@@ -32,6 +38,9 @@ const (
 	moduleCallConfidence = callEdgeConfidence
 	selfCallConfidence   = 0.85
 )
+
+// moduleScopeTable holds the files a scoped module pass resolves.
+const moduleScopeTable = "temp.module_scope"
 
 // moduleResolvedLanguages are the languages this resolver serves. A
 // compile-time list, like supportedCallGraphLanguages, for the same reason.
@@ -54,20 +63,26 @@ type moduleDecl struct {
 
 func (d moduleDecl) identity() string { return nodeIdentity(d.path, d.qualified, d.name) }
 
-// moduleBinding is one name an import binds in a file.
+// moduleBinding is one name an import binds in a file. conflict marks a name
+// bound more than once to different things (a try/except import, a second
+// import of the name): which one a call means is not known, so it means none.
 type moduleBinding struct {
 	spec     string // the module as written
 	imported string // the name imported from it; "" for the whole module
+	conflict bool
 }
 
 // moduleTables is the whole-index state one resolution pass reads.
 type moduleTables struct {
-	files    map[string]int64                  // path → file id, module languages only
-	langOf   map[int64]string                  // file id → language
-	top      map[int64]map[string][]moduleDecl // file id → top-level name → declarations
-	members  map[int64]map[string]moduleDecl   // class id → member name → method
-	parentOf map[int64]int64                   // method id → class id
-	binds    map[int64]map[string]moduleBinding
+	files    map[string]int64                   // path → file id, module languages only
+	pathOf   map[int64]string                   // file id → path
+	langOf   map[int64]string                   // file id → language
+	byBase   map[string][]string                // base name → paths, for suffix matches
+	top      map[int64]map[string][]moduleDecl  // file id → top-level name → declarations
+	members  map[int64]map[string][]moduleDecl  // class or type id → member name → members
+	parentOf map[int64]int64                    // member id → its class or type
+	binds    map[int64]map[string]moduleBinding // file id → local name → binding
+	modMemo  map[moduleKey]moduleHit            // module lookups, this pass
 }
 
 func moduleLanguagePlaceholders() (string, []any) {
@@ -89,6 +104,11 @@ func resolveModuleCalls(ctx context.Context, tx *sql.Tx, scoped bool) error {
 	if len(t.files) == 0 {
 		return nil
 	}
+	if scoped {
+		if err := t.widenScope(ctx, tx); err != nil {
+			return err
+		}
+	}
 	edges, err := collectModuleEdges(ctx, tx, &t, scoped)
 	if err != nil {
 		return err
@@ -96,10 +116,83 @@ func resolveModuleCalls(ctx context.Context, tx *sql.Tx, scoped bool) error {
 	return insertResolvedEdges(tx, edges)
 }
 
+// widenScope fills moduleScopeTable with the rebuild scope's module-language
+// files and every file that imports one of them, and clears the importers' own
+// derived edges (the scope's were cleared by resolveCallsContext), so all of them
+// are resolved afresh against the changed files' new declarations.
+func (t *moduleTables) widenScope(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `CREATE TEMP TABLE IF NOT EXISTS module_scope(file_id INTEGER PRIMARY KEY)`); err != nil {
+		return fmt.Errorf("topology: module calls: scope: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+moduleScopeTable); err != nil {
+		return fmt.Errorf("topology: module calls: scope: %w", err)
+	}
+	changed, err := scopeFileIDs(ctx, tx)
+	if err != nil {
+		return err
+	}
+	var importers []int64
+	for file, names := range t.binds {
+		if !changed[file] && t.importsAny(file, names, changed) {
+			importers = append(importers, file)
+		}
+	}
+	for id := range changed {
+		if _, ok := t.langOf[id]; ok {
+			importers = append(importers, id)
+		}
+	}
+	for _, id := range importers {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO `+moduleScopeTable+`(file_id) VALUES (?)`, id); err != nil {
+			return fmt.Errorf("topology: module calls: scope: %w", err)
+		}
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM topology_edges WHERE source = ? AND from_id IN (
+		SELECT n.id FROM topology_nodes n JOIN `+moduleScopeTable+` s ON s.file_id = n.file_id)`, callResolverSource)
+	if err != nil {
+		return fmt.Errorf("topology: module calls: scoped clear: %w", err)
+	}
+	return nil
+}
+
+// importsAny reports whether one of a file's bindings resolves to a changed file.
+func (t *moduleTables) importsAny(file int64, names map[string]moduleBinding, changed map[int64]bool) bool {
+	lang, from := t.langOf[file], t.pathOf[file]
+	for _, b := range names {
+		if id, ok := t.moduleFile(lang, from, b.spec); ok && changed[id] {
+			return true
+		}
+		if lang == "python" && b.imported != "" {
+			if id, ok := t.moduleFile(lang, from, joinPythonModule(b.spec, b.imported)); ok && changed[id] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func scopeFileIDs(ctx context.Context, tx *sql.Tx) (map[int64]bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT file_id FROM `+scopeTable)
+	if err != nil {
+		return nil, fmt.Errorf("topology: module calls: scope: %w", err)
+	}
+	defer rows.Close()
+	out := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("topology: module calls: scope: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 func loadModuleTables(ctx context.Context, tx *sql.Tx) (moduleTables, error) {
 	t := moduleTables{
-		files: map[string]int64{}, langOf: map[int64]string{}, top: map[int64]map[string][]moduleDecl{},
-		members: map[int64]map[string]moduleDecl{}, parentOf: map[int64]int64{}, binds: map[int64]map[string]moduleBinding{},
+		files: map[string]int64{}, pathOf: map[int64]string{}, langOf: map[int64]string{}, byBase: map[string][]string{},
+		top: map[int64]map[string][]moduleDecl{}, members: map[int64]map[string][]moduleDecl{},
+		parentOf: map[int64]int64{}, binds: map[int64]map[string]moduleBinding{}, modMemo: map[moduleKey]moduleHit{},
 	}
 	ph, args := moduleLanguagePlaceholders()
 	if err := t.loadFiles(ctx, tx, ph, args); err != nil {
@@ -130,36 +223,42 @@ func (t *moduleTables) loadFiles(ctx context.Context, tx *sql.Tx, ph string, arg
 		if err := rows.Scan(&id, &p, &lang); err != nil {
 			return fmt.Errorf("topology: module calls: files: %w", err)
 		}
-		t.files[p], t.langOf[id] = id, lang
+		t.files[p], t.pathOf[id], t.langOf[id] = id, p, lang
+		t.byBase[path.Base(p)] = append(t.byBase[path.Base(p)], p)
 	}
 	return rows.Err()
 }
 
-// loadParents maps each method to the class that contains it.
+// loadParents maps each member (a method, a test method, a nested function) to
+// the class or type that contains it.
 //
 //nolint:gosec // G202: the IN list is placeholders only; every value is bound
 func (t *moduleTables) loadParents(ctx context.Context, tx *sql.Tx, ph string, args []any) error {
 	q := `SELECT e.from_id, e.to_id FROM topology_edges e
 		   JOIN topology_nodes p ON p.id = e.from_id
 		   JOIN topology_nodes c ON c.id = e.to_id
-		  WHERE e.kind = ? AND p.kind = ? AND c.kind = ? AND c.language IN (` + ph + `)`
-	rows, err := tx.QueryContext(ctx, q, append([]any{string(EdgeContains), string(KindClass), string(KindMethod)}, args...)...)
+		  WHERE e.kind = ? AND p.kind IN (?, ?) AND c.kind IN (?, ?, ?) AND c.language IN (` + ph + `)`
+	rows, err := tx.QueryContext(ctx, q, append([]any{
+		string(EdgeContains), string(KindClass), string(KindType),
+		string(KindMethod), string(KindTest), string(KindFunction),
+	}, args...)...)
 	if err != nil {
 		return fmt.Errorf("topology: module calls: members: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var class, method int64
-		if err := rows.Scan(&class, &method); err != nil {
+		var owner, member int64
+		if err := rows.Scan(&owner, &member); err != nil {
 			return fmt.Errorf("topology: module calls: members: %w", err)
 		}
-		t.parentOf[method] = class
+		t.parentOf[member] = owner
 	}
 	return rows.Err()
 }
 
-// loadDecls indexes the callable declarations: methods under their class, the
-// rest under their file's top level.
+// loadDecls indexes the callable declarations: members under their class or
+// type, top-level ones under their file. A nested function (qualified by the
+// function around it) is neither: no import or self call can name it.
 //
 //nolint:gosec // G202: the IN list is placeholders only; every value is bound
 func (t *moduleTables) loadDecls(ctx context.Context, tx *sql.Tx, ph string, args []any) error {
@@ -177,17 +276,20 @@ func (t *moduleTables) loadDecls(ctx context.Context, tx *sql.Tx, ph string, arg
 		if err := rows.Scan(&d.id, &file, &d.kind, &d.name, &d.qualified, &d.path); err != nil {
 			return fmt.Errorf("topology: module calls: declarations: %w", err)
 		}
-		if class, ok := t.parentOf[d.id]; ok {
-			if t.members[class] == nil {
-				t.members[class] = map[string]moduleDecl{}
+		switch owner, ok := t.parentOf[d.id]; {
+		case ok:
+			if t.members[owner] == nil {
+				t.members[owner] = map[string][]moduleDecl{}
 			}
-			t.members[class][d.name] = d
-			continue
+			t.members[owner][d.name] = append(t.members[owner][d.name], d)
+		case d.qualified != "" && d.qualified != d.name:
+			// nested: not reachable through an import
+		default:
+			if t.top[file] == nil {
+				t.top[file] = map[string][]moduleDecl{}
+			}
+			t.top[file][d.name] = append(t.top[file][d.name], d)
 		}
-		if t.top[file] == nil {
-			t.top[file] = map[string][]moduleDecl{}
-		}
-		t.top[file][d.name] = append(t.top[file][d.name], d)
 	}
 	return rows.Err()
 }
@@ -211,6 +313,9 @@ func (t *moduleTables) loadBindings(ctx context.Context, tx *sql.Tx, ph string, 
 		if t.binds[file] == nil {
 			t.binds[file] = map[string]moduleBinding{}
 		}
+		if prev, ok := t.binds[file][local]; ok && (prev.spec != b.spec || prev.imported != b.imported) {
+			b.conflict = true
+		}
 		t.binds[file][local] = b
 	}
 	return rows.Err()
@@ -230,7 +335,7 @@ func collectModuleEdges(ctx context.Context, tx *sql.Tx, t *moduleTables, scoped
 	        FROM topology_call_sites cs JOIN topology_files f ON f.id = cs.file_id
 	       WHERE cs.site_kind = ? AND cs.language IN (` + ph + `)`
 	if scoped {
-		q += ` AND cs.file_id IN (SELECT file_id FROM ` + scopeTable + `)`
+		q += ` AND cs.file_id IN (SELECT file_id FROM ` + moduleScopeTable + `)`
 	}
 	rows, err := tx.QueryContext(ctx, q, append([]any{string(CallSiteCall)}, args...)...)
 	if err != nil {
@@ -261,21 +366,32 @@ func (t *moduleTables) resolve(s moduleSite) (moduleDecl, float64, bool) {
 	case s.qualifier == "":
 		b, ok := t.binds[s.file][s.callee]
 		// A whole-module or namespace binding is not callable as a declaration;
-		// a default import names no declaration (the module's default export
-		// has no name the index records), so it finds nothing either.
-		if !ok || b.imported == "" || b.imported == "*" {
+		// a default import names no declaration (the module's default export has
+		// no name the index records), so it finds nothing either.
+		if !ok || b.conflict || b.imported == "" || b.imported == "*" {
 			return moduleDecl{}, 0, false
 		}
 		d, ok := t.inModule(lang, s.path, b.spec, b.imported)
 		return d, moduleCallConfidence, ok
 	case isSelfQualifier(lang, s.qualifier):
-		d, ok := t.members[t.parentOf[s.enclosing]][s.callee]
-		return d, selfCallConfidence, ok && t.parentOf[s.enclosing] != 0
+		owner, ok := t.parentOf[s.enclosing]
+		if !ok {
+			return moduleDecl{}, 0, false
+		}
+		d, ok := one(t.members[owner][s.callee])
+		return d, selfCallConfidence, ok
 	}
 	b, ok := t.binds[s.file][s.qualifier]
-	if !ok {
+	if !ok || b.conflict {
 		return moduleDecl{}, 0, false
 	}
+	return t.resolveMember(lang, s, b)
+}
+
+// resolveMember resolves a call qualified by an import binding: a function of the
+// bound module, a function of a submodule a from-import named, or a member of an
+// imported class.
+func (t *moduleTables) resolveMember(lang string, s moduleSite, b moduleBinding) (moduleDecl, float64, bool) {
 	if b.imported == "" || b.imported == "*" {
 		d, ok := t.inModule(lang, s.path, b.spec, s.callee)
 		return d, moduleCallConfidence, ok
@@ -291,8 +407,16 @@ func (t *moduleTables) resolve(s moduleSite) (moduleDecl, float64, bool) {
 	if !ok || class.kind != string(KindClass) {
 		return moduleDecl{}, 0, false
 	}
-	d, ok := t.members[class.id][s.callee]
+	d, ok := one(t.members[class.id][s.callee])
 	return d, moduleCallConfidence, ok
+}
+
+// one is the single declaration of ds, or none when there are several or none.
+func one(ds []moduleDecl) (moduleDecl, bool) {
+	if len(ds) != 1 {
+		return moduleDecl{}, false
+	}
+	return ds[0], true
 }
 
 func isSelfQualifier(lang, q string) bool {
@@ -310,103 +434,5 @@ func (t *moduleTables) inModule(lang, from, spec, name string) (moduleDecl, bool
 	if !ok {
 		return moduleDecl{}, false
 	}
-	ds := t.top[file][name]
-	if len(ds) != 1 {
-		return moduleDecl{}, false
-	}
-	return ds[0], true
-}
-
-// moduleFile is the indexed file a module specifier names, when exactly one does.
-func (t *moduleTables) moduleFile(lang, from, spec string) (int64, bool) {
-	var cands []string
-	suffix := false
-	switch {
-	case lang == "python":
-		cands, suffix = pythonModuleCandidates(from, spec)
-	case jsFamily(lang):
-		cands = jsModuleCandidates(from, spec)
-	}
-	for _, c := range cands {
-		if id, ok := t.files[c]; ok {
-			return id, true
-		}
-	}
-	if !suffix {
-		return 0, false
-	}
-	// An absolute Python import names a module from a source root (src/, a
-	// package directory) the index does not know: accept the one file whose path
-	// ends with the module's path, and no answer when several do.
-	var found int64
-	for p, id := range t.files {
-		for _, c := range cands {
-			if strings.HasSuffix(p, "/"+c) {
-				if found != 0 && found != id {
-					return 0, false
-				}
-				found = id
-			}
-		}
-	}
-	return found, found != 0
-}
-
-// pythonModuleCandidates lists the files a Python module specifier may be, in
-// preference order, and whether a path-suffix match is allowed (absolute
-// imports only).
-func pythonModuleCandidates(from, spec string) ([]string, bool) {
-	dots := len(spec) - len(strings.TrimLeft(spec, "."))
-	rest := strings.ReplaceAll(spec[dots:], ".", "/")
-	if dots == 0 {
-		return []string{rest + ".py", rest + "/__init__.py"}, true
-	}
-	base := path.Dir(from)
-	for range dots - 1 {
-		base = path.Dir(base)
-	}
-	if rest == "" {
-		return []string{path.Join(base, "__init__.py")}, false
-	}
-	p := path.Join(base, rest)
-	return []string{p + ".py", p + "/__init__.py"}, false
-}
-
-// joinPythonModule names a submodule of spec: "." + "a" is ".a", "pkg" + "a"
-// is "pkg.a".
-func joinPythonModule(spec, name string) string {
-	if strings.HasSuffix(spec, ".") {
-		return spec + name
-	}
-	return spec + "." + name
-}
-
-// jsExtensions are the files a relative specifier without an extension may be,
-// in the order bundlers and tsc try them.
-var jsExtensions = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
-
-// jsModuleCandidates lists the files a relative JS/TS specifier may be. A bare
-// specifier names a package (node_modules, a bundler alias) and is not followed.
-func jsModuleCandidates(from, spec string) []string {
-	if !strings.HasPrefix(spec, "./") && !strings.HasPrefix(spec, "../") {
-		return nil
-	}
-	p := path.Join(path.Dir(from), spec)
-	var out []string
-	if ext := path.Ext(p); slices.Contains(jsExtensions, ext) {
-		out = append(out, p)
-		// TypeScript's ESM convention imports "./a.js" for the source file a.ts.
-		stem := strings.TrimSuffix(p, ext)
-		for _, e := range []string{".ts", ".tsx", ".mts", ".cts"} {
-			out = append(out, stem+e)
-		}
-		return out
-	}
-	for _, e := range jsExtensions {
-		out = append(out, p+e)
-	}
-	for _, e := range jsExtensions {
-		out = append(out, p+"/index"+e)
-	}
-	return out
+	return one(t.top[file][name])
 }

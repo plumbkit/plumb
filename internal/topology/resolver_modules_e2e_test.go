@@ -216,19 +216,155 @@ func TestModuleResolver_TypeScriptAndJavaScript(t *testing.T) {
 }
 
 // An absolute Python import resolves to the one indexed module whose path ends
-// that way, and to none when several do: a guessed module is never an edge.
+// that way inside a real package, and to none when several do: a guessed module
+// is never an edge. A repository file that only shares a module's name is not
+// that module: app/json.py is not the standard library's json. A single-file
+// top-level module resolves at the root.
 func TestModuleResolver_PythonAbsoluteImportsBySuffix(t *testing.T) {
 	ws := writeTree(t, map[string]string{
-		"src/only/mod.py": "def f():\n    return 1\n",
-		"src/a/mod.py":    "def g():\n    return 1\n",
-		"lib/a/mod.py":    "def g():\n    return 2\n",
-		"app/main.py":     "import only.mod\nimport a.mod\n\ndef unique():\n    return only.mod.f()\n\ndef ambiguous():\n    return a.mod.g()\n",
+		"src/only/__init__.py": "",
+		"src/only/mod.py":      "def f():\n    return 1\n",
+		"src/a/__init__.py":    "",
+		"src/a/mod.py":         "def g():\n    return 1\n",
+		"lib/a/__init__.py":    "",
+		"lib/a/mod.py":         "def g():\n    return 2\n",
+		"loose/b/mod.py":       "def h():\n    return 3\n",
+		"app/json.py":          "def dumps(x):\n    return x\n",
+		"util.py":              "def tool():\n    return 4\n",
+		"app/main.py": "import only.mod\nimport a.mod\nimport b.mod\nimport json\nimport util\n\n" +
+			"def unique():\n    return only.mod.f()\n\ndef ambiguous():\n    return a.mod.g()\n\n" +
+			"def not_a_package():\n    return b.mod.h()\n\ndef stdlib():\n    return json.dumps(1)\n\n" +
+			"def root_module():\n    return util.tool()\n",
 	})
-	store := openIndexed(t, ws, 4, treesitter.NewPython())
+	store := openIndexed(t, ws, 10, treesitter.NewPython())
+	for sel, want := range map[string][]string{"not_a_package": nil, "stdlib": nil, "root_module": {"tool@util.py"}} {
+		if got := resolvedCallees(t, store, "app/main.py", sel); !slices.Equal(got, want) {
+			t.Errorf("%s calls %v, want %v", sel, got, want)
+		}
+	}
 	if got := resolvedCallees(t, store, "app/main.py", "unique"); !slices.Equal(got, []string{"f@src/only/mod.py"}) {
 		t.Errorf("unique calls %v, want [f@src/only/mod.py]", got)
 	}
 	if got := resolvedCallees(t, store, "app/main.py", "ambiguous"); len(got) != 0 {
 		t.Errorf("ambiguous calls %v, want none: two modules end in a/mod.py", got)
+	}
+}
+
+// qualifiedCallees lists the qualified names of the call-resolver targets of the
+// one declaration sel names in path.
+func qualifiedCallees(t *testing.T, store *topology.Store, path, sel string) []string {
+	t.Helper()
+	ctx := context.Background()
+	nodes, err := store.ResolveNodes(ctx, sel, topology.NodeHint{Path: path})
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("resolve %s#%s: %v %+v", path, sel, err, nodes)
+	}
+	n, err := store.ExploreFrom(ctx, nodes[0], topology.ExploreOpts{
+		Depth: 1, MaxNodes: 50, Direction: topology.DirectionOutward,
+		EdgeKinds: []string{string(topology.EdgeCalls)}, IncludeDerivedCalls: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range n.Edges {
+		if e.Source != "call-resolver" || e.FromID != nodes[0].ID {
+			continue
+		}
+		for _, x := range n.Nodes {
+			if x.ID == e.ToID {
+				out = append(out, x.Qualified)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// reindex rewrites rel and waits until the index holds its new content.
+func reindex(t *testing.T, store *topology.Store, ws, rel, src string) {
+	t.Helper()
+	before, _, _ := store.IndexedContentHash(context.Background(), rel)
+	if err := os.WriteFile(filepath.Join(ws, rel), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store.Enqueue(filepath.Join(ws, rel))
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		h, ok, _ := store.IndexedContentHash(context.Background(), rel)
+		if ok && h != before && store.Status().IndexerState == "idle" {
+			return
+		}
+	}
+	t.Fatalf("%s was not re-indexed", rel)
+}
+
+// A scoped re-index of a callee file keeps each importer's edge on the one
+// declaration it named (A.run, never B.run, which shares the name), and gives an
+// importer in another directory the edge to a declaration the callee gained,
+// without waiting for a full rebuild.
+func TestModuleResolver_ScopedReindexOfACallee(t *testing.T) {
+	py := "class A:\n    def run(self):\n        return 1\n\n\nclass B:\n    def run(self):\n        return 2\n"
+	ts := "export class A { run() { return 1; } }\nexport class B { run() { return 2; } }\n"
+	ws := writeTree(t, map[string]string{
+		"pkg/__init__.py": "",
+		"pkg/m.py":        py,
+		"app/main.py":     "from pkg.m import A, fresh\n\ndef caller():\n    return A.run(None)\n\ndef uses_fresh():\n    return fresh()\n",
+		"src/m.ts":        ts,
+		"web/main.ts":     "import { A, fresh } from \"../src/m\";\nexport function caller() { return A.run(); }\nexport function usesFresh() { return fresh(); }\n",
+	})
+	store := openIndexed(t, ws, 5, treesitter.NewPython(), treesitter.NewTypeScript())
+	check := func(when string) {
+		t.Helper()
+		if got := qualifiedCallees(t, store, "app/main.py", "caller"); !slices.Equal(got, []string{"A.run"}) {
+			t.Errorf("%s: python caller resolves to %v, want [A.run]", when, got)
+		}
+		if got := qualifiedCallees(t, store, "web/main.ts", "caller"); !slices.Equal(got, []string{"A.run"}) {
+			t.Errorf("%s: typescript caller resolves to %v, want [A.run]", when, got)
+		}
+	}
+	check("before")
+	if got := qualifiedCallees(t, store, "app/main.py", "uses_fresh"); len(got) != 0 {
+		t.Fatalf("control: fresh does not exist yet, but uses_fresh resolves to %v", got)
+	}
+	reindex(t, store, ws, "pkg/m.py", py+"\n\ndef fresh():\n    return 3\n")
+	reindex(t, store, ws, "src/m.ts", ts+"export function fresh() { return 3; }\n")
+	check("after the callees were re-indexed")
+	if got := qualifiedCallees(t, store, "app/main.py", "uses_fresh"); !slices.Equal(got, []string{"fresh"}) {
+		t.Errorf("python uses_fresh resolves to %v after fresh was added, want [fresh]", got)
+	}
+	if got := qualifiedCallees(t, store, "web/main.ts", "usesFresh"); !slices.Equal(got, []string{"fresh"}) {
+		t.Errorf("typescript usesFresh resolves to %v after fresh was added, want [fresh]", got)
+	}
+}
+
+// A name declared twice at a module's top level is no answer; a directory import
+// finds its index file; a parent-relative import climbs; a name bound twice to
+// different modules (try/except ImportError) is no answer either.
+func TestModuleResolver_AmbiguityIndexAndParentImports(t *testing.T) {
+	ws := writeTree(t, map[string]string{
+		"pkg/__init__.py":     "",
+		"pkg/dup.py":          "def dup():\n    return 1\n\n\ndef dup():\n    return 2\n",
+		"pkg/util.py":         "def up():\n    return 1\n",
+		"pkg/fast.py":         "def f():\n    return 1\n",
+		"pkg/slow.py":         "def f():\n    return 2\n",
+		"pkg/sub/__init__.py": "",
+		"pkg/sub/mod.py": "from ..dup import dup\nfrom ..util import up\ntry:\n    from ..fast import f\nexcept ImportError:\n    from ..slow import f\n\n" +
+			"def ambiguous():\n    return dup()\n\ndef climbs():\n    return up()\n\ndef rebound():\n    return f()\n",
+		"src/lib/index.ts": "export function fromIndex() { return 1; }\n",
+		"src/app.ts":       "import { fromIndex } from \"./lib\";\nexport function viaIndex() { return fromIndex(); }\n",
+	})
+	store := openIndexed(t, ws, 9, treesitter.NewPython(), treesitter.NewTypeScript())
+	for _, c := range []struct {
+		path, sel string
+		want      []string
+	}{
+		{"pkg/sub/mod.py", "ambiguous", nil},
+		{"pkg/sub/mod.py", "climbs", []string{"up@pkg/util.py"}},
+		{"pkg/sub/mod.py", "rebound", nil},
+		{"src/app.ts", "viaIndex", []string{"fromIndex@src/lib/index.ts"}},
+	} {
+		if got := resolvedCallees(t, store, c.path, c.sel); !slices.Equal(got, c.want) {
+			t.Errorf("%s#%s calls %v, want %v", c.path, c.sel, got, c.want)
+		}
 	}
 }

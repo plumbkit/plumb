@@ -478,9 +478,12 @@ is gated to the same language set.
 
 ## Import-resolved call edges (Python, TypeScript, JavaScript)
 
-For Python, TypeScript and JavaScript the extractors record every call inside a function
-and what each import binds (`site_kind = 'binding'` rows in `topology_call_sites`: the
-local name, the module as written, and the name imported from it). A second resolver,
+For Python, TypeScript and JavaScript the extractors record what each import binds
+(`site_kind = 'binding'` rows in `topology_call_sites`: the local name, the module as
+written, and the name imported from it) and every call inside a function that could be
+followed — one whose name or qualifier root is a bound name, or a method call on
+`self`/`cls`/`this` (a call like `print(x)` or `console.log(x)` could never become an
+edge, and most calls are of that kind, so they are not recorded). A second resolver,
 the **module resolver**, runs in the same transaction after the Go one and writes
 `call-resolver` edges for the calls an import names, and nothing else:
 
@@ -496,13 +499,17 @@ the **module resolver**, runs in the same transaction after the Go one and write
 
 Python modules resolve relative to the importing file (`.`, `..`) or, for an absolute
 import, to `a/b.py` or `a/b/__init__.py` at the root or, failing that, the one indexed
-file whose path ends that way (several is no answer). TypeScript and JavaScript resolve
+file whose path ends that way inside a real package (`a/__init__.py` beside it; a
+single-file top-level module only at the root, so a repository's `app/json.py` is never
+taken for the standard library's `json`); several matches are no answer. TypeScript and JavaScript resolve
 only relative specifiers (`./`, `../`), trying the specifier as written, then with
 `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, `.cjs` and as a directory `index`,
 and mapping TypeScript's ESM `./a.js` to `a.ts`; a bare specifier (a package, a bundler
 or `tsconfig` alias) is not followed. A default import is not followed either, since it
-does not name the declaration. Everything else — a call through an untyped value,
-dynamic dispatch, a re-export, a wildcard import — makes no edge, never a guessed one,
+does not name the declaration, and neither is a name bound twice to different modules
+(a `try`/`except ImportError` fallback) or declared twice at a module's top level.
+Everything else — a call through an untyped value, dynamic dispatch, a re-export, a
+wildcard import — makes no edge, never a guessed one,
 so these graphs make no completeness claim: the census and caller-completeness answers
 stay Go-only, and a pack labels a short Python or TypeScript caller list as the floor it
 is. Traversals (`context_for_task`, `call_hierarchy`'s topology fallback,
@@ -511,7 +518,11 @@ package and function reachability do not.
 
 The extractors find a call's enclosing function by the definition's position, not its
 name, so two classes' same-named methods keep their own calls (and their intra-file
-heuristic edges).
+heuristic edges), and they qualify every member by its container (`Store.save`, a nested
+function `outer.inner`), so each target's identity is unique and a re-index of a callee
+file re-attaches an importer's edge to the one declaration it named. A scoped pass
+resolves the rebuild scope plus every file that imports a file in it, so a declaration
+added to a callee gains its importers' edges without a full rebuild.
 
 ## Route recovery
 

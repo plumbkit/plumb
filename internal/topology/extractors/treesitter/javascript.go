@@ -134,6 +134,8 @@ func (w *jsWalk) appendFunc(name string, rng *tsg.Node, enclosingType int64) {
 	w.funcIdx[name] = idx
 	w.js.register(rng, idx)
 	if enclosingType >= 0 {
+		// Qualified by its class, as TypeScript's members are (tsWalk.containment).
+		w.nodes[idx].Qualified = w.nodes[enclosingType].Name + "." + name
 		w.edges = append(w.edges, topology.Edge{
 			FromID:     enclosingType,
 			ToID:       idx,
@@ -212,6 +214,7 @@ func (w *jsWalk) addMember(rng *tsg.Node, classIdx int64, name string) {
 		Path:      w.path,
 	}
 	setSpan(&node, rng)
+	node.Qualified = w.nodes[classIdx].Name + "." + name
 	w.nodes = append(w.nodes, node)
 	w.edges = append(w.edges, topology.Edge{
 		FromID:     classIdx,

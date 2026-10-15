@@ -160,11 +160,13 @@ func hopRank(h int) int {
 // function go test -run selects, Test, Example or Fuzz followed by nothing or a
 // non-lowercase rune, as the testing package requires (a benchmark needs -bench,
 // and a helper is not a test at all). Python: a function pytest collects by its
-// default rule, test followed by nothing or an underscore. A JavaScript or
+// default rule, test followed by an underscore. A JavaScript or
 // TypeScript test is named by its title, which no filter here can select safely.
 func runnableTestName(name, lang string) bool {
 	if lang == "python" {
-		return name == "test" || strings.HasPrefix(name, "test_")
+		// A function named just "test" is collected too, but `-k test` would
+		// select nearly every test, so it is never named.
+		return strings.HasPrefix(name, "test_")
 	}
 	if lang != "go" && lang != "" {
 		return false

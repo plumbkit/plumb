@@ -75,7 +75,8 @@ func bareNames(text, lang string) map[string]bool {
 
 // shadows reports whether text declares name itself, so its uses there are of
 // the local and not the file's name. Go: := (name := …, a, name := …) or var.
-// Python: an assignment to it (name = …, name: T = …) or a for target. TypeScript
+// Python: an assignment statement to it (name = …, name: T = …, at the start of
+// a line, so a keyword argument f(name=…) is not one) or a for target. TypeScript
 // and JavaScript: let, const or var. Parameters and destructuring are not
 // detected.
 func shadows(text, name, lang string) bool {
@@ -83,7 +84,7 @@ func shadows(text, name, lang string) bool {
 	var pattern string
 	switch lang {
 	case "python":
-		pattern = `(^|[^.\w])` + q + `\s*(:[^=\n]*)?=[^=]|\bfor\s+` + q + `\b`
+		pattern = `(?m)^[ \t]*` + q + `\s*(:[^=\n]*)?=[^=]|\bfor\s+` + q + `\b`
 	case "typescript", "javascript":
 		pattern = `\b(let|const|var)\s+` + q + `\b`
 	default:
