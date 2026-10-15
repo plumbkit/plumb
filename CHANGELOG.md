@@ -28,6 +28,15 @@
   `lsp pool` row (active and hibernated servers, an estimated RSS against an
   advisory target of 12 servers and 6 GiB — reported, not enforced), and
   `plumb debug lsp` gains REFS, CALLS and OVER CAP columns.
+- **A language server whose file watcher loses events is resynced, not left
+  stale** (PLAN-538). Before, a watcher that overflowed only logged that the
+  snapshot "may need a daemon restart" — and that restart re-warmed every
+  project. Now that one server is restarted in place, once no call holds it,
+  and reads the tree afresh; every other server is untouched. A burst of losses
+  costs one restart (30 s quiet, at most one per server per 10 minutes). A
+  watcher that fails is recreated with backoff, and its server resynced once it
+  is back.
+
 - **One file watcher per workspace, not one per consumer** (PLAN-503). The
   topology index and every language server on a workspace each ran their own
   recursive OS watcher over the same tree — a Go and TypeScript workspace ran

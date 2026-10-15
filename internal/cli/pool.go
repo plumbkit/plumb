@@ -140,6 +140,16 @@ type workspacePool struct {
 	// the daemon before first use.
 	watchHub *fswatch.Hub
 
+	// resyncs counts the language-server resyncs after lost watcher events and
+	// lastResynced names the latest (pool_resync.go, PLAN-538). The three
+	// durations override the resync and watcher-retry timings in tests (0 =
+	// the defaults). Guarded by mu.
+	resyncs           int
+	lastResynced      poolKey
+	resyncQuiet       time.Duration
+	resyncMinInterval time.Duration
+	watcherRetryDelay time.Duration
+
 	// liveEnabled names the languages `plumb enable-lsp` turned on in this
 	// daemon. A later global config reload keeps them enabled — the enable is a
 	// deliberate pool-local act the config file does not record. Guarded by mu.
@@ -267,6 +277,14 @@ type poolEntry struct {
 	// janitor already dropped (pool_budget.go). Guarded by workspacePool.mu.
 	hibernatedAt time.Time
 	trimmed      bool
+	// resyncTimer is a pending resync after lost watcher events; lastResync is
+	// when the server was last resynced; watcherRetrying marks a running
+	// watcher-recreation loop and watcherFailures counts its attempts
+	// (pool_resync.go, PLAN-538). Guarded by workspacePool.mu.
+	resyncTimer     *time.Timer
+	lastResync      time.Time
+	watcherRetrying bool
+	watcherFailures int
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that

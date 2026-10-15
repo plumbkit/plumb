@@ -50,6 +50,12 @@ type lspFSWatcher struct {
 	failed  <-chan struct{}
 	closeOS func()
 
+	// onLost and onFailed are the pool's reactions (pool_resync.go, PLAN-538):
+	// resync this entry's server, and recreate this watcher. nil in tests that
+	// build a watcher alone. Set before Start.
+	onLost   func()
+	onFailed func()
+
 	done     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -102,7 +108,10 @@ func (fw *lspFSWatcher) consume() {
 			return
 		case <-failed:
 			failed = nil
-			slog.Warn("lsp: file watcher failed; the language server will not hear of external changes until the workspace is reopened", "workspace", fw.workspace)
+			slog.Warn("lsp: file watcher failed; recreating it, and resyncing the language server once it is back", "workspace", fw.workspace)
+			if fw.onFailed != nil {
+				fw.onFailed()
+			}
 		case ev, ok := <-fw.events:
 			if !ok {
 				return
@@ -112,7 +121,9 @@ func (fw *lspFSWatcher) consume() {
 			if !ok {
 				return
 			}
-			slog.Warn("lsp: file watcher lost events; language-server snapshot may need a daemon restart", "workspace", fw.workspace)
+			if fw.onLost != nil {
+				fw.onLost() // resyncs this server only; logs, rate-limited, itself
+			}
 		}
 	}
 }

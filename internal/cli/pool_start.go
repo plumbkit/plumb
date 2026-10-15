@@ -126,6 +126,8 @@ func (p *workspacePool) attachWatcher(e *poolEntry) {
 		slog.Warn("lsp: file watcher unavailable", "root", e.root, "language", e.language, "err", err)
 		return
 	}
+	watcher.onLost = func() { p.onWatcherLost(e) }
+	watcher.onFailed = func() { p.onWatcherFailed(e) }
 	p.mu.Lock()
 	live := !p.closed && p.entries[poolKey{e.root, e.language}] == e && e.state.running() && e.watcher == nil
 	if live {
