@@ -115,17 +115,13 @@ func TestHub_ASlowSubscriberLosesAloneAndBlocksNobody(t *testing.T) {
 	fast, _ := h.Subscribe("/ws", Options{}, "")
 	defer fast.Close()
 	w := h.last()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := range eventBuffer + 10 {
-			w.events <- Event{Path: fmt.Sprintf("/ws/f%d", i), Op: Write}
-		}
-	}()
+	// Lockstep: each event is read by the fast subscriber before the next is
+	// sent, so only the slow one (which never reads) can overflow — under load
+	// a free-running producer could overflow the fast one too.
 	for i := range eventBuffer + 10 {
+		w.events <- Event{Path: fmt.Sprintf("/ws/f%d", i), Op: Write}
 		recv(t, fast.Events(), fmt.Sprintf("fast event %d", i))
 	}
-	<-done
 	if !signalled(slow.Lost()) {
 		t.Fatal("the slow subscriber's overflow was not reported on its Lost")
 	}
