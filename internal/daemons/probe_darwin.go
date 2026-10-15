@@ -211,7 +211,7 @@ func procArgs(pid int) (exe string, args []string, err error) {
 	if err != nil {
 		return "", nil, err
 	}
-	return parseProcArgs(raw)
+	return ParseProcArgs(raw)
 }
 
 // lsofListing is one `lsof -F pn` over every path the census cares about, so the
