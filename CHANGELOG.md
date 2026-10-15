@@ -14,7 +14,20 @@
   server's tsserver dependency; TypeScript 7 does not ship tsserver. Explicitly
   disable fsevents' unnecessary native rebuild script for current npm. Update
   client conformance pins to Codex 0.162.1 and OpenCode 1.19.0.
-
+- **A language server no connection uses is reclaimed, not kept until the
+  daemon stops** (PLAN-533). The pool now owns each server and counts leases on
+  it: a connection leases its primary and borrows every other server it routes
+  to — a secondary language, a nested root such as a parent repository routing
+  into a submodule, a workspace-symbol fan-out target — until it disconnects or
+  switches workspace, and every routed tool call holds a lease for its whole
+  duration (the file watcher's change notifications do not: one racing a
+  hibernation fails harmlessly, and the woken server re-reads the disk). A
+  server is hibernated only with no call in progress, and torn down 90 s after
+  its last lease is gone and its last call has ended. An explicit Swift restart
+  waits for calls in progress instead of failing. Before, a server started by routing
+  lived until daemon shutdown, and hibernation or `max_workspaces` eviction
+  could stop a server in the middle of a call. `plumb debug lsp` shows the new
+  `starting` and `waking` states while a handshake is in progress.
 
 ### Added
 
@@ -39,23 +52,6 @@
   `--no-context`; `--context` is still accepted and deprecated. An unreadable
   config still reads as off. The hook and the tool share one prompt parser
   (`tools.PromptSelectors`).
-### Changed
-
-- **A language server no connection uses is reclaimed, not kept until the
-  daemon stops** (PLAN-533). The pool now owns each server and counts leases on
-  it: a connection leases its primary and borrows every other server it routes
-  to — a secondary language, a nested root such as a parent repository routing
-  into a submodule, a workspace-symbol fan-out target — until it disconnects or
-  switches workspace, and every routed tool call holds a lease for its whole
-  duration (the file watcher's change notifications do not: one racing a
-  hibernation fails harmlessly, and the woken server re-reads the disk). A
-  server is hibernated only with no call in progress, and torn down 90 s after
-  its last lease is gone and its last call has ended. An explicit Swift restart
-  waits for calls in progress instead of failing. Before, a server started by routing
-  lived until daemon shutdown, and hibernation or `max_workspaces` eviction
-  could stop a server in the middle of a call. `plumb debug lsp` shows the new
-  `starting` and `waking` states while a handshake is in progress.
-
 ## 0.25.0 (2026-10-15)
 
 ### Removed
