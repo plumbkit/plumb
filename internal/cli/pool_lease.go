@@ -104,7 +104,18 @@ func (p *workspacePool) scheduleIdleReap(e *poolEntry) {
 		return
 	}
 	p.cancelGraceLocked(e)
-	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(e) })
+	e.graceTimer = time.AfterFunc(p.grace(), func() { p.reapEntry(e) })
+}
+
+// grace is the idle grace before an unleased entry is torn down: idleGrace, or
+// poolIdleGrace for a pool built without one. A zero grace would tear an entry
+// down the moment its first call ended — an unpinned acquire's entry before the
+// caller could even use it — which no pool means.
+func (p *workspacePool) grace() time.Duration {
+	if p.idleGrace > 0 {
+		return p.idleGrace
+	}
+	return poolIdleGrace
 }
 
 // release drops one pinned session reference on root (paired with an
@@ -139,8 +150,8 @@ func (p *workspacePool) unleaseLocked(e *poolEntry) {
 	if e.graceTimer != nil {
 		e.graceTimer.Stop()
 	}
-	e.graceTimer = time.AfterFunc(p.idleGrace, func() { p.reapEntry(e) })
-	slog.Info("pool: last lease released — scheduling idle teardown", "root", e.root, "language", e.language, "grace", p.idleGrace)
+	e.graceTimer = time.AfterFunc(p.grace(), func() { p.reapEntry(e) })
+	slog.Info("pool: last lease released — scheduling idle teardown", "root", e.root, "language", e.language, "grace", p.grace())
 }
 
 // markActive records that a starting or waking entry finished its handshake. It
