@@ -55,7 +55,7 @@ var stateChanging = map[string]string{
 	"topology_search": readOnly, "topology_explore": readOnly, "topology_impact": readOnly,
 	"topology_routes": readOnly, "topology_affected": readOnly, "topology_status": readOnly,
 	"structural_query": readOnly,
-	"daemon_info":      readOnly, "workspace_sessions": readOnly,
+	"daemon_info":      readOnly, "workspace_sessions": readOnly, "tool_feedback": readOnly,
 }
 
 const (

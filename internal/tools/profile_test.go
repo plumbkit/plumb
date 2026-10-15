@@ -72,6 +72,7 @@ func nonLeanToolSet() []describable {
 		NewFindReplace(),
 		NewDaemonInfoFunc(nil, nil, "", time.Time{}),
 		NewRenameSession(nil),
+		NewToolFeedback(),
 		NewWorkspaceSessions(nil, nil),
 		NewInsertBeforeSymbol(nil, 0),
 		NewInsertAfterSymbol(nil, 0),

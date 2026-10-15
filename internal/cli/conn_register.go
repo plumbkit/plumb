@@ -228,6 +228,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithDaemonCensus(daemonCensusRow).
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
+	srv.Register(tools.NewToolFeedback())
 	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
 		WithAgentIdentity(s.rosterIdentity).
 		WithAgentName(s.addressableNameFor).

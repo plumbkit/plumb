@@ -50,7 +50,14 @@ func renderContextPack(p contextPack) string {
 // renderContext renders pack within its budget and reports which files' bodies
 // it delivered, which is what the caller may record as read.
 func renderContext(p contextPack) packResult {
-	return packLines(p.lines(), p.budget())
+	res := packLines(p.lines(), p.budget())
+	// The feedback pointer only takes room nothing else wanted: it is added after
+	// packing, to a pack that lost nothing, when it fits, so it never displaces a
+	// line or follows the omission footer.
+	if !res.Omitted && len(res.Text)+1+len(contextFeedbackLine) <= p.budget() {
+		res.Text += "\n" + contextFeedbackLine
+	}
+	return res
 }
 
 func (p *contextPack) lines() []packLine {
@@ -63,6 +70,10 @@ func (p *contextPack) lines() []packLine {
 	ls = append(ls, p.gapLines()...)
 	return append(ls, p.nextLines()...)
 }
+
+// contextFeedbackLine closes a pack that has room for it: where to say what it
+// lacked or carried needlessly.
+const contextFeedbackLine = `feedback: missing something, or noise? tool_feedback {"tool":"context_for_task","missing":"…","noise":"…"}`
 
 // headerLine names the tool, the agent's root, the intent and the budget. It is
 // the first line of the output, and baselineBytesFrom reads that line looking

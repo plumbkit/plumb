@@ -99,6 +99,9 @@ type bodyUnit struct {
 type packResult struct {
 	Text      string
 	Delivered []int
+	// Omitted is whether anything was dropped (the text then ends in the
+	// omission footer).
+	Omitted bool
 }
 
 // footerCeiling is the longest the omission footer can be, newline included. It
@@ -171,7 +174,7 @@ func packLines(lines []packLine, budget int) packResult {
 	if dropped.total() > 0 {
 		out = append(out, omittedFooter(dropped))
 	}
-	return packResult{Text: strings.Join(out, "\n"), Delivered: delivered}
+	return packResult{Text: strings.Join(out, "\n"), Delivered: delivered, Omitted: dropped.total() > 0}
 }
 
 // fitEverything returns every record at its richest fidelity when that fits in
