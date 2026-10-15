@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
@@ -23,6 +24,9 @@ type Store struct {
 	db        *sql.DB
 	idx       *Indexer
 	watcher   *fsWatcher // nil when [topology] watch is off or the OS watcher could not start
+	// closed is set by Close, so a holder of a stale handle can tell it must
+	// re-acquire rather than query a closed database (PLAN-535).
+	closed atomic.Bool
 }
 
 // Open opens or creates the topology index for workspace. It starts the
@@ -81,12 +85,17 @@ func Open(workspace string, cfg config.TopologyConfig, exts []Extractor) (*Store
 // Close stops the indexer and closes the database. Safe to call from any
 // goroutine; subsequent calls are no-ops.
 func (s *Store) Close() error {
+	s.closed.Store(true)
 	if s.watcher != nil {
 		s.watcher.Stop() // stop enqueuing before the indexer drains and the db closes
 	}
 	s.idx.Stop()
 	return s.db.Close()
 }
+
+// Closed reports whether Close has been called. A store the daemon pool drained
+// or re-opened is closed; its holder re-acquires (PLAN-535).
+func (s *Store) Closed() bool { return s.closed.Load() }
 
 // Enqueue schedules a file for re-indexing. path may be absolute or workspace-relative.
 // Non-blocking; drops silently if the queue is full.

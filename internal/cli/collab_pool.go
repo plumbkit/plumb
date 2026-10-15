@@ -5,14 +5,17 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/collab"
 )
 
 // collabPool manages one collab.Store per workspace root, shared across every
 // connection to that workspace (collab.db is a WAL SQLite handle, so sharing
-// avoids redundant handles). Stores are opened lazily and live until daemon
-// shutdown.
+// avoids redundant handles). Stores are opened lazily and closed once no
+// connection holds the workspace and it has gone storeIdleGrace unused
+// (store_drain.go, PLAN-535), or at daemon shutdown; the daemon-level store
+// lives until shutdown.
 //
 // Two open modes enforce the lazy-creation contract from the design: acquire
 // opens-or-creates (the write path — share_intent / leave_note — is the only
@@ -37,6 +40,10 @@ type collabPool struct {
 	// afterwards closes its store.
 	flight keyedFlight
 	closed bool
+	// used stamps each per-workspace store's last open or lookup, so the store
+	// drain (store_drain.go, PLAN-535) can close an idle, unattached
+	// workspace's store. The daemon-level store is never drained.
+	used map[string]time.Time
 	// openStore opens a store (workspace "" with global set: the daemon-level
 	// one); nil means collab.Open / collab.OpenGlobal. A test seam.
 	openStore func(workspace string, global bool) (*collab.Store, error)
@@ -160,7 +167,11 @@ func (p *collabPool) cachedLocked(key string) *collab.Store {
 	if key == collabGlobalKey {
 		return p.global
 	}
-	return p.stores[key]
+	s := p.stores[key]
+	if s != nil {
+		p.used = stampUsedLocked(p.used, key)
+	}
+	return s
 }
 
 func (p *collabPool) publishLocked(key string, s *collab.Store) {
@@ -169,6 +180,7 @@ func (p *collabPool) publishLocked(key string, s *collab.Store) {
 		return
 	}
 	p.stores[key] = s
+	p.used = stampUsedLocked(p.used, key)
 }
 
 // openUnlocked opens a store, or reports (nil, nil) for an absent database when
@@ -279,8 +291,19 @@ func (p *collabPool) closeAll() {
 		_ = s.Close()
 	}
 	p.stores = make(map[string]*collab.Store)
+	p.used = nil
 	if p.global != nil {
 		_ = p.global.Close()
 		p.global = nil
 	}
+}
+
+// reapIdle closes every per-workspace store that no connection holds and that
+// has gone storeIdleGrace without an open or lookup (PLAN-535; see drainIdle).
+// The daemon-level store is never drained. Returns how many it closed.
+func (p *collabPool) reapIdle(now time.Time, held func(root string) bool) int {
+	return drainIdle(drainSet[*collab.Store]{
+		mu: &p.mu, stores: &p.stores, used: &p.used, flight: &p.flight,
+		close: func(_ string, s *collab.Store) { _ = s.Close() },
+	}, now, held)
 }

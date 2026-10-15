@@ -37,6 +37,9 @@ type connHandle struct {
 	// summarise generates this session's episodic summary; invoked by the idle
 	// reaper once per idle spell. nil when episodic summaries are unavailable.
 	summarise func()
+	// heldRoots lists the roots this connection holds: its workspace and each
+	// logical agent's, so the store drain keeps their databases (PLAN-535).
+	heldRoots func() []string
 }
 
 // connRegistry tracks live MCP connections so the idle reaper can cancel them
@@ -96,6 +99,29 @@ func (r *connRegistry) cancelNamespace(id string) int {
 		c()
 	}
 	return len(cancels)
+}
+
+// heldRoots is the canonical set of roots some live connection holds — its own
+// workspace or a logical agent's (PLAN-535). The handles are snapshotted under
+// r.mu and asked outside it.
+func (r *connRegistry) heldRoots() map[string]bool {
+	r.mu.Lock()
+	fns := make([]func() []string, 0, len(r.conns))
+	for _, h := range r.conns {
+		if h.heldRoots != nil {
+			fns = append(fns, h.heldRoots)
+		}
+	}
+	r.mu.Unlock()
+	out := make(map[string]bool)
+	for _, fn := range fns {
+		for _, root := range fn() {
+			if root != "" {
+				out[paths.Canonical(root)] = true
+			}
+		}
+	}
+	return out
 }
 
 // liveProxyIDs returns the non-empty proxy session IDs of every live

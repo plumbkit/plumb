@@ -572,3 +572,22 @@ func (s *connSession) rehydrateReadsForAgent(sh *agentShard, root string) {
 	sh.readTracker.Hydrate(out)
 	s.log().Info("daemon: rehydrated per-agent read-tracking", "agent", sh.id, "root", root, "count", len(out))
 }
+
+// heldRoots lists the roots this connection holds: its workspace and every
+// logical agent shard's (PLAN-535's store drain keeps their databases open).
+func (s *connSession) heldRoots() []string {
+	s.shardsMu.Lock()
+	shards := make([]*agentShard, 0, len(s.shards))
+	for _, sh := range s.shards {
+		shards = append(shards, sh)
+	}
+	s.shardsMu.Unlock()
+	roots := make([]string, 0, 1+len(shards))
+	roots = append(roots, s.workspace())
+	for _, sh := range shards {
+		sh.mu.RLock()
+		roots = append(roots, sh.root)
+		sh.mu.RUnlock()
+	}
+	return roots
+}

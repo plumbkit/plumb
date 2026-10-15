@@ -74,7 +74,14 @@ func (s *connSession) topologyEnabledFor(workspace string) bool {
 // builds the write-tool deps and the topology accessor — runs before the client
 // handshake attaches the workspace.
 func (s *connSession) topologyStoreLive() *topology.Store {
-	return s.view().topologyStore
+	st := s.view().topologyStore
+	if st != nil && st.Closed() {
+		// The pool drained or re-opened it (PLAN-535): re-acquire rather than
+		// hand out a closed database.
+		s.reconcileTopologyStore(s.workspace())
+		st = s.view().topologyStore
+	}
+	return st
 }
 
 // topologyStoreForRoot is the root-keyed topology accessor (Invariant 3, B6). On a
@@ -94,7 +101,7 @@ func (s *connSession) topologyStoreForRoot(root string) *topology.Store {
 			return st
 		}
 	}
-	if st := s.view().topologyStore; st != nil && paths.Canonical(st.Root()) == root {
+	if st := s.view().topologyStore; st != nil && !st.Closed() && paths.Canonical(st.Root()) == root {
 		return st
 	}
 	return nil

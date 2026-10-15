@@ -417,6 +417,11 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	projCfgWatches := newProjectConfigWatchManager(ctx, registry.reloadProject)
 	defer projCfgWatches.close()
 
+	// Close the topology, memory and collab databases of a workspace no
+	// connection holds once it has been idle for a while (PLAN-535); before,
+	// they stayed open until the daemon stopped. Ends with ctx.
+	go runStoreDrain(ctx, storeDrainEvery, topoPool, memPool, collabPool, heldRootsOf(registry, projCfgWatches))
+
 	daemonStartedAt := daemonStartTime()
 
 	// The web UI server is constructed unbound: it does not listen until a
@@ -521,6 +526,7 @@ func newConnHandle(s *connSession) connHandle {
 		mailboxInbox:   s.hookInbox,
 		hintRoot:       s.hookHintRoot,
 		sensitive:      s.changeSensitive,
+		heldRoots:      s.heldRoots,
 	}
 }
 

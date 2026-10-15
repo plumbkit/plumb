@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **A project's databases are closed once nothing uses them** (PLAN-535). The
+  daemon used to keep every project's `topology.db`, `memory.db` and `collab.db`
+  open until it stopped — including projects whose sessions had long gone and
+  scratch directories since deleted. Now a project no connection is attached to
+  is closed after ten minutes without use: its file watcher, indexer and memory
+  reindex are stopped and joined, and the next use simply re-opens it. A
+  session's topology handle re-acquires instead of reading a closed database.
 - **A language server's helper processes no longer outlive it.** Each server
   now runs as the leader of its own process group, so stopping it (a pool
   close, hibernation, an idle teardown) sends SIGTERM to the whole group,

@@ -542,6 +542,15 @@ markdown files under `.plumb/memories/` for `memory.db`) — so `.plumb/.gitigno
 excludes them and a schema bump simply drops and rebuilds rather than migrating.
 All four open in WAL mode.
 
+The per-project handles (`topology.db`, `memory.db`, and the workspace's
+`collab.db`) are pooled by the daemon and opened on first use. A janitor
+(`store_drain.go`) closes a project's handles once no connection is attached to
+it (its project-config watch is the hold) and it has gone ten minutes unused:
+it claims the root's open flight, unpublishes the store and closes it outside
+the pool lock, which stops and joins the topology watcher and indexer and the
+memory reindex. The next use re-opens it; a session's cached topology handle
+re-acquires. The daemon-level cross-project `collab.db` stays open.
+
 ```mermaid
 flowchart TD
     D["plumb daemon (singleton)"]
