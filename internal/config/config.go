@@ -65,13 +65,14 @@ type LSPConfig struct {
 	// attached. The poolEntry and its warm cache are kept; the next tool call
 	// transparently restarts the process. Aimed at heavyweight servers (jdtls
 	// reaches ~1.5 GB RSS). 0 disables hibernation (the default for every
-	// language except java). Read at pool construction — restart-needed.
+	// language except java). Applied live: a change is adopted by the running
+	// entries without restarting their servers (PLAN-539).
 	IdleTimeout Duration `toml:"idle_timeout"`
 	// MaxWorkspaces caps the number of simultaneously-running servers of this
 	// language across all workspaces. Before starting one beyond the cap, the
 	// pool hibernates the least-recently-used running entry of the same language
 	// (LRU eviction). 0 means unlimited (the default for every language except
-	// java). Read at pool construction — restart-needed.
+	// java). Applied live, without restarting any server (PLAN-539).
 	MaxWorkspaces int `toml:"max_workspaces"`
 	// Diagnostics selects how plumb negotiates this language server's
 	// diagnostics: "auto" (or empty) defers to plumb's per-adapter policy —
@@ -80,13 +81,14 @@ type LSPConfig struct {
 	// capability and, when the server advertises diagnosticProvider, negotiates
 	// the pull model (otherwise it degrades to pull-requested-but-unavailable).
 	// Empty is treated as "auto" in the resolver so user configs stay minimal.
-	// Read at pool construction — restart-needed (ReloadNextSession).
+	// Applied live: a change restarts that language's affected servers
+	// (PLAN-539).
 	Diagnostics string `toml:"diagnostics"`
 	// InitializationOptions is a free-form table passed verbatim to the language
 	// server as the LSP `initializationOptions` at initialize. Empty or absent
 	// sends nothing (the default; init params stay byte-identical). An advanced
-	// escape hatch — keys are server-specific and unvalidated by plumb. Read at
-	// pool construction — restart-needed.
+	// escape hatch — keys are server-specific and unvalidated by plumb. Applied
+	// live: a change restarts that language's affected servers (PLAN-539).
 	//
 	// Zig/zls example — surface real compile/semantic diagnostics (not just the
 	// default ast-check syntax errors) by enabling build-on-save. WARNING: this

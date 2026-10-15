@@ -40,6 +40,16 @@
 
 ### Changed
 
+- **An `[lsp.<lang>]` change no longer needs a daemon restart** (PLAN-539).
+  Editing a language's server config — globally or in a project's
+  `.plumb/config.toml` — restarts only the running servers whose effective config
+  it changes, each once no call holds it, and leaves every other server warm.
+  An `idle_timeout` or `max_workspaces` change alone restarts nothing, a
+  language disabled by the edit has its servers stopped, and one turned on with
+  `plumb enable-lsp` stays on across the reload unless the edit itself changes
+  that language's `enabled`. A project config that does not parse leaves its
+  servers as they are. The TUI gains per-language idle timeout and max
+  workspaces rows.
 - **One slow workspace no longer stalls every other** (PLAN-536). Starting or
   waking a language server, opening a topology index, a memory index or a
   collab mailbox now runs without the pool-wide lock: the per-workspace config

@@ -1010,9 +1010,13 @@ without an event), the `reload-config`
 control-socket command (used by `plumb config reload`), and the TUI settings editor
 after a save. Each MCP session subscribes to the store and re-merges its per-project
 view on a change, so `[edits]`, `[git]`, `[walk]`, and the rate limit apply live;
-`[topology]` is reconciled live by the daemon (`topologyPool.Reconcile`). Settings
-the daemon cannot apply live — LSP server definitions (`[lsp.*]`), `[cache]`, and
-`log_format` (`config.RestartSensitiveEqual`) — are reported as restart-needed by
+`[topology]` is reconciled live by the daemon (`topologyPool.Reconcile`).
+`[lsp.<lang>]` is applied by the pool (`workspacePool.applyGlobalLSP`, and
+`reconfigureRoot` after a project reload): each live entry whose effective config
+changed is hibernated once no call holds it, given a supervisor built from the new
+config, and woken in place, so its leases and map slot survive. Settings the
+daemon cannot apply live — `[cache]`, `log_format` and `[daemon]`
+(`config.RestartSensitiveEqual`) — are reported as restart-needed by
 `Store.RestartNeeded()`: a daemon WARN on the offending reload, a line in the
 `daemon_info` tool, and a "Reload behaviour" legend in `plumb config show`.
 
@@ -1089,7 +1093,7 @@ only triggered on `textDocument/publishDiagnostics` notifications.
 - **New config field**: add to `config.Config`, update `defaults`, add
   validation in `validate()`, document in this file and in
   `docs/configuration.md`. If the daemon cannot apply the field without a
-  restart (e.g. an LSP-process or cache setting), add it to
+  restart (e.g. a cache setting), add it to
   `config.RestartSensitiveEqual` so `Store.RestartNeeded()` reports it;
   otherwise it is picked up live via the per-session store subscription.
   Consider exposing it as a row in the TUI Settings screen

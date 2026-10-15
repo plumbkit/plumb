@@ -18,7 +18,9 @@ import (
 
 // ReloadTier classifies when a change to a setting takes effect. The
 // ReloadRestart set must stay in lock-step with the fields
-// RestartSensitiveEqual compares (log format + cache).
+// RestartSensitiveEqual compares (log format, cache, the account authority —
+// plus log_file, which has no reader); TestRestartTier_MatchesTheComparison
+// pins it.
 type ReloadTier int
 
 const (

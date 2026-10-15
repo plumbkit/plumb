@@ -219,8 +219,8 @@ func TestRestartSensitiveEqual(t *testing.T) {
 		lspChange.LSP = map[string]LSPConfig{}
 	}
 	lspChange.LSP["go"] = LSPConfig{Command: "some-other-gopls"}
-	if RestartSensitiveEqual(a, lspChange) {
-		t.Error("LSP server change should be restart-sensitive")
+	if !RestartSensitiveEqual(a, lspChange) {
+		t.Error("an LSP server change restarts only that language's servers (PLAN-539), not the daemon")
 	}
 
 	// The account authority decides where the daemon's sockets, locks and state

@@ -104,6 +104,8 @@ const (
 	skLSPArgs
 	skLSPRootMarkers
 	skLSPDiagnostics
+	skLSPIdleTimeout
+	skLSPMaxWorkspaces
 	// [semantics] rows (the Semantics tab).
 	skSemEnabled
 	skSemProvider
@@ -436,6 +438,14 @@ func lspSettingItems(cfg config.Config) []settingItem {
 			settingItem{
 				group: g, label: "diagnostics", kind: settingCycle, key: skLSPDiagnostics, lspLang: lang, lspMissing: dormant,
 				value: diagnosticsValue(e.Diagnostics), options: config.DiagnosticsModes,
+			},
+			settingItem{
+				group: g, label: "idle timeout", kind: settingCycle, key: skLSPIdleTimeout, lspLang: lang, lspMissing: dormant,
+				value: idleTimeoutValue(e.IdleTimeout.Duration), options: lspIdleTimeoutOptions,
+			},
+			settingItem{
+				group: g, label: "max workspaces", kind: settingCycle, key: skLSPMaxWorkspaces, lspLang: lang, lspMissing: dormant,
+				value: strconv.Itoa(e.MaxWorkspaces), options: lspMaxWorkspacesOptions,
 			},
 		)
 	}

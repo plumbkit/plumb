@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
 )
@@ -241,6 +242,10 @@ func lspFieldName(key settingKey) (string, bool) {
 		return "root_markers", true
 	case skLSPDiagnostics:
 		return "diagnostics", true
+	case skLSPIdleTimeout:
+		return "idle_timeout", true
+	case skLSPMaxWorkspaces:
+		return "max_workspaces", true
 	default:
 		return "", false
 	}
@@ -264,6 +269,16 @@ func applyLSPField(c *config.Config, lang string, key settingKey, value any) {
 		e.RootMarkers, _ = value.([]string)
 	case skLSPDiagnostics:
 		e.Diagnostics, _ = value.(string)
+	case skLSPIdleTimeout:
+		if s, ok := value.(string); ok {
+			d, _ := time.ParseDuration(s)
+			if s == "0" {
+				d = 0
+			}
+			e.IdleTimeout = config.Duration{Duration: d}
+		}
+	case skLSPMaxWorkspaces:
+		e.MaxWorkspaces, _ = value.(int)
 	}
 	c.LSP[lang] = e
 }

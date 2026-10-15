@@ -61,6 +61,9 @@ type languageConfigStamp struct {
 type cachedWorkspaceLanguages struct {
 	stamp languageConfigStamp
 	langs []langConfig
+	// invalid marks a project config that did not parse, so langs is the
+	// global fallback (see projectConfigInvalid).
+	invalid bool
 }
 
 // languageConfigState protects the small cache of project-resolved languages. It
@@ -221,6 +224,7 @@ func (p *workspacePool) effectiveLanguages(root string) []langConfig {
 		return cached.langs
 	}
 	langs, err := p.resolveProjectLanguages(policyRoot)
+	invalid := err != nil
 	if err != nil {
 		// Same degradation as everywhere else a project config will not parse: the
 		// global config applies whole.
@@ -236,12 +240,27 @@ func (p *workspacePool) effectiveLanguages(root string) []langConfig {
 		slog.Warn("pool: project config invalid; using global LSP config", "root", policyRoot, "err", err)
 		langs = p.langsSnapshot()
 	}
-	resolved := cachedWorkspaceLanguages{stamp: stamp, langs: langs}
+	resolved := cachedWorkspaceLanguages{stamp: stamp, langs: langs, invalid: invalid}
 	if p.languageConfig.cache == nil {
 		p.languageConfig.cache = make(map[string]cachedWorkspaceLanguages)
 	}
 	p.languageConfig.cache[policyRoot] = resolved
 	return resolved.langs
+}
+
+// projectConfigInvalid reports whether the project config governing root's
+// languages fails to parse — the pool is then running on the global fallback,
+// which is a degradation rather than an edit, so a reconfigure must not act on
+// it (PLAN-539). Resolving first keeps the answer current for the file's stamp.
+func (p *workspacePool) projectConfigInvalid(root string) bool {
+	p.effectiveLanguages(root)
+	policyRoot := languagePolicyRoot(root)
+	if policyRoot == "" {
+		return false
+	}
+	p.languageConfig.mu.RLock()
+	defer p.languageConfig.mu.RUnlock()
+	return p.languageConfig.cache[policyRoot].invalid
 }
 
 // resolveProjectLanguages merges the project config at policyRoot onto the base
@@ -275,6 +294,9 @@ func (s *connSession) invalidatePoolLanguages(workspace string) {
 		return
 	}
 	s.pool.invalidateLanguageConfig(workspace)
+	// The project's [lsp.<lang>] overrides may have changed what the running
+	// servers under it should be: restart exactly those (PLAN-539).
+	s.pool.reconfigureRoot(workspace)
 }
 
 // invalidateLanguageConfig drops the cached resolution for one project and bumps
