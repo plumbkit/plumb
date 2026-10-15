@@ -32,6 +32,20 @@ func (r *connRegistry) namespaceForToken(token string) (string, bool) {
 	return ns.ID, true
 }
 
+// registryCtrlHandlers are the control-socket handlers the connection
+// registry answers: the project reload, namespaces, and the hooks' requests —
+// the /clear marker (kept beside the connections that consume it), the mailbox
+// probe, and the resolver that scopes each hook request to its namespace.
+func registryCtrlHandlers(r *connRegistry) ctrlHandlers {
+	return ctrlHandlers{
+		reloadProject:       r.reloadProject,
+		namespace:           r.namespaces.handleCtrl,
+		conversationCleared: r.conversationClears().mark,
+		mailbox:             r.mailboxProbe,
+		resolveNamespace:    r.namespaceForToken,
+	}
+}
+
 // hookRequestNamespace is the namespace a hook request is answered from: the
 // handlers' resolver's answer, or — with no resolver wired — the default
 // namespace for a request without a token and nobody for one with a token

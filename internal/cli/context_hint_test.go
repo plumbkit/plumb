@@ -332,7 +332,7 @@ func TestContextHint_AgentStateEvictsLeastRecentlyUsed(t *testing.T) {
 	for i := range maxContextHintStates {
 		f.svc.window(agent(i))
 	}
-	f.svc.remember(hintAgentKey("conv", "0"), []tools.ContextSeed{{Symbol: "Kept"}}) // agent 0 is now the most recent
+	f.svc.remember(hintAgentKey("", "conv", "0"), []tools.ContextSeed{{Symbol: "Kept"}}) // agent 0 is now the most recent
 	if got := f.svc.window(agent(maxContextHintStates)); got != "w:1" {
 		t.Fatalf("a new agent past the cap got %q, want its own first window", got)
 	}
@@ -342,10 +342,10 @@ func TestContextHint_AgentStateEvictsLeastRecentlyUsed(t *testing.T) {
 	if n := len(f.svc.states); n != maxContextHintStates {
 		t.Fatalf("states = %d, want the cap %d", n, maxContextHintStates)
 	}
-	if _, ok := f.svc.states[hintAgentKey("conv", "1")]; ok {
+	if _, ok := f.svc.states[hintAgentKey("", "conv", "1")]; ok {
 		t.Error("the least recently used agent (1) was not evicted")
 	}
-	if got := f.svc.recall(hintAgentKey("conv", "0")); len(got) != 1 || got[0].Symbol != "Kept" {
+	if got := f.svc.recall(hintAgentKey("", "conv", "0")); len(got) != 1 || got[0].Symbol != "Kept" {
 		t.Errorf("the recently used agent lost its seeds: %+v", got)
 	}
 }

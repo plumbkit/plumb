@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tools"
 )
 
@@ -237,5 +238,113 @@ func TestHookRequestNamespace_WithoutAResolverRefusesATokenedRequest(t *testing.
 	}
 	if ns, ok := hookRequestNamespace(ctrlHandlers{}, ""); !ok || ns != "" {
 		t.Fatal("control: a request without a token is the default namespace")
+	}
+}
+
+// TestHookPeerCount_CountsOnlyTheCallersNamespace: a session in another
+// namespace on the same workspace is not a peer (it cannot write to this
+// mailbox, and counting it would reveal it).
+func TestHookPeerCount_CountsOnlyTheCallersNamespace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := t.TempDir()
+	for _, info := range []session.Info{
+		{Name: "self-ns", Folder: ws, Namespace: "ns-1"},
+		{Name: "peer-ns", Folder: ws, Namespace: "ns-1"},
+		{Name: "self-default", Folder: ws},
+		{Name: "peer-default", Folder: ws},
+		{Name: "other-default", Folder: ws},
+	} {
+		reg, err := session.Register(info)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { session.Unregister(reg.ID) })
+	}
+	if got := hookPeerCount(ws, "self-ns"); got != 1 {
+		t.Errorf("a namespaced session counts %d peers, want 1 (its own namespace's)", got)
+	}
+	if got := hookPeerCount(ws, "self-default"); got != 2 {
+		t.Errorf("a default-namespace session counts %d peers, want 2 (none of the namespace's)", got)
+	}
+}
+
+// TestHandOverOnClear_TakesOnlyItsOwnNamespacesMarker drives the connection
+// side of the /clear handover: a namespaced connection takes the marker its
+// namespace's hook set, and not a default-namespace one for the same id.
+func TestHandOverOnClear_TakesOnlyItsOwnNamespacesMarker(t *testing.T) {
+	const old, now = "conv-OLD", "conv-NEW"
+	for name, c := range map[string]struct {
+		markNS string
+		moves  bool
+	}{
+		"its own namespace's marker": {"ns-1", true},
+		"a default-namespace marker": {"", false},
+		"another namespace's marker": {"ns-2", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := newIdentitySession(t)
+			s.mutate(func(v *sessionView) { v.namespace = "ns-1" })
+			s.linkExternalID(stampedCtx(old), old)
+			s.recordLogicalAgentCall(old)
+			s.registry = newConnRegistry()
+			s.registry.clears.mark(clearMarkerKey(c.markNS, now))
+			s.handOverOnClear(now)
+			if moved := s.externalID() == now; moved != c.moves {
+				t.Fatalf("relinked = %v, want %v", moved, c.moves)
+			}
+		})
+	}
+}
+
+// TestContextHintService_ResolvesInTheRequestsNamespace: both resolve calls
+// (admission and the ledger's root) ask in the request's namespace.
+func TestContextHintService_ResolvesInTheRequestsNamespace(t *testing.T) {
+	f := newHintFixture(t)
+	var asked []string
+	f.svc.resolve = func(_, _, ns string) (hintRoot, bool) {
+		asked = append(asked, ns)
+		return hintRoot{}, false
+	}
+	req := prompt("conv-1", "Cart.Total")
+	req.namespace = "ns-1"
+	f.svc.serve(context.Background(), req)
+	if len(asked) < 2 {
+		t.Fatalf("resolve asked %d times, want both admission and the ledger root", len(asked))
+	}
+	for _, ns := range asked {
+		if ns != "ns-1" {
+			t.Fatalf("resolve asked in namespaces %q, want only ns-1", asked)
+		}
+	}
+}
+
+// TestContextHintState_IsPerNamespace: two namespaces reusing a session id do
+// not share a hint window or remembered seeds.
+func TestContextHintState_IsPerNamespace(t *testing.T) {
+	f := newHintFixture(t)
+	f.svc.remember(hintAgentKey("ns-1", "conv", ""), []tools.ContextSeed{{Symbol: "Mine"}})
+	if got := f.svc.recall(hintAgentKey("", "conv", "")); len(got) != 0 {
+		t.Fatalf("the default namespace recalled another namespace's seeds: %v", got)
+	}
+	if got := f.svc.recall(hintAgentKey("ns-1", "conv", "")); len(got) != 1 {
+		t.Fatal("control: the namespace's own seeds were not recalled")
+	}
+}
+
+// TestRegistryCtrlHandlers_ScopeHooksThroughTheRegistry pins the daemon's
+// wiring: the handlers it serves resolve a hook's token through the namespace
+// registry, so a live token reaches its namespace rather than being refused.
+func TestRegistryCtrlHandlers_ScopeHooksThroughTheRegistry(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	token, ns, err := r.create(time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := registryCtrlHandlers(r.conns)
+	if id, ok := hookRequestNamespace(h, token); !ok || id != ns.ID {
+		t.Fatalf("the daemon's handlers resolved a live token to %q, %v; want %s", id, ok, ns.ID)
+	}
+	if h.mailbox == nil || h.conversationCleared == nil || h.namespace == nil || h.reloadProject == nil {
+		t.Fatal("a registry-backed handler is unwired")
 	}
 }

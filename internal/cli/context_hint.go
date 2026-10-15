@@ -144,7 +144,9 @@ func newContextHintService(hinter tools.ContextHinter, ledger *contexthints.Stor
 	}
 }
 
-func hintAgentKey(sessionID, agentID string) string { return sessionID + "\x00" + agentID }
+func hintAgentKey(namespace, sessionID, agentID string) string {
+	return namespace + "\x00" + sessionID + "\x00" + agentID // per namespace: two may reuse an id
+}
 
 // hintExternal is the identity the daemon knows the caller by: the
 // conversation, or `<conversation>/<agent>` for a subagent, as the Claude Code
@@ -166,7 +168,7 @@ func hintExternal(sessionID, agentID string) string {
 func (c *contextHintService) window(req contextHintRequest) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st := c.stateLocked(hintAgentKey(req.SessionID, req.AgentID))
+	st := c.stateLocked(hintAgentKey(req.namespace, req.SessionID, req.AgentID))
 	switch {
 	case req.TurnID != "" && req.TurnID != st.lastTurn:
 		st.seq++
@@ -345,7 +347,7 @@ func (c *contextHintService) charge(req contextHintRequest, turn string, d hintD
 		return hintDecision{outcome: contexthints.OutcomeThrottled, detail: "budget", seeds: d.seeds}
 	}
 	if len(d.seeds) > 0 {
-		c.remember(hintAgentKey(req.SessionID, req.AgentID), d.seeds)
+		c.remember(hintAgentKey(req.namespace, req.SessionID, req.AgentID), d.seeds)
 	}
 	d.outcome = contexthints.OutcomeEmitted
 	return d
@@ -361,13 +363,13 @@ func (c *contextHintService) seedsFor(req contextHintRequest, root string) (seed
 	case "SessionStart":
 		switch req.Source {
 		case "resume", "compact":
-			return revalidateSeeds(root, c.recall(hintAgentKey(req.SessionID, req.AgentID))), false, "no-seeds"
+			return revalidateSeeds(root, c.recall(hintAgentKey(req.namespace, req.SessionID, req.AgentID))), false, "no-seeds"
 		}
 		return nil, false, "startup"
 	case "SubagentStart":
 		// The parent's validated seeds, re-checked against the CHILD's own root:
 		// a parent's path outside it is dropped, never inherited.
-		return revalidateSeeds(root, c.recall(hintAgentKey(req.SessionID, ""))), true, ""
+		return revalidateSeeds(root, c.recall(hintAgentKey(req.namespace, req.SessionID, ""))), true, ""
 	}
 	return nil, false, "event"
 }

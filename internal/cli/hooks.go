@@ -328,6 +328,17 @@ func hookPeerCount(workspace, self string) int {
 	if err != nil {
 		return 0
 	}
+	// Peers are counted inside the caller's own namespace only (PLAN-520): a
+	// session in another namespace cannot write to this mailbox, and counting it
+	// would both extend the watcher for nobody and reveal that it exists.
+	ns := ""
+	for _, s := range all {
+		if self != "" && s.Name == self {
+			ns = s.Namespace
+			break
+		}
+	}
+	all = session.InNamespace(all, ns)
 	root := filepath.Clean(workspace)
 	n := 0
 	for _, s := range all {

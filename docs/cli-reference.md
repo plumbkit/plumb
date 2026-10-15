@@ -829,6 +829,10 @@ the session's `PLUMB_NAMESPACE` and send it with every daemon request they make:
 the Stop-hook mailbox probe, context hints and the `/clear` handover are answered
 only from that namespace's sessions. A hook without a token speaks for the
 default namespace; one whose token was released or expired is answered by nobody.
+Set the token as `PLUMB_NAMESPACE` in the client's environment rather than only
+passing `--namespace` to `plumb serve`: the hooks read the environment, so a
+serve given the flag alone leaves its hooks in the default namespace, where its
+sessions are not found and the hooks stay silent.
 
 | Command | Effect |
 |---|---|
