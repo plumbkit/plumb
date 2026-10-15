@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/contexthints"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/tools"
 )
@@ -362,5 +363,42 @@ func TestNotifyConversationCleared_AMalformedTokenSendsNothing(t *testing.T) {
 	case line := <-got:
 		t.Errorf("a malformed token still sent %q", line)
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// TestContextHint_AReusedSessionIDIsSeparatePerNamespace drives serve: a
+// conversation id reused in another namespace shares neither the turn window
+// nor the remembered seeds a compact or a subagent recalls.
+func TestContextHint_AReusedSessionIDIsSeparatePerNamespace(t *testing.T) {
+	f := newHintFixture(t)
+	root := hintRepo(t, "only/parent.go")
+	f.roots["conv-1"], f.roots["conv-1/agent-8"] = root, root
+	long := strings.Repeat("y", 150)
+	f.hinter.lines = func(tools.HintRequest) []tools.HintLine {
+		return []tools.HintLine{{Selector: long}, {Selector: long}, {Selector: long}, {Selector: long}, {Selector: long}}
+	}
+	in := func(ns string, r contextHintRequest) contextHintRequest { r.namespace = ns; return r }
+	if r := f.svc.serve(context.Background(), in("ns-1", prompt("conv-1", "only/parent.go", "Parent.Func"))); r.Outcome != contexthints.OutcomeEmitted {
+		t.Fatalf("namespaced prompt = %+v, want emitted", r)
+	}
+	f.hinter.calls = nil
+	compact := contextHintRequest{Host: "claude-code", Event: "SessionStart", Source: "compact", SessionID: "conv-1"}
+	if r := f.svc.serve(context.Background(), in("", compact)); r.Outcome == contexthints.OutcomeThrottled {
+		t.Fatal("the default namespace's compact was throttled by another namespace's turn")
+	}
+	sub := contextHintRequest{Host: "claude-code", Event: "SubagentStart", SessionID: "conv-1", AgentID: "agent-8"}
+	f.svc.serve(context.Background(), in("", sub))
+	for _, c := range f.hinter.calls {
+		if len(c.Seeds) != 0 {
+			t.Fatalf("the default namespace recalled another namespace's seeds: %+v", c.Seeds)
+		}
+	}
+	// Control: in its own namespace the subagent does inherit the parent's seeds.
+	f.hinter.calls = nil
+	sub.AgentID = "agent-9"
+	f.roots["conv-1/agent-9"] = root
+	f.svc.serve(context.Background(), in("ns-1", sub))
+	if len(f.hinter.calls) != 1 || len(f.hinter.calls[0].Seeds) == 0 {
+		t.Fatalf("control: the namespace's own subagent got calls %+v, want the parent's seeds", f.hinter.calls)
 	}
 }
