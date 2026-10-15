@@ -36,7 +36,7 @@ func TestRoutingProxy_BoundaryGuardResolvesTheCallingAgent(t *testing.T) {
 		return sentinel
 	})
 
-	_, err := rp.route(mcp.WithLogicalAgent(context.Background(), "agent-7"), "file:///w/x.go", false)
+	_, _, err := rp.route(mcp.WithLogicalAgent(context.Background(), "agent-7"), "file:///w/x.go", false)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("route error = %v, want the guard's sentinel (the guard was not consulted)", err)
 	}

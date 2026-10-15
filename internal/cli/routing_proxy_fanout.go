@@ -160,10 +160,12 @@ func (r *routingProxy) symbolTargets(wsRoot string, discovered []discoveredRoot)
 // symbols of a server that was warm and ready all along. A warm target costs its
 // own query and nothing else, whatever preceded it.
 func (r *routingProxy) symbolsFrom(ctx, waitCtx context.Context, t lsTarget, params protocol.WorkspaceSymbolParams) (syms []protocol.SymbolInformation, ready bool, err error) {
-	e, err := r.pool.acquireLang(ctx, t.root, t.language, false)
+	e, done, err := r.pool.acquireCall(ctx, t.root, t.language)
 	if err != nil {
 		return nil, false, err
 	}
+	defer done()
+	r.borrowEntry(e)
 	c := r.entryClient(waitCtx, e, true)
 	if c == nil {
 		return nil, false, nil

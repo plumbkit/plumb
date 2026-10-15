@@ -61,6 +61,12 @@ type routingProxy struct {
 	// warmCap bounds the block-and-retry wait for a still-warming routed server
 	// (see awaitEntryReady). A field so tests shorten it; set once at construction.
 	warmCap time.Duration
+
+	// borrowed holds the entries beyond the primary this connection has a session
+	// lease on (routing_proxy_lease.go). Guarded by leaseMu, which is taken before
+	// the pool mutex and never while holding mu.
+	leaseMu  sync.Mutex
+	borrowed map[*poolEntry]struct{}
 }
 
 func newRoutingProxy(pool *workspacePool) *routingProxy {
@@ -127,6 +133,9 @@ func (r *routingProxy) setPrimary(root, language string, p *clientProxy) {
 // workspace that differs from the current one — to switch the connection's LSP
 // routing to a different project.
 func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
+	// The previous workspace's borrowed servers are returned as well; any this
+	// workspace still uses are borrowed again by its next call.
+	defer r.releaseBorrowed()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.primaryRoot = root
@@ -145,7 +154,10 @@ func (r *routingProxy) resetPrimary(root, language string, p *clientProxy) {
 // the lifecycle methods) wakes the server instead of failing with the
 // misleading "not yet ready". A genuinely cold first start (no primary pinned
 // yet) still returns that error.
-func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
+//
+// The returned done ends the call lease (see clientProxy.begin): call it when the
+// call made through the client returns. It is nil exactly when err is non-nil.
+func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, func(), error) {
 	return r.primaryClientWait(ctx, true)
 }
 
@@ -155,28 +167,28 @@ func (r *routingProxy) primaryClient(ctx context.Context) (lsp.Client, error) {
 // non-blocking handle check, warmingErr on miss) for the LSP notify path, where a
 // notify to a warming server is redundant — its initial scan reads current
 // on-disk content — so blocking would only stack latency, not correctness.
-func (r *routingProxy) primaryClientWait(ctx context.Context, wait bool) (lsp.Client, error) {
+func (r *routingProxy) primaryClientWait(ctx context.Context, wait bool) (lsp.Client, func(), error) {
 	r.mu.RLock()
 	p := r.primary
 	root := r.primaryRoot
 	lang := r.primaryLang
 	r.mu.RUnlock()
-	if c := p.get(); c != nil {
-		p.touch()
-		return c, nil
+	if c, done := p.begin(); c != nil {
+		return c, done, nil
 	}
 	if root == "" || lang == "" {
-		return nil, warmingErr(0, "")
+		return nil, nil, warmingErr(0, "")
 	}
-	e, err := r.pool.acquireLang(ctx, root, lang, false)
+	e, done, err := r.pool.acquireCall(ctx, root, lang)
 	if err != nil {
-		return nil, fmt.Errorf("waking primary %s for %s: %w", lang, root, err)
+		return nil, nil, fmt.Errorf("waking primary %s for %s: %w", lang, root, err)
 	}
 	if c := r.entryClient(ctx, e, wait); c != nil {
-		return c, nil
+		return c, done, nil
 	}
+	done()
 	_, elapsed := r.pool.warmupFor(e.root, e.language)
-	return nil, warmingErr(elapsed, "")
+	return nil, nil, warmingErr(elapsed, "")
 }
 
 // route returns the Client responsible for the workspace containing uri.
@@ -184,7 +196,10 @@ func (r *routingProxy) primaryClientWait(ctx context.Context, wait bool) (lsp.Cl
 // wait selects the readiness policy (see primaryClientWait): query methods pass
 // true to block-and-retry a warming server, notify methods pass false to keep the
 // prior fast behaviour.
-func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Client, error) {
+//
+// Like primaryClient it returns the call lease's done, which the caller runs when
+// its call returns.
+func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Client, func(), error) {
 	if uri == "" {
 		return r.primaryClientWait(ctx, wait)
 	}
@@ -194,7 +209,7 @@ func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Cl
 	r.mu.RUnlock()
 	if guard != nil {
 		if err := guard(ctx, path); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	// Root and language together, in one project-policy resolution: the file's own
@@ -219,59 +234,63 @@ func (r *routingProxy) route(ctx context.Context, uri string, wait bool) (lsp.Cl
 	r.mu.RUnlock()
 
 	if root == primaryRoot && targetLang == primaryLang {
-		if c := primary.get(); c != nil {
-			primary.touch()
-			return c, nil
+		if c, done := primary.begin(); c != nil {
+			return c, done, nil
 		}
 	}
-	// On-demand routing acquire: not a pinned primary workspace/language, so
-	// pass pin=false. The entry is never torn down by the refcount path for a
-	// never-pinned (root, language); it lives until daemon shutdown (pre-refcount
-	// behaviour) — the same lifecycle as a cross-workspace on-demand entry.
-	e, err := r.pool.acquireLang(ctx, root, targetLang, false)
+	// On-demand routing acquire: a call lease for this call, and a borrowed
+	// session lease that keeps the server for the rest of the connection. The
+	// entry is reaped idleGrace after the last of both is gone.
+	e, done, err := r.pool.acquireCall(ctx, root, targetLang)
 	if err != nil {
-		return nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
+		return nil, nil, fmt.Errorf("acquiring %s for %s: %w", targetLang, root, err)
 	}
+	r.borrowEntry(e)
 	if c := r.entryClient(ctx, e, wait); c != nil {
 		r.noteActivated(root, targetLang)
-		return c, nil
+		return c, done, nil
 	}
+	done()
 	_, elapsed := r.pool.warmupFor(e.root, e.language)
-	return nil, warmingErr(elapsed, root)
+	return nil, nil, warmingErr(elapsed, root)
 }
 
 // ─── lsp.Client implementation ─────────────────────────────────────────
 
 // Workspace-wide / lifecycle methods stick to the primary.
 func (r *routingProxy) Initialize(ctx context.Context, params protocol.InitializeParams) (*protocol.InitializeResult, error) {
-	c, err := r.primaryClient(ctx)
+	c, done, err := r.primaryClient(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Initialize(ctx, params)
 }
 
 func (r *routingProxy) Initialized(ctx context.Context) error {
-	c, err := r.primaryClient(ctx)
+	c, done, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.Initialized(ctx)
 }
 
 func (r *routingProxy) Shutdown(ctx context.Context) error {
-	c, err := r.primaryClient(ctx)
+	c, done, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.Shutdown(ctx)
 }
 
 func (r *routingProxy) Exit(ctx context.Context) error {
-	c, err := r.primaryClient(ctx)
+	c, done, err := r.primaryClient(ctx)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.Exit(ctx)
 }
 
@@ -295,10 +314,11 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 
 	// Single-language root: keep the primary-only behaviour.
 	if len(discovered) == 0 {
-		c, err := r.primaryClient(ctx)
+		c, done, err := r.primaryClient(ctx)
 		if err != nil {
 			return nil, err
 		}
+		defer done()
 		return c.WorkspaceSymbols(ctx, params)
 	}
 	return r.fanOutWorkspaceSymbols(ctx, params, wsRoot, discovered)
@@ -317,49 +337,57 @@ func (r *routingProxy) WorkspaceSymbols(ctx context.Context, params protocol.Wor
 // connection-versus-agent leak this whole path exists to fix.
 func (r *routingProxy) agentWorkspaceSymbols(ctx context.Context, params protocol.WorkspaceSymbolParams, root string) ([]protocol.SymbolInformation, error) {
 	if _, language, err := r.pool.Detect(root); err == nil && language != "" && language != LanguageNone {
-		_, _ = r.pool.acquireLang(ctx, root, language, false)
+		if e, done, err := r.pool.acquireCall(ctx, root, language); err == nil {
+			r.borrowEntry(e)
+			done()
+		}
 	}
 	return r.fanOutWorkspaceSymbols(ctx, params, root, nil)
 }
 
 func (r *routingProxy) Capabilities() *protocol.ServerCapabilities {
-	c, err := r.primaryClient(context.Background())
+	c, done, err := r.primaryClient(context.Background())
 	if err != nil {
 		return nil
 	}
+	defer done()
 	return c.Capabilities()
 }
 
 func (r *routingProxy) Subscribe(handler func(string, json.RawMessage)) func() {
-	c, err := r.primaryClient(context.Background())
+	c, done, err := r.primaryClient(context.Background())
 	if err != nil {
 		return func() {}
 	}
+	defer done()
 	return c.Subscribe(handler)
 }
 
 // URI-bearing document methods route by URI.
 func (r *routingProxy) DidOpen(ctx context.Context, params protocol.DidOpenTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI, false)
+	c, done, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.DidOpen(ctx, params)
 }
 
 func (r *routingProxy) DidChange(ctx context.Context, params protocol.DidChangeTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI, false)
+	c, done, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.DidChange(ctx, params)
 }
 
 func (r *routingProxy) DidClose(ctx context.Context, params protocol.DidCloseTextDocumentParams) error {
-	c, err := r.route(ctx, params.TextDocument.URI, false)
+	c, done, err := r.route(ctx, params.TextDocument.URI, false)
 	if err != nil {
 		return err
 	}
+	defer done()
 	return c.DidClose(ctx, params)
 }
 
@@ -376,10 +404,11 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 		if err == nil && language == LanguageNone {
 			continue
 		}
-		c, err := r.route(ctx, ev.URI, false)
+		c, done, err := r.route(ctx, ev.URI, false)
 		if err != nil {
 			return err
 		}
+		defer done()
 		groups[c] = append(groups[c], ev)
 	}
 	var firstErr error
@@ -392,98 +421,110 @@ func (r *routingProxy) DidChangeWatchedFiles(ctx context.Context, params protoco
 }
 
 func (r *routingProxy) DocumentSymbols(ctx context.Context, params protocol.DocumentSymbolParams) ([]protocol.DocumentSymbol, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.DocumentSymbols(ctx, params)
 }
 
 func (r *routingProxy) Definition(ctx context.Context, params protocol.DefinitionParams) ([]protocol.Location, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Definition(ctx, params)
 }
 
 func (r *routingProxy) References(ctx context.Context, params protocol.ReferenceParams) ([]protocol.Location, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.References(ctx, params)
 }
 
 func (r *routingProxy) Hover(ctx context.Context, params protocol.HoverParams) (*protocol.Hover, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Hover(ctx, params)
 }
 
 func (r *routingProxy) PrepareRename(ctx context.Context, params protocol.PrepareRenameParams) (*protocol.PrepareRenameResult, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.PrepareRename(ctx, params)
 }
 
 func (r *routingProxy) Rename(ctx context.Context, params protocol.RenameParams) (*protocol.WorkspaceEdit, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Rename(ctx, params)
 }
 
 func (r *routingProxy) PrepareCallHierarchy(ctx context.Context, params protocol.PrepareCallHierarchyParams) ([]protocol.CallHierarchyItem, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.PrepareCallHierarchy(ctx, params)
 }
 
 func (r *routingProxy) IncomingCalls(ctx context.Context, params protocol.CallHierarchyIncomingCallsParams) ([]protocol.CallHierarchyIncomingCall, error) {
-	c, err := r.route(ctx, params.Item.URI, true)
+	c, done, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.IncomingCalls(ctx, params)
 }
 
 func (r *routingProxy) OutgoingCalls(ctx context.Context, params protocol.CallHierarchyOutgoingCallsParams) ([]protocol.CallHierarchyOutgoingCall, error) {
-	c, err := r.route(ctx, params.Item.URI, true)
+	c, done, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.OutgoingCalls(ctx, params)
 }
 
 func (r *routingProxy) PrepareTypeHierarchy(ctx context.Context, params protocol.PrepareTypeHierarchyParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.TextDocument.URI, true)
+	c, done, err := r.route(ctx, params.TextDocument.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.PrepareTypeHierarchy(ctx, params)
 }
 
 func (r *routingProxy) Supertypes(ctx context.Context, params protocol.TypeHierarchySupertypesParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.Item.URI, true)
+	c, done, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Supertypes(ctx, params)
 }
 
 func (r *routingProxy) Subtypes(ctx context.Context, params protocol.TypeHierarchySubtypesParams) ([]protocol.TypeHierarchyItem, error) {
-	c, err := r.route(ctx, params.Item.URI, true)
+	c, done, err := r.route(ctx, params.Item.URI, true)
 	if err != nil {
 		return nil, err
 	}
+	defer done()
 	return c.Subtypes(ctx, params)
 }
 

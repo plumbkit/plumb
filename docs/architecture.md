@@ -294,9 +294,22 @@ Key design properties:
   primary holds a reference; when the last session on a root detaches, the
   primary is torn down after a 90 s idle grace so it stays warm across a quick
   disconnect-reconnect but is eventually reclaimed when the workspace is idle.
-  **Secondary** servers start lazily on the first file of their language and
-  live to daemon shutdown. A secondary activates automatically when its server
-  binary is on PATH (`[lsp.<lang>] enabled = false` excludes it).
+  **Secondary** servers start lazily on the first file of their language. A
+  secondary activates automatically when its server binary is on PATH
+  (`[lsp.<lang>] enabled = false` excludes it).
+- **Leases decide when a server goes** (PLAN-533). The pool owns every entry;
+  nothing else closes one. A connection holds a *session lease* on its primary
+  (the pin) and on every other server it routes to — a secondary language, a
+  nested root such as a parent repository routing into a submodule, a
+  workspace-symbol fan-out target — which it *borrows* on first use and returns
+  when it disconnects or switches workspace. Each call holds a *call lease* for
+  its whole duration, including the primary's lock-free fast path (the file
+  watcher's change notifications hold none: one racing a hibernation fails
+  harmlessly, and the woken server re-reads the disk). Hibernation
+  needs no call in progress; reaping needs no call and no session lease, then
+  the same 90 s grace. A server no connection holds is therefore reclaimed, not
+  kept until daemon shutdown. Entries move through `starting`, `active`,
+  `hibernating`, `hibernated` and `waking`.
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.

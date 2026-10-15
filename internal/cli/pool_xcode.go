@@ -179,12 +179,17 @@ func (p *workspacePool) markXcodeSemanticProven(root string) {
 // restartSwift reuses the pool's hibernate/wake lifecycle so refs, the proxy,
 // supervisor hooks, and the watcher remain coherent for every attached session.
 //
-// Like awaitReady, this has a SLOW-failure hazard: wakeLocked sets the entry
-// poolActive optimistically and returns before the woken Supervisor's first
+// A call in progress holds a call lease, which hibernation refuses to cut short
+// (PLAN-533), so the restart waits for running calls to finish — retrying the
+// hibernation every restartSwiftLeasePoll, up to restartSwiftLeaseWait — rather
+// than failing the moment a query happens to be in flight.
+//
+// Like awaitReady, this has a SLOW-failure hazard: wakeLocked marks the entry
+// waking and returns before the woken Supervisor's first
 // OnStart has actually completed. If that OnStart then fails AFTER we stop
 // waiting (grace or ctx expiry, below), nobody is left reading readyCh unless
 // we hand it to reapOnLateStartFailure — otherwise the entry is left
-// poolActive with a dead proxy (proxy.get() == nil) and gets reused forever.
+// waking with a dead proxy (proxy.get() == nil) and gets reused forever.
 // removeFailed is the correct healing here too, not a narrower "mark for
 // re-restart": wakeLocked reuses the SAME poolEntry/Supervisor rather than
 // building a new one, and the Supervisor's loop already exited on the failed
@@ -192,17 +197,51 @@ func (p *workspacePool) markXcodeSemanticProven(root string) {
 // eviction lets the NEXT acquire build a genuinely fresh entry. removeFailed is
 // idempotent (map-identity guard + closeOnce), so it is safe even if a
 // concurrent reapEntry/hibernate already touched this entry.
+// restartSwiftLeaseWait bounds how long an explicit Swift restart waits for the
+// calls in progress to finish; restartSwiftLeasePoll is how often it retries.
+const (
+	restartSwiftLeaseWait = 30 * time.Second
+	restartSwiftLeasePoll = 20 * time.Millisecond
+)
+
+// shutdownCtx is the pool's daemon-lifetime context, or Background outside a
+// daemon (tests that build the pool directly).
+func (p *workspacePool) shutdownCtx() context.Context {
+	if p.baseCtx == nil {
+		return context.Background()
+	}
+	return p.baseCtx
+}
+
+// hibernateForRestart hibernates e for an explicit restart, waiting for calls in
+// progress to end. On success it returns with p.mu HELD and e hibernated.
+func (p *workspacePool) hibernateForRestart(e *poolEntry) error {
+	deadline := time.Now().Add(restartSwiftLeaseWait)
+	for {
+		p.hibernateEntry(e)
+		p.mu.Lock()
+		if e.state == poolHibernated {
+			return nil // still holding p.mu
+		}
+		p.mu.Unlock()
+		if e.proxy.inflight.Load() == 0 || !time.Now().Before(deadline) {
+			return errors.New("restarting SourceKit-LSP: entry did not hibernate")
+		}
+		select {
+		case <-p.shutdownCtx().Done():
+			return errors.New("restarting SourceKit-LSP: the daemon is shutting down")
+		case <-time.After(restartSwiftLeasePoll):
+		}
+	}
+}
+
 func (p *workspacePool) restartSwift(root string) error {
 	e := p.lookup(root, "swift")
 	if e == nil {
 		return fmt.Errorf("restarting SourceKit-LSP: no Swift pool entry for %s", root)
 	}
-	p.hibernateEntry(e)
-
-	p.mu.Lock()
-	if e.state != poolHibernated {
-		p.mu.Unlock()
-		return errors.New("restarting SourceKit-LSP: entry did not hibernate")
+	if err := p.hibernateForRestart(e); err != nil {
+		return err
 	}
 	if e.cache != nil {
 		e.cache.Clear()

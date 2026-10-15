@@ -556,6 +556,9 @@ func (s *connSession) close() {
 	if ref != "" {
 		s.pool.release(ref, refLang)
 	}
+	if s.sessionProxy != nil {
+		s.sessionProxy.releaseBorrowed()
+	}
 	if budgetKey != "" {
 		s.budgets.release(budgetKey)
 	}

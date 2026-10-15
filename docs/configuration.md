@@ -1562,10 +1562,10 @@ the environment it started with, and so does one restarted after a crash or woke
 from hibernation. Editing `go.work` — `go work use` to list a worktree, or
 dropping a `use` line — therefore changes nothing for a server already running
 for that root until it starts again. `plumb restart` is always enough. It is not
-the only way: a workspace's primary server is torn down 90 s after the last
-session on that root detaches, and the next one decides again. A server started
-on demand for another root (a subagent's worktree, say) runs until the daemon
-stops, so for that one `plumb restart` is the way. The git child and the
+the only way: a server is torn down 90 s after the last connection using it
+detaches (or switches workspace) and its last call ends, and the next one decides
+again. That holds for a server started on demand for another root (a subagent's
+worktree, say) as much as for a workspace's primary. The git child and the
 `[tasks.<lang>]` commands decide afresh for every command, so they follow the
 edit at once.
 

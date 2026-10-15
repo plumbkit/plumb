@@ -25,6 +25,70 @@ type clientProxy struct {
 	// hold the proxy, avoiding a pool-mutex map lookup per tool call. The pool's
 	// idle-hibernation janitor and LRU eviction read it.
 	lastUsed atomic.Int64
+
+	// inflight counts the calls running against this proxy's server right now:
+	// a call lease is taken before the call starts (begin, or an unpinned
+	// acquire under the pool lock) and returned when it ends. Hibernation and
+	// reaping refuse an entry whose count is non-zero, so neither stops a server
+	// in the middle of a call. Lock-free on the hot path; see begin for the
+	// ordering that makes the check race-free.
+	inflight atomic.Int64
+
+	// held mirrors poolEntry.refs > 0 (pins and borrows), written under the pool
+	// mutex wherever refs changes. A call ending on an entry nobody holds asks the
+	// pool to schedule its idle teardown (onIdle); a held entry's teardown is
+	// scheduled by its last release instead, so the hot path never takes the
+	// pool mutex for it.
+	held atomic.Bool
+
+	// onIdle runs when the last call lease on an unheld entry is returned. Set
+	// once by the pool before the entry is published and never changed; nil for
+	// proxies built outside the pool (tests), where it is skipped.
+	onIdle func()
+}
+
+// begin opens a call lease and returns the live client, or (nil, nil) when the
+// server is not ready. The caller must call the returned func exactly once when
+// its call ends (it is idempotent, so a defer plus an early call is safe).
+//
+// The order — count first, then read the client — is what makes the lease
+// race-free against teardown, which does the mirror image: clear the client
+// first, then read the count, and restore the client if the count is non-zero.
+// Go's atomics and the proxy mutex are sequentially consistent, so a begin that
+// sees a live client was counted before teardown looked, and a teardown that
+// saw zero cleared the client before begin read it. Either the call keeps the
+// server, or the call sees "not ready"; it never holds a server being stopped.
+func (p *clientProxy) begin() (lsp.Client, func()) {
+	p.inflight.Add(1)
+	c := p.get()
+	if c == nil {
+		p.release() // no call made: return the count without touching the clock
+		return nil, nil
+	}
+	p.touch()
+	return c, p.endOnce()
+}
+
+// endOnce returns an idempotent func that returns one call lease.
+func (p *clientProxy) endOnce() func() {
+	var once sync.Once
+	return func() { once.Do(p.end) }
+}
+
+// end returns one call lease. The idle clock is touched again at the end, so a
+// long call counts as activity for its whole duration, not just its start.
+func (p *clientProxy) end() {
+	p.touch()
+	p.release()
+}
+
+// release returns one call lease. The last one on an entry nobody holds asks
+// the pool to arm its idle teardown — also on begin's not-ready path, whose
+// count may have made a concurrent reap stand down.
+func (p *clientProxy) release() {
+	if p.inflight.Add(-1) == 0 && !p.held.Load() && p.onIdle != nil {
+		p.onIdle()
+	}
 }
 
 // touch records that a tool call was just routed through this proxy. Lock-free;

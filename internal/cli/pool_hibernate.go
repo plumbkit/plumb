@@ -158,7 +158,7 @@ func (p *workspacePool) hibernateIdle() {
 	var victims []*poolEntry
 	p.mu.Lock()
 	for _, e := range p.entries {
-		if e.state != poolActive {
+		if !e.state.running() {
 			continue
 		}
 		cfg := e.lspCfg
@@ -184,16 +184,21 @@ func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) 
 	}
 	var running []*poolEntry
 	for k, e := range p.entries {
-		if k.language == language && e.state == poolActive {
+		if k.language == language && e.state.running() {
 			running = append(running, e)
 		}
 	}
 	if len(running) < maxRunning {
 		return nil
 	}
-	victim := running[0]
-	for _, e := range running[1:] {
-		if e.proxy.lastUsed.Load() < victim.proxy.lastUsed.Load() {
+	// A server with a call in progress is never the victim; when every one is
+	// busy there is none, and the new server starts over budget.
+	var victim *poolEntry
+	for _, e := range running {
+		if e.proxy.inflight.Load() > 0 {
+			continue
+		}
+		if victim == nil || e.proxy.lastUsed.Load() < victim.proxy.lastUsed.Load() {
 			victim = e
 		}
 	}
@@ -211,13 +216,22 @@ func (p *workspacePool) overBudgetVictimLocked(language string, maxRunning int) 
 // to fully tear the entry down.
 func (p *workspacePool) hibernateEntry(e *poolEntry) {
 	p.mu.Lock()
-	if e.state != poolActive {
+	if !e.state.running() {
 		p.mu.Unlock()
 		return
 	}
-	e.state = poolHibernating
+	// Clear first, then look for a call lease, restoring the client if one is
+	// held: the mirror image of clientProxy.begin, so a call either keeps the
+	// server or sees it as not ready, never holds one being stopped.
 	client := e.proxy.get()
 	e.proxy.clear()
+	if e.proxy.inflight.Load() > 0 {
+		e.proxy.set(client)
+		p.mu.Unlock()
+		slog.Debug("pool: hibernation skipped — a call is in progress", "root", e.root, "language", e.language)
+		return
+	}
+	e.state = poolHibernating
 	sup := e.sup
 	watcher := e.watcher
 	e.watcher = nil
@@ -261,7 +275,7 @@ func (p *workspacePool) wakeLocked(e *poolEntry) (<-chan error, error) {
 		e.watcher = watcher
 		watcher.Start()
 	}
-	e.state = poolActive
+	e.state = poolWaking
 	e.startedAt = time.Now()
 	e.proxy.touch()
 	return readyCh, nil
