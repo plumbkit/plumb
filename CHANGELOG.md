@@ -17,7 +17,8 @@
   off), and a server hibernated for 4 hours is trimmed — removed when no session
   holds it, otherwise its cache is dropped. A config saved by an older plumb's
   whole-struct save pins `idle_timeout = '0s'` and keeps hibernation off;
-  `plumb doctor` now names those keys (`plumb config prune` removes them).
+  `plumb doctor` now names those keys; delete those lines to take the new
+  default.
   `max_workspaces` is now enforced when a server starts *and* when one wakes,
   and frees the slots synchronously — every idle server it takes to get back
   under the cap, one no session holds first, then the least recently used. A
