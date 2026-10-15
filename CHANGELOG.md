@@ -764,6 +764,11 @@
 
 ### Tests
 
+- **The legacy bridge's last two shutdown rules are pinned.** Closing the
+  bridge waits for its accept loops (so no old client's connection can join
+  the daemon's drain after it began), and a closed account-socket guard does
+  not rewrite the authority record when a bridge changes late (PLAN-549
+  review residuals).
 - **Every `plumb setup` entry point is pinned to record the service profile.**
   The flip made all five (claude-code, claude-desktop, the target-backed clients,
   `--all` and the interactive picker) record it, because a canonical cold start
