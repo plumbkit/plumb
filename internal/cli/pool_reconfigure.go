@@ -59,20 +59,21 @@ func (p *workspacePool) applyGlobalLSP(cfg config.Config) int {
 		next[name] = l
 	}
 	p.fileLSP = maps.Clone(cfg.LSP)
+	// baseConfig.LSP is written only under p.mu and langsMu together, so p.mu
+	// alone reads it: an unrelated reload stops here, before the LookPath
+	// calls activeLanguages makes.
+	if reflect.DeepEqual(p.baseConfig.LSP, next) {
+		p.mu.Unlock()
+		return 0
+	}
 	scoped := cfg
 	scoped.LSP = next
 	langs := activeLanguages(scoped)
 	p.langsMu.Lock()
-	same := reflect.DeepEqual(p.baseConfig.LSP, next)
-	if !same {
-		p.baseConfig.LSP = next
-		p.langs = langs
-	}
+	p.baseConfig.LSP = next
+	p.langs = langs
 	p.langsMu.Unlock()
 	p.mu.Unlock()
-	if same {
-		return 0
-	}
 	p.invalidateAllLanguageConfigs()
 	p.langsGen.Add(1)
 	slog.Info("pool: global [lsp] config changed — restarting the affected language servers only")
