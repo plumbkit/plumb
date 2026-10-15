@@ -317,10 +317,15 @@ Key design properties:
   and a refused token refuses the connection outright. A namespace is the set of
   proxy sessions that joined it (`namespace_member` in `session_state.db`), since
   every per-connection table is keyed by proxy session ID; release or expiry
-  revokes it, drains its connections for 30 s, cancels them, and purges their
-  rows and session files. Discovery (rosters, peers, mail addressing, resume)
-  sees only the caller's own namespace; language servers, indexes and write locks
-  stay shared.
+  revokes it, drains its connections for 30 s, cancels them, and on a later
+  janitor tick purges their rows and session files. Shared stores stay shared
+  and their ROWS carry the namespace: collab.db rows (mail, intents) are read
+  and written through a namespace view of the one store, stats.db rows and
+  episodic summaries carry a `namespace` column, and the purge deletes them in
+  the roots the namespace recorded and the daemon-level store. Discovery
+  (rosters, peers, mail, resume) sees only the caller's own namespace; language
+  servers, indexes and write locks stay shared, and session names stay unique
+  across namespaces.
 - **Per-connection sessions** — `handleConn` registers a `session.Info`
   immediately on connection (with `Folder=""` until workspace resolves). The
   session is then patched as workspace and client identity become known.

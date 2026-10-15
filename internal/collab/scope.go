@@ -36,18 +36,20 @@ import (
 // Concurrency: the ownership cache is guarded by its own mutex; readScope is a
 // value type built per call.
 
-// readScope is a Claimant resolved against one store: the target-workspace term
-// every read of that store applies. Only Store.scope makes one, which is what makes
-// the scope impossible to skip — the predicates take a readScope, not a Claimant.
+// readScope is a Claimant resolved against one store: the namespace and
+// target-workspace terms every read of that store applies. Only Store.scope makes
+// one, which is what makes the scope impossible to skip — the predicates take a
+// readScope, not a Claimant — and what carries the view's namespace into every
+// delivery read without any of them having to remember it.
 type readScope struct {
 	who Claimant
-	// term is the SQL that limits rows to this reader's workspace, beginning with
-	// AND; args are its arguments.
+	// term is the SQL that limits rows to this reader's namespace and workspace,
+	// beginning with AND; args are its arguments, in the term's placeholder order.
 	term string
 	args []any
 	// none reports that the scope admits no row at all — the global store, read
 	// without consent, holding nothing this workspace's project wrote — so the
-	// caller can answer without running its query. term is then "AND 0", so a
+	// caller can answer without running its query. term then carries "AND 0", so a
 	// read that forgot to check none still matches nothing.
 	none bool
 }
@@ -56,6 +58,27 @@ type readScope struct {
 // undelivered rows, which is all a delivery path can claim; observation paths
 // (summaries, threads) count delivered rows too.
 func (s *Store) scope(ctx context.Context, who Claimant, now time.Time, unreadOnly bool) (readScope, error) {
+	sc, err := s.workspaceBoundScope(ctx, who, now, unreadOnly)
+	return sc.inNamespace(s.ns), err
+}
+
+// namespaceScope is the scope that admits every row of one namespace and nothing
+// else: the term a read with no workspace restriction still applies.
+func namespaceScope(ns string) readScope { return readScope{}.inNamespace(ns) }
+
+// inNamespace narrows sc to namespace ns. The namespace term comes FIRST, ahead
+// of the workspace and family terms sc keeps, so args stay in placeholder order.
+// A scope that already admits no row (none) stays that way: its `AND 0` is still
+// in the term.
+func (sc readScope) inNamespace(ns string) readScope {
+	sc.term = `AND namespace = ? ` + sc.term
+	sc.args = append([]any{ns}, sc.args...)
+	return sc
+}
+
+// workspaceBoundScope is scope without the namespace: the workspace restriction,
+// and on the daemon-level store the repository-family restriction, alone.
+func (s *Store) workspaceBoundScope(ctx context.Context, who Claimant, now time.Time, unreadOnly bool) (readScope, error) {
 	if !s.IsGlobal() || who.CrossProject {
 		return workspaceScope(who), nil
 	}
@@ -100,7 +123,8 @@ func (s *Store) ownedOrigins(ctx context.Context, workspace string, now time.Tim
 		return nil, nil
 	}
 	query := `SELECT DISTINCT origin_git_common_dir FROM collab_rows
-		 WHERE target_workspace = ? AND origin_git_common_dir != '' AND kind = ? AND expires_at > ?`
+		 WHERE target_workspace = ? AND origin_git_common_dir != '' AND kind = ? AND expires_at > ?
+		   AND namespace = ?`
 	if unreadOnly {
 		query += ` AND delivered_at = 0`
 	}
@@ -108,7 +132,7 @@ func (s *Store) ownedOrigins(ctx context.Context, workspace string, now time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("collab: prepare origin lookup: %w", err)
 	}
-	rows, err := stmt.QueryContext(ctx, workspace, string(KindNote), now.UnixNano())
+	rows, err := stmt.QueryContext(ctx, workspace, string(KindNote), now.UnixNano(), s.ns)
 	if err != nil {
 		return nil, fmt.Errorf("collab: look up origins: %w", err)
 	}

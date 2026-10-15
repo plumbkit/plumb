@@ -47,12 +47,16 @@ func InNamespace(all []Info, ns string) []Info {
 // InNamespaceOf keeps the sessions in the namespace of the session selfID — the
 // caller's own row — or the default namespace when selfID is not among them.
 func InNamespaceOf(all []Info, selfID string) []Info {
-	ns := ""
+	return InNamespace(all, NamespaceOf(all, selfID))
+}
+
+// NamespaceOf is the namespace on session id's row, or the default namespace
+// when id is not among all.
+func NamespaceOf(all []Info, id string) string {
 	for _, info := range all {
-		if info.ID == selfID {
-			ns = info.Namespace
-			break
+		if info.ID == id {
+			return info.Namespace
 		}
 	}
-	return InNamespace(all, ns)
+	return ""
 }

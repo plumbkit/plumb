@@ -26,6 +26,7 @@ type writerCommand struct {
 	call     *Call
 	rename   *renameCommand
 	episodic *Episodic
+	purge    *string // a namespace to purge (PLAN-520)
 }
 
 type renameCommand struct {
@@ -118,6 +119,20 @@ func (w *Writer) RecordEpisodic(e Episodic) {
 	}
 }
 
+// PurgeNamespace enqueues the deletion of every row of namespace ns (PLAN-520),
+// ordered behind the inserts already queued so they are purged too. It waits for
+// room in the buffer rather than dropping: a lost purge would leave the
+// namespace's rows behind for good.
+func (w *Writer) PurgeNamespace(ns string) {
+	if w == nil || w.closed.Load() || ns == "" {
+		return
+	}
+	select {
+	case w.ch <- writerCommand{purge: &ns}:
+	case <-w.stop:
+	}
+}
+
 // Dropped reports the cumulative number of commands dropped because the buffer
 // was full. Exposed for tests and diagnostics.
 func (w *Writer) Dropped() int64 {
@@ -137,6 +152,26 @@ func (w *Writer) Close() {
 	<-w.done
 	w.db.checkpoint()
 	w.db.Close()
+}
+
+// applyOther runs one non-insert command, after the pending batch is flushed:
+// a rename names rows already stored, an episodic insert follows the calls it
+// summarises, and a namespace purge takes the namespace's queued rows too.
+func (w *Writer) applyOther(cmd writerCommand) {
+	switch {
+	case cmd.rename != nil:
+		if err := w.db.RenameSession(cmd.rename.sessionID, cmd.rename.name); err != nil {
+			slog.Warn("stats: rename session failed", "session", cmd.rename.sessionID, "err", err)
+		}
+	case cmd.episodic != nil:
+		if err := w.db.recordEpisodic(*cmd.episodic); err != nil {
+			slog.Warn("stats: record episodic failed", "workspace", cmd.episodic.Workspace, "err", err)
+		}
+	case cmd.purge != nil:
+		if _, err := w.db.PurgeNamespace(*cmd.purge); err != nil {
+			slog.Warn("stats: purge namespace failed", "namespace", *cmd.purge, "err", err)
+		}
+	}
 }
 
 // run accumulates inserts and commits them in batches — on the size threshold
@@ -172,16 +207,9 @@ func (w *Writer) run() {
 			if len(batch) >= writerMaxBatch {
 				flush()
 			}
-		case cmd.rename != nil:
-			flush() // name rows that are already inserted
-			if err := w.db.RenameSession(cmd.rename.sessionID, cmd.rename.name); err != nil {
-				slog.Warn("stats: rename session failed", "session", cmd.rename.sessionID, "err", err)
-			}
-		case cmd.episodic != nil:
-			flush()
-			if err := w.db.recordEpisodic(*cmd.episodic); err != nil {
-				slog.Warn("stats: record episodic failed", "workspace", cmd.episodic.Workspace, "err", err)
-			}
+		default:
+			flush() // every other command acts on rows already inserted
+			w.applyOther(cmd)
 		}
 	}
 

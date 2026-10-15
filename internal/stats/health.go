@@ -167,7 +167,9 @@ func utcDayBounds(day time.Time) (from, to int64) {
 // and is concurrently touched by an unrelated analyzer-warning cleanup —
 // this keeps the health metrics' SQL surface independent of that file.
 func dayWhere(from, to int64, workspace string) (string, []any) {
-	where := " WHERE called_at >= ? AND called_at < ?"
+	// Health metrics are the default namespace's: an end-to-end run in its own
+	// namespace (PLAN-520) is not the user's work.
+	where := " WHERE namespace = '' AND called_at >= ? AND called_at < ?"
 	args := []any{from, to}
 	if workspace != "" {
 		where += " AND workspace = ?"

@@ -29,8 +29,7 @@ type sessionDTO struct {
 
 // handleSessions lists the active sessions with their per-session call counts.
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	infos, err := session.List()
-	infos = session.InNamespace(infos, "") // human views show the default namespace (PLAN-520)
+	infos, err := defaultSessions()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "listing sessions: "+err.Error())
 		return

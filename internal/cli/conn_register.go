@@ -229,7 +229,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		WithProtocol(s.protocolStatus))
 	srv.Register(tools.NewRenameSession(s.renameSession))
 	srv.Register(tools.NewToolFeedback())
-	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithBoundary(boundary).
+	srv.Register(tools.NewWorkspaceSessions(s.workspace, s.sessionID).WithNamespace(s.namespaceID).WithBoundary(boundary).
 		WithAgentIdentity(s.rosterIdentity).
 		WithAgentName(s.addressableNameFor).
 		WithCollabStoreFor(s.collabStoreIfExistsForWorkspace).
@@ -264,7 +264,7 @@ func (s *connSession) registerAllTools(srv *mcp.Server, daemonStartedAt time.Tim
 		Index:               s.memoryIndexLive,
 		GeneratedMemoryKeep: func() int { return s.memoryConfig().GeneratedMemoryKeep },
 	}))
-	srv.Register(tools.NewSessionStart(s.workspaceFor, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).
+	srv.Register(tools.NewSessionStart(s.workspaceFor, s.sessionInv, s.rootFromClient, s.refuseHomeRoots, s.clientNameStr, s.gitPolicy).WithNamespace(s.namespaceID).
 		WithTopology(topoFn).
 		WithToolProfile(func() (string, int, string) {
 			p, reason := s.resolveToolProfile()

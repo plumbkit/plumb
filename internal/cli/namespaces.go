@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/plumbkit/plumb/internal/collab"
 	"github.com/plumbkit/plumb/internal/daemons"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
@@ -45,8 +46,11 @@ type namespaceRegistry struct {
 	// persists at most once per namespaceRenewEvery.
 	renewedAt map[string]time.Time
 	// draining maps a revoked namespace to the moment its connections are
-	// cancelled; the purge follows on the next tick once none remains.
-	draining map[string]time.Time
+	// cancelled. cancelledAt records when that first happened: the purge never
+	// runs in the same tick as the first cancel, and runs once no connection is
+	// left or namespaceForcePurge after that first cancel, whichever is first.
+	draining    map[string]time.Time
+	cancelledAt map[string]time.Time
 	// purgeExtra removes what lives outside session_state.db (session files are
 	// handled here; collab and stats rows join in PLAN-520's second slice).
 	purgeExtra []func(id string, sessionIDs []string)
@@ -66,14 +70,15 @@ const (
 
 func newNamespaceRegistry(store *sessionstate.Store, conns *connRegistry) *namespaceRegistry {
 	return &namespaceRegistry{
-		store:      store,
-		conns:      conns,
-		now:        time.Now,
-		ownerStart: daemons.ProcessStart,
-		drain:      namespaceDrain,
-		ownerGrace: namespaceOwnerGrace,
-		renewedAt:  make(map[string]time.Time),
-		draining:   make(map[string]time.Time),
+		store:       store,
+		conns:       conns,
+		now:         time.Now,
+		ownerStart:  daemons.ProcessStart,
+		drain:       namespaceDrain,
+		ownerGrace:  namespaceOwnerGrace,
+		renewedAt:   make(map[string]time.Time),
+		draining:    make(map[string]time.Time),
+		cancelledAt: make(map[string]time.Time),
 	}
 }
 
@@ -161,9 +166,23 @@ func (r *namespaceRegistry) gate(token, proxySessionID string) (string, error) {
 		}
 		return "", nil
 	}
+	if proxySessionID == "" {
+		return "", errors.New("a namespaced connection needs a proxy session ID; connect through `plumb serve --namespace`")
+	}
 	ns, err := r.resolve(token)
 	if err != nil {
 		return "", err
+	}
+	member, err := r.store.NamespaceOf(proxySessionID)
+	if err != nil {
+		return "", err
+	}
+	if member == "" {
+		// A proxy session the default namespace already knows cannot be taken
+		// into a namespace: its rows would be purged with it.
+		if _, known, err := r.store.LoadIdentity(proxySessionID); err != nil || known {
+			return "", errors.New("this proxy session already belongs to the default namespace; start a new serve with --namespace")
+		}
 	}
 	if err := r.store.AddNamespaceMember(ns.ID, proxySessionID); err != nil {
 		return "", err
@@ -179,17 +198,21 @@ func (r *namespaceRegistry) touch(id string) {
 		return
 	}
 	now := r.now()
+	ns, err := r.store.NamespaceByID(id)
+	if err != nil || ns.State != sessionstate.NamespaceActive {
+		return
+	}
+	// Persist at most once per namespaceRenewEvery — or per quarter TTL for a
+	// short one, so a namespace in continuous use never reaches its expiry
+	// between two persisted renewals.
+	every := min(namespaceRenewEvery, ns.TTL/4)
 	r.mu.Lock()
-	if now.Sub(r.renewedAt[id]) < namespaceRenewEvery {
+	if now.Sub(r.renewedAt[id]) < every {
 		r.mu.Unlock()
 		return
 	}
 	r.renewedAt[id] = now
 	r.mu.Unlock()
-	ns, err := r.store.NamespaceByID(id)
-	if err != nil || ns.State != sessionstate.NamespaceActive {
-		return
-	}
 	if err := r.store.SetNamespaceExpiry(id, now.Add(ns.TTL)); err != nil {
 		slog.Warn("namespace: renew", "namespace", id, "err", err)
 	}
@@ -280,15 +303,39 @@ func (r *namespaceRegistry) tick() {
 	}
 	r.mu.Unlock()
 	for _, id := range due {
-		live := r.conns.cancelNamespace(id)
-		r.mu.Lock()
-		at := r.draining[id]
-		r.mu.Unlock()
-		if live > 0 && now.Before(at.Add(namespaceForcePurge)) {
-			continue // cancelled; purge once they have gone
-		}
-		r.purge(id)
+		r.drainDue(id, now)
 	}
+}
+
+// drainDue handles a namespace whose drain is over: cancel its connections and
+// purge it on a LATER tick, once none is left (or namespaceForcePurge after the
+// first cancel), so a connection still tearing down cannot write rows after
+// the purge that would then count as the default namespace's.
+func (r *namespaceRegistry) drainDue(id string, now time.Time) {
+	live := r.conns.cancelNamespace(id)
+	r.mu.Lock()
+	first, cancelled := r.cancelledAt[id]
+	if !cancelled {
+		r.cancelledAt[id] = now
+	}
+	r.mu.Unlock()
+	if !cancelled {
+		return // cancelled just now: purge on a later tick
+	}
+	if live > 0 && now.Before(first.Add(namespaceForcePurge)) {
+		return
+	}
+	r.purge(id)
+}
+
+// ownerStartTolerance absorbs a start time read slightly differently later:
+// Linux derives it from btime, which a clock adjustment can nudge. A recycled
+// pid starts far later than that.
+const ownerStartTolerance = 2 * time.Second
+
+func ownerStartMatches(gotMs, wantMs int64) bool {
+	d := time.Duration(gotMs-wantMs) * time.Millisecond
+	return d > -ownerStartTolerance && d < ownerStartTolerance
 }
 
 // checkActive expires one active namespace when its time is up or its owner
@@ -302,7 +349,7 @@ func (r *namespaceRegistry) checkActive(ns sessionstate.Namespace, now time.Time
 		return
 	}
 	start, ok := r.ownerStart(ns.OwnerPID)
-	if ok && start.UnixMilli() == ns.OwnerStart {
+	if ok && ownerStartMatches(start.UnixMilli(), ns.OwnerStart) {
 		if !ns.OwnerMismatchAt.IsZero() {
 			_ = r.store.SetOwnerMismatch(ns.ID, time.Time{})
 		}
@@ -338,8 +385,16 @@ func (r *namespaceRegistry) purge(id string) {
 	for _, sid := range sessionIDs {
 		session.Remove(sid)
 	}
+	// Also every session row stamped with the namespace, including one whose
+	// identity record was never written (a connection refused or cut short).
+	if all, err := session.List(); err == nil {
+		for _, info := range session.InNamespace(all, id) {
+			session.Remove(info.ID)
+		}
+	}
 	r.mu.Lock()
 	delete(r.draining, id)
+	delete(r.cancelledAt, id)
 	delete(r.renewedAt, id)
 	r.mu.Unlock()
 	slog.Info("namespace: purged", "namespace", id, "sessions", len(sessionIDs))
@@ -348,12 +403,41 @@ func (r *namespaceRegistry) purge(id string) {
 // startNamespaces gives the daemon's connection registry its namespace registry
 // and starts the janitor. With no session-state store there is none, and every
 // namespace token is refused rather than silently ignored.
-func startNamespaces(ctx context.Context, store *sessionstate.Store, conns *connRegistry) {
+func startNamespaces(ctx context.Context, store *sessionstate.Store, conns *connRegistry, stats *statsStore, collabs *collabPool) {
 	if store == nil {
 		return
 	}
-	conns.namespaces = newNamespaceRegistry(store, conns)
-	go conns.namespaces.run(ctx)
+	r := newNamespaceRegistry(store, conns)
+	r.purgeExtra = append(r.purgeExtra,
+		func(id string, _ []string) { purgeNamespaceMail(ctx, store, collabs, id) },
+		func(id string, _ []string) { stats.PurgeNamespace(id) })
+	conns.namespaces = r
+	go r.run(ctx)
+}
+
+// purgeNamespaceMail deletes a namespace's mail and intents from every collab
+// store it wrote to: the roots its members recorded, and the daemon-level store.
+// A root whose collab.db is gone has nothing left to delete.
+func purgeNamespaceMail(ctx context.Context, store *sessionstate.Store, collabs *collabPool, id string) {
+	if collabs == nil {
+		return
+	}
+	roots, err := store.NamespaceRoots(id)
+	if err != nil {
+		slog.Warn("namespace: purge (roots)", "namespace", id, "err", err)
+	}
+	stores := []*collab.Store{collabs.getGlobal()}
+	for _, root := range roots {
+		stores = append(stores, collabs.get(root))
+	}
+	for _, st := range stores {
+		if st == nil {
+			continue
+		}
+		if _, err := st.PurgeNamespace(ctx, id); err != nil {
+			slog.Warn("namespace: purge (mail)", "namespace", id, "workspace", st.Workspace(), "err", err)
+		}
+	}
 }
 
 // run drives the janitor until ctx ends.

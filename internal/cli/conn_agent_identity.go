@@ -216,10 +216,10 @@ func (s *connSession) resolvedInbox(ctx context.Context, register bool) tools.In
 		SelfID:          who.id,
 		Root:            root,
 		Policy:          s.collabPolicyAt(root),
-		Workspace:       func() *collab.Store { return s.collabPool.get(root) },
+		Workspace:       func() *collab.Store { return s.nsCollab(s.collabPool.get(root)) },
 		Global:          s.collabGlobalIfExists,
-		WorkspaceReader: func() (*collab.Store, error) { return s.collabPool.getResult(root) },
-		GlobalReader:    s.collabPool.getGlobalResult,
+		WorkspaceReader: func() (*collab.Store, error) { return s.nsCollabResult(s.collabPool.getResult(root)) },
+		GlobalReader:    s.nsGlobalReader,
 	}
 	if who.id != "" {
 		in.Self = who.name

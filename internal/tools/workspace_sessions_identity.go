@@ -11,6 +11,8 @@ package tools
 import (
 	"context"
 
+	"github.com/plumbkit/plumb/internal/session"
+
 	"github.com/plumbkit/plumb/internal/collab"
 )
 
@@ -119,11 +121,22 @@ func (t *WorkspaceSessions) resolveWSCaller(ctx context.Context) (workspace stri
 	return workspace, c
 }
 
-// namespaceSelf is the session whose namespace scopes the roster: the caller's
-// own row, else the connection's (PLAN-520).
-func (t *WorkspaceSessions) namespaceSelf(callerID string) string {
-	if callerID == "" && t.selfSessID != nil {
-		return t.selfSessID()
+// WithNamespace wires the connection's namespace (PLAN-520), which scopes the
+// roster and the recent-writes feed. Unwired, the namespace is read off the
+// caller's own session row.
+func (t *WorkspaceSessions) WithNamespace(fn func() string) *WorkspaceSessions {
+	t.namespaceFn = fn
+	return t
+}
+
+// callerNamespace is the namespace the caller sees: its connection's, or —
+// unwired — the one on its own session row.
+func (t *WorkspaceSessions) callerNamespace(all []session.Info, callerID string) string {
+	if t.namespaceFn != nil {
+		return t.namespaceFn()
 	}
-	return callerID
+	if callerID == "" && t.selfSessID != nil {
+		callerID = t.selfSessID()
+	}
+	return session.NamespaceOf(all, callerID)
 }

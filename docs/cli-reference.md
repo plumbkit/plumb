@@ -816,13 +816,17 @@ suite needs no daemon of its own. Connect with `plumb serve --namespace <token>`
 (or `PLUMB_NAMESPACE`). Inside a namespace, sessions, their names' identity
 records, workspace pins, read tracking and resume credentials are invisible to
 everyone outside it, and the roster, peer lists and mail addressing see only the
-namespace's own sessions. Language servers, indexes, project memory and the
-per-path write locks stay shared: a namespace changes who can see whom, not what
-the daemon knows about the code.
+namespace's own sessions. Its mail and intents, its tool-call stats and its
+session summaries are tagged with it: delivery, `plumb mail`, the Stop-hook
+count and the recent-writes feed see only their own namespace, and `plumb stats`,
+the TUI and the web UI show the default one. Language servers, indexes, project
+memory and the per-path write locks stay shared: a namespace changes who can see
+whom, not what the daemon knows about the code. Session names stay unique across
+every namespace.
 
 | Command | Effect |
 |---|---|
-| `create` | Makes a namespace and prints its **token** (shown once) and public **id**. `--ttl` sets its lifetime (default 2 h, 1 m–7 d); every call made in it renews it. `--owner-pid` is a liveness hint (default: the command's parent process; `0` for none): when that process is gone — a test runner killed before its exit trap — the namespace expires 5 minutes later. |
+| `create` | Makes a namespace and prints its **token** (shown once) and public **id**. `--ttl` sets its lifetime (default 2 h, 1 m–7 d); every call made in it renews it. `--owner-pid` names the owning process (say, the test runner's own pid; default none): when it is gone — a runner killed before its exit trap — the namespace expires 5 minutes later. |
 | `renew` | Extends the namespace by its TTL. |
 | `release` | Revokes the namespace at once: its token is refused from then on and new connections are rejected. Connected serves get 30 s to finish, are then cancelled, and everything the namespace held is purged. |
 | `list` | Lists namespaces by id, state, TTL, expiry and owner. Tokens are never listed. |

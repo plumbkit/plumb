@@ -87,3 +87,25 @@ func TestReconnect_NamespaceRefusalEndsTheProxy(t *testing.T) {
 		t.Fatalf("dialled %d times, want exactly 1 (no retry after a refusal)", n)
 	}
 }
+
+func TestServeNamespaceToken_FlagThenEnv(t *testing.T) {
+	env := func(string) string { return "pns1-env" }
+	if got := serveNamespaceToken("pns1-flag", env); got != "pns1-flag" {
+		t.Fatalf("flag+env = %q, want the flag", got)
+	}
+	if got := serveNamespaceToken("", env); got != "pns1-env" {
+		t.Fatalf("env only = %q, want PLUMB_NAMESPACE", got)
+	}
+	if got := serveNamespaceToken("", func(string) string { return "" }); got != "" {
+		t.Fatalf("neither = %q", got)
+	}
+}
+
+func TestLegacyPumpNamespaceGuard(t *testing.T) {
+	if err := legacyPumpNamespaceGuard("pns1-x"); err == nil {
+		t.Fatal("the legacy byte pump accepted a namespace it cannot carry")
+	}
+	if err := legacyPumpNamespaceGuard(""); err != nil {
+		t.Fatalf("a plain legacy serve was refused: %v", err)
+	}
+}

@@ -95,6 +95,7 @@ type RootsResolver func(ctx context.Context) string
 // per-session signal, which is why it may enter via the roots resolver above
 // — always Detect-validated and never persisted as the sticky pin.
 type SessionStart struct {
+	namespaceFn    func() string // the connection's namespace (PLAN-520); nil reads it off the caller's row
 	ws             WorkspaceFn
 	diag           diagnosticsSource                                                                                       // may be nil; diagnostics section skipped when nil
 	roots          RootsResolver                                                                                           // may be nil; roots/list fallback skipped when nil

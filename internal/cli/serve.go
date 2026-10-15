@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -75,17 +74,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	cwd, _ := os.Getwd()
 	workspace := resolveWorkspaceHint(serveFlagWorkspace, os.Getenv("PLUMB_WORKSPACE"))
 
-	namespace := serveFlagNamespace
-	if namespace == "" {
-		namespace = os.Getenv("PLUMB_NAMESPACE")
-	}
+	namespace := serveNamespaceToken(serveFlagNamespace, os.Getenv)
 
 	if serveFlagNoReconnect || !proxyReconnectEnabled() {
 		defer conn.Close()
-		if namespace != "" {
-			// The legacy byte pump cannot carry the token, and joining the default
-			// namespace instead would be exactly the fallback a namespace forbids.
-			return errors.New("plumb serve: --namespace needs the resilient proxy; drop --no-reconnect")
+		if err := legacyPumpNamespaceGuard(namespace); err != nil {
+			return err
 		}
 		if len(allowDirs) > 0 {
 			slog.Warn("serve: --allow-dir is ignored with the legacy byte-pump proxy; it requires the resilient proxy (the default)")

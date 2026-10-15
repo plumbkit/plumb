@@ -142,8 +142,9 @@ var namespaceCmd = &cobra.Command{
 	Use:   "namespace",
 	Short: "Create and manage namespaces: private slices of the daemon for an end-to-end run",
 	Long: `A namespace isolates an end-to-end run inside the one daemon: its sessions,
-names, pins, read tracking, resume credentials, mail and stats are invisible to
-everyone else, and released or expired together. Connect with
+identity records, pins, read tracking, resume credentials, mail and tool-call
+stats are invisible outside it, and are purged together when it is released or
+expires. Session names stay unique across every namespace. Connect with
 "plumb serve --namespace <token>" (or PLUMB_NAMESPACE).`,
 }
 
@@ -153,9 +154,6 @@ var namespaceCreateCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
 		owner := namespaceFlagOwnerPID
-		if owner < 0 {
-			owner = os.Getppid()
-		}
 		ttl := ""
 		if namespaceFlagTTL != 0 {
 			ttl = namespaceFlagTTL.String()
@@ -234,7 +232,7 @@ func printJSON(v any) error {
 func init() {
 	namespaceCmd.PersistentFlags().BoolVar(&namespaceFlagJSON, "json", false, "print JSON")
 	namespaceCreateCmd.Flags().DurationVar(&namespaceFlagTTL, "ttl", 0, "lifetime, renewed by every call (default 2h)")
-	namespaceCreateCmd.Flags().IntVar(&namespaceFlagOwnerPID, "owner-pid", -1, "the owning process, a liveness hint (default: this command's parent; 0 for none)")
+	namespaceCreateCmd.Flags().IntVar(&namespaceFlagOwnerPID, "owner-pid", 0, "the owning process (say, the test runner's own pid): the namespace expires 5 minutes after it is gone (default: none)")
 	namespaceCmd.AddCommand(namespaceCreateCmd,
 		namespaceTokenCmd("renew", "Renew a namespace for another TTL"),
 		namespaceTokenCmd("release", "Release a namespace: refuse its token now, purge its state after a 30 s drain"),

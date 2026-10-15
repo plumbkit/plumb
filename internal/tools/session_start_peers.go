@@ -57,9 +57,7 @@ func (t *SessionStart) activePeers(ws string) []session.Info {
 	if err != nil {
 		return nil
 	}
-	if t.selfSessID != nil {
-		all = session.InNamespaceOf(all, t.selfSessID())
-	}
+	all = session.InNamespace(all, t.callerNamespace(all))
 	var peers []session.Info
 	for _, p := range all {
 		if t.selfSessID != nil && p.ID == t.selfSessID() {
@@ -110,7 +108,8 @@ func (t *SessionStart) peerAreas(ws string) map[string][]string {
 	if err != nil || db == nil {
 		return nil
 	}
-	writes, err := db.RecentWritesByWorkspace(ws, writeToolNames, peerDigestWriteLimit)
+	all, _ := session.List()
+	writes, err := db.RecentWritesByWorkspace(ws, t.callerNamespace(all), writeToolNames, peerDigestWriteLimit)
 	if err != nil {
 		return nil
 	}
@@ -182,4 +181,16 @@ func peerArea(ctx context.Context, ws, absPath string, store *topology.Store) st
 		return fmt.Sprintf("%s (%s)", dir, annot)
 	}
 	return dir
+}
+
+// callerNamespace is the namespace the caller sees (PLAN-520): its
+// connection's, or — unwired — the one on its own session row.
+func (t *SessionStart) callerNamespace(all []session.Info) string {
+	if t.namespaceFn != nil {
+		return t.namespaceFn()
+	}
+	if t.selfSessID != nil {
+		return session.NamespaceOf(all, t.selfSessID())
+	}
+	return ""
 }

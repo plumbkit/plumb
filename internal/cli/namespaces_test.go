@@ -85,6 +85,9 @@ func TestNamespaces_CreateValidatesTTLAndOwner(t *testing.T) {
 	if _, _, err := r.create(time.Second, 0); err == nil {
 		t.Fatal("a 1 s TTL was accepted")
 	}
+	if _, _, err := r.create(namespaceMaxTTL+time.Hour, 0); err == nil {
+		t.Fatal("a TTL over the maximum was accepted")
+	}
 	if _, ns := mustCreate(t, r, 0, 0); ns.TTL != namespaceDefaultTTL {
 		t.Fatalf("default TTL = %s", ns.TTL)
 	}
@@ -276,12 +279,6 @@ func TestConnSession_NamespaceGateBindsAndStamps(t *testing.T) {
 	t.Cleanup(s.close)
 	s.registry = r.conns
 
-	if err := s.onNamespace("pns1-bogus", "psid-x"); err == nil {
-		t.Fatal("a bogus token was admitted")
-	}
-	if s.view().namespace != "" {
-		t.Fatal("a refused gate bound a namespace")
-	}
 	if err := s.onNamespace(token, "psid-x"); err != nil {
 		t.Fatal(err)
 	}
@@ -342,10 +339,10 @@ func TestResolvePeer_OnlyInsideTheNamespace(t *testing.T) {
 func TestResumeCredential_NotAcrossNamespaces(t *testing.T) {
 	r, ss, _, _ := newTestNamespaces(t)
 	token, ns := mustCreate(t, r, time.Hour, 0)
-	if err := ss.SaveIdentity("psid-old", sessionstate.Identity{Name: "old-wren", SessionID: "sid-old"}); err != nil {
+	if _, err := r.gate(token, "psid-old"); err != nil { // the identity is the namespace's
 		t.Fatal(err)
 	}
-	if _, err := r.gate(token, "psid-old"); err != nil { // the identity is the namespace's
+	if err := ss.SaveIdentity("psid-old", sessionstate.Identity{Name: "old-wren", SessionID: "sid-old"}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -512,5 +509,128 @@ func TestRunSessions_ShowsTheDefaultNamespace(t *testing.T) {
 	}
 	if out := run("*"); !strings.Contains(out, def.ID) || !strings.Contains(out, nsd.ID) {
 		t.Fatalf("--namespace * listing:\n%s", out)
+	}
+}
+
+// TestNamespaces_CancelAndPurgeNeverShareATick: a drain that ends between two
+// ticks cancels on the first tick after it and purges on a LATER one — once the
+// connection is gone, or namespaceForcePurge after the first cancel.
+func TestNamespaces_CancelAndPurgeNeverShareATick(t *testing.T) {
+	r, ss, clock, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	r.conns.add("conn-ns", connHandle{namespace: func() string { return ns.ID }, cancel: func() {}})
+	if _, err := r.release(token); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(namespaceDrain + 20*time.Second) // well past the force window measured from the drain end
+	r.tick()
+	if _, err := ss.NamespaceByID(ns.ID); err != nil {
+		t.Fatal("purged in the same tick as the first cancel")
+	}
+	clock.advance(namespaceForcePurge / 2)
+	r.tick()
+	if _, err := ss.NamespaceByID(ns.ID); err != nil {
+		t.Fatal("purged before the force window after the first cancel, with a connection still live")
+	}
+	clock.advance(namespaceForcePurge)
+	r.tick()
+	if _, err := ss.NamespaceByID(ns.ID); !errors.Is(err, sessionstate.ErrNamespaceUnknown) {
+		t.Fatal("not purged after the force window")
+	}
+}
+
+// TestNamespaces_ShortTTLSurvivesContinuousUse: a 1-minute namespace used every
+// few seconds never expires between persisted renewals.
+func TestNamespaces_ShortTTLSurvivesContinuousUse(t *testing.T) {
+	r, ss, clock, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Minute, 0)
+	if _, err := r.gate(token, "psid-short"); err != nil {
+		t.Fatal(err)
+	}
+	for range 30 { // 2.5 minutes of a call every 5 s, a tick every 5 s
+		clock.advance(5 * time.Second)
+		r.touch(ns.ID)
+		r.tick()
+	}
+	if got, _ := ss.NamespaceByID(ns.ID); got.State != sessionstate.NamespaceActive {
+		t.Fatalf("a namespace in continuous use expired (state %s)", got.State)
+	}
+}
+
+func TestNamespaces_GateEdges(t *testing.T) {
+	r, ss, _, _ := newTestNamespaces(t)
+	token, _ := mustCreate(t, r, time.Hour, 0)
+	if _, err := r.gate(token, ""); err == nil {
+		t.Fatal("a token with no proxy session ID was admitted")
+	}
+	if err := ss.SaveIdentity("psid-known", sessionstate.Identity{Name: "calm-otter", SessionID: "sid-k"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.gate(token, "psid-known"); err == nil {
+		t.Fatal("a proxy session the default namespace knows was taken into a namespace")
+	}
+	if got, _ := ss.NamespaceOf("psid-known"); got != "" {
+		t.Fatal("the refused join still recorded a membership")
+	}
+}
+
+// TestConnSession_NamespaceIsForLife: a connection that joined a namespace is
+// refused a re-initialize that would move it elsewhere; a refused connection's
+// row is retired so the default namespace does not list it.
+func TestConnSession_NamespaceIsForLife(t *testing.T) {
+	r, ss, _, _ := newTestNamespaces(t)
+	token, _ := mustCreate(t, r, time.Hour, 0)
+	other, _ := mustCreate(t, r, time.Hour, 0)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, ss, newSharedBudgets())
+	t.Cleanup(s.close)
+	s.registry = r.conns
+	if err := s.onNamespace(token, "psid-life"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.onNamespace("", "psid-other"); err == nil {
+		t.Fatal("a namespaced connection re-initialised into the default namespace")
+	}
+	if err := s.onNamespace(other, "psid-life2"); err == nil {
+		t.Fatal("a namespaced connection re-initialised into another namespace")
+	}
+
+	refused := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, ss, newSharedBudgets())
+	t.Cleanup(refused.close)
+	refused.registry = r.conns
+	if err := refused.onNamespace("pns1-bogus", "psid-bogus"); err == nil {
+		t.Fatal("a bogus token was admitted")
+	}
+	all, _ := session.List()
+	for _, info := range all {
+		if info.ID == refused.sessionID() {
+			t.Fatal("a refused connection is still listed as a live session")
+		}
+	}
+}
+
+func TestOwnerStartMatches_Tolerance(t *testing.T) {
+	if !ownerStartMatches(10_000, 10_000+1_500) || !ownerStartMatches(10_000+1_500, 10_000) {
+		t.Fatal("a start 1.5 s off was not tolerated")
+	}
+	if ownerStartMatches(10_000, 10_000+60_000) {
+		t.Fatal("a start a minute off (a recycled pid) matched")
+	}
+}
+
+// TestNamespaces_PurgeSweepsStampedRows: a session row stamped with the
+// namespace whose identity record was never written is removed too.
+func TestNamespaces_PurgeSweepsStampedRows(t *testing.T) {
+	r, _, _, _ := newTestNamespaces(t)
+	_, ns := mustCreate(t, r, time.Hour, 0)
+	row, err := session.Register(session.Info{Folder: t.TempDir(), Namespace: ns.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.purge(ns.ID)
+	all, _ := session.List()
+	for _, info := range all {
+		if info.ID == row.ID {
+			t.Fatal("a stamped session row without an identity record survived the purge")
+		}
 	}
 }

@@ -10,14 +10,12 @@ import (
 	"github.com/plumbkit/plumb/internal/clientcaps"
 	"github.com/plumbkit/plumb/internal/history"
 	"github.com/plumbkit/plumb/internal/monitor"
-	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/topology"
 )
 
 func (m *Model) refresh() {
-	all, err := session.List()
-	all = session.InNamespace(all, "") // human views show the default namespace (PLAN-520)
+	all, err := defaultSessions()
 	if err != nil {
 		m.loadErr = err.Error()
 		return

@@ -77,7 +77,7 @@ func TestAfterToolFromCtxRecordsTheCallersAgent(t *testing.T) {
 		t.Fatalf("stats.Open: %v", err)
 	}
 	defer db.Close()
-	rows, err := db.RecentWritesByWorkspace(root, []string{"write_file"}, 50)
+	rows, err := db.RecentWritesByWorkspace(root, "", []string{"write_file"}, 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.RecentWritesByWorkspace(agentRoot, []string{"git"}, 50)
+	rows, err := db.RecentWritesByWorkspace(agentRoot, "", []string{"git"}, 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace(agentRoot): %v", err)
 	}
@@ -213,7 +213,7 @@ func TestAfterToolFilesTheRowUnderTheAgentsOwnWorkspace(t *testing.T) {
 		t.Errorf("the repository that was committed to has %d audit rows, want 1 — "+
 			"its own feed cannot show a commit plumb itself mediated", len(rows))
 	}
-	stray, err := db.RecentWritesByWorkspace(connRoot, []string{"git"}, 50)
+	stray, err := db.RecentWritesByWorkspace(connRoot, "", []string{"git"}, 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace(connRoot): %v", err)
 	}
@@ -272,7 +272,7 @@ func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows, err := db.RecentWritesByWorkspace(reachedInto, []string{"write_file"}, 50)
+	rows, err := db.RecentWritesByWorkspace(reachedInto, "", []string{"write_file"}, 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace(reachedInto): %v", err)
 	}
@@ -280,7 +280,7 @@ func TestAfterToolPrefersThePathArgumentOverTheAgentsRoot(t *testing.T) {
 		t.Errorf("the project the call reached into has %d audit rows, want 1 — "+
 			"a path argument is more specific than the caller's own root", len(rows))
 	}
-	stray, err := db.RecentWritesByWorkspace(agentRoot, []string{"write_file"}, 50)
+	stray, err := db.RecentWritesByWorkspace(agentRoot, "", []string{"write_file"}, 50)
 	if err != nil {
 		t.Fatalf("RecentWritesByWorkspace(agentRoot): %v", err)
 	}
@@ -348,7 +348,7 @@ func TestAfterToolFilesAGitCallUnderItsRepo(t *testing.T) {
 		{agentRoot, 0, "the caller's own root was not committed to"},
 		{connRoot, 0, "the connection's pin was not committed to"},
 	} {
-		rows, err := db.RecentWritesByWorkspace(c.root, []string{"git"}, 50)
+		rows, err := db.RecentWritesByWorkspace(c.root, "", []string{"git"}, 50)
 		if err != nil {
 			t.Fatalf("RecentWritesByWorkspace(%s): %v", c.root, err)
 		}

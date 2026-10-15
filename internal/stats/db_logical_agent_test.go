@@ -76,7 +76,7 @@ func TestMigrateAddsLogicalAgentColumn(t *testing.T) {
 	if v != SchemaVersion {
 		t.Fatalf("user_version after upgrade = %d, want %d", v, SchemaVersion)
 	}
-	got, err := db.RecentWritesByWorkspace("/w", []string{"edit_file"}, 10)
+	got, err := db.RecentWritesByWorkspace("/w", "", []string{"edit_file"}, 10)
 	if err != nil || len(got) != 1 {
 		t.Fatalf("RecentWritesByWorkspace on the upgraded DB: %d rows, %v", len(got), err)
 	}
@@ -111,7 +111,7 @@ func TestLogicalAgentRoundTrips(t *testing.T) {
 	}
 	want := map[string]string{`{"file_path":"/w/a.go"}`: "conv-1/agent-7", `{"file_path":"/w/b.go"}`: "conv-1", `{"file_path":"/w/c.go"}`: ""}
 
-	writes, err := db.RecentWritesByWorkspace("/w", []string{"write_file"}, 10)
+	writes, err := db.RecentWritesByWorkspace("/w", "", []string{"write_file"}, 10)
 	if err != nil || len(writes) != 3 {
 		t.Fatalf("RecentWritesByWorkspace: %d rows, %v", len(writes), err)
 	}

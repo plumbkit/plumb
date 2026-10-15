@@ -57,6 +57,7 @@ type WorkspaceSessions struct {
 	// agent is in and which row is its own; nil on a single-agent connection.
 	agentIdentityFn func(ctx context.Context) (workspace, selfID string)
 	agentNameFn     func(ctx context.Context) string
+	namespaceFn     func() string // the connection's namespace (PLAN-520); nil reads it off the caller's row
 	collabStoreFor  func(workspace string) *collab.Store
 	inheritedFor    func(ctx context.Context) []string // may be nil; the predecessor identities the CALLER provably continues
 	boundaryCheck   func(string) error                 // read boundary guard
@@ -229,9 +230,10 @@ func (t *WorkspaceSessions) runSync(workspace string, caller wsCaller, recentLim
 
 	// ── 1. Active sessions for this workspace ──────────────────────────────
 	all, err := session.List()
+	ns := t.callerNamespace(all, caller.id)
 	var peers []session.Info
 	if err == nil {
-		all = session.InNamespaceOf(all, t.namespaceSelf(caller.id))
+		all = session.InNamespace(all, ns)
 		for _, s := range all {
 			// Normalise both with filepath.Clean to tolerate trailing slashes
 			// or redundant separators in either side.
@@ -248,7 +250,7 @@ func (t *WorkspaceSessions) runSync(workspace string, caller wsCaller, recentLim
 	// still fill recentLimit entries after filtering.
 	var writes []stats.RecentCall
 	if db, dbErr := stats.SharedReadOnly(); dbErr == nil && db != nil {
-		writes, _ = db.RecentWritesByWorkspace(workspace, writeToolNames, feedFetchLimit(recentLimit))
+		writes, _ = db.RecentWritesByWorkspace(workspace, ns, writeToolNames, feedFetchLimit(recentLimit))
 	}
 	writes = feedRecentWrites(writes, recentLimit)
 

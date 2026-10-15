@@ -19,6 +19,24 @@
   stdin has closed, and a descendant that starts a process group of its own
   (the background `swift-build` that `sourcekit-lsp` launches) is outside a
   group signal's reach (PLAN-537).
+### Added
+
+- **Namespaces: an end-to-end run isolated inside the one daemon** (PLAN-520).
+  `plumb namespace create` returns a token; `plumb serve --namespace <token>`
+  (or `PLUMB_NAMESPACE`) joins it. A namespace's sessions, identity records,
+  workspace pins, read tracking, resume credentials, mail and intents, and
+  tool-call stats and session summaries are invisible outside it: rosters,
+  peer lists, `workspace_sessions` (its recent-writes feed too), mail delivery
+  and the Stop-hook count, `plumb mail`, and resumes see only the caller's own
+  namespace. Language servers, indexes and write locks stay shared, and
+  session names stay unique across every namespace. It lives for its TTL
+  (default 2 h, renewed by use), or until `plumb namespace release`, or until
+  the owner process given with `--owner-pid` has been gone for 5 minutes; then
+  its token is refused at once — never falling back to the default namespace —
+  its connections are drained for 30 s and cancelled, and everything it held is
+  purged. Namespaces survive a daemon restart. The TUI, web UI, `plumb sessions`
+  and `plumb stats` show the default namespace (`plumb sessions --namespace`
+  shows another).
 
 ### Changed
 
@@ -129,19 +147,6 @@
   default. Production pools always set it; the zero-value shape is every test
   pool, where the PLAN-533 leases made `TestWorkspacePoolClose_PromptNoWarn`
   flaky.
-- **Namespaces: an end-to-end run isolated inside the one daemon** (PLAN-520).
-  `plumb namespace create` returns a token; `plumb serve --namespace <token>`
-  (or `PLUMB_NAMESPACE`) joins it. A namespace's sessions, identity records,
-  workspace pins, read tracking and resume credentials are invisible outside it,
-  and rosters, peer lists, `workspace_sessions`, mail addressing and resumes see
-  only the caller's own namespace; language servers, indexes and write locks
-  stay shared. It lives for its TTL (default 2 h, renewed by use), or until
-  `plumb namespace release`, or until its owner process has been gone for 5
-  minutes; then its token is refused at once — never falling back to the default
-  namespace — its connections are drained for 30 s and cancelled, and everything
-  it held is purged. Namespaces survive a daemon restart. The TUI, web UI and
-  `plumb sessions` show the default namespace (`plumb sessions --namespace`
-  shows another). Mail and stats rows are tagged and purged in a follow-up.
 
 ## 0.25.0 (2026-10-15)
 

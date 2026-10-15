@@ -416,7 +416,7 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	registry := newConnRegistry()
 	// Namespaces (PLAN-520) live in session_state.db; with no store, every
 	// namespace token is refused rather than silently ignored.
-	startNamespaces(ctx, sessState, registry)
+	startNamespaces(ctx, sessState, registry, statsStore, collabPool)
 
 	// The per-workspace project-config watchers (PLAN-414) are the hot-reload
 	// correctness mechanism: one fsnotify watch per live workspace, dispatching

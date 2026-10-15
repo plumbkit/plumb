@@ -268,7 +268,7 @@ func TestGenerateEpisodicSummary_Integration(t *testing.T) {
 	deadline := time.After(episodicWaitDeadline)
 	for {
 		if ro, _ := stats.SharedReadOnly(); ro != nil {
-			if e, ok, _ := ro.LatestEpisodic(ws); ok {
+			if e, ok, _ := ro.LatestEpisodic(ws, ""); ok {
 				got = e
 				break
 			}
