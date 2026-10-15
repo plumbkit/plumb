@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/mcp"
 	"github.com/plumbkit/plumb/internal/session"
 	"github.com/plumbkit/plumb/internal/sessionstate"
 )
@@ -147,7 +148,11 @@ func TestNamespaces_ReleaseDrainsThenPurges(t *testing.T) {
 	if _, err := r.gate(token, "psid-ns"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ss.SaveIdentity("psid-ns", sessionstate.Identity{Name: "ns-wren", SessionID: "sid-ns"}); err != nil {
+	row, err := session.Register(session.Info{Folder: t.TempDir(), Namespace: ns.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ss.SaveIdentity("psid-ns", sessionstate.Identity{Name: row.Name, SessionID: row.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ss.SaveIdentity("psid-default", sessionstate.Identity{Name: "calm-otter", SessionID: "sid-default"}); err != nil {
@@ -187,6 +192,12 @@ func TestNamespaces_ReleaseDrainsThenPurges(t *testing.T) {
 	}
 	if _, ok, _ := ss.LoadIdentity("psid-ns"); ok {
 		t.Fatal("the member's identity survived the purge")
+	}
+	all, _ := session.List()
+	for _, info := range all {
+		if info.ID == row.ID {
+			t.Fatal("the member's session row survived the purge")
+		}
 	}
 	if _, ok, _ := ss.LoadIdentity("psid-default"); !ok {
 		t.Fatal("the purge removed a default-namespace identity")
@@ -370,5 +381,136 @@ func TestBeginResume_NotAcrossNamespaces(t *testing.T) {
 	def.beginResume("conv-resume")
 	if def.view().pendingResume == nil {
 		t.Fatal("control: a default connection did not resume its own namespace's session")
+	}
+}
+
+func sessionRow(t *testing.T, id string) session.Info {
+	t.Helper()
+	all, err := session.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range all {
+		if info.ID == id {
+			return info
+		}
+	}
+	t.Fatalf("no session row %s", id)
+	return session.Info{}
+}
+
+// TestRegisterHooks_NamespaceGateAndStampAreWired drives the hooks a real
+// connection gets: the gate binds the namespace and the initialize meta stamps
+// it on the session row.
+func TestRegisterHooks_NamespaceGateAndStampAreWired(t *testing.T) {
+	r, ss, _, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, ss, newSharedBudgets())
+	t.Cleanup(s.close)
+	s.registry = r.conns
+	srv := mcp.New(mcp.ServerInfo{Name: "plumb", Version: "test"})
+	s.registerHooks(srv)
+	if srv.OnNamespace == nil {
+		t.Fatal("registerHooks wired no namespace gate")
+	}
+	if err := srv.OnNamespace(context.Background(), token, "psid-hooks"); err != nil {
+		t.Fatal(err)
+	}
+	srv.InitializeMeta(context.Background())
+	if got := sessionRow(t, s.sessionID()).Namespace; got != ns.ID {
+		t.Fatalf("session row namespace after initialize = %q, want %s", got, ns.ID)
+	}
+}
+
+// TestOnAfterTool_RenewsTheNamespace: every tool call renews its namespace.
+func TestOnAfterTool_RenewsTheNamespace(t *testing.T) {
+	r, ss, clock, _ := newTestNamespaces(t)
+	token, ns := mustCreate(t, r, time.Hour, 0)
+	s := newConnSession(context.Background(), detectTestPool(), nil, config.NewStore(config.Defaults()), nil, ss, newSharedBudgets())
+	t.Cleanup(s.close)
+	s.registry = r.conns
+	if err := s.onNamespace(token, "psid-touch"); err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(30 * time.Minute)
+	s.onAfterTool("read_file", nil, "", "", 0, false, nil, "", "")
+	got, _ := ss.NamespaceByID(ns.ID)
+	if want := clock.now().Add(time.Hour); !got.ExpiresAt.Equal(want) {
+		t.Fatalf("expiry after a call = %v, want %v", got.ExpiresAt, want)
+	}
+}
+
+// TestAgentRosterRow_CarriesTheNamespace: a logical agent's own roster row on a
+// namespaced connection belongs to that namespace.
+func TestAgentRosterRow_CarriesTheNamespace(t *testing.T) {
+	_, ss := newOriginStore(t)
+	s := nsTestSession(t, ss, "ns-cccc")
+	sh := &agentShard{id: "agent-ns"}
+	s.registerAgentRow(sh, freshTempDir(t), "go")
+	sh.mu.RLock()
+	id := sh.rosterID
+	sh.mu.RUnlock()
+	if id == "" {
+		t.Fatal("control: no roster row was registered")
+	}
+	if got := sessionRow(t, id).Namespace; got != "ns-cccc" {
+		t.Fatalf("agent roster row namespace = %q, want ns-cccc", got)
+	}
+}
+
+// TestActivePeerNames_OnlyTheCallersNamespace: the peer names a write warning
+// cites come from the caller's namespace only.
+func TestActivePeerNames_OnlyTheCallersNamespace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := freshTempDir(t)
+	reg := func(ns string) session.Info {
+		info, err := session.Register(session.Info{Folder: ws, Namespace: ns})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	self, peer, outsider := reg("ns-1"), reg("ns-1"), reg("")
+	got := activePeerNames(ws, self.ID)
+	if _, ok := got[peer.ID]; !ok {
+		t.Fatalf("control: the namespace's peer is missing: %v", got)
+	}
+	if _, ok := got[outsider.ID]; ok {
+		t.Fatalf("a default-namespace session counted as a peer: %v", got)
+	}
+}
+
+// TestRunSessions_ShowsTheDefaultNamespace: `plumb sessions` lists the default
+// namespace unless asked for another (or "*").
+func TestRunSessions_ShowsTheDefaultNamespace(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	ws := freshTempDir(t)
+	def, err := session.Register(session.Info{Folder: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nsd, err := session.Register(session.Info{Folder: ws, Namespace: "ns-9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(ns string) string {
+		t.Helper()
+		oldJSON, oldNS := sessionsFlagJSON, sessionsFlagNamespace
+		t.Cleanup(func() { sessionsFlagJSON, sessionsFlagNamespace = oldJSON, oldNS })
+		sessionsFlagJSON, sessionsFlagNamespace = true, ns
+		return captureStdout(t, func() {
+			if err := runSessions(nil, nil); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if out := run(""); !strings.Contains(out, def.ID) || strings.Contains(out, nsd.ID) {
+		t.Fatalf("default listing:\n%s", out)
+	}
+	if out := run("ns-9"); strings.Contains(out, def.ID) || !strings.Contains(out, nsd.ID) {
+		t.Fatalf("--namespace ns-9 listing:\n%s", out)
+	}
+	if out := run("*"); !strings.Contains(out, def.ID) || !strings.Contains(out, nsd.ID) {
+		t.Fatalf("--namespace * listing:\n%s", out)
 	}
 }
