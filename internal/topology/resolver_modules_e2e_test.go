@@ -346,14 +346,16 @@ func TestModuleResolver_AmbiguityIndexAndParentImports(t *testing.T) {
 		"pkg/dup.py":          "def dup():\n    return 1\n\n\ndef dup():\n    return 2\n",
 		"pkg/util.py":         "def up():\n    return 1\n",
 		"pkg/fast.py":         "def f():\n    return 1\n",
+		"pkg/nest.py":         "def outer():\n    def helper():\n        return 1\n    return helper()\n\n\ndef helper():\n    return 2\n",
 		"pkg/slow.py":         "def f():\n    return 2\n",
 		"pkg/sub/__init__.py": "",
-		"pkg/sub/mod.py": "from ..dup import dup\nfrom ..util import up\ntry:\n    from ..fast import f\nexcept ImportError:\n    from ..slow import f\n\n" +
-			"def ambiguous():\n    return dup()\n\ndef climbs():\n    return up()\n\ndef rebound():\n    return f()\n",
+		"pkg/sub/mod.py": "from ..dup import dup\nfrom ..util import up\nfrom ..nest import helper\ntry:\n    from ..fast import f\nexcept ImportError:\n    from ..slow import f\n\n" +
+			"def ambiguous():\n    return dup()\n\ndef climbs():\n    return up()\n\ndef rebound():\n    return f()\n\n" +
+			"def top_level_only():\n    return helper()\n",
 		"src/lib/index.ts": "export function fromIndex() { return 1; }\n",
 		"src/app.ts":       "import { fromIndex } from \"./lib\";\nexport function viaIndex() { return fromIndex(); }\n",
 	})
-	store := openIndexed(t, ws, 9, treesitter.NewPython(), treesitter.NewTypeScript())
+	store := openIndexed(t, ws, 10, treesitter.NewPython(), treesitter.NewTypeScript())
 	for _, c := range []struct {
 		path, sel string
 		want      []string
@@ -361,6 +363,8 @@ func TestModuleResolver_AmbiguityIndexAndParentImports(t *testing.T) {
 		{"pkg/sub/mod.py", "ambiguous", nil},
 		{"pkg/sub/mod.py", "climbs", []string{"up@pkg/util.py"}},
 		{"pkg/sub/mod.py", "rebound", nil},
+		// outer's nested helper is no import target, so the top-level one is the one.
+		{"pkg/sub/mod.py", "top_level_only", []string{"helper@pkg/nest.py"}},
 		{"src/app.ts", "viaIndex", []string{"fromIndex@src/lib/index.ts"}},
 	} {
 		if got := resolvedCallees(t, store, c.path, c.sel); !slices.Equal(got, c.want) {
