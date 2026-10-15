@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"log/slog"
-	"reflect"
 	"runtime/debug"
 	"slices"
 	"sync"
@@ -115,11 +114,11 @@ func (s *Store) RestartNeeded() bool {
 }
 
 // RestartSensitiveEqual reports whether a and b agree on every setting the
-// daemon cannot apply without a restart: LSP server definitions, cache sizing,
-// log format, and the account authority that decides where the daemon's sockets,
-// locks and state live. Everything else (edits, git, walk, topology, log level,
-// theme, workspace, lsp_query, quality) is applied live or on the next
-// attach/session.
+// daemon cannot apply without a restart: cache sizing, log format, log file, and
+// the account authority that decides where the daemon's sockets, locks and
+// state live. Everything else is applied live or on the next attach/session —
+// [lsp.<lang>] included, which restarts only the affected language servers
+// (PLAN-539).
 //
 // The set stays in lock-step with the ReloadRestart members of the field
 // registry (internal/config/fields_registry.go) and with the TUI's reloadRestart
@@ -127,9 +126,9 @@ func (s *Store) RestartNeeded() bool {
 // the user the wrong thing in one of them.
 func RestartSensitiveEqual(a, b Config) bool {
 	return a.LogFormat == b.LogFormat &&
+		a.LogFile == b.LogFile &&
 		a.Cache == b.Cache &&
-		a.Daemon == b.Daemon &&
-		reflect.DeepEqual(a.LSP, b.LSP)
+		a.Daemon == b.Daemon
 }
 
 // set publishes cfg: swap the pointer, bump the generation, record the time,

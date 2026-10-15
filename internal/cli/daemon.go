@@ -386,18 +386,10 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 	collabPool := newCollabPool()
 	defer collabPool.closeAll()
 
-	// Daemon-level reconciliation: on every global config change, reconfigure the
-	// shared pools that can reload live (topology), and log when a change needs a
-	// restart to take effect (LSP servers, cache, log format). Per-connection
-	// edits/git/walk reload via each session's own store subscription (conn.go).
-	// The subscription lives for the daemon's lifetime, so its unsubscribe is
-	// intentionally discarded.
-	store.Subscribe(func(c config.Config) {
-		topoPool.Reconcile(c.Topology)
-		if store.RestartNeeded() {
-			slog.Warn("daemon: config change requires a restart to take effect (LSP servers, cache, or log format)")
-		}
-	})
+	// Per-connection edits/git/walk reload via each session's own store
+	// subscription (conn.go). The subscription lives for the daemon's lifetime,
+	// so its unsubscribe is intentionally discarded.
+	store.Subscribe(globalConfigReconciler(store, topoPool, pool))
 
 	// Watch the global config file so external edits (vim, etc.) reload live; the
 	// TUI and `plumb config reload` push via the control socket instead. Started

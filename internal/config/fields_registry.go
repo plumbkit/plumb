@@ -402,26 +402,36 @@ var registryData = []Field{
 	},
 
 	// --- LSP per-language template ([lsp.<lang>]) ---
+	// Live: a change restarts exactly the <lang> servers whose effective config
+	// it changes, once no call holds them (PLAN-539); nothing else restarts.
 	{
-		Key: "lsp.<lang>.enabled", Type: FieldBool, ReloadTier: ReloadNextSession, PerLanguage: true,
+		Key: "lsp.<lang>.enabled", Type: FieldBool, ReloadTier: ReloadLive, PerLanguage: true,
 		Description: "Enabled languages activate automatically once their server is installed. Set off to exclude <lang> even when installed.",
 	},
 	{
-		Key: "lsp.<lang>.command", Type: FieldString, ReloadTier: ReloadNextSession, PerLanguage: true,
+		Key: "lsp.<lang>.command", Type: FieldString, ReloadTier: ReloadLive, PerLanguage: true,
 		Description: "Executable for the <lang> language server. Enter to edit.",
 	},
 	{
-		Key: "lsp.<lang>.args", Type: FieldList, ReloadTier: ReloadNextSession, PerLanguage: true,
+		Key: "lsp.<lang>.args", Type: FieldList, ReloadTier: ReloadLive, PerLanguage: true,
 		Description: "Command-line args passed to the <lang> server. Enter to edit.",
 	},
 	{
-		Key: "lsp.<lang>.root_markers", Type: FieldList, ReloadTier: ReloadNextSession, PerLanguage: true,
+		Key: "lsp.<lang>.root_markers", Type: FieldList, ReloadTier: ReloadLive, PerLanguage: true,
 		Description: "Files that mark a <lang> project root. Enter to edit.",
 	},
 	{
-		Key: "lsp.<lang>.diagnostics", Type: FieldEnum, ReloadTier: ReloadNextSession, PerLanguage: true,
+		Key: "lsp.<lang>.diagnostics", Type: FieldEnum, ReloadTier: ReloadLive, PerLanguage: true,
 		AllowedValues: DiagnosticsModes,
 		Description:   "How plumb negotiates <lang> diagnostics: auto (adapter policy — push today) | push (pushed publishDiagnostics only) | pull (LSP 3.17 textDocument/diagnostic when the server advertises it).",
+	},
+	{
+		Key: "lsp.<lang>.idle_timeout", Type: FieldDuration, ReloadTier: ReloadLive, PerLanguage: true,
+		Description: "Hibernate a <lang> server after this long without a tool call (its warm cache survives). 0 disables.",
+	},
+	{
+		Key: "lsp.<lang>.max_workspaces", Type: FieldInt, ReloadTier: ReloadLive, PerLanguage: true, Min: &minZero,
+		Description: "Cap on concurrently running <lang> servers; the least recently used idle one is hibernated first. 0 = unlimited.",
 	},
 
 	// --- Semantics ---

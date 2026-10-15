@@ -327,8 +327,8 @@ func runConfigShow(_ *cobra.Command, _ []string) error {
 	// user most: a project that enables a language in its own .plumb/config.toml
 	// takes effect on the next request, and telling them to restart the daemon
 	// invites them to conclude the setting does not work.
-	reloadTable.Row("lsp.* (project)", configShowOkStyle().Render("live on next request"))
-	reloadTable.Row("lsp.* (global), cache, log_format, daemon.account_authority", configShowWarnStyle().Render("needs daemon restart (or `plumb enable-lsp`)"))
+	reloadTable.Row("lsp.* (global and project)", configShowOkStyle().Render("live — restarts only the affected language servers"))
+	reloadTable.Row("cache, log_format, log_file, daemon.account_authority", configShowWarnStyle().Render("needs daemon restart"))
 	fmt.Println(renderConfigShowTable(reloadTable))
 	fmt.Println()
 

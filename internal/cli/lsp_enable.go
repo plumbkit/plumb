@@ -245,6 +245,10 @@ func (p *workspacePool) enableLanguage(name string) (already bool, err error) {
 	// lock is taken here and never under p.mu's inverse order — see
 	// languageConfigState.
 	p.invalidateAllLanguageConfigs()
+	if p.liveEnabled == nil {
+		p.liveEnabled = make(map[string]bool)
+	}
+	p.liveEnabled[name] = true
 	// Published last, so a connection that observes the new generation is
 	// guaranteed to see the widened set when it re-detects. Bumped only on a real
 	// widening — the already-enabled no-op above returns before here, so a repeat

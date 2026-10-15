@@ -29,8 +29,9 @@ everything else is inherited from the layer below.
    hot-reloaded: an fsnotify watch on the file, the `reload-config`
    control-socket command, and `plumb config reload` each trigger a re-read
    that propagates to every live session. Settings the daemon cannot apply
-   live (LSP servers, cache, log format, `[daemon]`) are flagged as
-   restart-needed by `plumb config show` and the `daemon_info` tool.
+   live (cache, log format, log file, `[daemon]`) are flagged as
+   restart-needed by `plumb config show` and the `daemon_info` tool. An
+   `[lsp.<lang>]` change restarts only the servers it affects (see below).
 3. **Project config** — `<workspace>/.plumb/config.toml`. Loaded when a
    connection's workspace resolves and merged onto the global config. A project
    file that sets one field inherits the rest. Hot-reloaded per workspace: the
@@ -54,9 +55,14 @@ capability switch (mailbox, cross_project, intents, knowledge_handoff,
 peer_awareness) is also announced to the affected sessions on their next tool
 result or `session_start`. `[xcode]` is evaluated
 once per workspace on the next session, because enabling it may launch trusted
-project-sensitive tooling. The restart-bound exceptions are the `[lsp.*]`
-servers, `[cache]`, `log_format` and `[daemon]`; `plumb config show` and
-`daemon_info` flag those as restart-needed.
+project-sensitive tooling. An `[lsp.<lang>]` change — global or project —
+restarts exactly the running servers whose effective config it changes (that
+language's, under the roots it governs), each once no call holds it; every other
+server and its warm state is left alone. A change to `idle_timeout` or
+`max_workspaces` alone is adopted without restarting anything, and a language
+turned on with `plumb enable-lsp` stays on across a reload. The restart-bound
+exceptions are `[cache]`, `log_format`, `log_file` and `[daemon]`;
+`plumb config show` and `daemon_info` flag those as restart-needed.
 
 ## File locations
 
@@ -1438,10 +1444,10 @@ resolves the policy from scratch.
 | `weak_root_markers` | []string | Promiscuous markers (`package.json`, `index.html`, `requirements.txt`) that name the language only of the directory they sit in directly, never an ancestor. Strong markers beat weak ones at the same directory; a directory claimed by several weak markers is decided by the source files beneath it. |
 | `env` | map | Extra environment variables for the server process. |
 | `enabled` | bool | Whether plumb starts this server and detects this language. |
-| `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Restart-needed. |
-| `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Restart-needed. |
-| `diagnostics` | string | How plumb negotiates this language's diagnostics: `auto` (default; an absent/empty value is treated the same) defers to plumb's per-adapter policy — **push for every adapter today**; `push` consumes pushed `publishDiagnostics` only; `pull` advertises the LSP 3.17 `textDocument/diagnostic` client capability and negotiates the pull model when the server advertises `diagnosticProvider` (otherwise the connection degrades to `pull-requested-but-unavailable`). See *Diagnostics mode* below. Restart-needed. |
-| `initialization_options` | table | Free-form table sent verbatim as the LSP `initializationOptions` at `initialize`. Absent/empty sends nothing (the default). Advanced escape hatch — keys are server-specific and unvalidated by plumb. See *Server initialization options* below. Restart-needed. |
+| `idle_timeout` | duration | Hibernate the server (stop its process, keep the warm cache) after this long without a tool call; the next call restarts it. `0` disables. Default `0`, except `java` = `20m`. Live (no restart). |
+| `max_workspaces` | int | Cap on concurrently-running servers of this language; the least-recently-used is hibernated before starting another. `0` = unlimited. Default `0`, except `java` = `2`. Live (no restart). |
+| `diagnostics` | string | How plumb negotiates this language's diagnostics: `auto` (default; an absent/empty value is treated the same) defers to plumb's per-adapter policy — **push for every adapter today**; `push` consumes pushed `publishDiagnostics` only; `pull` advertises the LSP 3.17 `textDocument/diagnostic` client capability and negotiates the pull model when the server advertises `diagnosticProvider` (otherwise the connection degrades to `pull-requested-but-unavailable`). See *Diagnostics mode* below. Live: restarts that language's affected servers. |
+| `initialization_options` | table | Free-form table sent verbatim as the LSP `initializationOptions` at `initialize`. Absent/empty sends nothing (the default). Advanced escape hatch — keys are server-specific and unvalidated by plumb. See *Server initialization options* below. Live: restarts that language's affected servers. |
 
 Built-in defaults (all `enabled = true`; the *effective* set is whichever of
 these servers are installed):

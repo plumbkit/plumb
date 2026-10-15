@@ -275,6 +275,9 @@ func (s *connSession) invalidatePoolLanguages(workspace string) {
 		return
 	}
 	s.pool.invalidateLanguageConfig(workspace)
+	// The project's [lsp.<lang>] overrides may have changed what the running
+	// servers under it should be: restart exactly those (PLAN-539).
+	s.pool.reconfigureRoot(workspace)
 }
 
 // invalidateLanguageConfig drops the cached resolution for one project and bumps

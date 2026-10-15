@@ -127,6 +127,11 @@ type workspacePool struct {
 	// closed is set by close(), under mu: a watcher whose build finishes after
 	// it is stopped rather than attached (attachWatcher).
 	closed bool
+
+	// liveEnabled names the languages `plumb enable-lsp` turned on in this
+	// daemon. A later global config reload keeps them enabled — the enable is a
+	// deliberate pool-local act the config file does not record. Guarded by mu.
+	liveEnabled map[string]bool
 }
 
 type langConfig struct {
@@ -232,6 +237,11 @@ type poolEntry struct {
 	refs       int
 	graceTimer *time.Timer
 	closeOnce  sync.Once
+
+	// reconfiguring is set while a config change restarts this entry in place
+	// (pool_reconfigure.go), so concurrent reloads do not start a second restart.
+	// Guarded by workspacePool.mu.
+	reconfiguring bool
 }
 
 // newWorkspacePool builds the pool. baseCtx is the daemon-lifetime context that

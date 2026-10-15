@@ -6,6 +6,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -109,7 +110,12 @@ func (m Model) setCycle(it settingItem, dir int) Model {
 // merged effective value in a workspace scope.
 func (m Model) setLSPCycle(it settingItem, dir int) Model {
 	next := cycleOption(it.options, it.value, dir)
-	if m.applyScopedLSP(it, next) {
+	var value any = next
+	if it.key == skLSPMaxWorkspaces {
+		n, _ := strconv.Atoi(next) // the options are all integers
+		value = n
+	}
+	if m.applyScopedLSP(it, value) {
 		m.settingsStatus = m.scopedStatus(it.key, it.lspLang+" "+it.label+" → "+next)
 	}
 	return m
