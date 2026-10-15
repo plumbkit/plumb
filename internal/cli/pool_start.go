@@ -120,12 +120,14 @@ func (p *workspacePool) newWatcher(root string, proxy *clientProxy) (*lspFSWatch
 // the entry is still the live, running entry that has none and the pool is not
 // closed. An entry torn down or hibernated meanwhile, or one close() has already
 // swept (it does not empty p.entries), gets nothing, and the watcher is stopped.
-func (p *workspacePool) attachWatcher(e *poolEntry) {
+func (p *workspacePool) attachWatcher(e *poolEntry) bool {
 	watcher, err := p.newWatcher(e.root, e.proxy)
 	if err != nil {
 		slog.Warn("lsp: file watcher unavailable", "root", e.root, "language", e.language, "err", err)
-		return
+		return false
 	}
+	watcher.onLost = func() { p.onWatcherLost(e) }
+	watcher.onFailed = func() { p.onWatcherFailed(e, watcher) }
 	p.mu.Lock()
 	live := !p.closed && p.entries[poolKey{e.root, e.language}] == e && e.state.running() && e.watcher == nil
 	if live {
@@ -136,4 +138,5 @@ func (p *workspacePool) attachWatcher(e *poolEntry) {
 	if !live {
 		watcher.Stop()
 	}
+	return live
 }

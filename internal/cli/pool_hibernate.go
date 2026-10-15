@@ -35,7 +35,8 @@ func (p *workspacePool) lspStatusReport() string { return p.lspStatusReportV(fal
 
 // lspStatusReportV2 is lsp-status-v2: the seven lsp-status fields plus refs,
 // in-flight calls and whether the language is over its max_workspaces (0/1)
-// — PLAN-534. A separate command so a CLI that predates it, which reads exactly
+// — PLAN-534 — and seconds since the server was last resynced after lost file
+// events, -1 for never (PLAN-538). A separate command so a CLI that predates it, which reads exactly
 // seven fields, keeps reading lsp-status.
 func (p *workspacePool) lspStatusReportV2() string { return p.lspStatusReportV(true) }
 
@@ -48,6 +49,7 @@ func (p *workspacePool) lspStatusReportV(v2 bool) string {
 		refs              int
 		inflight          int64
 		overCap           bool
+		lastResync        time.Time
 	}
 	p.mu.Lock()
 	overCap := p.overCapLocked()
@@ -59,7 +61,7 @@ func (p *workspacePool) lspStatusReportV(v2 bool) string {
 		}
 		rows = append(rows, row{
 			k.language, k.root, e.state.String(), pid, e.proxy.lastUsed.Load(), e.diagMode,
-			e.refs, e.proxy.inflight.Load(), overCap[k.language] && e.state.running(),
+			e.refs, e.proxy.inflight.Load(), overCap[k.language] && e.state.running(), e.lastResync,
 		})
 	}
 	p.mu.Unlock()
@@ -86,7 +88,11 @@ func (p *workspacePool) lspStatusReportV(v2 bool) string {
 			if r.overCap {
 				over = 1
 			}
-			fmt.Fprintf(&b, "\t%d\t%d\t%d", r.refs, r.inflight, over)
+			resynced := int64(-1) // never
+			if !r.lastResync.IsZero() {
+				resynced = (now - r.lastResync.UnixNano()) / int64(time.Second)
+			}
+			fmt.Fprintf(&b, "\t%d\t%d\t%d\t%d", r.refs, r.inflight, over, resynced)
 		}
 		b.WriteString("\n")
 	}
@@ -286,6 +292,7 @@ func (p *workspacePool) beginHibernateLocked(e *poolEntry) func() {
 		return nil
 	}
 	e.state = poolHibernating
+	p.cancelResyncLocked(e) // it re-reads the tree when it wakes
 	sup := e.sup
 	watcher := e.watcher
 	e.watcher = nil

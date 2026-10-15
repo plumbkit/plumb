@@ -1147,7 +1147,7 @@ the control socket and requires it to be up.
 | `plumb debug mem` | Print a `runtime.ReadMemStats` snapshot (heap, GC count, goroutines). |
 | `plumb debug heap` | Force a GC and write a `runtime/pprof` heap profile to the cache dir. |
 | `plumb debug stacks` | Write a full goroutine stack dump (the `SIGQUIT`-equivalent) for diagnosing a hang. |
-| `plumb debug lsp` | List each language server's state, PID, RSS, idle time, the sessions holding it (REFS), calls in progress (CALLS), and whether its language runs over `max_workspaces` (OVER CAP). |
+| `plumb debug lsp` | List each language server's state, PID, RSS, idle time, the sessions holding it (REFS), calls in progress (CALLS), and whether its language runs over `max_workspaces` (OVER CAP), and when it was last resynced after its file watcher lost events (RESYNCED). |
 | `plumb debug daemons` | List every `plumb daemon` of this user and flag any that is not the launch-authority holder, or whose socket path no longer holds the socket it bound. |
 
 `plumb debug daemons` is deliberately local: it dials no socket, because the state
