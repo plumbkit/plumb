@@ -40,7 +40,8 @@ knows nothing about tools or the CLI; tools know nothing about the TUI.
 | `internal/fswatch` | Recursive OS file watching for the topology and LSP watchers; picks a backend that never opens watched files (FSEvents via purego on macOS, inotify on Linux, none on kqueue-only platforms) so `.plumb`'s SQLite locks survive a watcher stopping |
 | `internal/monitor` | Process resource-usage snapshots (CPU %, memory) plus the daemon start time, with per-OS implementations; feeds the TUI daemon metrics and its uptime baseline |
 | `internal/mcp` | MCP server, `Tool` interface, stdio transport, hook callbacks |
-| `internal/lsp` | `lsp.Client` interface (23 methods), process supervisor |
+| `internal/lsp` | `lsp.Client` interface (23 methods), process supervisor (each server leads its own process group; see "Language-server process lifecycle") |
+| `internal/procgroup` | Process-group primitives for child processes: lead a group, signal it as a unit, and (Linux) die with the parent. Shared by the LSP supervisor and the command and git child runners in `internal/tools` |
 | `internal/lsp/jsonrpc` | JSON-RPC 2.0 over LSP content-framed stdio (server-request support); mock for testing |
 | `internal/lsp/protocol` | LSP types and method-name constants |
 | `internal/lsp/adapters/base` | The half of every adapter that is identical across servers: all 23 `lsp.Client` methods, capability cache, notification fan-out, server-request handler, error labelling. Adapters embed `*base.Adapter` |
@@ -903,6 +904,32 @@ a `connSession` (`internal/cli/conn.go`) which:
 On daemon shutdown (SIGINT/SIGTERM) the workspace and topology pools are stopped,
 the stats DB is closed, and the socket / PID / lock files are removed.
 
+### Language-server process lifecycle
+
+Every language server runs as the leader of its own process group
+(`Setpgid`, via `internal/procgroup`), so the daemon can stop the server and
+its helpers together instead of only the process it started:
+
+- **Stop and context cancellation.** `Supervisor.Stop`, or cancelling the
+  supervisor's context (pool close, hibernation, idle teardown), sends SIGTERM
+  to the group, then SIGKILLs the leader if it has not exited after 500 ms.
+  Once the leader is reaped, the supervisor SIGKILLs whatever the group still
+  holds. The same sweep runs when a server crashes, before its restart.
+- **Daemon exit.** After the pool closes, and again from the shutdown watchdog
+  immediately before `os.Exit`, `lsp.KillAllGroups` SIGKILLs every group in a
+  process-wide registry, so a server whose orderly stop wedged does not outlive
+  the daemon.
+- **Daemon killed outright (SIGKILL, crash).** No cleanup runs. On Linux the
+  kernel delivers SIGKILL to each direct child (`Pdeathsig`). That signal is
+  tied to the thread that forked the child, which Go keeps for the life of the
+  process, and it reaches the direct child only, not its helpers. **Darwin has
+  no equivalent**, so a server there is reclaimed only if it notices that its
+  stdin has closed; servers that ignore stdin EOF can outlive a SIGKILLed
+  daemon on macOS.
+- **Out of reach.** A descendant that starts a process group of its own (the
+  background `swift-build` that `sourcekit-lsp` launches) is not in the
+  server's group, so a group signal does not reach it.
+
 ## Concurrency model
 
 | Component | Contract |
@@ -913,7 +940,7 @@ the stats DB is closed, and the socket / PID / lock files are removed.
 | `lsp/jsonrpc.Conn` | Write serialised by `sync.Mutex`; pending calls tracked in a `sync.Map`; read loop on a dedicated goroutine. |
 | `cli.routingProxy` | Per-session proxy; `sync.RWMutex` around the primary pool-entry pointer; set on workspace attach. |
 | `config.Store` | Live global config; `Current()`/`Generation()` are lock-free atomic loads; `publishMu` serialises reloads so generations/notifications stay ordered; listeners invoked outside the lock so they may re-enter `Current`/`LoadProject`. |
-| `lsp.Supervisor` | Supervision loop on one goroutine; exported methods protected by `sync.RWMutex`. |
+| `lsp.Supervisor` | Supervision loop on one goroutine; exported methods protected by `sync.RWMutex`. Live process groups are tracked in a process-wide registry (mutex-guarded) so `lsp.KillAllGroups` can run from the shutdown watchdog. |
 | `adapters/*.Adapter` | Capabilities stored under `sync.RWMutex`; subscribers stored under `sync.RWMutex`; notification dispatch copies the handler slice before releasing the lock. |
 
 ## Transport protocols

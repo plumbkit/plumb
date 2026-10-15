@@ -98,6 +98,23 @@
   default. Production pools always set it; the zero-value shape is every test
   pool, where the PLAN-533 leases made `TestWorkspacePoolClose_PromptNoWarn`
   flaky.
+### Fixed
+
+- **A language server's helper processes no longer outlive it.** Each server
+  now runs as the leader of its own process group, so stopping it (a pool
+  close, hibernation, an idle teardown) sends SIGTERM to the whole group,
+  kills the server if it has not exited after 500 ms, and then kills anything
+  the group still holds. Before, cancelling the server's context killed only
+  the server itself, so gopls's telemetry child and a build tool's workers were
+  reparented to init and left running; the same sweep now runs when a server
+  crashes, before its restart. The daemon also kills every server's group as its
+  last act, from the shutdown watchdog immediately before it forces an exit, and
+  after the pool closes. On Linux the kernel additionally SIGKILLs each server
+  if the daemon dies without any cleanup. macOS has no equivalent, so a
+  server there is reclaimed after a SIGKILLed daemon only if it notices its
+  stdin has closed, and a descendant that starts a process group of its own
+  (the background `swift-build` that `sourcekit-lsp` launches) is outside a
+  group signal's reach (PLAN-537).
 
 ## 0.25.0 (2026-10-15)
 
