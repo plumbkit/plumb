@@ -91,6 +91,14 @@
   a `run_task` line selecting the reached `test_*` functions with `-k`; and more
   JavaScript/TypeScript test-file spellings are recognised.
 
+### Fixed
+
+- **A pool built without an idle grace no longer tears an unpinned language
+  server down the moment its call ends**: a zero grace now means the 90 s
+  default. Production pools always set it; the zero-value shape is every test
+  pool, where the PLAN-533 leases made `TestWorkspacePoolClose_PromptNoWarn`
+  flaky.
+
 ## 0.25.0 (2026-10-15)
 
 ### Removed

@@ -573,3 +573,25 @@ func TestRestartSwift_WaitStopsAtShutdown(t *testing.T) {
 		t.Fatalf("restart during shutdown = %v, want the shutting-down error", err)
 	}
 }
+
+// TestPool_ZeroGraceMeansTheDefault: a pool built without an idle grace does not
+// tear an unpinned entry down the moment its call ends (the shape of every
+// struct-literal test pool, and the flake TestWorkspacePoolClose_PromptNoWarn
+// hit once leases made unpinned entries reapable).
+func TestPool_ZeroGraceMeansTheDefault(t *testing.T) {
+	cmd, args := sleepCommand(t)
+	pool := warmingPool(context.Background(), cmd, args) // idleGrace left zero
+	pool.startGrace = 20 * time.Millisecond
+	defer pool.close()
+	root := t.TempDir()
+	if _, err := pool.acquireLang(context.Background(), root, "go", false); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if pool.lookup(root, "go") == nil {
+		t.Fatal("a zero-grace pool tore the entry down at once")
+	}
+	if g := pool.grace(); g != poolIdleGrace {
+		t.Fatalf("grace = %s, want the default %s", g, poolIdleGrace)
+	}
+}
