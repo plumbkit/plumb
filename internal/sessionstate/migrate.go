@@ -31,6 +31,7 @@ var migrationSteps = map[int]func(*sql.Tx) error{
 	9:  migrateV9,
 	10: migrateV10,
 	11: migrateV11,
+	12: migrateV12,
 }
 
 // runMigrationStep applies one step and advances user_version to that step's

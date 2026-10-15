@@ -100,7 +100,9 @@ CREATE TABLE IF NOT EXISTS pinned_workspace (
 //	11 — resume_credential: the hash, generation and state of each identity's
 //	    resume credential, so a replacement serve that presents the secret can
 //	    resume the full identity and not only the name (#556)
-const SchemaVersion = 11
+//	12 — namespace, namespace_member, namespace_root: private slices of the one
+//	    daemon's state for an end-to-end run, owned by a token holder (PLAN-520)
+const SchemaVersion = 12
 
 // PinSource records WHY a workspace was pinned. It is the discriminator that
 // lets a reconnecting connection tell a deliberate re-pin from a stale copy of
