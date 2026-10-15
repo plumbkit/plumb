@@ -36,6 +36,10 @@ var previewByDefault = map[string]bool{
 	"insert_after_symbol": true, "insert_before_symbol": true, "safe_delete_symbol": true,
 }
 
+// PreviewByDefault reports whether tool's dry_run defaults to true, for the
+// tools' own test to hold this list to their schemas (stats cannot import tools).
+func PreviewByDefault(tool string) bool { return previewByDefault[tool] }
+
 // isPreview reports whether an edit call only previewed its change.
 func isPreview(tool, inputJSON string) bool {
 	var in struct {

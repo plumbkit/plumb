@@ -167,7 +167,7 @@ type contextRow struct {
 // Weeks are UTC weeks starting on Monday. nil-safe.
 func (d *DB) ContextReport(filter Filter, now time.Time) (ContextReport, error) {
 	if d == nil {
-		return emptyContextReport(filter.Since, now), nil
+		return EmptyContextReport(filter.Since, now), nil
 	}
 	b := newReportBuilder()
 	if err := d.eachContextStream(filter, b.stream); err != nil {
@@ -178,15 +178,14 @@ func (d *DB) ContextReport(filter Filter, now time.Time) (ContextReport, error) 
 
 // EmptyContextReport is the report of a window with no calls, its lists empty
 // rather than null.
-func EmptyContextReport(since, now time.Time) ContextReport { return emptyContextReport(since, now) }
-
-func emptyContextReport(since, now time.Time) ContextReport {
+func EmptyContextReport(since, now time.Time) ContextReport {
 	return newReportBuilder().report(since, now)
 }
 
 // eachContextStream reads the window's rows stream by stream, the output only
 // for outputTools, and hands each stream to fn as soon as it ends, so memory is
-// bounded by the longest stream, not the window.
+// bounded by the longest stream, not the window. Of filter it reads Workspace
+// and Since only.
 //
 //nolint:gosec // G202: the IN list is placeholders for constant tool names and every value is bound
 func (d *DB) eachContextStream(filter Filter, fn func([]contextRow)) error {

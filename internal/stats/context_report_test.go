@@ -256,6 +256,8 @@ func TestContextReport_StreamsAreWholeAndScoredFromTheFirstPack(t *testing.T) {
 		{Workspace: "/other", SessionID: "s", Tool: "find_replace", InputJSON: `{"path":"cart","find":"a","replace":"b"}`, Success: true},
 		{Workspace: "/other", SessionID: "s", Tool: "find_replace", InputJSON: `{"path":"cart","find":"a","replace":"b","dry_run":false}`, Success: true},
 		{Workspace: "/other", SessionID: "s", Tool: "edit_file", InputJSON: `{"file_path":"api/checkout.go"}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "move_symbol", InputJSON: `{"source_uri":"store/ledger.go","destination_uri":"store/moved.go","name":"Total","dry_run":false}`, Success: true},
+		{Workspace: "/other", SessionID: "s", Tool: "rename_file", InputJSON: `{"from":"store/moved.go","to":"store/renamed.go"}`, Success: true},
 		{Workspace: "/other", SessionID: "s", Tool: "tool_feedback", InputJSON: `{"tool":"x","note":"lost"}`, Success: false},
 	})
 	r, err := db.ContextReport(Filter{Workspace: "/w", Since: at.Add(-time.Hour)}, at.Add(time.Hour))
@@ -270,8 +272,8 @@ func TestContextReport_StreamsAreWholeAndScoredFromTheFirstPack(t *testing.T) {
 		{"packs (the failed one opens nothing)", p.Packs, 1},
 		{"with: streams", p.WithPack.Streams, 1},
 		{"without: streams (early.go is pre-pack)", p.WithoutPack.Streams, 0},
-		{"with: edits (find_replace applied + edit_file; previews and pre-pack work not)", p.WithPack.Edits, 2},
-		{"with: files (find_replace names none)", p.WithPack.FilesEdited, 1},
+		{"with: edits (find_replace, edit_file, move_symbol, rename_file; previews and pre-pack work not)", p.WithPack.Edits, 4},
+		{"with: files (find_replace names none; move and rename name theirs)", p.WithPack.FilesEdited, 4},
 		{"edited files in pack", p.EditedFilesInPack, 1},
 		{"pack files used (the failed read is not a use)", p.PackFilesUsed, 2},
 		{"seed rereads (only the seed's file, and the failed read is none)", p.SeedRereads, 0},

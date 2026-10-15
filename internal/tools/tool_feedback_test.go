@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/plumbkit/plumb/internal/stats"
 	"github.com/plumbkit/plumb/internal/toolerror"
 )
 
@@ -57,6 +58,29 @@ func TestContextForTask_FeedbackLineOnlyInSpareRoom(t *testing.T) {
 		}
 		if len(with) > pack.budget() {
 			t.Fatalf("max_bytes %d: %d bytes, over the %d-byte pack budget", mb, len(with), pack.budget())
+		}
+	}
+}
+
+// The context report (internal/stats) treats a call to a tool whose dry_run
+// defaults to true as a preview unless it said otherwise. Its list must match the
+// schemas, and the recent-writes feed's list, or a new tool drifts silently.
+func TestPreviewByDefaultMatchesTheSchemas(t *testing.T) {
+	for _, tl := range append(leanToolSet(), nonLeanToolSet()...) {
+		var schema struct {
+			Properties map[string]struct {
+				Default any `json:"default"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(tl.InputSchema(), &schema); err != nil {
+			t.Fatalf("%s: %v", tl.Name(), err)
+		}
+		want := schema.Properties["dry_run"].Default == true
+		if got := stats.PreviewByDefault(tl.Name()); got != want {
+			t.Errorf("%s: stats.PreviewByDefault = %v, but its schema's dry_run default says %v", tl.Name(), got, want)
+		}
+		if got := dryRunDefaultTools[tl.Name()]; got != want {
+			t.Errorf("%s: dryRunDefaultTools = %v, but its schema's dry_run default says %v", tl.Name(), got, want)
 		}
 	}
 }
