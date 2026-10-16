@@ -370,3 +370,38 @@ func TestWatcher_GitWorktreeAddAndRemoveAreQuiet(t *testing.T) {
 		t.Fatalf("git worktree add/remove reported %d events inside the worktree: %v", len(got), got)
 	}
 }
+
+// TestWorktreeSkip_AGitEventRereadsTheBookkeeping: a worktree git records
+// before its checkout verifies (commondir not yet written) is found when its
+// .git appears.
+func TestWorktreeSkip_AGitEventRereadsTheBookkeeping(t *testing.T) {
+	s, _, recorded, _ := fakeSkip(t)
+	wt := filepath.Join(s.root, "plumb-wt-new")
+	if s.inside(filepath.Join(wt, "a.go"), Create) {
+		t.Fatal("control: an unrecorded, unverified directory was skipped")
+	}
+	recorded[wt] = true
+	s.inside(filepath.Join(wt, ".git"), Create)
+	if !s.inside(filepath.Join(wt, "b.go"), Create) {
+		t.Error("the .git event did not re-read git's bookkeeping")
+	}
+}
+
+// TestWatcher_LostEventsRedecideWorktrees: the watcher's loss signal reaches
+// the worktree verdicts.
+func TestWatcher_LostEventsRedecideWorktrees(t *testing.T) {
+	root := t.TempDir()
+	w, err := New(root, Options{SkipLinkedWorktrees: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Close)
+	w.worktrees.inside(filepath.Join(root, "d", "x.go"), Write)
+	w.signalLost()
+	w.worktrees.mu.Lock()
+	n := len(w.worktrees.known)
+	w.worktrees.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("after lost events %d verdicts survived, want none", n)
+	}
+}
