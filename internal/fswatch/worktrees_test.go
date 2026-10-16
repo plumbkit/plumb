@@ -194,13 +194,13 @@ func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool
 	s.resetLocked()
 	fakeTrees[s] = map[string]int{}
 	t.Cleanup(func() { delete(fakeTrees, s) })
-	s.stat = func(p string) (os.FileInfo, error) {
+	s.stat = func(p string) (dirID, error) {
 		if id, ok := fakeTrees[s][p]; ok {
-			return fakeDir{id}, nil
+			return dirID{fi: fakeDir{id}}, nil
 		}
-		return nil, os.ErrNotExist
+		return dirID{}, os.ErrNotExist
 	}
-	s.sameFile = func(a, b os.FileInfo) bool { return a.(fakeDir).id == b.(fakeDir).id }
+	s.sameFile = func(a, b dirID) bool { return a.fi.(fakeDir).id == b.fi.(fakeDir).id }
 	s.isWorktree = func(r, dir string) bool {
 		if r != root {
 			t.Fatalf("judged against %q, want the root", r)
@@ -802,5 +802,42 @@ func TestWorktreeSkip_AMovedBackRecordStaysTrusted(t *testing.T) {
 	s.inside(x, Create|Rename) // moved back: the same directories
 	if !s.inside(filepath.Join(wt, "b.go"), Remove) {
 		t.Error("a recorded worktree's removal after its parent moved away and back was reported")
+	}
+}
+
+// TestSameDir_ARecreatedDirectoryOnAReusedInodeDiffers: a directory removed
+// and made again is a different directory even where the filesystem reuses the
+// inode (ext4 does, at once), because its birth time differs. Where the
+// platform records no birth time this degrades to os.SameFile, and the test
+// only asserts the same-directory half.
+func TestSameDir_ARecreatedDirectoryOnAReusedInodeDiffers(t *testing.T) {
+	d := filepath.Join(t.TempDir(), "wt")
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := statDir(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := statDir(d)
+	if !sameDir(before, again) {
+		t.Fatal("control: one directory read twice is not the same directory")
+	}
+	if !before.hasBirth {
+		t.Skip("no birth time on this platform or filesystem")
+	}
+	time.Sleep(10 * time.Millisecond)
+	if err := os.Remove(d); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after, err := statDir(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameDir(before, after) {
+		t.Errorf("a recreated directory reads as the old one (reused inode: %v)", os.SameFile(before.fi, after.fi))
 	}
 }

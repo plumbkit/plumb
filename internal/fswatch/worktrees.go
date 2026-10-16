@@ -1,7 +1,6 @@
 package fswatch
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -63,7 +62,7 @@ type worktreeSkip struct {
 	// ident is the identity of each directory a worktree verdict or record was
 	// formed for, taken when it was formed: an arrival replaces a belief only
 	// where a DIFFERENT directory now stands (arrivalLocked).
-	ident map[string]os.FileInfo
+	ident map[string]dirID
 
 	// dirty is set by lost and consumed by the next lookup, which re-reads the
 	// bookkeeping and re-decides every verdict once: a burst of loss signals
@@ -71,16 +70,16 @@ type worktreeSkip struct {
 	dirty atomic.Bool
 
 	// isWorktree, listWorktrees, stat and sameFile are paths.LinkedWorktreeOf,
-	// paths.LinkedWorktreesOf, os.Lstat and os.SameFile: seams for tests that
-	// count or fake lookups and directories.
+	// paths.LinkedWorktreesOf, statDir and sameDir: seams for tests that count
+	// or fake lookups and directories.
 	isWorktree    func(root, dir string) bool
 	listWorktrees func(root string) []string
-	stat          func(string) (os.FileInfo, error)
-	sameFile      func(a, b os.FileInfo) bool
+	stat          func(string) (dirID, error)
+	sameFile      func(a, b dirID) bool
 }
 
 func newWorktreeSkip(root string) *worktreeSkip {
-	s := &worktreeSkip{root: root, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf, stat: os.Lstat, sameFile: os.SameFile}
+	s := &worktreeSkip{root: root, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf, stat: statDir, sameFile: sameDir}
 	s.resetLocked()
 	s.refreshLocked()
 	return s
@@ -158,7 +157,7 @@ func (s *worktreeSkip) settleLocked() {
 // resetLocked empties every verdict. s.mu must be held (or s unshared).
 func (s *worktreeSkip) resetLocked() {
 	s.worktree, s.ordinary, s.superseded = map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
-	s.ident = map[string]os.FileInfo{}
+	s.ident = map[string]dirID{}
 }
 
 // below is path relative to root, when it lies strictly below it.
@@ -206,11 +205,11 @@ func (s *worktreeSkip) forgetLocked(path string, op Op) {
 // its beliefs then would leak the rest of a removal (#703's review measured
 // thousands of events). So nothing happens unless a directory now stands at
 // path, and a belief is dropped only where its directory still exists and is
-// not the one it was formed for. A real worktree in the arriving tree verifies
+// not the one it was formed for (dirID: device, inode and birth time). A real worktree in the arriving tree verifies
 // again. s.mu must be held.
 func (s *worktreeSkip) arrivalLocked(path string) {
-	fi, err := s.stat(path)
-	if err != nil || !fi.IsDir() {
+	id, err := s.stat(path)
+	if err != nil || !id.fi.IsDir() {
 		return // nothing arrived: a move away, or a file
 	}
 	delete(s.ordinary, path)
@@ -243,8 +242,8 @@ func (s *worktreeSkip) replacedLocked(d string) bool {
 // identifyLocked records the identity of the directory a belief about d is
 // formed for, when it exists. s.mu must be held.
 func (s *worktreeSkip) identifyLocked(d string) {
-	if fi, err := s.stat(d); err == nil {
-		s.ident[d] = fi
+	if id, err := s.stat(d); err == nil {
+		s.ident[d] = id
 	}
 }
 
