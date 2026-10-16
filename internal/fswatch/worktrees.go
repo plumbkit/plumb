@@ -149,6 +149,11 @@ func (s *worktreeSkip) below(path string) (string, bool) {
 func (s *worktreeSkip) forgetLocked(path string, op Op) {
 	if op.Has(Create | Remove | Rename) {
 		delete(s.known, path)
+	}
+	// Only a directory arriving at the path supersedes its record. Its own
+	// Remove does not: sgtdi can deliver it before its children's, and the rest
+	// of the removal must stay covered by the record.
+	if op.Has(Create | Rename) {
 		if _, ok := s.recorded[path]; ok {
 			s.superseded[path] = struct{}{}
 		}

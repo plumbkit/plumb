@@ -483,3 +483,18 @@ func TestWatcher_AnOrdinaryDirectoryWhereAWorktreeWasIsWatched(t *testing.T) {
 	populate(t, wt, "plain.go")
 	expectEventually(t, c, filepath.Join(wt, "plain.go"), "an ordinary directory where a worktree was")
 }
+
+// TestWorktreeSkip_ADirectorysOwnRemoveFirstKeepsItsRecord: sgtdi can deliver
+// a removed worktree's own Remove before its children's; those stay skipped.
+func TestWorktreeSkip_ADirectorysOwnRemoveFirstKeepsItsRecord(t *testing.T) {
+	s, _, recorded, _ := fakeSkip(t)
+	wt := filepath.Join(s.root, "plumb-wt-gone")
+	recorded[wt] = true
+	s.lost()
+	s.inside(wt, Remove)
+	for _, rel := range []string{"a.go", "pkg/b.go"} {
+		if !s.inside(filepath.Join(wt, filepath.FromSlash(rel)), Remove) {
+			t.Errorf("%s's removal, after the directory's own, was reported", rel)
+		}
+	}
+}
