@@ -17,6 +17,7 @@
   that never identifies itself on a connection is invisible to this rule, for
   example a hook-less desktop chat sharing a connector. Its calls can then be
   credited to the session that did declare, so the report remains a proxy.
+
 - **The file watcher leaves linked git worktrees out.** The OS watcher a
   workspace's topology index and language servers share now drops every event
   inside a linked worktree of the workspace's repository (or of one of its
