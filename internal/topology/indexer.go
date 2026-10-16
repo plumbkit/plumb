@@ -38,12 +38,12 @@ type Indexer struct {
 	excludePatterns []string
 
 	// indexWorktrees is [topology] index_worktrees. False (the default) makes the
-	// resync walk prune a LINKED WORKTREE of this workspace's own repository: the
-	// directory holds a .git FILE whose gitdir points under <workspace>/.git/
-	// worktrees/, so it is a second full copy of the tree rather than another
-	// tree. Submodules (a .git file pointing under <workspace>/.git/modules/) are
-	// never pruned by this rule, and neither is anything the rule cannot read:
-	// see linkedWorktree. Read by the resync walk; set once before Start and not
+	// resync walk prune a LINKED WORKTREE of this workspace's repository or of one
+	// of its submodules — a second full copy of the tree rather than another tree
+	// — as verified by paths.LinkedWorktreeOf (commondir plus git's back-link).
+	// Submodules are never pruned by this rule, and neither is anything it cannot
+	// verify. The shared file watcher leaves the same worktrees out
+	// (watchOptions). Read by the resync walk; set once before Start and not
 	// mutated afterwards.
 	indexWorktrees bool
 

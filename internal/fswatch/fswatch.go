@@ -238,6 +238,7 @@ func (w *Watcher) deliver(ev Event) {
 // signalLost records that events may have been lost. Coalescing: if a signal
 // is already pending, this one is folded into it.
 func (w *Watcher) signalLost() {
+	w.worktrees.lost() // what was lost may have replaced a worktree (worktrees.go)
 	select {
 	case w.lost <- struct{}{}:
 	default:

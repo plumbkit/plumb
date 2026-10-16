@@ -1,6 +1,7 @@
 package paths
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -67,5 +68,42 @@ func TestLinkedWorktreeOf_NeedsARepositoryRoot(t *testing.T) {
 	}
 	if !LinkedWorktreeOf(repo, wt) {
 		t.Error("control: the worktree is its repository's, when that repository is the root")
+	}
+}
+
+// TestLinkedWorktreesOf lists git's own records of root's worktrees and its
+// submodules' — including one whose checkout has lost its .git (a removal in
+// progress) — and nothing outside root.
+func TestLinkedWorktreesOf(t *testing.T) {
+	root := mainCheckout(t, t.TempDir())
+	common := filepath.Join(root, ".git")
+	ownWT := filepath.Join(root, "plumb-wt-a")
+	linkedWorktree(t, common, "plumb-wt-a", ownWT, false)
+	sub := filepath.Join(root, "libs", "plumb")
+	subGit := submodule(t, root, "libs/plumb", sub, "../../../../libs/plumb")
+	subWT := filepath.Join(root, "plumb-wt-b")
+	linkedWorktree(t, subGit, "plumb-wt-b", subWT, true)
+	removing := filepath.Join(root, "plumb-wt-c")
+	linkedWorktree(t, common, "plumb-wt-c", removing, false)
+	if err := os.Remove(filepath.Join(removing, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+	linkedWorktree(t, common, "elsewhere", outside, false)
+
+	got := map[string]bool{}
+	for _, wt := range LinkedWorktreesOf(root) {
+		got[wt] = true
+	}
+	for _, want := range []string{ownWT, subWT, removing} {
+		if !got[Canonical(want)] {
+			t.Errorf("LinkedWorktreesOf = %v, missing %s", got, want)
+		}
+	}
+	if got[Canonical(outside)] || got[Canonical(sub)] || len(got) != 3 {
+		t.Errorf("LinkedWorktreesOf = %v, want exactly the three worktrees under root", got)
+	}
+	if LinkedWorktreesOf(t.TempDir()) != nil {
+		t.Error("a root that is no checkout records worktrees")
 	}
 }

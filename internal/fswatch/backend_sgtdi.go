@@ -382,7 +382,7 @@ func (w *Watcher) pumpEvent(ev fswatcher.WatchEvent, limitReached func(dir strin
 		// root's own metadata, with nothing for a consumer to do.
 		return op.Has(Remove | Rename)
 	}
-	if w.worktrees.inside(ev.Path) {
+	if w.worktrees.inside(ev.Path, op) {
 		return false // sgtdi applied ExcludeRegex itself
 	}
 	w.deliver(Event{Path: ev.Path, Op: op})

@@ -215,8 +215,9 @@ func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ig
 		return fs.SkipDir
 	}
 	// Last because it is the only check here that touches the filesystem: one
-	// os.ReadFile per surviving directory. It must still be decided before the
-	// stack for the directory is loaded, since the prune path never loads one.
+	// os.Lstat per surviving directory (more only where a .git exists). It must
+	// still be decided before the stack for the directory is loaded, since the
+	// prune path never loads one.
 	if !idx.indexWorktrees && paths.LinkedWorktreeOf(root, path) {
 		return fs.SkipDir
 	}

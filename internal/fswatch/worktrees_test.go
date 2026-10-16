@@ -2,7 +2,9 @@ package fswatch
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -146,30 +148,50 @@ func TestWatcher_DoesNotExpandAWorktreeMovedInWhole(t *testing.T) {
 	}
 }
 
-func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
+// fakeSkip is a worktreeSkip over /ws whose verified worktrees and recorded
+// bookkeeping the test sets, counting the verifications it makes.
+func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool, asked map[string]int) {
+	t.Helper()
 	root := filepath.Join(string(filepath.Separator), "ws")
-	s := newWorktreeSkip(root)
-	asked := map[string]int{}
-	worktrees := map[string]bool{filepath.Join(root, "wt"): true}
+	verified, recorded, asked = map[string]bool{}, map[string]bool{}, map[string]int{}
+	s = &worktreeSkip{root: root, known: map[string]bool{}}
 	s.isWorktree = func(r, dir string) bool {
 		if r != root {
 			t.Fatalf("judged against %q, want the root", r)
 		}
 		asked[dir]++
-		return worktrees[dir]
+		return verified[dir]
 	}
-	in := func(rel string) bool { return s.inside(filepath.Join(root, filepath.FromSlash(rel))) }
+	s.listWorktrees = func(string) []string {
+		var out []string
+		for d, ok := range recorded {
+			if ok {
+				out = append(out, d)
+			}
+		}
+		return out
+	}
+	s.refreshLocked()
+	return s, verified, recorded, asked
+}
 
-	if !in("wt/a/b.go") || !in("wt/c.go") {
+func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
+	s, verified, _, asked := fakeSkip(t)
+	root := s.root
+	at := func(rel string) string { return filepath.Join(root, filepath.FromSlash(rel)) }
+	in := func(rel string, op Op) bool { return s.inside(at(rel), op) }
+	verified[at("wt")] = true
+
+	if !in("wt/a/b.go", Write) || !in("wt/c.go", Write) {
 		t.Fatal("paths inside the worktree were not skipped")
 	}
-	if asked[filepath.Join(root, "wt")] != 1 {
-		t.Errorf("the worktree was judged %d times, want once (cached)", asked[filepath.Join(root, "wt")])
+	if asked[at("wt")] != 1 {
+		t.Errorf("the worktree was judged %d times, want once (cached)", asked[at("wt")])
 	}
-	if in("src/x.go") || in("top.go") {
+	if in("src/x.go", Write) || in("top.go", Write) {
 		t.Fatal("paths outside any worktree were skipped")
 	}
-	if _, judged := asked[filepath.Join(root, "top.go")]; judged {
+	if _, judged := asked[at("top.go")]; judged {
 		t.Error("an event's own path was judged: it may be a file")
 	}
 	if _, judged := asked[root]; judged {
@@ -177,28 +199,80 @@ func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
 	}
 
 	// A directory that becomes a worktree: its .git event re-decides it.
-	plain := filepath.Join(root, "src")
-	worktrees[plain] = true
-	if in("src/y.go") {
+	verified[at("src")] = true
+	if in("src/y.go", Write) {
 		t.Fatal("control: the cached verdict stands until something says otherwise")
 	}
-	in("src/.git")
-	if !in("src/y.go") {
+	in("src/.git", Create)
+	if !in("src/y.go", Write) {
 		t.Error("a .git event did not re-decide its directory")
 	}
-	// The directory's own event (removed, replaced) forgets it too.
-	worktrees[plain] = false
-	in("src")
-	if in("src/z.go") {
-		t.Error("an event for the directory itself did not re-decide it")
+	// Its .git going away (a removal starting) does not downgrade it.
+	verified[at("src")] = false
+	in("src/.git", Remove)
+	if !in("src/z.go", Remove) {
+		t.Error("a worktree's .git removal downgraded it mid-removal")
+	}
+	// A metadata event for the directory itself re-decides nothing; its own
+	// removal does.
+	in("src", Chmod)
+	if !in("src/z.go", Remove) {
+		t.Error("a metadata event for the worktree re-decided it")
+	}
+	in("src", Remove)
+	if in("src/z.go", Create) {
+		t.Error("the directory's own removal did not re-decide it")
 	}
 
 	var off *worktreeSkip
-	if off.inside(filepath.Join(root, "wt", "a.go")) || off.arrived(filepath.Join(root, "wt")) {
+	if off.inside(at("wt/a.go"), Write) || off.arrived(at("wt")) {
 		t.Error("a watcher without the option skipped something")
 	}
-	if s.arrived(root) || s.inside(filepath.Join(string(filepath.Separator), "elsewhere", "wt", "a.go")) {
+	off.lost()
+	if s.arrived(root) || s.inside(filepath.Join(string(filepath.Separator), "elsewhere", "wt", "a.go"), Write) {
 		t.Error("the root itself, or a path outside it, was judged")
+	}
+}
+
+// TestWorktreeSkip_BookkeepingCoversARemoval: a worktree whose .git is already
+// gone (removed first, or before this watcher ever saw it) is still a worktree
+// while git's bookkeeping records it.
+func TestWorktreeSkip_BookkeepingCoversARemoval(t *testing.T) {
+	s, _, recorded, _ := fakeSkip(t)
+	wt := filepath.Join(s.root, "plumb-wt-gone")
+	recorded[wt] = true
+	s.lost() // re-read the bookkeeping
+	if !s.inside(filepath.Join(wt, "a.go"), Remove) || !s.arrived(wt) {
+		t.Fatal("a recorded worktree with no .git was not skipped")
+	}
+	// Once the bookkeeping no longer records it and events were lost, the
+	// directory is re-decided: it may have been replaced by an ordinary one.
+	recorded[wt] = false
+	s.lost()
+	if s.inside(filepath.Join(wt, "a.go"), Create) {
+		t.Error("after a loss, a directory git no longer records stayed skipped")
+	}
+}
+
+// TestWorktreeSkip_TheCapKeepsWorktrees: a full cache drops "not a worktree"
+// verdicts, never a "worktree" one.
+func TestWorktreeSkip_TheCapKeepsWorktrees(t *testing.T) {
+	s, verified, _, asked := fakeSkip(t)
+	wt := filepath.Join(s.root, "wt")
+	verified[wt] = true
+	s.inside(filepath.Join(wt, "a.go"), Write)
+	for i := range worktreeCacheMax + 10 {
+		s.inside(filepath.Join(s.root, "d"+strconv.Itoa(i), "x.go"), Write)
+	}
+	verified[wt] = false // a re-decision now would say no
+	if !s.inside(filepath.Join(wt, "b.go"), Write) || asked[wt] != 1 {
+		t.Errorf("the cap evicted a worktree verdict (judged %d times)", asked[wt])
+	}
+	s.mu.Lock()
+	n := len(s.known)
+	s.mu.Unlock()
+	if n > worktreeCacheMax+1 {
+		t.Errorf("the cache holds %d verdicts, past its cap", n)
 	}
 }
 
@@ -224,5 +298,75 @@ func TestWatcher_ExpansionPrunesANestedWorktree(t *testing.T) {
 	rootStillReports(t, c, root)
 	if got := eventsUnder(c, wt); len(got) != 0 {
 		t.Fatalf("the expansion walked into a nested worktree: %v", got)
+	}
+}
+
+// TestWatcher_ARemovalIsQuiet: deleting a worktree — warm (seen before), cold
+// (never seen), or with its .git deleted first — reports nothing inside it
+// while git's admin directory still records it, which is the order both
+// `git worktree remove` and `rm -rf` leave things in.
+func TestWatcher_ARemovalIsQuiet(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		warm      bool
+		gitsFirst bool
+	}{{"warm", true, false}, {"cold", false, false}, {".git first", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			gitRepoAt(t, root)
+			wt := filepath.Join(root, "plumb-wt-rm")
+			populate(t, wt, "a.go", "pkg/b.go", "pkg/deep/c.go")
+			worktreeLink(t, wt, worktreeAdmin(t, root, "plumb-wt-rm", wt))
+			c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+			if tc.warm {
+				if err := os.WriteFile(filepath.Join(wt, "a.go"), []byte("w"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				rootStillReports(t, c, root)
+			}
+			if tc.gitsFirst {
+				if err := os.Remove(filepath.Join(wt, ".git")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.RemoveAll(wt); err != nil {
+				t.Fatal(err)
+			}
+			rootStillReports(t, c, root)
+			time.Sleep(200 * time.Millisecond)
+			if got := eventsUnder(c, wt); len(got) != 0 {
+				t.Fatalf("a worktree's removal was reported: %v", got)
+			}
+		})
+	}
+}
+
+// TestWatcher_GitWorktreeAddAndRemoveAreQuiet runs real git.
+func TestWatcher_GitWorktreeAddAndRemoveAreQuiet(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	root := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	populate(t, root, "pkg/a.go", "pkg/deep/b.go", "c.go")
+	git("add", ".")
+	git("commit", "-q", "-m", "init")
+	c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+
+	wt := filepath.Join(root, "plumb-wt-git")
+	git("worktree", "add", "-q", wt)
+	rootStillReports(t, c, root)
+	git("worktree", "remove", "--force", wt)
+	rootStillReports(t, c, root)
+	time.Sleep(200 * time.Millisecond)
+	if got := eventsUnder(c, wt); len(got) > 0 {
+		t.Fatalf("git worktree add/remove reported %d events inside the worktree: %v", len(got), got)
 	}
 }

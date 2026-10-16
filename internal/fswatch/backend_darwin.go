@@ -79,8 +79,8 @@ func (p *fseventsPump) run(batches <-chan []rawEvent) {
 // skipped is everything FSEvents does not filter that the watcher drops for an
 // event at path: Options.ExcludeRegex and Options.SkipLinkedWorktrees. (sgtdi
 // applies the regex itself; pumpEvent checks the worktrees.)
-func (w *Watcher) skipped(path string) bool {
-	return w.excluded(path) || w.worktrees.inside(path)
+func (w *Watcher) skipped(path string, op Op) bool {
+	return w.excluded(path) || w.worktrees.inside(path, op)
 }
 
 // accept takes one FSEvents record through loss detection, rebasing,
@@ -106,7 +106,7 @@ func (p *fseventsPump) accept(ev rawEvent, now time.Time) {
 		}
 		return
 	}
-	if p.w.skipped(path) {
+	if p.w.skipped(path, op) {
 		return
 	}
 	p.emit(path, op, now)

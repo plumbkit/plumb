@@ -9,43 +9,62 @@ import (
 )
 
 // worktrees.go — Options.SkipLinkedWorktrees: a watcher that drops every event
-// inside a linked worktree of its root (paths.LinkedWorktreeOf). Agents create
-// and remove worktrees inside a workspace by the dozen, each a full copy of the
-// tree. Without this, every checkout or removal was a burst of thousands of
-// events (and, for a worktree moved in whole, an expansion of all of it) that
-// filled the event buffer and reported loss: on plumb-ops, a shared watcher over
-// the agents' worktrees logged 583k lost-event warnings in a day.
+// inside a linked worktree of its root. Agents create and remove worktrees
+// inside a workspace by the dozen, each a full copy of the tree. Without this,
+// every checkout or removal was a burst of thousands of events (and, for a
+// worktree moved in whole, an expansion of all of it) that filled the event
+// buffer and reported loss: on plumb-ops, a shared watcher over the agents'
+// worktrees logged 583k lost-event warnings in a day.
 //
-// The verdict is per directory and cached, so a steady stream costs a map lookup
-// per ancestor. It is re-decided whenever an event touches the directory itself
-// or its .git entry: `git worktree add` creates the directory before it writes
-// .git, so the first answer for a new worktree can be "not one", and the .git
-// write that follows corrects it.
+// A directory is a worktree when it verifies as one (paths.LinkedWorktreeOf) or
+// when git's own bookkeeping records it (paths.LinkedWorktreesOf: the admin
+// directories' back-links, read when the watcher starts and again whenever a
+// .git entry changes or events are lost). The second half is what keeps a
+// REMOVAL quiet: `git worktree remove` and `rm -rf` delete the checkout's .git
+// along with everything else, often first, and the admin directory outlives
+// the checkout.
+//
+// Verdicts are cached per directory, so a steady stream costs a map lookup per
+// ancestor. A "worktree" verdict is dropped only by an event that creates,
+// removes or renames the directory itself; a .git event re-decides a "not a
+// worktree" verdict (`git worktree add` creates the directory before it writes
+// .git) but never downgrades a "worktree" one mid-removal. Lost events
+// re-decide every verdict against fresh bookkeeping, since what was lost may
+// have replaced a directory.
 
-// worktreeCacheMax bounds the verdict cache; past it the cache is dropped
-// wholesale and rebuilt lazily, as the topology watcher's ignore cache is.
+// worktreeCacheMax bounds the "not a worktree" verdicts; past it they are
+// dropped wholesale and rebuilt lazily. "Worktree" verdicts are never evicted:
+// there are few, and losing one mid-removal is the leak this file prevents.
 const worktreeCacheMax = 4096
 
 // worktreeSkip answers "is this path inside a linked worktree of root".
 //
-// Concurrency: safe for concurrent use; mu guards known.
+// Concurrency: safe for concurrent use; mu guards every field below it.
 type worktreeSkip struct {
-	root  string
-	mu    sync.Mutex
-	known map[string]bool // directory below root -> it is a linked worktree of root
-	// isWorktree is paths.LinkedWorktreeOf, a seam for tests that count lookups.
-	isWorktree func(root, dir string) bool
+	root string
+
+	mu       sync.Mutex
+	known    map[string]bool     // directory below root -> it is a linked worktree of root
+	recorded map[string]struct{} // worktrees git's bookkeeping records, in root's spelling
+
+	// isWorktree and listWorktrees are paths.LinkedWorktreeOf and
+	// paths.LinkedWorktreesOf, seams for tests that count or fake lookups.
+	isWorktree    func(root, dir string) bool
+	listWorktrees func(root string) []string
 }
 
 func newWorktreeSkip(root string) *worktreeSkip {
-	return &worktreeSkip{root: root, known: map[string]bool{}, isWorktree: paths.LinkedWorktreeOf}
+	s := &worktreeSkip{root: root, known: map[string]bool{}, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
+	s.refreshLocked()
+	return s
 }
 
-// inside reports whether path lies inside a linked worktree of root: whether a
-// directory strictly between root and path is one. The root itself is never
-// judged (a workspace that IS a linked worktree is watched), and nor is path
-// itself, which may be a file; arrived reports on a directory that just arrived.
-func (s *worktreeSkip) inside(path string) bool {
+// inside reports whether path, the subject of an event with op, lies inside a
+// linked worktree of root: whether a directory strictly between root and path
+// is one. The root itself is never judged (a workspace that IS a linked
+// worktree is watched), and nor is path itself, which may be a file; arrived
+// reports on a directory that just arrived.
+func (s *worktreeSkip) inside(path string, op Op) bool {
 	if s == nil {
 		return false
 	}
@@ -55,7 +74,7 @@ func (s *worktreeSkip) inside(path string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.forgetLocked(path)
+	s.forgetLocked(path, op)
 	dir := s.root
 	parts := strings.Split(rel, string(filepath.Separator))
 	for _, part := range parts[:len(parts)-1] {
@@ -68,8 +87,7 @@ func (s *worktreeSkip) inside(path string) bool {
 }
 
 // arrived reports whether dir, a directory that just arrived below root, is
-// itself a linked worktree — which is then not expanded. Not cached: the
-// directory's own events invalidate it anyway.
+// itself a linked worktree — which is then not expanded.
 func (s *worktreeSkip) arrived(dir string) bool {
 	if s == nil {
 		return false
@@ -77,7 +95,22 @@ func (s *worktreeSkip) arrived(dir string) bool {
 	if _, ok := s.below(dir); !ok {
 		return false
 	}
-	return s.isWorktree(s.root, dir)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.decideLocked(dir)
+}
+
+// lost re-decides every verdict: the events that would have told this watcher
+// a worktree was removed and replaced (or a directory became one) may be among
+// those lost.
+func (s *worktreeSkip) lost() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshLocked()
+	clear(s.known)
 }
 
 // below is path relative to root, when it lies strictly below it.
@@ -89,13 +122,21 @@ func (s *worktreeSkip) below(path string) (string, bool) {
 	return rel, true
 }
 
-// forgetLocked drops what an event at path may have changed: the verdict for
-// path itself (a directory created, removed or renamed) and, for its .git entry,
-// the verdict for the directory holding it. s.mu must be held.
-func (s *worktreeSkip) forgetLocked(path string) {
-	delete(s.known, path)
+// forgetLocked drops what an event at path with op may have changed. An event
+// that creates, removes or renames path re-decides path itself. A .git event
+// re-reads the bookkeeping and re-decides the directory holding it, unless that
+// directory is already a worktree: its .git going away is how a removal starts.
+// s.mu must be held.
+func (s *worktreeSkip) forgetLocked(path string, op Op) {
+	if op.Has(Create | Remove | Rename) {
+		delete(s.known, path)
+	}
 	if filepath.Base(path) == ".git" {
-		delete(s.known, filepath.Dir(path))
+		dir := filepath.Dir(path)
+		if dir != s.root && !s.known[dir] { // the root's own .git changes with every git command
+			delete(s.known, dir)
+			s.refreshLocked()
+		}
 	}
 }
 
@@ -105,9 +146,34 @@ func (s *worktreeSkip) verdictLocked(dir string) bool {
 		return v
 	}
 	if len(s.known) >= worktreeCacheMax {
-		clear(s.known)
+		for d, v := range s.known {
+			if !v {
+				delete(s.known, d)
+			}
+		}
 	}
-	v := s.isWorktree(s.root, dir)
+	v := s.decideLocked(dir)
 	s.known[dir] = v
 	return v
+}
+
+// decideLocked decides dir from the disk: a verified worktree, or one git's
+// bookkeeping records. s.mu must be held.
+func (s *worktreeSkip) decideLocked(dir string) bool {
+	if _, ok := s.recorded[dir]; ok {
+		return true
+	}
+	return s.isWorktree(s.root, dir)
+}
+
+// refreshLocked re-reads git's bookkeeping, keyed in the root's own spelling
+// (event paths use it; the bookkeeping is canonical). s.mu must be held.
+func (s *worktreeSkip) refreshLocked() {
+	canonRoot := paths.Canonical(s.root)
+	s.recorded = map[string]struct{}{}
+	for _, wt := range s.listWorktrees(s.root) {
+		if rel, err := filepath.Rel(canonRoot, wt); err == nil {
+			s.recorded[filepath.Join(s.root, rel)] = struct{}{}
+		}
+	}
 }
