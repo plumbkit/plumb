@@ -162,7 +162,7 @@ func (f *lockedFakeSink) resyncCount() int {
 // TestFSWatcher_StartStop exercises the real platform watcher's lifecycle: it
 // must construct, start, and stop cleanly without hanging.
 func TestFSWatcher_StartStop(t *testing.T) {
-	fw, err := newFSWatcher(t.TempDir(), &fakeSink{}, nil, nil)
+	fw, err := newFSWatcher(t.TempDir(), &fakeSink{}, nil, false, nil)
 	if err != nil {
 		t.Fatalf("newFSWatcher: %v", err)
 	}

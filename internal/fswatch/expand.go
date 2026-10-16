@@ -20,6 +20,12 @@ func (w *Watcher) excluded(path string) bool {
 	return w.exclude != nil && (w.exclude.MatchString(path) || w.exclude.MatchString(filepath.Base(path)))
 }
 
+// skipped is everything a backend drops for an event at path beyond what the
+// OS layer filtered: Options.ExcludeRegex and Options.SkipLinkedWorktrees.
+func (w *Watcher) skipped(path string) bool {
+	return w.excluded(path) || w.worktrees.inside(path)
+}
+
 // expandIfDir reports, through emit, everything inside path when an event says
 // path was created or renamed into place and it is a directory.
 //
@@ -39,7 +45,7 @@ func (w *Watcher) excluded(path string) bool {
 // subdirectory it cannot read) it asks for a reconcile. An entry that vanished
 // mid-walk is not a loss: its removal is an event of its own.
 func (w *Watcher) expandIfDir(path string, op Op, emit func(string)) {
-	if arrivedDir(path, op) {
+	if arrivedDir(path, op) && !w.worktrees.arrived(path) {
 		w.expand(path, emit)
 	}
 }
@@ -72,7 +78,7 @@ func (w *Watcher) expand(path string, emit func(string)) {
 		if d.IsDir() {
 			// With the trailing separator, a pattern that excludes everything
 			// UNDER a directory (ExcludeDirsRegex's dot branch) prunes it whole.
-			if w.excluded(p) || w.excluded(p+string(filepath.Separator)) {
+			if w.excluded(p) || w.excluded(p+string(filepath.Separator)) || w.worktrees.arrived(p) {
 				return filepath.SkipDir
 			}
 		} else if w.excluded(p) {

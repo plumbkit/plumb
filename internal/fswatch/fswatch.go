@@ -104,6 +104,10 @@ type Options struct {
 	// base name it matches, before debouncing. It filters events only: it never
 	// narrows what the OS watches. Build one with ExcludeDirsRegex.
 	ExcludeRegex string
+	// SkipLinkedWorktrees drops every event inside a linked worktree of the
+	// root (paths.LinkedWorktreeOf), and never expands one that arrives whole
+	// (worktrees.go). Like ExcludeRegex it filters events only.
+	SkipLinkedWorktrees bool
 }
 
 // ErrUnsupported is returned by New on a platform with no backend that is safe
@@ -132,6 +136,7 @@ type Watcher struct {
 	failed chan struct{}
 
 	exclude     *regexp.Regexp // Options.ExcludeRegex, nil when empty
+	worktrees   *worktreeSkip  // Options.SkipLinkedWorktrees, nil when off
 	expandLimit int            // maxExpand, smaller in tests
 
 	done      chan struct{}
@@ -173,6 +178,9 @@ func New(root string, opts Options) (*Watcher, error) {
 		exclude:     exclude,
 		expandLimit: maxExpand,
 		done:        make(chan struct{}),
+	}
+	if opts.SkipLinkedWorktrees {
+		w.worktrees = newWorktreeSkip(w.root)
 	}
 	if err := w.startBackend(opts); err != nil {
 		return nil, err

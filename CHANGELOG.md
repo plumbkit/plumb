@@ -17,6 +17,17 @@
   that never identifies itself on a connection is invisible to this rule, for
   example a hook-less desktop chat sharing a connector. Its calls can then be
   credited to the session that did declare, so the report remains a proxy.
+- **The file watcher leaves linked git worktrees out.** The OS watcher a
+  workspace's topology index and language servers share now drops every event
+  inside a linked worktree of the workspace's repository (or of one of its
+  submodules), and never expands one that arrives whole. Agents' worktrees
+  inside a workspace made each checkout or removal a burst of thousands of
+  events that overflowed the watcher and forced resyncs: one workspace logged
+  583k lost-event warnings in a day. The index's own walk uses the same rule,
+  which now verifies a worktree through git's `commondir` and back-link rather
+  than the shape of its path, so a submodule at a path like `libs/worktrees/x`
+  is no longer mistaken for one and a hand-written `.git` pointer proves
+  nothing. `[topology] index_worktrees` keeps them, on a watcher of its own.
 
 - **The Claude Code and Codex hooks stay inside their session's namespace.**
   `plumb hooks run-claude` and `run-codex` now send the session's

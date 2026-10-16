@@ -311,9 +311,11 @@ type TopologyConfig struct {
 	// each one multiplies both the index and the resync walk for no new
 	// information — one workspace reached 20,291 files and 753 MiB this way. It
 	// is an OPT-IN rather than an unconditional exclusion because the rule is
-	// exact: only a directory whose .git FILE records a gitdir under
-	// <workspace>/.git/worktrees/ is skipped, so submodules
-	// (<workspace>/.git/modules/) stay indexed either way.
+	// exact (paths.LinkedWorktreeOf): only a verified linked worktree of the
+	// workspace's repository or of one of its submodules is skipped, so
+	// submodules stay indexed either way. The OS file watcher shared by the
+	// index and the language servers leaves the same worktrees out; with this
+	// set, the index watches through a watcher of its own that keeps them.
 	IndexWorktrees bool `toml:"index_worktrees"`
 	// Watch enables OS-level file-system watching: any change to a source file —
 	// by this agent, another agent, or an external editor — is re-indexed at the

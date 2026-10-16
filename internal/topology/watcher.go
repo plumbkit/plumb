@@ -121,16 +121,24 @@ type fsWatcher struct {
 // share through an fswatch.Hub (PLAN-503): the topology index's cooldown and
 // exclusions, which are the set every consumer excludes. A consumer that
 // excludes more (the language servers' target/ and out/) filters them on its
-// own subscription.
+// own subscription. The shared watcher also leaves out the root's linked
+// worktrees (PLAN-491); the index's [topology] index_worktrees opt-in watches
+// with watchOptions(workspace, true), a watcher of its own.
 func SharedWatchOptions(workspace string) fswatch.Options {
-	return fswatch.Options{Cooldown: watchCooldown, ExcludeRegex: watchExcludeRegexFor(workspace)}
+	return watchOptions(workspace, false)
+}
+
+// watchOptions are SharedWatchOptions, with the linked worktrees watched too
+// when indexWorktrees is set.
+func watchOptions(workspace string, indexWorktrees bool) fswatch.Options {
+	return fswatch.Options{Cooldown: watchCooldown, ExcludeRegex: watchExcludeRegexFor(workspace), SkipLinkedWorktrees: !indexWorktrees}
 }
 
 // newFSWatcher constructs a watcher rooted at workspace. It does not start
 // watching until Start is called. An error here (e.g. the platform watcher
 // cannot be created) lets the caller fall back to periodic resync.
-func newFSWatcher(workspace string, sink indexSink, excludePatterns []string, hub *fswatch.Hub) (*fsWatcher, error) {
-	w, err := hub.Subscribe(workspace, SharedWatchOptions(workspace), "")
+func newFSWatcher(workspace string, sink indexSink, excludePatterns []string, indexWorktrees bool, hub *fswatch.Hub) (*fsWatcher, error) {
+	w, err := hub.Subscribe(workspace, watchOptions(workspace, indexWorktrees), "")
 	if err != nil {
 		return nil, err
 	}

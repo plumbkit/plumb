@@ -168,17 +168,16 @@ func TestResync_DoesNotGuessAtUnexpectedGitFile(t *testing.T) {
 		"malformed/main.go",
 		"modules/main.go",
 		"empty/main.go",
+		// A pointer in the worktree SHAPE that git's own bookkeeping does not
+		// back (no admin dir, no back-link) is a claim, not a worktree: it is
+		// indexed (paths.LinkedWorktreeOf verifies; relative links are
+		// paths.CheckoutAt's, tested there).
+		"relative/main.go",
 	} {
 		if !slices.Contains(got, want) {
 			t.Errorf("indexed = %v, want %s — the walk must not guess that a .git file "+
 				"it cannot classify is a worktree", got, want)
 		}
-	}
-	// The relative form of the worktree pointer is the same rule, resolved
-	// against the directory holding the .git file.
-	if under := pathsUnder(got, "relative"); len(under) != 0 {
-		t.Errorf("indexed %v under a .git file whose gitdir names "+
-			"<root>/.git/worktrees/relative; want none", under)
 	}
 }
 

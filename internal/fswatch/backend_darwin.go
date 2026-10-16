@@ -99,7 +99,7 @@ func (p *fseventsPump) accept(ev rawEvent, now time.Time) {
 		}
 		return
 	}
-	if p.w.excluded(path) {
+	if p.w.skipped(path) {
 		return
 	}
 	p.emit(path, op, now)

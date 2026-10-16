@@ -343,3 +343,26 @@ func withinDir(child, parent string) (rel []string, ok bool) {
 		dir = up
 	}
 }
+
+// LinkedWorktreeOf reports whether dir is a verified linked worktree (`git
+// worktree add`) of the repository checked out at root, or of one of root's
+// submodules: a second checkout of code the root already holds. The topology
+// index and the file watcher both leave such a directory out, since agents
+// create and remove them by the dozen and each is a full copy of the tree.
+//
+// Everything is verified the way CheckoutAt verifies it — commondir plus
+// git's own back-link — so a hand-written `.git` file proves nothing and is not
+// skipped. A submodule checkout (no commondir) is content the root contains
+// and is never a worktree here, whatever its path is called. A worktree of an
+// unrelated repository that happens to live under root is not root's either.
+func LinkedWorktreeOf(root, dir string) bool {
+	c, ok := CheckoutAt(dir)
+	if !ok || samePath(c.GitDir, c.CommonDir) {
+		return false // no verified checkout, a main checkout, or a submodule
+	}
+	r, ok := CheckoutAt(root)
+	if !ok {
+		return false
+	}
+	return samePath(c.CommonDir, r.CommonDir) || nestedGitDir(c.CommonDir, r.CommonDir)
+}
