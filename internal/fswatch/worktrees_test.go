@@ -156,7 +156,8 @@ func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool
 	t.Helper()
 	root := filepath.Join(string(filepath.Separator), "ws")
 	verified, recorded, asked = map[string]bool{}, map[string]bool{}, map[string]int{}
-	s = &worktreeSkip{root: root, known: map[string]bool{}, superseded: map[string]struct{}{}}
+	s = &worktreeSkip{root: root}
+	s.resetLocked()
 	s.isWorktree = func(r, dir string) bool {
 		if r != root {
 			t.Fatalf("judged against %q, want the root", r)
@@ -278,7 +279,7 @@ func TestWorktreeSkip_TheCapKeepsWorktrees(t *testing.T) {
 		t.Errorf("the cap evicted a worktree verdict (judged %d times)", asked[wt])
 	}
 	s.mu.Lock()
-	n := len(s.known)
+	n := len(s.ordinary) + len(s.worktree)
 	s.mu.Unlock()
 	if n > worktreeCacheMax+1 {
 		t.Errorf("the cache holds %d verdicts, past its cap", n)
@@ -520,5 +521,95 @@ func TestWorktreeSkip_AnArrivedWorktreeIsRemembered(t *testing.T) {
 	s.inside(wt, Remove)
 	if !s.inside(filepath.Join(wt, "pkg"), Remove) {
 		t.Error("a worktree seen only arriving leaked its removal")
+	}
+}
+
+// TestWorktreeSkip_AParentsArrivalRedecidesWorktreesBeneathIt (PLAN-558): a
+// worktree verdict cached below a directory that is removed and then arrives
+// whole again — an ordinary tree moved in where a worktree's parent was — does
+// not silence the ordinary directory now at that path. A real worktree that
+// arrives inside it is still skipped.
+func TestWorktreeSkip_AParentsArrivalRedecidesWorktreesBeneathIt(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cached verdict", true: "stale record too"}[stale], func(t *testing.T) {
+			s, verified, recorded, _ := fakeSkip(t)
+			x := filepath.Join(s.root, "agents")
+			wt := filepath.Join(x, "wt")
+			verified[wt] = true
+			if stale {
+				recorded[wt] = true
+				s.lost()
+			}
+			if !s.inside(filepath.Join(wt, "a.go"), Write) {
+				t.Fatal("control: the worktree was not skipped")
+			}
+			s.inside(x, Remove)
+			verified[wt] = false // an ordinary tree arrives at x, with an ordinary wt
+			s.inside(x, Create)
+			if s.arrived(wt) {
+				t.Error("the expansion of the arrived parent treats its ordinary wt as a worktree")
+			}
+			if s.inside(filepath.Join(wt, "edit.go"), Write) {
+				t.Error("an edit inside the ordinary wt was silenced by the old verdict")
+			}
+		})
+	}
+	// Control: a real worktree inside an arriving parent is still a worktree.
+	s, verified, _, _ := fakeSkip(t)
+	x := filepath.Join(s.root, "agents")
+	wt := filepath.Join(x, "wt")
+	verified[wt] = true
+	s.inside(x, Create)
+	if !s.arrived(wt) || !s.inside(filepath.Join(wt, "b.go"), Write) {
+		t.Error("a worktree inside an arriving directory was not skipped")
+	}
+}
+
+// TestWatcher_AnOrdinaryTreeMovedOverAWorktreesParentIsWatched (PLAN-558):
+// the real-backend shape — a worktree's parent removed, an ordinary tree with
+// the same layout moved into its place.
+func TestWatcher_AnOrdinaryTreeMovedOverAWorktreesParentIsWatched(t *testing.T) {
+	root := t.TempDir()
+	gitRepoAt(t, root)
+	x := filepath.Join(root, "agents")
+	wt := filepath.Join(x, "wt")
+	populate(t, wt, "a.go")
+	worktreeLink(t, wt, worktreeAdmin(t, root, "wt", wt))
+	c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+	if err := os.WriteFile(filepath.Join(wt, "a.go"), []byte("w"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootStillReports(t, c, root)
+	if err := os.RemoveAll(x); err != nil {
+		t.Fatal(err)
+	}
+	rootStillReports(t, c, root)
+	staging := filepath.Join(t.TempDir(), "agents")
+	populate(t, staging, "wt/plain.go")
+	if err := os.Rename(staging, x); err != nil {
+		t.Fatal(err)
+	}
+	expectEventually(t, c, filepath.Join(wt, "plain.go"), "an ordinary tree moved over a worktree's parent")
+}
+
+// TestWorktreeSkip_AFullWorktreeSetDropsOnlyVanishedDirectories: at the cap,
+// worktree verdicts for directories that are gone are dropped; one that still
+// exists is kept.
+func TestWorktreeSkip_AFullWorktreeSetDropsOnlyVanishedDirectories(t *testing.T) {
+	s, _, _, _ := fakeSkip(t)
+	live := t.TempDir()
+	s.mu.Lock()
+	s.rememberLocked(live, true)
+	for i := range worktreeCacheMax {
+		s.rememberLocked(filepath.Join(s.root, "gone-"+strconv.Itoa(i)), true)
+	}
+	_, kept := s.worktree[live]
+	n := len(s.worktree)
+	s.mu.Unlock()
+	if !kept {
+		t.Error("an existing worktree's verdict was dropped at the cap")
+	}
+	if n > 2 {
+		t.Errorf("the worktree set holds %d verdicts after the cap, want the live one and the newest", n)
 	}
 }

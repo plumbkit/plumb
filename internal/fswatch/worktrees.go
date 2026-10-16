@@ -1,6 +1,7 @@
 package fswatch
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -35,9 +36,10 @@ import (
 // Lost events re-decide every verdict against fresh bookkeeping, since what was
 // lost may have replaced a directory.
 
-// worktreeCacheMax bounds the "not a worktree" verdicts; past it they are
-// dropped wholesale and rebuilt lazily. "Worktree" verdicts are never evicted:
-// there are few, and losing one mid-removal is the leak this file prevents.
+// worktreeCacheMax bounds each verdict set. Past it the "not a worktree" set is
+// dropped wholesale and rebuilt lazily; the "worktree" set — few, and losing
+// one mid-removal is the leak this file prevents — drops only the directories
+// that no longer exist.
 const worktreeCacheMax = 4096
 
 // worktreeSkip answers "is this path inside a linked worktree of root".
@@ -46,8 +48,12 @@ const worktreeCacheMax = 4096
 type worktreeSkip struct {
 	root string
 
-	mu       sync.Mutex
-	known    map[string]bool     // directory below root -> it is a linked worktree of root
+	mu sync.Mutex
+	// worktree and ordinary are the cached verdicts for directories below root,
+	// kept apart so an arriving directory can drop the worktree verdicts beneath
+	// it without scanning every ordinary one.
+	worktree map[string]struct{}
+	ordinary map[string]struct{}
 	recorded map[string]struct{} // worktrees git's bookkeeping records, in root's spelling
 	// superseded are recorded worktrees whose path an event has since created or
 	// renamed into: the record may be stale (an admin directory outlives an
@@ -67,7 +73,8 @@ type worktreeSkip struct {
 }
 
 func newWorktreeSkip(root string) *worktreeSkip {
-	s := &worktreeSkip{root: root, known: map[string]bool{}, superseded: map[string]struct{}{}, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
+	s := &worktreeSkip{root: root, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
+	s.resetLocked()
 	s.refreshLocked()
 	return s
 }
@@ -117,7 +124,7 @@ func (s *worktreeSkip) arrived(dir string) bool {
 	// record of it can both be gone.
 	v := s.decideLocked(dir)
 	if v {
-		s.known[dir] = true
+		s.rememberLocked(dir, true)
 	}
 	return v
 }
@@ -136,8 +143,14 @@ func (s *worktreeSkip) lost() {
 func (s *worktreeSkip) settleLocked() {
 	if s.dirty.Swap(false) {
 		s.refreshLocked()
-		clear(s.known)
+		clear(s.worktree)
+		clear(s.ordinary)
 	}
+}
+
+// resetLocked empties every verdict. s.mu must be held (or s unshared).
+func (s *worktreeSkip) resetLocked() {
+	s.worktree, s.ordinary, s.superseded = map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 }
 
 // below is path relative to root, when it lies strictly below it.
@@ -161,35 +174,75 @@ func (s *worktreeSkip) forgetLocked(path string, op Op) {
 	// the admin directory too), so the directory's Remove can come before its
 	// children's, and the rest of the removal must stay skipped.
 	if op.Has(Create | Rename) {
-		delete(s.known, path)
-		if _, ok := s.recorded[path]; ok {
-			s.superseded[path] = struct{}{}
-		}
+		s.arrivalLocked(path)
 	}
 	if filepath.Base(path) == ".git" {
 		dir := filepath.Dir(path)
-		if dir != s.root && !s.known[dir] { // the root's own .git changes with every git command
-			delete(s.known, dir)
+		_, isWorktree := s.worktree[dir]
+		if dir != s.root && !isWorktree { // the root's own .git changes with every git command
+			delete(s.ordinary, dir)
 			s.refreshLocked()
+		}
+	}
+}
+
+// arrivalLocked re-decides what a directory arriving at path replaces: path
+// itself and every worktree verdict and record beneath it (PLAN-558). An
+// ordinary tree moved in where a worktree's parent was holds no worktree, but
+// the old verdict for <path>/<wt> would otherwise silence it — and the
+// expansion of the arrival judges its subdirectories with arrived(), which a
+// superseded record no longer answers. A real worktree inside the arriving
+// tree still verifies as one. s.mu must be held.
+func (s *worktreeSkip) arrivalLocked(path string) {
+	delete(s.worktree, path)
+	delete(s.ordinary, path)
+	if _, ok := s.recorded[path]; ok {
+		s.superseded[path] = struct{}{}
+	}
+	prefix := path + string(filepath.Separator)
+	for d := range s.worktree {
+		if strings.HasPrefix(d, prefix) {
+			delete(s.worktree, d)
+		}
+	}
+	for d := range s.recorded {
+		if strings.HasPrefix(d, prefix) {
+			s.superseded[d] = struct{}{}
 		}
 	}
 }
 
 // verdictLocked is dir's cached verdict, decided on a miss. s.mu must be held.
 func (s *worktreeSkip) verdictLocked(dir string) bool {
-	if v, ok := s.known[dir]; ok {
-		return v
+	if _, ok := s.worktree[dir]; ok {
+		return true
 	}
-	if len(s.known) >= worktreeCacheMax {
-		for d, v := range s.known {
-			if !v {
-				delete(s.known, d)
+	if _, ok := s.ordinary[dir]; ok {
+		return false
+	}
+	v := s.decideLocked(dir)
+	s.rememberLocked(dir, v)
+	return v
+}
+
+// rememberLocked caches dir's verdict, within worktreeCacheMax. s.mu must be held.
+func (s *worktreeSkip) rememberLocked(dir string, isWorktree bool) {
+	if !isWorktree {
+		if len(s.ordinary) >= worktreeCacheMax {
+			clear(s.ordinary)
+		}
+		s.ordinary[dir] = struct{}{}
+		return
+	}
+	delete(s.ordinary, dir)
+	if len(s.worktree) >= worktreeCacheMax {
+		for d := range s.worktree {
+			if _, err := os.Lstat(d); err != nil {
+				delete(s.worktree, d)
 			}
 		}
 	}
-	v := s.decideLocked(dir)
-	s.known[dir] = v
-	return v
+	s.worktree[dir] = struct{}{}
 }
 
 // decideLocked decides dir from the disk: a verified worktree, or one git's
