@@ -14,3 +14,12 @@ func (p *workspacePool) cfgFor(language string) (config.LSPConfig, bool) {
 func (p *workspacePool) cfgForWorkspace(root, language string) (config.LSPConfig, bool) {
 	return cfgAmong(p.effectiveLanguages(root), language)
 }
+
+// entryConfig is e's effective config, whether its language is enabled, and
+// whether the project config governing it fails to parse — all from one
+// resolution (resolveLanguages).
+func (p *workspacePool) entryConfig(e *poolEntry) (cfg config.LSPConfig, enabled, invalid bool) {
+	langs, invalid := p.resolveLanguages(e.root)
+	cfg, enabled = cfgAmong(langs, e.language)
+	return cfg, enabled, invalid
+}

@@ -89,6 +89,10 @@ type workspacePool struct {
 	// the cost, since the walk and the stats run on a hit as well. The guard would
 	// then pass while the regression it exists to catch was back.
 	langResolves atomic.Uint64
+	// reconfigureResolved, when set, runs in reconfigureEntry between its
+	// unlocked resolve and the locked decision: a test seam for the window the
+	// config generation check closes. Nil in production.
+	reconfigureResolved func(*poolEntry)
 
 	baseConfig     config.Config // global base for per-workspace LSP overrides
 	languageConfig languageConfigState

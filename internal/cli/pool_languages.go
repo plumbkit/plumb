@@ -197,17 +197,26 @@ func languageBoundaryKnownHome(dir string, atHome bool) bool {
 // LoadProject would fail validation. LogLevel is the sentinel for that, matching
 // what cfgForWorkspace used before this became a shared resolver.
 func (p *workspacePool) effectiveLanguages(root string) []langConfig {
+	langs, _ := p.resolveLanguages(root)
+	return langs
+}
+
+// resolveLanguages is effectiveLanguages plus whether the project config
+// governing root fails to parse (the languages are then the global fallback),
+// both from ONE resolution: asking twice could straddle an edit to the file and
+// pair one state's languages with the other's verdict (PLAN-539 follow-up).
+func (p *workspacePool) resolveLanguages(root string) ([]langConfig, bool) {
 	p.langResolves.Add(1)
 	// LogLevel is written once at construction and never mutated, so it needs no
 	// lock; the maps and slices behind it do (see langsSnapshot). Safe only while
 	// nothing assigns p.baseConfig WHOLE — .LSP is replaced field-wise by
 	// enableLanguage for exactly this reason.
 	if p.baseConfig.LogLevel == "" {
-		return p.langsSnapshot()
+		return p.langsSnapshot(), false
 	}
 	policyRoot := languagePolicyRoot(root)
 	if policyRoot == "" {
-		return p.langsSnapshot()
+		return p.langsSnapshot(), false
 	}
 	stamp := projectLanguageStamp(policyRoot)
 
@@ -215,13 +224,13 @@ func (p *workspacePool) effectiveLanguages(root string) []langConfig {
 	cached, ok := p.languageConfig.cache[policyRoot]
 	p.languageConfig.mu.RUnlock()
 	if ok && cached.stamp == stamp {
-		return cached.langs
+		return cached.langs, cached.invalid
 	}
 
 	p.languageConfig.mu.Lock()
 	defer p.languageConfig.mu.Unlock()
 	if cached, ok = p.languageConfig.cache[policyRoot]; ok && cached.stamp == stamp {
-		return cached.langs
+		return cached.langs, cached.invalid
 	}
 	langs, err := p.resolveProjectLanguages(policyRoot)
 	invalid := err != nil
@@ -245,22 +254,7 @@ func (p *workspacePool) effectiveLanguages(root string) []langConfig {
 		p.languageConfig.cache = make(map[string]cachedWorkspaceLanguages)
 	}
 	p.languageConfig.cache[policyRoot] = resolved
-	return resolved.langs
-}
-
-// projectConfigInvalid reports whether the project config governing root's
-// languages fails to parse — the pool is then running on the global fallback,
-// which is a degradation rather than an edit, so a reconfigure must not act on
-// it (PLAN-539). Resolving first keeps the answer current for the file's stamp.
-func (p *workspacePool) projectConfigInvalid(root string) bool {
-	p.effectiveLanguages(root)
-	policyRoot := languagePolicyRoot(root)
-	if policyRoot == "" {
-		return false
-	}
-	p.languageConfig.mu.RLock()
-	defer p.languageConfig.mu.RUnlock()
-	return p.languageConfig.cache[policyRoot].invalid
+	return resolved.langs, resolved.invalid
 }
 
 // resolveProjectLanguages merges the project config at policyRoot onto the base
