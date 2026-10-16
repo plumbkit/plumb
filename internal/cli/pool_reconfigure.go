@@ -289,12 +289,24 @@ func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled 
 // woken already, or taken by a newer restart (which wakes it itself) is left.
 //
 // It resolves the config first: the request that deferred the wake may have
-// DISABLED the language, and a disabled language's server stays stopped.
+// DISABLED the language, and a disabled language's server stays stopped. The
+// resolve is checked against the config generation under p.mu, as in
+// reconfigureEntry, so a disable published in between is not missed.
 func (p *workspacePool) wakeHeld(e *poolEntry) {
-	if _, enabled, invalid := p.entryConfig(e); !enabled && !invalid {
-		return
+	for {
+		gen := p.langsGen.Load()
+		if _, enabled, invalid := p.entryConfig(e); !enabled && !invalid {
+			return
+		}
+		if p.reconfigureResolved != nil {
+			p.reconfigureResolved(e)
+		}
+		p.mu.Lock()
+		if p.langsGen.Load() == gen {
+			break // p.mu stays held
+		}
+		p.mu.Unlock()
 	}
-	p.mu.Lock()
 	if p.closed || p.entries[poolKey{e.root, e.language}] != e || e.reconfiguring || e.refs == 0 || e.state != poolHibernated {
 		p.mu.Unlock()
 		return

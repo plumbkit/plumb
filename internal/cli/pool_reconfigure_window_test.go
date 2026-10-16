@@ -262,3 +262,34 @@ func TestRestartWithConfig_AnInvalidProjectFileDoesNotMoveAWaitingRound(t *testi
 		t.Fatalf("the server moved onto the global fallback (diagnostics %q)", c.Diagnostics)
 	}
 }
+
+// TestWakeHeld_ADisableDuringItsResolveIsSeen: a disable published between the
+// deferred wake's resolve and its decision leaves the server stopped.
+func TestWakeHeld_ADisableDuringItsResolveIsSeen(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	e, err := p.acquireLang(context.Background(), markedRoot(t, "go.mod"), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.hibernateEntry(e)
+	off := cfg
+	g := cfg.LSP["go"]
+	g.Enabled = false
+	off.LSP = map[string]config.LSPConfig{"go": g, "python": cfg.LSP["python"]}
+	fired := false // the publish re-enters this hook; only the outer call acts
+	p.reconfigureResolved = func(*poolEntry) {
+		if fired {
+			return
+		}
+		fired = true
+		p.applyGlobalLSP(off)
+	}
+	p.wakeHeld(e)
+	if !fired {
+		t.Fatal("control: the hook never ran")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if _, _, state := entryNow(p, e); state.running() {
+		t.Fatalf("a disable published during the deferred wake's resolve was missed (%s)", state)
+	}
+}
