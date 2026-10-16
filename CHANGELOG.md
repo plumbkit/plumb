@@ -11,9 +11,12 @@
   session without subagents, read as unattributed, including the first-prompt
   hints that matter most. A call now also counts as the agent's when it comes
   from a connection that agent alone declared through `session_start`, even when
-  the declaration follows the hint, and that was never shared (it recorded no
-  identity-stamped call). A connection two sessions declared, or one with a
-  `session_start` that named no one, still counts as nobody's.
+  the declaration follows the hint, and that was never observed shared (it
+  recorded no identity-stamped call). A connection two sessions declared, or one
+  with a `session_start` that named no one, still counts as nobody's. An agent
+  that never identifies itself on a connection is invisible to this rule, for
+  example a hook-less desktop chat sharing a connector. Its calls can then be
+  credited to the session that did declare, so the report remains a proxy.
 
 - **The Claude Code and Codex hooks stay inside their session's namespace.**
   `plumb hooks run-claude` and `run-codex` now send the session's

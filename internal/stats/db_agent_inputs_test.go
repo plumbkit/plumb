@@ -47,6 +47,16 @@ func agentInputsFixture(t *testing.T) (*DB, time.Time) {
 	declare("shared", "conv-A", -time.Minute)
 	rec("shared", "conv-B", "read_file", `{"conn":"shared-stamped-B"}`, -2*time.Hour)
 	rec("shared", "", "read_file", `{"conn":"shared"}`, 40*time.Second)
+	// stamped-later: declared by conv-A alone, but a stamped call AFTER the
+	// window shows it was shared; plumb cannot tell when the other agent came.
+	declare("stamped-later", "conv-A", -time.Minute)
+	rec("stamped-later", "", "read_file", `{"conn":"stamped-later"}`, 42*time.Second)
+	rec("stamped-later", "conv-B", "read_file", `{"conn":"stamped-later-B"}`, time.Hour)
+	// cleared-later: a second conversation declared on the same connection AFTER
+	// the window (the Codex /clear shape), so the window's calls are nobody's.
+	declare("cleared-later", "conv-A", -time.Minute)
+	rec("cleared-later", "", "read_file", `{"conn":"cleared-later"}`, 43*time.Second)
+	declare("cleared-later", "conv-B", time.Hour)
 	// other: a connection another conversation holds.
 	declare("other", "conv-B", -time.Minute)
 	rec("other", "", "read_file", `{"conn":"other"}`, 45*time.Second)

@@ -31,9 +31,9 @@ type HostUptake struct {
 	EmittedBytes int
 	// Consumed is emitted hints a later call by the same agent mentioned;
 	// Unconsumed had attributable calls that did not; Unattributed had no
-	// attributable call in the window at all (a connection several sessions
-	// declared or shared, or an agent that went quiet), so it is no evidence
-	// either way.
+	// attributable call in the window at all (a session that never declared its
+	// id or declared another one, a connection several sessions declared or
+	// shared, or an agent that went quiet), so it is no evidence either way.
 	Consumed     int
 	Unconsumed   int
 	Unattributed int

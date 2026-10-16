@@ -43,8 +43,12 @@ func TestHooksUptake_FirstPromptHintOnAnUnsharedConnectionIsConsumed(t *testing.
 	if err != nil {
 		t.Fatalf("open stats: %v", err)
 	}
+	// The declaration is recorded the way the daemon records it, through
+	// statsToolData: if session_start's session_id were ever redacted there,
+	// every unshared connection would fall back to unattributed, silently.
+	declared, _ := statsToolData("session_start", json.RawMessage(`{"detail":"brief","session_id":"codex-conv"}`), "orientation")
 	for i, c := range []stats.Call{
-		{SessionID: "conn-1", Tool: "session_start", InputJSON: `{"detail":"brief","session_id":"codex-conv"}`},
+		{SessionID: "conn-1", Tool: "session_start", InputJSON: declared},
 		{SessionID: "conn-1", Tool: "read_symbol", InputJSON: `{"path":"internal/topology/indexer_calls.go","name":"samePackageOutcome"}`},
 		{SessionID: "conn-2", Tool: "read_symbol", InputJSON: `{"path":"internal/topology/indexer_calls.go","name":"x"}`},
 	} {
