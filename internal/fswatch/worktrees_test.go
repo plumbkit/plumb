@@ -788,3 +788,19 @@ func TestWorktreeSkip_AMovedBackWorktreeKeepsItsVerdict(t *testing.T) {
 		t.Error("a worktree's verdict did not survive its parent moving away and back")
 	}
 }
+
+// TestWorktreeSkip_AMovedBackRecordStaysTrusted: a git record with no cached
+// verdict — the cold case — carries its directory's identity through a move
+// away and back, so the removal that follows is still skipped.
+func TestWorktreeSkip_AMovedBackRecordStaysTrusted(t *testing.T) {
+	s, _, recorded, _ := fakeSkip(t)
+	x := filepath.Join(s.root, "agents")
+	wt := filepath.Join(x, "wt")
+	place(s, x, wt)
+	recorded[wt] = true
+	s.lost()
+	s.inside(x, Create|Rename) // moved back: the same directories
+	if !s.inside(filepath.Join(wt, "b.go"), Remove) {
+		t.Error("a recorded worktree's removal after its parent moved away and back was reported")
+	}
+}
