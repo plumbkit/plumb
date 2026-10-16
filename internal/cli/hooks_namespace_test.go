@@ -423,6 +423,8 @@ func TestContextHint_BudgetsAndWindowsArePerNamespace(t *testing.T) {
 	if r := f.svc.serve(context.Background(), in("", prompt("conv-1", "Seed.A"))); r.Outcome != contexthints.OutcomeEmitted {
 		t.Fatalf("the default namespace's first prompt = %+v; another namespace spent its budget", r)
 	}
+	// Another namespace's prompt between them must not open a new turn here.
+	f.svc.serve(context.Background(), in("ns-1", prompt("conv-1", "Seed.B")))
 	compact := contextHintRequest{Host: "claude-code", Event: "SessionStart", Source: "compact", SessionID: "conv-1"}
 	if r := f.svc.serve(context.Background(), in("", compact)); r.Outcome != contexthints.OutcomeThrottled {
 		t.Fatalf("a compact in the default namespace's spent turn = %+v, want throttled (its own window)", r)
