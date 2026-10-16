@@ -463,6 +463,10 @@ func TestWatcherLost_TheResyncSaysItIsOne(t *testing.T) {
 	sup := supOf(pool, e)
 	f.latest(root).lost <- struct{}{}
 	eventually(t, 5*time.Second, "the server was not resynced", func() bool { return supOf(pool, e) != sup })
+	// The line is written after the swap is visible.
+	eventually(t, 5*time.Second, "the resync's restart was never logged", func() bool {
+		return strings.Contains(logs.String(), "restarted a language server for")
+	})
 	out := logs.String()
 	if !strings.Contains(out, "restarted a language server for a resync after lost file events") || strings.Contains(out, "for its new config") {
 		t.Fatalf("the resync's restart is not logged as a resync:\n%s", out)

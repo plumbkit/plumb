@@ -62,7 +62,7 @@ type cachedWorkspaceLanguages struct {
 	stamp languageConfigStamp
 	langs []langConfig
 	// invalid marks a project config that did not parse, so langs is the
-	// global fallback (see projectConfigInvalid).
+	// global fallback (see resolveLanguages).
 	invalid bool
 }
 

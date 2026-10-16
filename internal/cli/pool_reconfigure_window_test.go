@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -98,6 +100,9 @@ func TestRestartWithConfig_DoesNotWakeASupersededConfig(t *testing.T) {
 	done()
 	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"61"}) })
 	waitSettled(t, p, e)
+	eventually(t, 5*time.Second, "the deferred wake was never logged", func() bool {
+		return strings.Contains(logs.String(), "once its config settled") || strings.Contains(logs.String(), "woken=true")
+	})
 	if !strings.Contains(logs.String(), "its wake waits for the newer config") {
 		t.Errorf("the superseded round woke its server; log:\n%s", logs.String())
 	}
@@ -147,4 +152,111 @@ func TestWakeHeld_LeavesAnEntryANewerRestartOwns(t *testing.T) {
 		_, _, state := entryNow(p, e)
 		return state.running()
 	})
+}
+
+// TestRestartWithConfig_ADeferredWakeLeavesADisabledLanguageStopped: a change
+// that disables the language while a restart waits does not have its server
+// woken at the end (review of #701).
+func TestRestartWithConfig_ADeferredWakeLeavesADisabledLanguageStopped(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	e, _, done := heldAndBusy(t, p)
+	p.applyGlobalLSP(withGoArgs(cfg, "90"))
+	off := withGoArgs(cfg, "90")
+	g := off.LSP["go"]
+	g.Enabled = false
+	off.LSP["go"] = g
+	p.applyGlobalLSP(off)
+	done()
+	waitSettled(t, p, e)
+	time.Sleep(100 * time.Millisecond)
+	if _, _, state := entryNow(p, e); state != poolHibernated {
+		t.Fatalf("a disabled language's held server ended %s, want hibernated", state)
+	}
+}
+
+// TestRestartWithConfig_ASingleRoundWakesAtOnce: with no newer change waiting,
+// a held server is woken by its own round, and the restart says it was for its
+// new config.
+func TestRestartWithConfig_ASingleRoundWakesAtOnce(t *testing.T) {
+	logs := captureLogs(t)
+	p, cfg := reconfigPool(t)
+	e, _, done := heldAndBusy(t, p)
+	p.applyGlobalLSP(withGoArgs(cfg, "91"))
+	done()
+	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"91"}) })
+	waitSettled(t, p, e)
+	eventually(t, 5*time.Second, "the restart was never logged", func() bool {
+		return strings.Contains(logs.String(), "restarted a language server for")
+	})
+	out := logs.String()
+	if strings.Contains(out, "its wake waits for the newer config") || strings.Contains(out, "once its config settled") {
+		t.Errorf("a single round deferred its wake:\n%s", out)
+	}
+	if !strings.Contains(out, "restarted a language server for its new config") {
+		t.Errorf("a config restart is not logged as one:\n%s", out)
+	}
+}
+
+// TestWakeHeld_WakesOnlyAHeldHibernatedLiveEntry: the deferred wake leaves an
+// entry nobody holds, one already running, and one of a closed pool.
+func TestWakeHeld_WakesOnlyAHeldHibernatedLiveEntry(t *testing.T) {
+	logs := captureLogs(t)
+	p, _ := reconfigPool(t)
+	root := markedRoot(t, "go.mod")
+	e, err := p.acquireLang(context.Background(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.wakeHeld(e) // running already
+	if strings.Contains(logs.String(), "waking a reconfigured language server failed") || strings.Contains(logs.String(), "once its config settled") {
+		t.Errorf("a running entry was woken again:\n%s", logs.String())
+	}
+	p.hibernateEntry(e)
+	p.mu.Lock()
+	refs := e.refs
+	e.refs = 0
+	p.mu.Unlock()
+	p.wakeHeld(e)
+	if _, _, state := entryNow(p, e); state != poolHibernated {
+		t.Fatalf("an entry nobody holds was woken (%s)", state)
+	}
+	p.mu.Lock()
+	e.refs = refs
+	p.mu.Unlock()
+	p.close()
+	p.wakeHeld(e)
+	if _, _, state := entryNow(p, e); state != poolHibernated {
+		t.Fatalf("a closed pool's entry was woken (%s)", state)
+	}
+}
+
+// TestRestartWithConfig_AnInvalidProjectFileDoesNotMoveAWaitingRound: a
+// project file that breaks while a restart waits leaves the server on the
+// config that round installed, not the global fallback.
+func TestRestartWithConfig_AnInvalidProjectFileDoesNotMoveAWaitingRound(t *testing.T) {
+	p, cfg := reconfigPool(t)
+	p.baseConfig.LogLevel = "info" // the project-config resolver is active
+	root := markedRoot(t, "go.mod")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writePoolProjectConfig(t, root, "[lsp.go]\ndiagnostics = \"pull\"\n")
+	e, err := p.acquireLang(context.Background(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, done, err := p.acquireCall(context.Background(), root, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.applyGlobalLSP(withGoArgs(cfg, "92"))
+	writePoolProjectConfig(t, root, "[lsp.go\ndiagnostics = \n")
+	p.invalidateLanguageConfig(root)
+	p.reconfigureRoot(root) // marks the waiting round to re-check
+	done()
+	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"92"}) })
+	waitSettled(t, p, e)
+	if _, c, _ := entryNow(p, e); c.Diagnostics != "pull" {
+		t.Fatalf("the server moved onto the global fallback (diagnostics %q)", c.Diagnostics)
+	}
 }

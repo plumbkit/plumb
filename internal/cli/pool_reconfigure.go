@@ -200,6 +200,7 @@ const (
 func (p *workspacePool) restartWithConfig(e *poolEntry, cfg config.LSPConfig, enabled bool, reason string) {
 	for {
 		deferred := p.restartOnce(e, cfg, enabled, reason)
+		reason = restartReasonConfig // a further round is always a config change's
 		var again bool
 		if cfg, enabled, again = p.nextRestart(e); !again {
 			if deferred {
@@ -286,7 +287,13 @@ func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled 
 // wakeHeld wakes e when a session still holds it and it is hibernated, as the
 // last round of a restart that deferred its wake leaves it. An entry torn down,
 // woken already, or taken by a newer restart (which wakes it itself) is left.
+//
+// It resolves the config first: the request that deferred the wake may have
+// DISABLED the language, and a disabled language's server stays stopped.
 func (p *workspacePool) wakeHeld(e *poolEntry) {
+	if _, enabled, invalid := p.entryConfig(e); !enabled && !invalid {
+		return
+	}
 	p.mu.Lock()
 	if p.closed || p.entries[poolKey{e.root, e.language}] != e || e.reconfiguring || e.refs == 0 || e.state != poolHibernated {
 		p.mu.Unlock()
@@ -294,6 +301,7 @@ func (p *workspacePool) wakeHeld(e *poolEntry) {
 	}
 	readyCh, err := p.wakeLocked(e)
 	p.mu.Unlock()
+	slog.Info("pool: woke a restarted language server once its config settled", "root", e.root, "language", e.language, "woken", err == nil)
 	p.afterWake(e, true, readyCh, err)
 }
 

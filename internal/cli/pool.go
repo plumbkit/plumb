@@ -63,8 +63,11 @@ type workspacePool struct {
 	langs   []langConfig
 	langsMu sync.RWMutex
 
-	// langsGen counts the times enableLanguage has widened the effective set. It
-	// is the signal a live connection watches to know its primary language may be
+	// langsGen is the pool's language-config generation, bumped AFTER every
+	// publish of a new effective set (enableLanguage, applyGlobalLSP,
+	// invalidateLanguageConfig). reconfigureEntry reads it before its unlocked
+	// resolve and re-checks it under p.mu, so a resolve that straddled a publish
+	// is repeated rather than acted on. It is also the signal a live connection watches to know its primary language may be
 	// resolvable now when it was not at attach time: `enable-lsp` deliberately
 	// leaves existing pool entries and pinned workspaces untouched, so without
 	// this a session that attached as LanguageNone would report "none attached"
