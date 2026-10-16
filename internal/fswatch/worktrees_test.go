@@ -841,3 +841,32 @@ func TestSameDir_ARecreatedDirectoryOnAReusedInodeDiffers(t *testing.T) {
 		t.Errorf("a recreated directory reads as the old one (reused inode: %v)", os.SameFile(before.fi, after.fi))
 	}
 }
+
+// TestSameDir_ComparesFileAndBirth pins both halves of sameDir without
+// depending on whether this filesystem reuses inodes.
+func TestSameDir_ComparesFileAndBirth(t *testing.T) {
+	base := t.TempDir()
+	a, b := filepath.Join(base, "a"), filepath.Join(base, "b")
+	for _, d := range []string{a, b} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fa, _ := os.Lstat(a)
+	fb, _ := os.Lstat(b)
+	at := func(fi os.FileInfo, birth int64, has bool) dirID { return dirID{fi: fi, birth: birth, hasBirth: has} }
+	for _, tc := range []struct {
+		name string
+		x, y dirID
+		want bool
+	}{
+		{"one directory, one birth", at(fa, 1, true), at(fa, 1, true), true},
+		{"one inode, two births (a reused inode)", at(fa, 1, true), at(fa, 2, true), false},
+		{"two directories, one birth", at(fa, 1, true), at(fb, 1, true), false},
+		{"no birth time to compare", at(fa, 1, true), at(fa, 0, false), true},
+	} {
+		if got := sameDir(tc.x, tc.y); got != tc.want {
+			t.Errorf("%s: sameDir = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
