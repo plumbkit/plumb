@@ -60,7 +60,7 @@ func OpenWith(workspace string, cfg config.TopologyConfig, exts []Extractor, hub
 
 	var watcher *fsWatcher
 	if cfg.Watch {
-		w, werr := newFSWatcher(workspace, s, excludes, hub)
+		w, werr := newFSWatcher(workspace, s, excludes, cfg.IndexWorktrees, hub)
 		switch {
 		case werr != nil && cfg.ResyncIntervalMinutes == 0:
 			// Both freshness paths are off: the index refreshes only at startup

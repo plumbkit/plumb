@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/plumbkit/plumb/internal/ignore"
@@ -217,95 +215,14 @@ func (idx *Indexer) resyncEnterDir(root, path, name string, stacks map[string]ig
 		return fs.SkipDir
 	}
 	// Last because it is the only check here that touches the filesystem: one
-	// os.ReadFile per surviving directory. It must still be decided before the
-	// stack for the directory is loaded, since the prune path never loads one.
-	if !idx.indexWorktrees && linkedWorktree(root, path) {
+	// os.Lstat per surviving directory (more only where a .git exists). It must
+	// still be decided before the stack for the directory is loaded, since the
+	// prune path never loads one.
+	if !idx.indexWorktrees && paths.LinkedWorktreeOf(root, path) {
 		return fs.SkipDir
 	}
 	stacks[path] = parent.Load(path)
 	return nil
-}
-
-// linkedWorktree reports whether dir is a LINKED WORKTREE of the repository
-// rooted at root — a second checkout of the same repository, created by
-// `git worktree add` and materialised in this tree as an untracked directory
-// holding a .git FILE. Nothing about the directory's NAME is consulted: the
-// distinction is git's own bookkeeping, because the names are convention
-// (plumb-wt-*, plumb-review-*) and a rename must not change the answer.
-//
-// The rule is exact, and it is deliberately silent when it cannot be exact:
-//
-//   - a directory with no .git file is not a worktree (an ordinary directory, or
-//     the main checkout, whose .git is a directory);
-//   - a .git file whose gitdir: line points into a repository's worktrees directory
-//     IS a linked worktree, and is skipped unless [topology] index_worktrees opts in.
-//     The repository may be the workspace root OR one inside it: agent worktrees in a
-//     workspace whose code lives in a submodule are worktrees of THAT repository, so
-//     their gitdir is <root>/.git/modules/<sub>/worktrees/<name> — matching only
-//     <root>/.git/worktrees missed every one of them (review round 1, B1);
-//   - a .git file pointing under <root>/.git/modules/ WITHOUT a worktrees component is
-//     a SUBMODULE, whose files are part of this tree and stay indexed — this rule never
-//     prunes one;
-//   - anything else — an unreadable file, a missing gitdir: line, a path outside this
-//     workspace (a worktree of a DIFFERENT repository vendored in by hand) — is not
-//     skipped. The walk does not guess.
-//
-// The gitdir: target may be relative (git writes a submodule's as
-// ../.git/modules/<name>) and either side may be spelled through a symlink
-// (/var vs /private/var on macOS, where git records the path it was handed), so
-// both are resolved before comparison.
-func linkedWorktree(root, dir string) bool {
-	data, err := os.ReadFile(filepath.Join(dir, ".git"))
-	if err != nil {
-		return false
-	}
-	target, ok := gitdirTarget(data)
-	if !ok {
-		return false
-	}
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(dir, target)
-	}
-	target = paths.Canonical(filepath.Clean(target))
-	// The test is the SHAPE of the part of target INSIDE this workspace: a relative path whose
-	// components include both .git and worktrees. Two things make the relative form load-bearing
-	// rather than cosmetic. First, confinement: a repository outside the workspace is not ours
-	// to classify, so it is never pruned on this rule. Second — and this is review round 1's B3 —
-	// testing the ABSOLUTE path's components would classify every file in a workspace that merely
-	// LIVES under a directory called "worktrees" (…/code/worktrees/myproject) as a linked
-	// worktree, and prune the whole workspace. Only the path below the root says anything about
-	// what is inside it.
-	rel, err := filepath.Rel(paths.Canonical(root), target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	// git writes exactly two shapes for a worktree's admin dir, and this tests those shapes
-	// rather than searching for components: `<root>/.git/worktrees/<name>` and
-	// `<root>/.git/modules/<sub>/worktrees/<name>`. A component search was wrong twice over
-	// (review round 1, B3 and SHOULD-FIX 2): it also matched a workspace that merely LIVES under
-	// a directory called "worktrees", and a SUBMODULE whose path ends in `worktrees`
-	// (`.git/modules/worktrees` has both components and is not a worktree at all).
-	if first, _, _ := strings.Cut(rel, string(filepath.Separator)); first != ".git" {
-		return false
-	}
-	return filepath.Base(filepath.Dir(target)) == "worktrees"
-}
-
-// gitdirTarget extracts the path from a .git file's contents. A .git file holds
-// one line, `gitdir: <path>`; git writes nothing else, and a file that does not
-// match that shape is not a gitdir pointer at all (ok is false, and the caller
-// must not skip on a guess).
-func gitdirTarget(data []byte) (string, bool) {
-	line, _, _ := strings.Cut(string(data), "\n")
-	target, found := strings.CutPrefix(strings.TrimSpace(line), "gitdir:")
-	if !found {
-		return "", false
-	}
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return "", false
-	}
-	return target, true
 }
 
 // resyncSkipsFile reports whether the walk excludes one file. Its directory's

@@ -22,12 +22,25 @@ import (
 // lockProbe records whether a mutex was free when probed.
 type lockProbe struct{ heldOnce atomic.Bool }
 
+// lockProbeWindow is how long mu must stay unavailable for the probe to say
+// the caller holds it. One failed TryLock is not evidence: the test's own
+// concurrent acquires take mu for a moment, and catching one of them flaked
+// CI. A caller that holds mu across the probed call holds it throughout.
+const lockProbeWindow = 200 * time.Millisecond
+
 func (lp *lockProbe) probe(mu *sync.Mutex) {
-	if mu.TryLock() {
-		mu.Unlock()
-		return
+	deadline := time.Now().Add(lockProbeWindow)
+	for {
+		if mu.TryLock() {
+			mu.Unlock()
+			return
+		}
+		if time.Now().After(deadline) {
+			lp.heldOnce.Store(true)
+			return
+		}
+		time.Sleep(time.Millisecond)
 	}
-	lp.heldOnce.Store(true)
 }
 
 func within(t *testing.T, d time.Duration, what string, fn func()) {

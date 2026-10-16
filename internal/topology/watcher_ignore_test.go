@@ -121,7 +121,7 @@ func TestFSWatcher_ThroughOSWatcher(t *testing.T) {
 	}
 
 	sink := &recordingSink{}
-	fw, err := newFSWatcher(ws, sink, nil, nil)
+	fw, err := newFSWatcher(ws, sink, nil, false, nil)
 	if err != nil {
 		t.Fatalf("newFSWatcher: %v", err)
 	}

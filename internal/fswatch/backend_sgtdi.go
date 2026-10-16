@@ -382,8 +382,11 @@ func (w *Watcher) pumpEvent(ev fswatcher.WatchEvent, limitReached func(dir strin
 		// root's own metadata, with nothing for a consumer to do.
 		return op.Has(Remove | Rename)
 	}
+	if w.worktrees.inside(ev.Path, op) {
+		return false // sgtdi applied ExcludeRegex itself
+	}
 	w.deliver(Event{Path: ev.Path, Op: op})
-	if arrivedDir(ev.Path, op) {
+	if arrivedDir(ev.Path, op) && !w.worktrees.arrived(ev.Path) {
 		w.expand(ev.Path, func(child string) { w.deliver(Event{Path: child, Op: Create}) })
 		if !w.isFailed() && limitReached(ev.Path) {
 			w.degrade(limitMsg, nil)
