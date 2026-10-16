@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/plumbkit/plumb/internal/paths"
 )
@@ -28,9 +29,10 @@ import (
 // ancestor. A "worktree" verdict is dropped only by an event that creates,
 // removes or renames the directory itself; a .git event re-decides a "not a
 // worktree" verdict (`git worktree add` creates the directory before it writes
-// .git) but never downgrades a "worktree" one mid-removal. Lost events
-// re-decide every verdict against fresh bookkeeping, since what was lost may
-// have replaced a directory.
+// .git) but never downgrades a "worktree" one mid-removal. An event that
+// creates a recorded worktree's path supersedes the record, which can be stale.
+// Lost events re-decide every verdict against fresh bookkeeping, since what was
+// lost may have replaced a directory.
 
 // worktreeCacheMax bounds the "not a worktree" verdicts; past it they are
 // dropped wholesale and rebuilt lazily. "Worktree" verdicts are never evicted:
@@ -46,6 +48,16 @@ type worktreeSkip struct {
 	mu       sync.Mutex
 	known    map[string]bool     // directory below root -> it is a linked worktree of root
 	recorded map[string]struct{} // worktrees git's bookkeeping records, in root's spelling
+	// superseded are recorded worktrees whose path an event has since created or
+	// renamed into: the record may be stale (an admin directory outlives an
+	// `rm -rf` until `git worktree prune`), so only a live verification counts
+	// there, until a .git that verifies appears.
+	superseded map[string]struct{}
+
+	// dirty is set by lost and consumed by the next lookup, which re-reads the
+	// bookkeeping and re-decides every verdict once: a burst of loss signals
+	// costs one refresh, not one per signal.
+	dirty atomic.Bool
 
 	// isWorktree and listWorktrees are paths.LinkedWorktreeOf and
 	// paths.LinkedWorktreesOf, seams for tests that count or fake lookups.
@@ -54,7 +66,7 @@ type worktreeSkip struct {
 }
 
 func newWorktreeSkip(root string) *worktreeSkip {
-	s := &worktreeSkip{root: root, known: map[string]bool{}, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
+	s := &worktreeSkip{root: root, known: map[string]bool{}, superseded: map[string]struct{}{}, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
 	s.refreshLocked()
 	return s
 }
@@ -74,6 +86,7 @@ func (s *worktreeSkip) inside(path string, op Op) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.settleLocked()
 	s.forgetLocked(path, op)
 	dir := s.root
 	parts := strings.Split(rel, string(filepath.Separator))
@@ -97,20 +110,26 @@ func (s *worktreeSkip) arrived(dir string) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.settleLocked()
 	return s.decideLocked(dir)
 }
 
-// lost re-decides every verdict: the events that would have told this watcher
-// a worktree was removed and replaced (or a directory became one) may be among
-// those lost.
+// lost marks every verdict for re-deciding: the events that would have told
+// this watcher a worktree was removed and replaced (or a directory became one)
+// may be among those lost. It is O(1); the next lookup does the work.
 func (s *worktreeSkip) lost() {
-	if s == nil {
-		return
+	if s != nil {
+		s.dirty.Store(true)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.refreshLocked()
-	clear(s.known)
+}
+
+// settleLocked applies a pending lost: re-read the bookkeeping and drop every
+// verdict. s.mu must be held.
+func (s *worktreeSkip) settleLocked() {
+	if s.dirty.Swap(false) {
+		s.refreshLocked()
+		clear(s.known)
+	}
 }
 
 // below is path relative to root, when it lies strictly below it.
@@ -130,6 +149,9 @@ func (s *worktreeSkip) below(path string) (string, bool) {
 func (s *worktreeSkip) forgetLocked(path string, op Op) {
 	if op.Has(Create | Remove | Rename) {
 		delete(s.known, path)
+		if _, ok := s.recorded[path]; ok {
+			s.superseded[path] = struct{}{}
+		}
 	}
 	if filepath.Base(path) == ".git" {
 		dir := filepath.Dir(path)
@@ -160,10 +182,13 @@ func (s *worktreeSkip) verdictLocked(dir string) bool {
 // decideLocked decides dir from the disk: a verified worktree, or one git's
 // bookkeeping records. s.mu must be held.
 func (s *worktreeSkip) decideLocked(dir string) bool {
-	if _, ok := s.recorded[dir]; ok {
+	if s.isWorktree(s.root, dir) {
+		delete(s.superseded, dir) // a worktree again: its record can be trusted
 		return true
 	}
-	return s.isWorktree(s.root, dir)
+	_, recorded := s.recorded[dir]
+	_, superseded := s.superseded[dir]
+	return recorded && !superseded
 }
 
 // refreshLocked re-reads git's bookkeeping, keyed in the root's own spelling
@@ -174,6 +199,11 @@ func (s *worktreeSkip) refreshLocked() {
 	for _, wt := range s.listWorktrees(s.root) {
 		if rel, err := filepath.Rel(canonRoot, wt); err == nil {
 			s.recorded[filepath.Join(s.root, rel)] = struct{}{}
+		}
+	}
+	for d := range s.superseded {
+		if _, ok := s.recorded[d]; !ok {
+			delete(s.superseded, d) // no longer recorded: nothing to supersede
 		}
 	}
 }

@@ -150,11 +150,13 @@ func TestWatcher_DoesNotExpandAWorktreeMovedInWhole(t *testing.T) {
 
 // fakeSkip is a worktreeSkip over /ws whose verified worktrees and recorded
 // bookkeeping the test sets, counting the verifications it makes.
+var listed int // fakeSkip's bookkeeping reads, across the test binary
+
 func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool, asked map[string]int) {
 	t.Helper()
 	root := filepath.Join(string(filepath.Separator), "ws")
 	verified, recorded, asked = map[string]bool{}, map[string]bool{}, map[string]int{}
-	s = &worktreeSkip{root: root, known: map[string]bool{}}
+	s = &worktreeSkip{root: root, known: map[string]bool{}, superseded: map[string]struct{}{}}
 	s.isWorktree = func(r, dir string) bool {
 		if r != root {
 			t.Fatalf("judged against %q, want the root", r)
@@ -163,6 +165,7 @@ func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool
 		return verified[dir]
 	}
 	s.listWorktrees = func(string) []string {
+		listed++
 		var out []string
 		for d, ok := range recorded {
 			if ok {
@@ -398,10 +401,78 @@ func TestWatcher_LostEventsRedecideWorktrees(t *testing.T) {
 	t.Cleanup(w.Close)
 	w.worktrees.inside(filepath.Join(root, "d", "x.go"), Write)
 	w.signalLost()
-	w.worktrees.mu.Lock()
-	n := len(w.worktrees.known)
-	w.worktrees.mu.Unlock()
-	if n != 0 {
-		t.Fatalf("after lost events %d verdicts survived, want none", n)
+	if !w.worktrees.dirty.Load() {
+		t.Fatal("lost events did not mark the worktree verdicts for re-deciding")
 	}
+}
+
+// TestWorktreeSkip_ARecreatedPathOutlivesItsStaleRecord: an ordinary
+// directory created where a removed worktree was is watched, though git's
+// bookkeeping still records the worktree (an `rm -rf` leaves the admin
+// directory until `git worktree prune`) — and stays watched across a later
+// re-read of that bookkeeping.
+func TestWorktreeSkip_ARecreatedPathOutlivesItsStaleRecord(t *testing.T) {
+	s, verified, recorded, _ := fakeSkip(t)
+	wt := filepath.Join(s.root, "plumb-wt-old")
+	recorded[wt] = true
+	s.lost()
+	if !s.inside(filepath.Join(wt, "a.go"), Remove) {
+		t.Fatal("control: the recorded worktree's removal was not skipped")
+	}
+	s.inside(wt, Remove)
+	s.inside(wt, Create) // an ordinary directory at the same path
+	if s.inside(filepath.Join(wt, "b.go"), Create) {
+		t.Fatal("an ordinary directory at a removed worktree's path was skipped on a stale record")
+	}
+	s.inside(filepath.Join(s.root, "other", ".git"), Create) // re-reads the bookkeeping
+	s.lost()
+	if s.inside(filepath.Join(wt, "c.go"), Write) {
+		t.Error("a re-read of the bookkeeping brought the stale record back")
+	}
+	// A worktree created there again is one.
+	verified[wt] = true
+	s.inside(filepath.Join(wt, ".git"), Create)
+	if !s.inside(filepath.Join(wt, "d.go"), Create) {
+		t.Error("a new worktree at the path was not skipped")
+	}
+}
+
+// TestWorktreeSkip_LostIsLazy: a burst of loss signals costs one re-read, at
+// the next lookup; the root's own .git changing costs none.
+func TestWorktreeSkip_LostIsLazy(t *testing.T) {
+	s, _, _, _ := fakeSkip(t)
+	before := listed
+	for range 100 {
+		s.lost()
+	}
+	if listed != before {
+		t.Fatalf("lost re-read the bookkeeping %d times by itself", listed-before)
+	}
+	s.inside(filepath.Join(s.root, "a", "b.go"), Write)
+	s.inside(filepath.Join(s.root, "a", "c.go"), Write)
+	if listed-before != 1 {
+		t.Fatalf("a burst of losses re-read the bookkeeping %d times, want 1", listed-before)
+	}
+	s.inside(filepath.Join(s.root, ".git"), Write)
+	if listed-before != 1 {
+		t.Error("the root's own .git changing re-read the bookkeeping")
+	}
+}
+
+// TestWatcher_AnOrdinaryDirectoryWhereAWorktreeWasIsWatched: the real-backend
+// shape of the stale-record case: `rm -rf` of a worktree (its admin directory
+// stays), then an ordinary directory at the same path.
+func TestWatcher_AnOrdinaryDirectoryWhereAWorktreeWasIsWatched(t *testing.T) {
+	root := t.TempDir()
+	gitRepoAt(t, root)
+	wt := filepath.Join(root, "plumb-wt-reused")
+	populate(t, wt, "a.go")
+	worktreeLink(t, wt, worktreeAdmin(t, root, "plumb-wt-reused", wt))
+	c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	rootStillReports(t, c, root)
+	populate(t, wt, "plain.go")
+	expectEventually(t, c, filepath.Join(wt, "plain.go"), "an ordinary directory where a worktree was")
 }
