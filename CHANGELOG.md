@@ -17,6 +17,7 @@
   that never identifies itself on a connection is invisible to this rule, for
   example a hook-less desktop chat sharing a connector. Its calls can then be
   credited to the session that did declare, so the report remains a proxy.
+
 - **An `[lsp]` restart can no longer land on a superseded config.** A
   reconfigure that resolved its config just before a newer one was published
   re-resolves instead of restarting the server back onto the old one, the
