@@ -20,12 +20,6 @@ func (w *Watcher) excluded(path string) bool {
 	return w.exclude != nil && (w.exclude.MatchString(path) || w.exclude.MatchString(filepath.Base(path)))
 }
 
-// skipped is everything a backend drops for an event at path beyond what the
-// OS layer filtered: Options.ExcludeRegex and Options.SkipLinkedWorktrees.
-func (w *Watcher) skipped(path string) bool {
-	return w.excluded(path) || w.worktrees.inside(path)
-}
-
 // expandIfDir reports, through emit, everything inside path when an event says
 // path was created or renamed into place and it is a directory.
 //
