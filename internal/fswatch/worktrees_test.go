@@ -771,3 +771,20 @@ func TestWatcher_ARenameAwayAndBackKeepsARemovalQuiet(t *testing.T) {
 		t.Fatalf("a worktree's removal after its parent moved away and back was reported: %v", got)
 	}
 }
+
+// TestWorktreeSkip_AMovedBackWorktreeKeepsItsVerdict: with no git record to
+// lean on, a worktree's own cached verdict carries its identity through its
+// parent moving away and back.
+func TestWorktreeSkip_AMovedBackWorktreeKeepsItsVerdict(t *testing.T) {
+	s, verified, _, _ := fakeSkip(t)
+	x := filepath.Join(s.root, "agents")
+	wt := filepath.Join(x, "wt")
+	place(s, x, wt)
+	verified[wt] = true
+	s.inside(filepath.Join(wt, "a.go"), Write)
+	s.inside(x, Create|Rename) // moved back: the same directories
+	verified[wt] = false
+	if !s.inside(filepath.Join(wt, "b.go"), Remove) {
+		t.Error("a worktree's verdict did not survive its parent moving away and back")
+	}
+}
