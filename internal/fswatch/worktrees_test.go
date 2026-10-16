@@ -435,6 +435,13 @@ func TestWorktreeSkip_ARecreatedPathOutlivesItsStaleRecord(t *testing.T) {
 	if !s.inside(filepath.Join(wt, "d.go"), Create) {
 		t.Error("a new worktree at the path was not skipped")
 	}
+	// Its removal, after a loss (a cold verdict), is covered by its record
+	// again: verifying it as a worktree lifted the supersede.
+	verified[wt] = false
+	s.lost()
+	if !s.inside(filepath.Join(wt, "e.go"), Remove) {
+		t.Error("the new worktree's removal fell back on a superseded record")
+	}
 }
 
 // TestWorktreeSkip_LostIsLazy: a burst of loss signals costs one re-read, at
