@@ -56,5 +56,12 @@ func notifyConversationCleared(conversationID string) {
 	if strings.ContainsAny(conversationID, "\r\n") {
 		return // one command per line; an id that spans lines is not an id
 	}
-	_, _, _ = askDaemonCtrl(ctrlConversationClearedCommand+" "+conversationID, time.Now().Add(clearNotifyBudget))
+	command := ctrlConversationClearedCommand + " " + conversationID
+	if token := hookNamespaceToken(); token != "" {
+		if strings.ContainsAny(token, " \r\n") {
+			return // not a token; sending none would speak for the default namespace
+		}
+		command += " " + token // its namespace (hooks_namespace.go)
+	}
+	_, _, _ = askDaemonCtrl(command, time.Now().Add(clearNotifyBudget))
 }

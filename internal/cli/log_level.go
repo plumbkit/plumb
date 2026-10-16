@@ -114,16 +114,20 @@ func validLogLevelCommand(level string) bool {
 // treats a nil callback as "feature unavailable". Collapsing these into a struct
 // (rather than positional params) keeps adding a new admin command cheap.
 type ctrlHandlers struct {
-	diags         func(string) string          // diagnostics <workspace>
-	reload        func() error                 // reload-config
-	reloadProject func(string)                 // reload-project <workspace>
-	lspStatus     func() string                // lsp-status
-	lspStatusV2   func() string                // lsp-status-v2 (PLAN-534)
-	enableLSP     func(string) (string, error) // enable-lsp <lang> → status line
-	xcodeStatus   func(string) string          // xcode-status <workspace>
-	webStart      func(int) (string, error)    // web-start [port] → URL
-	webStatus     func() string                // web-status
-	webStop       func() error                 // web-stop
+	// resolveNamespace turns a hook request's namespace token into the
+	// namespace it is scoped to (connRegistry.namespaceForToken); nil scopes
+	// every hook request to the default namespace.
+	resolveNamespace func(token string) (string, bool)
+	diags            func(string) string          // diagnostics <workspace>
+	reload           func() error                 // reload-config
+	reloadProject    func(string)                 // reload-project <workspace>
+	lspStatus        func() string                // lsp-status
+	lspStatusV2      func() string                // lsp-status-v2 (PLAN-534)
+	enableLSP        func(string) (string, error) // enable-lsp <lang> → status line
+	xcodeStatus      func(string) string          // xcode-status <workspace>
+	webStart         func(int) (string, error)    // web-start [port] → URL
+	webStatus        func() string                // web-status
+	webStop          func() error                 // web-stop
 	// conversationCleared records that a Claude Code conversation was started by
 	// /clear: conversation-cleared <new session id> (conn_clear_markers.go).
 	conversationCleared func(string)

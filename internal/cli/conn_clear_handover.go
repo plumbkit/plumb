@@ -84,7 +84,7 @@ func (s *connSession) handOverOnClear(stamp string) {
 	if !s.logicalAgents.soleConversationIs(cur) {
 		return
 	}
-	if !clears.take(stamp) {
+	if !clears.take(namespacedID(s.view().namespace, stamp)) {
 		return
 	}
 	s.log().Info("daemon: /clear handed the connection's identity to the conversation it started",

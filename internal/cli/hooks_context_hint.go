@@ -47,6 +47,7 @@ func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest)
 	req := contextHintRequest{
 		Host: "claude-code", Event: input.Event, Source: input.Source,
 		SessionID: input.SessionID, AgentID: input.AgentID, Workspace: root,
+		NamespaceToken: hookNamespaceToken(),
 	}
 	if input.Event == "UserPromptSubmit" {
 		req.Selectors = promptSelectors(input.Prompt)
@@ -107,6 +108,7 @@ func codexContextHintText(input codexHookInput, ask func(contextHintRequest) str
 	req := contextHintRequest{
 		Host: "codex", Event: input.Event, Source: input.Source,
 		SessionID: input.SessionID, AgentID: input.AgentID, TurnID: input.TurnID, Workspace: root,
+		NamespaceToken: hookNamespaceToken(),
 	}
 	if input.Event == "UserPromptSubmit" {
 		req.Selectors = promptSelectors(input.Prompt)

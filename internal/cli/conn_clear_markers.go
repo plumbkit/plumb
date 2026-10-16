@@ -177,8 +177,17 @@ func handleClearCommand(conn net.Conn, line string, h ctrlHandlers) bool {
 		fmt.Fprint(conn, "error: conversation markers unavailable\n")
 		return true
 	}
-	id = strings.TrimSpace(id)
-	h.conversationCleared(id)
+	id, token, _ := strings.Cut(strings.TrimSpace(id), " ")
+	if strings.Contains(id, ":") {
+		fmt.Fprint(conn, "ok\n") // not a conversation id; ':' separates a namespace key
+		return true
+	}
+	namespace, ok := hookRequestNamespace(h, strings.TrimSpace(token))
+	if !ok {
+		fmt.Fprint(conn, "ok\n") // advisory: a refused namespace marks nothing
+		return true
+	}
+	h.conversationCleared(namespacedID(namespace, id))
 	slog.Debug("daemon: conversation started by /clear announced over the control socket", "conversation", logicalAgentLabel(id))
 	fmt.Fprint(conn, "ok\n")
 	return true

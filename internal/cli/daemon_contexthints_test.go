@@ -187,14 +187,14 @@ func TestHintRootFor_FallsBackOnlyToAServedWorkspace(t *testing.T) {
 	}
 	registry.add("a", connHandle{workspace: func() string { return served }, hintRoot: know("conv-1", served)})
 
-	if root, ok := registry.hintRootFor("fresh", served); !ok || root.Path != served || !root.FromCWD {
+	if root, ok := registry.hintRootFor("fresh", served, ""); !ok || root.Path != served || !root.FromCWD {
 		t.Fatalf("served workspace: %+v, %v; want %s from the cwd", root, ok, served)
 	}
-	if root, ok := registry.hintRootFor("fresh", link); !ok || root.Path != served {
+	if root, ok := registry.hintRootFor("fresh", link, ""); !ok || root.Path != served {
 		t.Fatalf("a symlinked spelling of the served root: %+v, %v; want the connection's own %s", root, ok, served)
 	}
 	for _, ws := range []string{other, "", "relative/dir", filepath.Join(served, "sub")} {
-		if root, ok := registry.hintRootFor("fresh", ws); ok {
+		if root, ok := registry.hintRootFor("fresh", ws, ""); ok {
 			t.Errorf("workspace %q, served by no connection, resolved to %+v", ws, root)
 		}
 	}
@@ -203,11 +203,11 @@ func TestHintRootFor_FallsBackOnlyToAServedWorkspace(t *testing.T) {
 	}
 
 	registry.add("b", connHandle{workspace: func() string { return other }})
-	if root, ok := registry.hintRootFor("conv-1", other); !ok || root.Path != served || root.FromCWD {
+	if root, ok := registry.hintRootFor("conv-1", other, ""); !ok || root.Path != served || root.FromCWD {
 		t.Fatalf("a known identity naming another served root: %+v, %v; want its own %s", root, ok, served)
 	}
 	registry.add("c", connHandle{hintRoot: know("conv-1", other)})
-	if root, ok := registry.hintRootFor("conv-1", served); ok {
+	if root, ok := registry.hintRootFor("conv-1", served, ""); ok {
 		t.Fatalf("an identity two connections claim resolved through the fallback to %+v", root)
 	}
 }

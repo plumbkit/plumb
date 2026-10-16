@@ -460,23 +460,16 @@ func runDaemon(_ *cobra.Command, _ []string) error {
 		contextHint, closeHints := startContextHints(ctx, registry, newDaemonContextHinter(topoPool.forRoot, registry),
 			func() bool { return store.Current().Context.Hints })
 		defer closeHints()
-		go serveControlSocket(ctrlGuard, configLevel, cfg.LogFormat, ctrlHandlers{
-			diags:         diagsFn,
-			reload:        store.Reload,
-			reloadProject: registry.reloadProject,
-			namespace:     registry.namespaces.handleCtrl,
-			lspStatus:     pool.lspStatusReport,
-			lspStatusV2:   pool.lspStatusReportV2,
-			enableLSP:     pool.enableLanguageCtrl,
-			xcodeStatus:   pool.xcodeStatusJSON,
-			webStart:      webServer.Start,
-			webStatus:     webServer.Status,
-			webStop:       webServer.Stop,
-			// The marker lives on the registry, beside the connections that consume it.
-			conversationCleared: registry.conversationClears().mark,
-			mailbox:             registry.mailboxProbe,
-			contextHint:         contextHint,
-		})
+		handlers := registryCtrlHandlers(registry)
+		handlers.diags = diagsFn
+		handlers.reload = store.Reload
+		handlers.lspStatus = pool.lspStatusReport
+		handlers.lspStatusV2 = pool.lspStatusReportV2
+		handlers.enableLSP = pool.enableLanguageCtrl
+		handlers.xcodeStatus = pool.xcodeStatusJSON
+		handlers.webStart, handlers.webStatus, handlers.webStop = webServer.Start, webServer.Status, webServer.Stop
+		handlers.contextHint = contextHint
+		go serveControlSocket(ctrlGuard, configLevel, cfg.LogFormat, handlers)
 	}
 
 	slog.Info("daemon: ready", "socket", socketPath, "pid", os.Getpid(), "log", daemonLogPath())
