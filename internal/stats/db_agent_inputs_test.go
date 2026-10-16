@@ -2,6 +2,7 @@ package stats
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,6 +112,36 @@ func TestInputsForAgent_LimitKeepsTheOldest(t *testing.T) {
 	}
 	if want := []string{`{"detail":"brief","session_id":"conv-A"}`, `{"conn":"solo"}`}; !slices.Equal(got, want) {
 		t.Errorf("limit 2:\n got %q\nwant %q", got, want)
+	}
+}
+
+// The query runs once per emitted hint over the daemon's whole stats.db, so its
+// plan is part of its contract: each window connection's session_start rows
+// are reached through idx_tc_session, never by walking every session_start in
+// the table. A reshaped join or WHERE drops the index without failing anything
+// else.
+func TestInputsForAgent_PlanProbesTheSessionIndex(t *testing.T) {
+	db, hint := agentInputsFixture(t)
+	rows, err := db.db.Query("EXPLAIN QUERY PLAN "+agentInputsSQL,
+		hint.UnixMilli(), hint.Add(10*time.Minute).UnixMilli(), "conv-A", 20)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notUsed int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
+			t.Fatalf("scan plan: %v", err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("plan rows: %v", err)
+	}
+	if !slices.Contains(plan, "SEARCH d USING INDEX idx_tc_session (session_id=?)") {
+		t.Errorf("session_start rows are not probed through idx_tc_session; plan:\n%s", strings.Join(plan, "\n"))
 	}
 }
 
