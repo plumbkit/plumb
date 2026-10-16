@@ -201,3 +201,28 @@ func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
 		t.Error("the root itself, or a path outside it, was judged")
 	}
 }
+
+// TestWatcher_ExpansionPrunesANestedWorktree: a directory moved in whole that
+// holds a worktree is expanded, but not into the worktree.
+func TestWatcher_ExpansionPrunesANestedWorktree(t *testing.T) {
+	root := t.TempDir()
+	gitRepoAt(t, root)
+	staging := filepath.Join(t.TempDir(), "agents")
+	moved := filepath.Join(root, "agents")
+	wt := filepath.Join(moved, "wt")
+	populate(t, staging, "notes.go", "wt/a.go", "wt/deep/b.go")
+	worktreeLink(t, filepath.Join(staging, "wt"), worktreeAdmin(t, root, "wt", wt))
+	c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+
+	if err := os.Rename(staging, moved); err != nil {
+		t.Fatal(err)
+	}
+	notes := filepath.Join(moved, "notes.go")
+	if !waitFor(func() bool { return c.count(notes, 0) > 0 }, 15*time.Second) {
+		t.Fatalf("control: the moved directory's own file was not reported; got %v", c.snapshot())
+	}
+	rootStillReports(t, c, root)
+	if got := eventsUnder(c, wt); len(got) != 0 {
+		t.Fatalf("the expansion walked into a nested worktree: %v", got)
+	}
+}

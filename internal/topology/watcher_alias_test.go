@@ -7,6 +7,9 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/plumbkit/plumb/internal/config"
+	"github.com/plumbkit/plumb/internal/fswatch"
 )
 
 // TestFSWatcher_NewSymlinkIsEnqueuedUnderItsOwnName: the indexer keeps a
@@ -79,5 +82,31 @@ func TestWatchOptions_LeaveLinkedWorktreesOutUnlessIndexed(t *testing.T) {
 	}
 	if watchOptions(ws, false) != SharedWatchOptions(ws) {
 		t.Error("the default index watcher does not share the language servers' options")
+	}
+}
+
+// TestOpenWith_IndexWorktreesWatchesOnItsOwnOptions: a store that indexes
+// worktrees does not join the shared watcher that leaves them out; one that
+// does not, does.
+func TestOpenWith_IndexWorktreesWatchesOnItsOwnOptions(t *testing.T) {
+	for _, tc := range []struct {
+		indexWorktrees bool
+		watches        int
+	}{{false, 1}, {true, 2}} {
+		ws := t.TempDir()
+		hub := fswatch.NewHub()
+		s, err := OpenWith(ws, config.TopologyConfig{MaxFileSizeBytes: 512 * 1024, Watch: true, IndexWorktrees: tc.indexWorktrees}, nil, hub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lsp, err := hub.Subscribe(ws, SharedWatchOptions(ws), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hub.Watches(); got != tc.watches {
+			t.Errorf("index_worktrees=%v: %d OS watchers beside the shared subscriber, want %d", tc.indexWorktrees, got, tc.watches)
+		}
+		lsp.Close()
+		_ = s.Close()
 	}
 }
