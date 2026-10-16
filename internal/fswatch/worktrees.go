@@ -29,8 +29,9 @@ import (
 // ancestor. A "worktree" verdict is dropped only by an event that creates,
 // removes or renames the directory itself; a .git event re-decides a "not a
 // worktree" verdict (`git worktree add` creates the directory before it writes
-// .git) but never downgrades a "worktree" one mid-removal. An event that
-// creates a recorded worktree's path supersedes the record, which can be stale.
+// .git) but never downgrades a "worktree" one mid-removal, and neither does the
+// directory's own Remove. An event that creates or renames into a recorded
+// worktree's path re-decides it and supersedes the record, which can be stale.
 // Lost events re-decide every verdict against fresh bookkeeping, since what was
 // lost may have replaced a directory.
 
@@ -111,7 +112,14 @@ func (s *worktreeSkip) arrived(dir string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settleLocked()
-	return s.decideLocked(dir)
+	// Remembered: a worktree that arrives is not expanded, so nothing inside it
+	// may ever be looked up before it is removed — by when its .git and git's
+	// record of it can both be gone.
+	v := s.decideLocked(dir)
+	if v {
+		s.known[dir] = true
+	}
+	return v
 }
 
 // lost marks every verdict for re-deciding: the events that would have told
@@ -142,18 +150,18 @@ func (s *worktreeSkip) below(path string) (string, bool) {
 }
 
 // forgetLocked drops what an event at path with op may have changed. An event
-// that creates, removes or renames path re-decides path itself. A .git event
+// that creates or renames into path re-decides path itself. A .git event
 // re-reads the bookkeeping and re-decides the directory holding it, unless that
 // directory is already a worktree: its .git going away is how a removal starts.
 // s.mu must be held.
 func (s *worktreeSkip) forgetLocked(path string, op Op) {
-	if op.Has(Create | Remove | Rename) {
-		delete(s.known, path)
-	}
-	// Only a directory arriving at the path supersedes its record. Its own
-	// Remove does not: sgtdi can deliver it before its children's, and the rest
-	// of the removal must stay covered by the record.
+	// Only a directory arriving at the path re-decides it and supersedes its
+	// record. Its own Remove does neither: sgtdi delivers a burst's paths in no
+	// set order, at least its cooldown after the fact (by when git has deleted
+	// the admin directory too), so the directory's Remove can come before its
+	// children's, and the rest of the removal must stay skipped.
 	if op.Has(Create | Rename) {
+		delete(s.known, path)
 		if _, ok := s.recorded[path]; ok {
 			s.superseded[path] = struct{}{}
 		}

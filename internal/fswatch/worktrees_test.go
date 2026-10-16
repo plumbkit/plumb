@@ -222,9 +222,15 @@ func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
 	if !in("src/z.go", Remove) {
 		t.Error("a metadata event for the worktree re-decided it")
 	}
+	// Nor does its own Remove (it can arrive before its children's); a
+	// directory arriving at the path does.
 	in("src", Remove)
+	if !in("src/z.go", Remove) {
+		t.Error("the worktree's own Remove re-decided it mid-removal")
+	}
+	in("src", Create)
 	if in("src/z.go", Create) {
-		t.Error("the directory's own removal did not re-decide it")
+		t.Error("a directory arriving at the path did not re-decide it")
 	}
 
 	var off *worktreeSkip
@@ -496,5 +502,23 @@ func TestWorktreeSkip_ADirectorysOwnRemoveFirstKeepsItsRecord(t *testing.T) {
 		if !s.inside(filepath.Join(wt, filepath.FromSlash(rel)), Remove) {
 			t.Errorf("%s's removal, after the directory's own, was reported", rel)
 		}
+	}
+}
+
+// TestWorktreeSkip_AnArrivedWorktreeIsRemembered: a worktree seen only by its
+// own arrival (never expanded, nothing inside it looked up) stays skipped
+// through a removal processed after git has forgotten it.
+func TestWorktreeSkip_AnArrivedWorktreeIsRemembered(t *testing.T) {
+	s, verified, _, _ := fakeSkip(t)
+	wt := filepath.Join(s.root, "plumb-wt-brief")
+	verified[wt] = true
+	s.inside(wt, Create)
+	if !s.arrived(wt) {
+		t.Fatal("control: the arrived worktree was not recognised")
+	}
+	verified[wt] = false // its .git and git's record are gone by now
+	s.inside(wt, Remove)
+	if !s.inside(filepath.Join(wt, "pkg"), Remove) {
+		t.Error("a worktree seen only arriving leaked its removal")
 	}
 }
