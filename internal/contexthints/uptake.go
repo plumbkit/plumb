@@ -7,8 +7,10 @@ package contexthints
 // consumed when a tool call by the SAME logical agent, soon after, mentions one
 // of the selectors the hint named. That is evidence of use, not of
 // comprehension, and it can only see plumb's own tool calls: a native read of
-// the named file leaves no trace here. A hint whose agent made no attributable
-// call in the window is counted as unattributed, never as unconsumed.
+// the named file leaves no trace here. Which calls are the agent's is the call
+// source's answer (stats.InputsForAgent: its stamped calls, and those of a
+// connection it alone declared). A hint whose agent made no attributable call
+// in the window is counted as unattributed, never as unconsumed.
 
 import (
 	"sort"
@@ -29,8 +31,9 @@ type HostUptake struct {
 	EmittedBytes int
 	// Consumed is emitted hints a later call by the same agent mentioned;
 	// Unconsumed had attributable calls that did not; Unattributed had no
-	// attributable call in the window at all (an unstamped host, or an agent
-	// that went quiet), so it is no evidence either way.
+	// attributable call in the window at all (a session that never declared its
+	// id or declared another one, a connection several sessions declared or
+	// shared, or an agent that went quiet), so it is no evidence either way.
 	Consumed     int
 	Unconsumed   int
 	Unattributed int

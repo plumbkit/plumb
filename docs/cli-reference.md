@@ -408,6 +408,11 @@ uptake` reports configured (handlers on disk), trusted (Codex's own approval
 record), invoked (the daemon's bounded hint ledger, by outcome and reason) and
 consumed (a later plumb call by the same agent named what the hint named: a
 proxy, and hints with no attributable later call are reported as unattributed).
+A call is the agent's when it carries the agent's identity, or when it comes
+from a connection that agent alone declared through `session_start` and that was
+never observed shared, which covers Codex and single-agent Claude Code sessions.
+An agent that never identifies itself on such a connection leaves no trace, so
+its calls count as the declaring agent's.
 
 Lifecycle hooks are the one place plumb can reach an agent between tool calls:
 at the start of a session, and at the end of a turn. Bare `plumb hooks` is
