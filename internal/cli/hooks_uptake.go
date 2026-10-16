@@ -47,7 +47,9 @@ ledger and its tool-call stats, both opened read-only.
   invoked     hook requests the daemon recorded, by outcome and reason
   consumed    emitted hints a later plumb call by the same agent mentioned, within
               ten minutes — a proxy for use, not proof of comprehension; hints whose
-              agent made no attributable call are counted as unattributed
+              agent made no attributable call are counted as unattributed. A call
+              is the agent's when it carries the agent's identity, or comes from a
+              connection only that agent declared (session_start) and never shared
 
 Rows the ledger evicted (1000 rows / 1 MiB / 7 days per workspace) are counted, so a
 missing row is never read as a no-op.`,
