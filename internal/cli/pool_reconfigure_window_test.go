@@ -121,3 +121,30 @@ func TestRestartWithConfig_ADeferredWakeIsNotLost(t *testing.T) {
 		return state.running()
 	})
 }
+
+// TestWakeHeld_LeavesAnEntryANewerRestartOwns: the deferred wake does not wake
+// an entry a newer restart has already taken — that restart wakes it itself.
+func TestWakeHeld_LeavesAnEntryANewerRestartOwns(t *testing.T) {
+	p, _ := reconfigPool(t)
+	e, err := p.acquireLang(context.Background(), markedRoot(t, "go.mod"), "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.hibernateWhenIdle(e); err != nil {
+		t.Fatal(err)
+	}
+	e.reconfiguring = true // hibernateWhenIdle returned holding p.mu
+	p.mu.Unlock()
+	p.wakeHeld(e)
+	if _, _, state := entryNow(p, e); state != poolHibernated {
+		t.Fatalf("an entry a newer restart owns was woken (%s)", state)
+	}
+	p.mu.Lock()
+	e.reconfiguring = false
+	p.mu.Unlock()
+	p.wakeHeld(e)
+	eventually(t, 5*time.Second, "control: a held, hibernated entry with no restart running was not woken", func() bool {
+		_, _, state := entryNow(p, e)
+		return state.running()
+	})
+}
