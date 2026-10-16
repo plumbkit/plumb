@@ -250,9 +250,11 @@ func TestRestartWithConfig_AnInvalidProjectFileDoesNotMoveAWaitingRound(t *testi
 		t.Fatal(err)
 	}
 	p.applyGlobalLSP(withGoArgs(cfg, "92"))
+	p.applyGlobalLSP(withGoArgs(cfg, "93")) // marks the waiting round to re-check
+	// The file breaks before that re-check: it must not move the server onto
+	// the global fallback (args 93, push diagnostics).
 	writePoolProjectConfig(t, root, "[lsp.go\ndiagnostics = \n")
 	p.invalidateLanguageConfig(root)
-	p.reconfigureRoot(root) // marks the waiting round to re-check
 	done()
 	waitReconfigured(t, p, e, func(c config.LSPConfig) bool { return slices.Equal(c.Args, []string{"92"}) })
 	waitSettled(t, p, e)
