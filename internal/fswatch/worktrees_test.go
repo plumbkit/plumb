@@ -824,6 +824,9 @@ func TestSameDir_ARecreatedDirectoryOnAReusedInodeDiffers(t *testing.T) {
 		t.Fatal("control: one directory read twice is not the same directory")
 	}
 	if !before.hasBirth {
+		if platformRecordsBirth(d) {
+			t.Fatal("the filesystem records a birth time, but dirID did not read it")
+		}
 		t.Skip("no birth time on this platform or filesystem")
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -868,5 +871,24 @@ func TestSameDir_ComparesFileAndBirth(t *testing.T) {
 		if got := sameDir(tc.x, tc.y); got != tc.want {
 			t.Errorf("%s: sameDir = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestWorktreeSkip_AnArrivalKeepsTheVerdictOfAGoneWorktree: a parent arriving
+// while the worktree beneath it is already gone (a removal in flight) leaves
+// that worktree's verdict, so the removal's remaining events stay skipped.
+func TestWorktreeSkip_AnArrivalKeepsTheVerdictOfAGoneWorktree(t *testing.T) {
+	s, verified, _, _ := fakeSkip(t)
+	x := filepath.Join(s.root, "agents")
+	wt := filepath.Join(x, "wt")
+	place(s, x, wt)
+	verified[wt] = true
+	s.inside(filepath.Join(wt, "a.go"), Write)
+	vanish(s, wt)
+	verified[wt] = false
+	place(s, x) // a directory arrives at x; wt is not in it
+	s.inside(x, Create)
+	if !s.inside(filepath.Join(wt, "pkg", "b.go"), Remove) {
+		t.Error("a gone worktree lost its verdict to its parent's arrival")
 	}
 }
