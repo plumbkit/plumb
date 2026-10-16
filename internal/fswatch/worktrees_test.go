@@ -148,9 +148,43 @@ func TestWatcher_DoesNotExpandAWorktreeMovedInWhole(t *testing.T) {
 	}
 }
 
-// fakeSkip is a worktreeSkip over /ws whose verified worktrees and recorded
-// bookkeeping the test sets, counting the verifications it makes.
+// fakeSkip is a worktreeSkip over /ws whose verified worktrees, recorded
+// bookkeeping and directories (place, vanish) the test sets, counting the
+// verifications it makes.
 var listed int // fakeSkip's bookkeeping reads, across the test binary
+
+// fakeDir is a directory in a fakeSkip's tree; its id is its identity.
+type fakeDir struct{ id int }
+
+func (fakeDir) Name() string       { return "d" }
+func (fakeDir) Size() int64        { return 0 }
+func (fakeDir) Mode() os.FileMode  { return os.ModeDir | 0o755 }
+func (fakeDir) ModTime() time.Time { return time.Time{} }
+func (fakeDir) IsDir() bool        { return true }
+func (fakeDir) Sys() any           { return nil }
+
+var (
+	fakeTrees  = map[*worktreeSkip]map[string]int{}
+	fakeNextID int
+)
+
+// place puts a NEW directory at path — a fresh identity, as a mkdir or a tree
+// moved in from elsewhere gives it.
+func place(s *worktreeSkip, paths ...string) {
+	for _, p := range paths {
+		fakeNextID++
+		fakeTrees[s][p] = fakeNextID
+	}
+}
+
+// vanish removes path and everything beneath it from the fake tree.
+func vanish(s *worktreeSkip, path string) {
+	for p := range fakeTrees[s] {
+		if p == path || strings.HasPrefix(p, path+string(filepath.Separator)) {
+			delete(fakeTrees[s], p)
+		}
+	}
+}
 
 func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool, asked map[string]int) {
 	t.Helper()
@@ -158,6 +192,15 @@ func fakeSkip(t *testing.T) (s *worktreeSkip, verified, recorded map[string]bool
 	verified, recorded, asked = map[string]bool{}, map[string]bool{}, map[string]int{}
 	s = &worktreeSkip{root: root}
 	s.resetLocked()
+	fakeTrees[s] = map[string]int{}
+	t.Cleanup(func() { delete(fakeTrees, s) })
+	s.stat = func(p string) (os.FileInfo, error) {
+		if id, ok := fakeTrees[s][p]; ok {
+			return fakeDir{id}, nil
+		}
+		return nil, os.ErrNotExist
+	}
+	s.sameFile = func(a, b os.FileInfo) bool { return a.(fakeDir).id == b.(fakeDir).id }
 	s.isWorktree = func(r, dir string) bool {
 		if r != root {
 			t.Fatalf("judged against %q, want the root", r)
@@ -229,6 +272,7 @@ func TestWorktreeSkip_CachesAndForgets(t *testing.T) {
 	if !in("src/z.go", Remove) {
 		t.Error("the worktree's own Remove re-decided it mid-removal")
 	}
+	place(s, at("src"))
 	in("src", Create)
 	if in("src/z.go", Create) {
 		t.Error("a directory arriving at the path did not re-decide it")
@@ -427,6 +471,7 @@ func TestWorktreeSkip_ARecreatedPathOutlivesItsStaleRecord(t *testing.T) {
 		t.Fatal("control: the recorded worktree's removal was not skipped")
 	}
 	s.inside(wt, Remove)
+	place(s, wt)
 	s.inside(wt, Create) // an ordinary directory at the same path
 	if s.inside(filepath.Join(wt, "b.go"), Create) {
 		t.Fatal("an ordinary directory at a removed worktree's path was skipped on a stale record")
@@ -535,6 +580,7 @@ func TestWorktreeSkip_AParentsArrivalRedecidesWorktreesBeneathIt(t *testing.T) {
 			s, verified, recorded, _ := fakeSkip(t)
 			x := filepath.Join(s.root, "agents")
 			wt := filepath.Join(x, "wt")
+			place(s, x, wt)
 			verified[wt] = true
 			if stale {
 				recorded[wt] = true
@@ -543,8 +589,10 @@ func TestWorktreeSkip_AParentsArrivalRedecidesWorktreesBeneathIt(t *testing.T) {
 			if !s.inside(filepath.Join(wt, "a.go"), Write) {
 				t.Fatal("control: the worktree was not skipped")
 			}
+			vanish(s, x)
 			s.inside(x, Remove)
 			verified[wt] = false // an ordinary tree arrives at x, with an ordinary wt
+			place(s, x, wt)
 			s.inside(x, Create)
 			if s.arrived(wt) {
 				t.Error("the expansion of the arrived parent treats its ordinary wt as a worktree")
@@ -559,6 +607,7 @@ func TestWorktreeSkip_AParentsArrivalRedecidesWorktreesBeneathIt(t *testing.T) {
 	x := filepath.Join(s.root, "agents")
 	wt := filepath.Join(x, "wt")
 	verified[wt] = true
+	place(s, x, wt)
 	s.inside(x, Create)
 	if !s.arrived(wt) || !s.inside(filepath.Join(wt, "b.go"), Write) {
 		t.Error("a worktree inside an arriving directory was not skipped")
@@ -597,7 +646,8 @@ func TestWatcher_AnOrdinaryTreeMovedOverAWorktreesParentIsWatched(t *testing.T) 
 // exists is kept.
 func TestWorktreeSkip_AFullWorktreeSetDropsOnlyVanishedDirectories(t *testing.T) {
 	s, _, _, _ := fakeSkip(t)
-	live := t.TempDir()
+	live := filepath.Join(s.root, "live")
+	place(s, live)
 	s.mu.Lock()
 	s.rememberLocked(live, true)
 	for i := range worktreeCacheMax {
@@ -623,12 +673,14 @@ func TestWorktreeSkip_AnArrivalTouchesOnlyItsOwnSubtree(t *testing.T) {
 	sibling := filepath.Join(s.root, "agents-old", "wt")
 	verified[sibling] = true
 	s.inside(filepath.Join(sibling, "a.go"), Write)
+	place(s, sibling)
 	inner := filepath.Join(s.root, "agents", "wt")
 	s.inside(filepath.Join(inner, "a.go"), Write) // cached ordinary
 	verified[inner] = true
 	if !s.arrived(inner) {
 		t.Fatal("control: the directory that became a worktree was not recognised")
 	}
+	place(s, filepath.Join(s.root, "agents"), inner) // a tree with a worktree in it moved in
 	s.inside(filepath.Join(s.root, "agents"), Create)
 	before := asked[sibling]
 	if !s.inside(filepath.Join(sibling, "b.go"), Write) || asked[sibling] != before {
@@ -636,5 +688,86 @@ func TestWorktreeSkip_AnArrivalTouchesOnlyItsOwnSubtree(t *testing.T) {
 	}
 	if !s.inside(filepath.Join(inner, "b.go"), Write) {
 		t.Error("a worktree beneath the arrival was answered by its stale ordinary verdict")
+	}
+}
+
+// TestWorktreeSkip_AMoveIsNotAnArrival (#703's review): inotify reports a
+// directory moving AWAY as Remove|Rename, and one moved away and back is the
+// same directory. Neither drops the worktree beliefs beneath it, so the rest
+// of a removal stays skipped.
+func TestWorktreeSkip_AMoveIsNotAnArrival(t *testing.T) {
+	for _, back := range []bool{false, true} {
+		t.Run(map[bool]string{false: "moved away", true: "moved away and back"}[back], func(t *testing.T) {
+			s, verified, recorded, _ := fakeSkip(t)
+			x := filepath.Join(s.root, "agents")
+			wt := filepath.Join(x, "wt")
+			place(s, x, wt)
+			verified[wt], recorded[wt] = true, true
+			s.lost()
+			if !s.inside(filepath.Join(wt, "a.go"), Write) {
+				t.Fatal("control: the worktree was not skipped")
+			}
+			ids := map[string]int{x: fakeTrees[s][x], wt: fakeTrees[s][wt]}
+			vanish(s, x)
+			s.inside(x, Remove|Rename) // IN_MOVED_FROM
+			if back {
+				fakeTrees[s][x], fakeTrees[s][wt] = ids[x], ids[wt] // the same directories
+				s.inside(x, Create|Rename)                          // IN_MOVED_TO
+			}
+			verified[wt] = false // its .git is the first thing a removal takes
+			if !s.inside(filepath.Join(wt, "pkg", "b.go"), Remove) {
+				t.Error("after a move, a worktree's removal was reported")
+			}
+			s.lost() // a cold verdict leans on the record, which a move must not supersede
+			if !s.inside(filepath.Join(wt, "pkg", "c.go"), Remove) {
+				t.Error("after a move, the worktree's record was superseded")
+			}
+		})
+	}
+}
+
+// TestWorktreeSkip_AnArrivingWorktreeLosesItsOrdinaryVerdict: a directory
+// once judged ordinary that arrives anew as a worktree is re-decided.
+func TestWorktreeSkip_AnArrivingWorktreeLosesItsOrdinaryVerdict(t *testing.T) {
+	s, verified, _, _ := fakeSkip(t)
+	x := filepath.Join(s.root, "x")
+	s.inside(filepath.Join(x, "a.go"), Write) // cached ordinary
+	verified[x] = true
+	place(s, x)
+	s.inside(x, Create)
+	if !s.inside(filepath.Join(x, "b.go"), Write) {
+		t.Error("an arriving worktree was answered by its old ordinary verdict")
+	}
+}
+
+// TestWatcher_ARenameAwayAndBackKeepsARemovalQuiet: the real-backend shape of
+// #703's review — on Linux, a worktree's parent moved away and back, then the
+// worktree removed, reported thousands of events.
+func TestWatcher_ARenameAwayAndBackKeepsARemovalQuiet(t *testing.T) {
+	root := t.TempDir()
+	gitRepoAt(t, root)
+	x := filepath.Join(root, "agents")
+	wt := filepath.Join(x, "wt")
+	populate(t, wt, "a.go", "pkg/b.go", "pkg/deep/c.go")
+	worktreeLink(t, wt, worktreeAdmin(t, root, "wt", wt))
+	c := startWatcher(t, root, Options{SkipLinkedWorktrees: true})
+	if err := os.WriteFile(filepath.Join(wt, "a.go"), []byte("w"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootStillReports(t, c, root)
+	tmp := filepath.Join(root, "agents.tmp")
+	if err := os.Rename(x, tmp); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, x); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	rootStillReports(t, c, root)
+	time.Sleep(300 * time.Millisecond)
+	if got := eventsUnder(c, wt); len(got) != 0 {
+		t.Fatalf("a worktree's removal after its parent moved away and back was reported: %v", got)
 	}
 }

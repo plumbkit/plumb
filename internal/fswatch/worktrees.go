@@ -60,20 +60,27 @@ type worktreeSkip struct {
 	// `rm -rf` until `git worktree prune`), so only a live verification counts
 	// there, until a .git that verifies appears.
 	superseded map[string]struct{}
+	// ident is the identity of each directory a worktree verdict or record was
+	// formed for, taken when it was formed: an arrival replaces a belief only
+	// where a DIFFERENT directory now stands (arrivalLocked).
+	ident map[string]os.FileInfo
 
 	// dirty is set by lost and consumed by the next lookup, which re-reads the
 	// bookkeeping and re-decides every verdict once: a burst of loss signals
 	// costs one refresh, not one per signal.
 	dirty atomic.Bool
 
-	// isWorktree and listWorktrees are paths.LinkedWorktreeOf and
-	// paths.LinkedWorktreesOf, seams for tests that count or fake lookups.
+	// isWorktree, listWorktrees, stat and sameFile are paths.LinkedWorktreeOf,
+	// paths.LinkedWorktreesOf, os.Lstat and os.SameFile: seams for tests that
+	// count or fake lookups and directories.
 	isWorktree    func(root, dir string) bool
 	listWorktrees func(root string) []string
+	stat          func(string) (os.FileInfo, error)
+	sameFile      func(a, b os.FileInfo) bool
 }
 
 func newWorktreeSkip(root string) *worktreeSkip {
-	s := &worktreeSkip{root: root, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf}
+	s := &worktreeSkip{root: root, isWorktree: paths.LinkedWorktreeOf, listWorktrees: paths.LinkedWorktreesOf, stat: os.Lstat, sameFile: os.SameFile}
 	s.resetLocked()
 	s.refreshLocked()
 	return s
@@ -142,15 +149,16 @@ func (s *worktreeSkip) lost() {
 // verdict. s.mu must be held.
 func (s *worktreeSkip) settleLocked() {
 	if s.dirty.Swap(false) {
-		s.refreshLocked()
 		clear(s.worktree)
 		clear(s.ordinary)
+		s.refreshLocked()
 	}
 }
 
 // resetLocked empties every verdict. s.mu must be held (or s unshared).
 func (s *worktreeSkip) resetLocked() {
 	s.worktree, s.ordinary, s.superseded = map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
+	s.ident = map[string]os.FileInfo{}
 }
 
 // below is path relative to root, when it lies strictly below it.
@@ -186,29 +194,57 @@ func (s *worktreeSkip) forgetLocked(path string, op Op) {
 	}
 }
 
-// arrivalLocked re-decides what a directory arriving at path replaces: path
-// itself and every worktree verdict and record beneath it (PLAN-558). An
-// ordinary tree moved in where a worktree's parent was holds no worktree, but
-// the old verdict for <path>/<wt> would otherwise silence it — and the
-// expansion of the arrival judges its subdirectories with arrived(), which a
-// superseded record no longer answers. A real worktree inside the arriving
-// tree still verifies as one. s.mu must be held.
+// arrivalLocked re-decides what a directory arriving at path replaces: the
+// worktree verdicts and records at and beneath path whose directory is now a
+// DIFFERENT one (PLAN-558). An ordinary tree moved in where a worktree's parent
+// was holds no worktree, but the old verdict for <path>/<wt> would otherwise
+// silence it, and the arrival's expansion judges its subdirectories with
+// arrived(), which a superseded record no longer answers.
+//
+// Identity, not the event, decides. inotify reports a directory moving AWAY as
+// Remove|Rename, and one moved away and back is the same directory: dropping
+// its beliefs then would leak the rest of a removal (#703's review measured
+// thousands of events). So nothing happens unless a directory now stands at
+// path, and a belief is dropped only where its directory still exists and is
+// not the one it was formed for. A real worktree in the arriving tree verifies
+// again. s.mu must be held.
 func (s *worktreeSkip) arrivalLocked(path string) {
-	delete(s.worktree, path)
-	delete(s.ordinary, path)
-	if _, ok := s.recorded[path]; ok {
-		s.superseded[path] = struct{}{}
+	fi, err := s.stat(path)
+	if err != nil || !fi.IsDir() {
+		return // nothing arrived: a move away, or a file
 	}
+	delete(s.ordinary, path)
 	prefix := path + string(filepath.Separator)
+	under := func(d string) bool { return d == path || strings.HasPrefix(d, prefix) }
 	for d := range s.worktree {
-		if strings.HasPrefix(d, prefix) {
+		if under(d) && s.replacedLocked(d) {
 			delete(s.worktree, d)
 		}
 	}
 	for d := range s.recorded {
-		if strings.HasPrefix(d, prefix) {
+		if under(d) && s.replacedLocked(d) {
 			s.superseded[d] = struct{}{}
 		}
+	}
+}
+
+// replacedLocked reports whether the directory at d is not the one a belief
+// about d was formed for. A d that is gone is not replaced (it is being
+// removed, and its belief must cover the rest of the removal). s.mu must be held.
+func (s *worktreeSkip) replacedLocked(d string) bool {
+	cur, err := s.stat(d)
+	if err != nil {
+		return false
+	}
+	old, ok := s.ident[d]
+	return !ok || !s.sameFile(old, cur)
+}
+
+// identifyLocked records the identity of the directory a belief about d is
+// formed for, when it exists. s.mu must be held.
+func (s *worktreeSkip) identifyLocked(d string) {
+	if fi, err := s.stat(d); err == nil {
+		s.ident[d] = fi
 	}
 }
 
@@ -235,14 +271,18 @@ func (s *worktreeSkip) rememberLocked(dir string, isWorktree bool) {
 		return
 	}
 	delete(s.ordinary, dir)
+	if _, ok := s.worktree[dir]; ok {
+		return
+	}
 	if len(s.worktree) >= worktreeCacheMax {
 		for d := range s.worktree {
-			if _, err := os.Lstat(d); err != nil {
+			if _, err := s.stat(d); err != nil {
 				delete(s.worktree, d)
 			}
 		}
 	}
 	s.worktree[dir] = struct{}{}
+	s.identifyLocked(dir)
 }
 
 // decideLocked decides dir from the disk: a verified worktree, or one git's
@@ -270,6 +310,18 @@ func (s *worktreeSkip) refreshLocked() {
 	for d := range s.superseded {
 		if _, ok := s.recorded[d]; !ok {
 			delete(s.superseded, d) // no longer recorded: nothing to supersede
+		}
+	}
+	for d := range s.recorded {
+		if _, ok := s.ident[d]; !ok {
+			s.identifyLocked(d)
+		}
+	}
+	for d := range s.ident {
+		_, rec := s.recorded[d]
+		_, wt := s.worktree[d]
+		if !rec && !wt {
+			delete(s.ident, d)
 		}
 	}
 }
