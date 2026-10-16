@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.26.2 (unreleased)
+
+### Fixed
+
+- **An ordinary directory moved in where a worktree's parent was is watched.**
+  The watcher remembered a linked worktree below a directory after that
+  directory was removed, so an ordinary tree later moved into its place (say,
+  `agents/` holding a plain `wt/`) had the edits inside `wt/` silenced. A
+  directory that arrives now re-decides every worktree beneath it that is no
+  longer the same directory; a real worktree inside the arriving tree is still
+  left out, and a worktree whose parent was only moved away and back keeps
+  its removal quiet.
+
 ## 0.26.1 (2026-10-16)
 
 ### Fixed
