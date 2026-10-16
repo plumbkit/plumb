@@ -613,3 +613,28 @@ func TestWorktreeSkip_AFullWorktreeSetDropsOnlyVanishedDirectories(t *testing.T)
 		t.Errorf("the worktree set holds %d verdicts after the cap, want the live one and the newest", n)
 	}
 }
+
+// TestWorktreeSkip_AnArrivalTouchesOnlyItsOwnSubtree: a directory arriving at
+// agents leaves a worktree under its sibling agents-old alone, and a worktree
+// under it that was once cached as ordinary is re-decided, not answered by
+// that stale verdict.
+func TestWorktreeSkip_AnArrivalTouchesOnlyItsOwnSubtree(t *testing.T) {
+	s, verified, _, asked := fakeSkip(t)
+	sibling := filepath.Join(s.root, "agents-old", "wt")
+	verified[sibling] = true
+	s.inside(filepath.Join(sibling, "a.go"), Write)
+	inner := filepath.Join(s.root, "agents", "wt")
+	s.inside(filepath.Join(inner, "a.go"), Write) // cached ordinary
+	verified[inner] = true
+	if !s.arrived(inner) {
+		t.Fatal("control: the directory that became a worktree was not recognised")
+	}
+	s.inside(filepath.Join(s.root, "agents"), Create)
+	before := asked[sibling]
+	if !s.inside(filepath.Join(sibling, "b.go"), Write) || asked[sibling] != before {
+		t.Error("an arrival at agents re-decided a worktree under agents-old")
+	}
+	if !s.inside(filepath.Join(inner, "b.go"), Write) {
+		t.Error("a worktree beneath the arrival was answered by its stale ordinary verdict")
+	}
+}
