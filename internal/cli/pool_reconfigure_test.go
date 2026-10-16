@@ -311,7 +311,7 @@ func TestRestartWithConfig_DoesNotReviveAfterClose(t *testing.T) {
 	p.close()
 	g := cfg.LSP["go"]
 	g.Args = []string{"35"}
-	p.restartWithConfig(e, g, true)
+	p.restartWithConfig(e, g, true, restartReasonConfig)
 	if now, c, state := entryNow(p, e); now != sup || slices.Equal(c.Args, []string{"35"}) || state.running() {
 		t.Fatalf("a closed pool's entry was restarted (new supervisor %v, args %v, state %s)", now != sup, c.Args, state)
 	}

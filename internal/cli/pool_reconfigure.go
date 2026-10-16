@@ -116,13 +116,36 @@ func (p *workspacePool) reconfigureEntries(selected func(*poolEntry) bool) int {
 // instead of finishing on the one it started with. An entry governed by a
 // project config that does not parse is left as it is until the file is fixed
 // — the pool's fallback to the global config is a degradation, not an edit.
+//
+// The config is resolved outside p.mu, so it is checked against the pool's
+// config generation under the lock: one that moved means a newer config was
+// published while this one resolved, and the resolve is repeated rather than
+// acting on a stale want — which could otherwise restart a server back onto
+// an old config just after a newer restart finished.
 func (p *workspacePool) reconfigureEntry(e *poolEntry) bool {
-	if p.projectConfigInvalid(e.root) {
-		return false
+	for {
+		gen := p.langsGen.Load()
+		want, enabled, invalid := p.entryConfig(e)
+		if invalid {
+			return false
+		}
+		if p.reconfigureResolved != nil {
+			p.reconfigureResolved(e)
+		}
+		p.mu.Lock()
+		if p.langsGen.Load() != gen {
+			p.mu.Unlock()
+			continue
+		}
+		started := p.startReconfigureLocked(e, want, enabled)
+		p.mu.Unlock()
+		return started
 	}
-	want, enabled := p.cfgForWorkspace(e.root, e.language)
-	p.mu.Lock()
-	defer p.mu.Unlock()
+}
+
+// startReconfigureLocked starts e's restart onto want, or marks a running one
+// to run again. Caller holds p.mu.
+func (p *workspacePool) startReconfigureLocked(e *poolEntry, want config.LSPConfig, enabled bool) bool {
 	if e.reconfiguring {
 		e.reconfigureAgain = true
 		return false
@@ -131,7 +154,7 @@ func (p *workspacePool) reconfigureEntry(e *poolEntry) bool {
 		return false
 	}
 	e.reconfiguring = true
-	go p.restartWithConfig(e, want, enabled)
+	go p.restartWithConfig(e, want, enabled, restartReasonConfig)
 	return true
 }
 
@@ -160,13 +183,29 @@ func serverChange(a, b config.LSPConfig) bool {
 	return !reflect.DeepEqual(a, b)
 }
 
+// Why an entry is restarted in place, for its log lines: a changed config
+// (PLAN-539), or a resync after its file watcher lost events (PLAN-538), which
+// restarts it on the config it already has.
+const (
+	restartReasonConfig = "its new config"
+	restartReasonResync = "a resync after lost file events"
+)
+
 // restartWithConfig is one entry's in-place restart: hibernate it once no call
 // holds it, swap in a supervisor for cfg, and wake it when a session holds it.
-func (p *workspacePool) restartWithConfig(e *poolEntry, cfg config.LSPConfig, enabled bool) {
+// A round that ends with another already requested does not wake the server it
+// built — that would start it on a config about to be replaced (expensive for a
+// server such as jdtls) — so the wake is left to the round that follows, or, if
+// none needs a restart after all, done here at the end.
+func (p *workspacePool) restartWithConfig(e *poolEntry, cfg config.LSPConfig, enabled bool, reason string) {
 	for {
-		p.restartOnce(e, cfg, enabled)
+		deferred := p.restartOnce(e, cfg, enabled, reason)
+		reason = restartReasonConfig // a further round is always a config change's
 		var again bool
 		if cfg, enabled, again = p.nextRestart(e); !again {
+			if deferred {
+				p.wakeHeld(e)
+			}
 			return
 		}
 	}
@@ -187,10 +226,10 @@ func (p *workspacePool) nextRestart(e *poolEntry) (config.LSPConfig, bool, bool)
 		}
 		e.reconfigureAgain = false
 		p.mu.Unlock()
-		if p.projectConfigInvalid(e.root) {
+		want, enabled, invalid := p.entryConfig(e)
+		if invalid {
 			continue // re-checks the flag; ends the round unless a request came in
 		}
-		want, enabled := p.cfgForWorkspace(e.root, e.language)
 		p.mu.Lock()
 		restart := needsRestartLocked(e, want, enabled)
 		p.mu.Unlock()
@@ -201,16 +240,17 @@ func (p *workspacePool) nextRestart(e *poolEntry) (config.LSPConfig, bool, bool)
 }
 
 // restartOnce is one restart round: hibernate e once no call holds it, swap in
-// a supervisor for cfg, and wake it when a session holds it.
-func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled bool) {
+// a supervisor for cfg, and wake it when a session holds it — unless another
+// round is already requested, when it reports the wake deferred instead.
+func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled bool, reason string) (wakeDeferred bool) {
 	var env []string
 	var goWorkOff string
 	if enabled {
 		env, goWorkOff = goLSPEnv(e.language, e.root, cfg, envFor(cfg))
 	}
 	if err := p.hibernateWhenIdle(e); err != nil {
-		slog.Warn("pool: could not restart a language server for its new config", "root", e.root, "language", e.language, "err", err)
-		return
+		slog.Warn("pool: could not restart a language server for "+reason, "root", e.root, "language", e.language, "err", err)
+		return false
 	}
 	// p.mu is held from here (hibernateWhenIdle returns with it).
 	if p.closed || p.entries[poolKey{e.root, e.language}] != e || !enabled {
@@ -218,7 +258,7 @@ func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled 
 		if !enabled {
 			slog.Info("pool: language disabled by config — its server stays stopped", "root", e.root, "language", e.language)
 		}
-		return
+		return false
 	}
 	e.lspCfg = cfg
 	e.goWorkOff = goWorkOff
@@ -228,20 +268,65 @@ func (p *workspacePool) restartOnce(e *poolEntry, cfg config.LSPConfig, enabled 
 		e.cache.Clear()
 	}
 	held := e.refs > 0
+	if held && e.reconfigureAgain {
+		p.mu.Unlock()
+		slog.Info("pool: restarted a language server for "+reason+"; its wake waits for the newer config", "root", e.root, "language", e.language)
+		return true
+	}
 	var readyCh <-chan error
 	var err error
 	if held {
 		readyCh, err = p.wakeLocked(e)
 	}
 	p.mu.Unlock()
-	slog.Info("pool: restarted a language server for its new config", "root", e.root, "language", e.language, "woken", held && err == nil)
+	slog.Info("pool: restarted a language server for "+reason, "root", e.root, "language", e.language, "woken", held && err == nil)
+	p.afterWake(e, held, readyCh, err)
+	return false
+}
+
+// wakeHeld wakes e when a session still holds it and it is hibernated, as the
+// last round of a restart that deferred its wake leaves it. An entry torn down,
+// woken already, or taken by a newer restart (which wakes it itself) is left.
+//
+// It resolves the config first: the request that deferred the wake may have
+// DISABLED the language, and a disabled language's server stays stopped. The
+// resolve is checked against the config generation under p.mu, as in
+// reconfigureEntry, so a disable published in between is not missed.
+func (p *workspacePool) wakeHeld(e *poolEntry) {
+	for {
+		gen := p.langsGen.Load()
+		if _, enabled, invalid := p.entryConfig(e); !enabled && !invalid {
+			return
+		}
+		if p.reconfigureResolved != nil {
+			p.reconfigureResolved(e)
+		}
+		p.mu.Lock()
+		if p.langsGen.Load() == gen {
+			break // p.mu stays held
+		}
+		p.mu.Unlock()
+	}
+	if p.closed || p.entries[poolKey{e.root, e.language}] != e || e.reconfiguring || e.refs == 0 || e.state != poolHibernated {
+		p.mu.Unlock()
+		return
+	}
+	readyCh, err := p.wakeLocked(e)
+	p.mu.Unlock()
+	slog.Info("pool: woke a restarted language server once its config settled", "root", e.root, "language", e.language, "woken", err == nil)
+	p.afterWake(e, true, readyCh, err)
+}
+
+// afterWake finishes a restart's wake outside p.mu: it reports a failed wake
+// (the next acquire retries), and otherwise reattaches the file watcher
+// hibernation dropped — the wake does not rebuild it (attachWatcher, PLAN-536)
+// — and watches for a late start failure.
+func (p *workspacePool) afterWake(e *poolEntry, woke bool, readyCh <-chan error, err error) {
 	if err != nil {
 		slog.Warn("pool: waking a reconfigured language server failed; the next acquire retries", "root", e.root, "language", e.language, "err", err)
 		return
 	}
-	if held {
-		// The wake does not rebuild the file watcher hibernation dropped; it is
-		// attached here, after the unlock (attachWatcher, PLAN-536).
+	if woke {
 		p.attachWatcher(e)
 	}
 	if readyCh != nil {

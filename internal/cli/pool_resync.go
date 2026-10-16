@@ -76,7 +76,7 @@ func (p *workspacePool) resyncEntry(e *poolEntry) {
 		return
 	}
 	e.reconfiguring = true
-	go p.restartWithConfig(e, e.lspCfg, true)
+	go p.restartWithConfig(e, e.lspCfg, true, restartReasonResync)
 }
 
 // resyncInterval is the minimum gap between an entry's resyncs: losses that

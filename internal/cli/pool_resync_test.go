@@ -449,3 +449,26 @@ func TestWatcherLost_ASkippedHibernationKeepsThePendingResync(t *testing.T) {
 		t.Fatal("a refused hibernation dropped the pending resync")
 	}
 }
+
+// TestWatcherLost_TheResyncSaysItIsOne: a resync's restart is logged as one,
+// not as a config change.
+func TestWatcherLost_TheResyncSaysItIsOne(t *testing.T) {
+	logs := captureLogs(t)
+	pool, f := resyncPool(t)
+	root := goModRoot(t)
+	e, err := pool.acquireLang(t.Context(), root, "go", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup := supOf(pool, e)
+	f.latest(root).lost <- struct{}{}
+	eventually(t, 5*time.Second, "the server was not resynced", func() bool { return supOf(pool, e) != sup })
+	// The line is written after the swap is visible.
+	eventually(t, 5*time.Second, "the resync's restart was never logged", func() bool {
+		return strings.Contains(logs.String(), "restarted a language server for")
+	})
+	out := logs.String()
+	if !strings.Contains(out, "restarted a language server for a resync after lost file events") || strings.Contains(out, "for its new config") {
+		t.Fatalf("the resync's restart is not logged as a resync:\n%s", out)
+	}
+}
