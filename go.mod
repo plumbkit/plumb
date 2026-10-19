@@ -12,7 +12,7 @@ require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/charmbracelet/x/term v0.2.2
-	github.com/ebitengine/purego v0.11.1
+	github.com/ebitengine/purego v0.11.2
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/klauspost/compress v1.20.3
 	github.com/muesli/reflow v0.3.0
