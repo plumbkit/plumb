@@ -14,7 +14,7 @@
 # Contract (see github.com/anthropics/oss-scanner, templates/Dockerfile): the
 # checkout lives at /src, the final stage keeps a package manager, and a failing
 # test must not fail the build. Keep the Go version in step with go.mod
-# (currently `go 1.27`, `toolchain go1.27.2`), mirroring build/docker/*.Dockerfile,
+# (currently `go 1.27`, `toolchain go1.27.3`), mirroring build/docker/*.Dockerfile,
 # and the language-server set in step with the `integration` job in
 # .github/workflows/ci.yml.
 #

@@ -2,6 +2,11 @@
 
 ## 0.27.0 (unreleased)
 
+### Security
+
+- **Built with Go 1.27.3**, which fixes GO-2026-6809 in the standard
+  library's `crypto/x509`; govulncheck found it reachable from plumb.
+
 ### Added
 
 - **omp (oh-my-pi) is a supported client: `plumb setup omp`, skills and hooks.**
