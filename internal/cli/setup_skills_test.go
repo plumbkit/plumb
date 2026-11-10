@@ -23,7 +23,7 @@ import (
 // session_start guidance block, never as files written into a directory plumb
 // guessed at.
 func TestSkillCapableClients_ArePinned(t *testing.T) {
-	want := []string{"claude-code", "codex", "junie", "kimi-code", "zcode"}
+	want := []string{"claude-code", "codex", "junie", "kimi-code", "omp", "zcode"}
 
 	capable := skillCapableClients()
 	got := make([]string, 0, len(capable))
@@ -184,6 +184,8 @@ func pointClientHomesAt(t *testing.T) string {
 	t.Setenv("HOME", root)
 	t.Setenv("CODEX_HOME", filepath.Join(root, "codex-home"))
 	t.Setenv("KIMI_CODE_HOME", filepath.Join(root, "kimi-home"))
+	t.Setenv("OMP_PROFILE", "")
+	t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(root, "omp-agent"))
 	return root
 }
 

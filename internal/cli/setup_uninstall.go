@@ -141,7 +141,8 @@ func removePlumbHooksFor(t setupTarget) []string {
 	if err != nil {
 		return nil
 	}
-	removed, err := removeHooksAt(path, h.ours)
+	plumbBin, _ := os.Executable() // regenerates a partly-kept hook file; a full removal never uses it
+	removed, err := h.removeAt(path, uninstallScope{}, plumbBin)
 	if err != nil {
 		return []string{fmt.Sprintf("hooks: error: %v", err)}
 	}

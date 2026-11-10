@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.27.0 (unreleased)
+
+### Added
+
+- **omp (oh-my-pi) is a supported client: `plumb setup omp`, skills and hooks.**
+  `plumb setup omp` registers plumb in omp's user `mcp.json`, in the agent
+  directory omp itself resolves (`~/.omp/agent`, a named profile's
+  `~/.omp/profiles/<name>/agent`, or `PI_CODING_AGENT_DIR` / `PI_CONFIG_DIR`),
+  keeping any other keys on the entry, such as a raised `timeout`; `--all`
+  detects omp by that directory. omp reads `SKILL.md` bundles from
+  `<agent dir>/skills`, so `plumb skills sync omp` keeps the eight skills there.
+  `plumb hooks install omp` writes one plumb-owned extension module,
+  `<agent dir>/extensions/plumb.ts`, that sends each event to the hidden
+  `plumb hooks run-omp`: the session linkage on a session's first prompt (and
+  again after a compaction), a Stop check for unread peer mail in main
+  sessions, and the context hints. It carries no identity stamp, because omp
+  meets a revised `xd://` tool call with a fresh approval prompt. A `plumb.ts`
+  plumb did not write is never overwritten or deleted.
+
 ## 0.26.2 (2026-10-16)
 
 ### Fixed

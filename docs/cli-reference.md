@@ -363,6 +363,7 @@ changing anything. Without a terminal, bare `plumb setup` prints help.
 | `plumb setup hermes` | `~/.hermes/config.yaml` (`mcp_servers` key; YAML) |
 | `plumb setup zcode` | `~/.zcode/cli/config.json` (nested `mcp.servers` key; strict server schema — `command` must be a plain string, unknown keys are dropped) + `~/.zcode/skills/` (skills via `plumb skills sync`) |
 | `plumb setup dsh` | DeepSeek Harness's home-level user patch layer (`$DSH_HOME/cordis.patch.yml`, or `~/.dsh/cordis.patch.yml`) — a YAML patch row for the in-box `@deepseek-ai/dsh-mcp-client` plugin. The home layer applies to **every** dsh profile (web, headless, custom), so one registration covers all of them; the bridged tools appear as `mcp__plumb__*`. |
+| `plumb setup omp` | omp's user agent directory: `~/.omp/agent/mcp.json` (the `mcpServers` shape with `"type": "stdio"`) + `~/.omp/agent/skills/` (skills via `plumb skills sync`). The directory follows omp's own precedence: a named profile (`OMP_PROFILE`, else `PI_PROFILE`) uses `~/.omp/profiles/<name>/agent`, `PI_CODING_AGENT_DIR` replaces the default profile's directory, and `PI_CONFIG_DIR` renames `.omp`. A repoint keeps the entry's other keys, such as a raised `timeout`. Run `/mcp reload` in a running omp to pick the change up. |
 All clients funnel through one format-agnostic merge (`mergeServerEntry`)
 backed by JSON, TOML, or YAML serialisers; config locations are resolved via
 OS/user-home helpers — no hardcoded paths. (Aider is intentionally absent — it
@@ -375,7 +376,7 @@ map sits one level deeper, under `mcp.servers` (`setup_zcode.go`).
 | `--project` | `claude-code` | Write to `.mcp.json` in the current directory (project-scoped) instead of the user-level config. |
 | `--lean` | `kimi-code`, `codex`, `gemini` | Also write a **client-side tool allowlist** on the plumb entry, pinning the ~22 tools of plumb's lean set (`tools.LeanToolNames()`, its only source) so the client loads those schemas instead of all 61. Each client has its own key, and none supports globbing — the value is always exact tool names: `enabledTools` for Kimi Code, `enabled_tools` for Codex (a TOML array on `[mcp_servers.plumb]`), `includeTools` for Gemini CLI (whose sibling `excludeTools` wins wherever both are present; plumb never touches the deprecated global `tools.allowed`/`tools.exclude` settings). The saving has to be taken client-side because none of these clients carries a verified deferred-discovery capability: plumb's own `[tools] profile = "lean"` would remove capability rather than schemas, where a filtered-out tool in the client's own config is the user's explicit choice. The list is a **snapshot**: re-run `plumb setup <client> --lean` after upgrading plumb to refresh it. Re-running with `--lean` **replaces** a hand-edited list with plumb's; the bulk `plumb setup --all` sweep carries no `--lean` state and therefore **preserves** whatever key is on disk, so a routine binary repoint never widens a surface you narrowed. A later **bare** named re-register differs by client: `plumb setup codex`/`plumb setup gemini` **clear** the key (the flag state on the command line is authoritative) and say so in their output, while `plumb setup kimi-code` **preserves** it — Kimi shipped first with no clearing path, so delete the key from `mcp.json` by hand to go back to its full surface. Because a bare re-register clears, `plumb doctor`'s repoint fix keeps `--lean` on the command it suggests whenever that client's config carries an allowlist today — following doctor's advice about a moved binary never widens a surface you narrowed. |
 | | | `plumb doctor` grades all three the same way, one parameterised check per client. It mentions the flag when a client registers plumb without an allowlist (informational — a full surface is a valid default), stays silent when the allowlist equals today's lean set, and otherwise grades the key's *content* rather than its shape: a list naming no tool plumb registers earns a warning with a fix (it leaves the client with no plumb tools at all, however well-formed the file), an aged snapshot of the lean set earns an informational drift hint naming what is missing or no longer registered, and a value that cannot be an allowlist at all — `[]`, `null`, or a non-list — earns a warning worded for that specific shape, since only `[]` definitely means "no tools" (`null` most likely reads as no allowlist at all, and a wrong-typed value is one plumb cannot predict the client's handling of). |
-| `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with five exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), and DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
+| `--all` | `plumb setup` | The single bulk flag: **repoint** every already-registered client at the current `plumb` binary (the repair after the binary moves or is rebuilt elsewhere — pairs with `plumb doctor`'s registered-binary check), and **register** plumb in installed clients that don't have it yet — any client whose config file already exists but has no plumb entry. Clients with no config file at all are left untouched (plumb can't tell an absent config from an uninstalled client — use the client's named subcommand to create one), with six exceptions: Junie is detected via its home dir (`~/.junie`), Kimi Code via its data dir (`$KIMI_CODE_HOME`, or `~/.kimi-code`), Kimi Work via its bundled kernel home (`$KIMI_WORK_HOME`, or the app's data dir on macOS), ZCode via its home dir (`~/.zcode`), DeepSeek Harness via its home dir (`$DSH_HOME`, or `~/.dsh`), and omp via its agent directory (`~/.omp/agent`, or wherever its profile and env overrides put it), because their MCP configs (`mcp.json`, the home `cordis.patch.yml`) only exist once an entry is configured, so `--all` creates them fresh. Triggers the bulk run on its own, so `plumb setup --all` is the one-shot first-time setup for every client already present on the machine — and the repair sweep afterwards. A client plumb cannot read or write is reported `error` in the table like any other status, against its own config path; the reason prints in a counted block **below** the table (after the summary line), because a parser message naming the file, the line and the syntax it choked on is far wider than any config path and stretched the Config column past the terminal width when it was inlined. Home directories inside those messages are contracted to `~` to match the table, and the summary line stops short of vouching for every installed client whenever any error is reported. |
 | `--repair`, `--install-missing` | `plumb setup` | Deprecated hidden aliases of `--all`: both still parse and print a deprecation warning, then run the full `--all` sweep. `--repair` used to be the repoint-only sweep and `--install-missing` the only register-missing path; `--all` now does both, so neither old spelling has a behaviour of its own. |
 | `--uninstall` | every `<client>` subcommand | Reverse the registration: back the config up, then remove plumb's entry — **only plumb's**; sibling MCP servers survive, and repeating the call on a client plumb is not registered in is a no-op. It also removes that client's lifecycle hooks (`plumb hooks uninstall`'s writer, so only plumb's own handlers go and the user's survive), and for a skill-capable client the skill directories plumb's sync installed — but only those still carrying plumb's provenance marker or exactly matching the embedded content, so a skill the user rewrote survives and is reported as left in place; each removed skill directory is backed up to a sibling `<name>.<timestamp>.bak` directory first. `plumb setup claude-code --project --uninstall` touches only the project's `.mcp.json`, never the user-level config or the user-scoped skills, which live in the user scope. |
 
@@ -393,8 +394,8 @@ plumb hooks uptake [--since 168h] [--json]       # are context hints configured,
 ```
 
 **Context hints.** `install` adds two advisory hint handlers, UserPromptSubmit
-and SubagentStart, for Claude Code and for Codex (which asks you to trust them in
-`/hooks` before they run), unless given `--no-context`; with hints on (the
+and SubagentStart, for Claude Code, for Codex (which asks you to trust them in
+`/hooks` before they run) and for omp, unless given `--no-context`; with hints on (the
 default, `[context] hints = true`, overridden by `PLUMB_CONTEXT_HINTS`) the
 client's SessionStart handler also appends a hint after the linkage sentence.
 `--no-context` does not remove handlers already installed, and a later plain
@@ -428,8 +429,9 @@ cannot reach.
 |---|---|---|
 | `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 3630s by default — the wake ceiling plus slack) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
+| `omp` | `<agent dir>/extensions/plumb.ts` (`~/.omp/agent/extensions/plumb.ts` by default; the agent directory resolves as for `plumb setup omp`) | One generated extension module carrying `SessionStart` and `Stop`; each handler pipes one JSON document to `plumb hooks run-omp` with a 5s timeout |
 
-Both clients get the `SessionStart`/`Stop` pair. **`SessionStart`** states the
+Every client gets the `SessionStart`/`Stop` pair. **`SessionStart`** states the
 client's own conversation ID as a fact, so the agent's first `session_start`
 can pass it as `session_id` — the linkage that lets `plumb mail`, `leave_note`
 and the wake path address that exact session rather than guessing from a
@@ -558,6 +560,22 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   This narrows the end-of-turn race; it is **not** push delivery.
   Codex also requires an interactive trust review for non-managed command hooks
   — run `/hooks` in Codex after installing.
+- **omp loads an extension, not a hook config.** omp runs lifecycle handlers as
+  TypeScript modules from `<agent dir>/extensions`, so plumb owns one file there.
+  It opens with a `Generated by \`plumb hooks install omp\`` line and records
+  each installed event on a `// plumb:hook <Event>` line; status, a partial
+  `uninstall --only context` and a full uninstall all read those lines, and a
+  `plumb.ts` without the opening line is the user's and is refused, never
+  overwritten or deleted. The module is a bridge: each handler sends its event
+  to `plumb hooks run-omp` over stdin (so a prompt never reaches argv) and
+  applies the JSON answer. omp has no `SessionStart` result channel, so the
+  linkage sentence rides the session's first `before_agent_start` instead, and
+  again after a compaction; subagent sessions get the subagent hint and no
+  linkage. `Stop` is omp's `session_stop`, main sessions only, and behaves as
+  Codex's check: one probe as the turn ends, never a wake. There is no identity
+  stamp: omp re-validates a revised tool input and meets a revised `xd://`
+  device call with a fresh approval prompt, so stamping would prompt on every
+  plumb call. Restart omp after installing; the module loads per session.
 
 Properties both hooks hold, and that the tests pin:
 
@@ -649,7 +667,7 @@ plumb skills sync [client] [--check] [--force]
 Bare `plumb skills` is **read-only**: a status table over the clients with a
 verified skills directory (Claude Code `~/.claude/skills/`, Codex
 `$CODEX_HOME/skills/` or `~/.codex/skills/`, Junie `~/.junie/skills/`, Kimi Code `$KIMI_CODE_HOME/skills/`
-or `~/.kimi-code/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
+or `~/.kimi-code/skills/`, omp `~/.omp/agent/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
 `missing`, or `stale` (content differs from the copy compiled into this
 binary). A skill-capable client whose config does not register plumb is shown
 as `unregistered`, with the reason `sync` skips it and the `plumb setup` fix
@@ -829,7 +847,7 @@ memory and the per-path write locks stay shared: a namespace changes who can see
 whom, not what the daemon knows about the code. Session names stay unique across
 every namespace.
 
-The Claude Code and Codex hooks (`plumb hooks run-claude`, `run-codex`) inherit
+The Claude Code, Codex and omp hooks (`plumb hooks run-claude`, `run-codex`, `run-omp`) inherit
 the session's `PLUMB_NAMESPACE` and send it with every daemon request they make:
 the Stop-hook mailbox probe, context hints and the `/clear` handover are answered
 only from that namespace's sessions. A hook without a token speaks for the

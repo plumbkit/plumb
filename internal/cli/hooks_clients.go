@@ -87,14 +87,44 @@ type hooksTarget struct {
 	// --no-context, kept fresh while present. nil when the client has none.
 	contextEntries func(plumbBin string) []hookEntry
 	ours           ownershipTest
-	notes          []string
+	// source, when set, replaces the shared JSON container below: the client
+	// loads its hooks as one plumb-owned source file, generated whole from the
+	// events installed (omp's extension module, hooks_omp.go). ours is unused
+	// then — the file's own marker decides ownership.
+	source func(plumbBin string, events []string) string
+	notes  []string
+}
+
+// statesAt classifies entries against the client's hook config on disk.
+func (t hooksTarget) statesAt(path string, entries []hookEntry, plumbBin string) ([]hookState, error) {
+	if t.source != nil {
+		return sourceHookStates(t, path, entries, plumbBin)
+	}
+	return hookStatesAt(path, entries, t.ours)
+}
+
+// installAt writes entries into the client's hook config, reporting a change.
+func (t hooksTarget) installAt(path string, entries []hookEntry, plumbBin string) (bool, error) {
+	if t.source != nil {
+		return installHookSource(t, path, entries, plumbBin)
+	}
+	return installHooksAt(path, entries, t.ours)
+}
+
+// removeAt takes plumb's handlers within scope out of the client's hook config
+// and reports how many went.
+func (t hooksTarget) removeAt(path string, scope uninstallScope, plumbBin string) (int, error) {
+	if t.source != nil {
+		return removeHookSource(t, path, scope.events, plumbBin)
+	}
+	return removeHooksAt(path, scope.ownership(t.ours))
 }
 
 // hooksTargets is the display order for every command that walks clients. It is
 // a function rather than a package var so it cannot depend on the
 // initialisation order of the setupTarget vars it embeds.
 func hooksTargets() []hooksTarget {
-	return []hooksTarget{claudeCodeHooksTarget, codexHooksTarget}
+	return []hooksTarget{claudeCodeHooksTarget, codexHooksTarget, ompHooksTarget}
 }
 
 var claudeCodeHooksTarget = hooksTarget{

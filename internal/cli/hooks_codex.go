@@ -45,6 +45,12 @@ func codexHookEntries(plumbBin string) []hookEntry {
 	}
 }
 
+// peerMailStopReason is the Stop decision's reason, shared by the clients whose
+// Stop hook blocks the turn's end (Codex, omp). It is a count, never a body.
+func peerMailStopReason(count int) string {
+	return fmt.Sprintf("You have %d unread Plumb message(s) from a peer agent. Call check_messages before finishing.", count)
+}
+
 var hooksRunCodexCmd = &cobra.Command{
 	Use:         "run-codex",
 	Short:       "Run a Codex lifecycle hook",
@@ -128,7 +134,7 @@ func codexHookResult(input codexHookInput, probe func(string, string) (mailRepor
 		}
 		return map[string]any{
 			"decision": "block",
-			"reason":   fmt.Sprintf("You have %d unread Plumb message(s) from a peer agent. Call check_messages before finishing.", report.Count),
+			"reason":   peerMailStopReason(report.Count),
 		}
 	default:
 		return nil

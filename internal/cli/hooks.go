@@ -35,9 +35,9 @@ import (
 var hooksCmd = &cobra.Command{
 	Use:   "hooks",
 	Short: "Show which plumb lifecycle hooks are installed per client",
-	Long: `Show, for every client plumb ships lifecycle hooks for (claude-code, codex),
-whether each hook is installed, missing, or stale relative to what this binary
-would write. Read-only.
+	Long: `Show, for every client plumb ships lifecycle hooks for (claude-code, codex,
+omp), whether each hook is installed, missing, or stale relative to what this
+binary would write. Read-only.
 
 ` + "`plumb hooks install [client]`" + ` installs or refreshes them;
 ` + "`plumb hooks uninstall [client]`" + ` removes them again. A client whose
@@ -59,14 +59,17 @@ subagents multiplexed over one connection keep their own workspace pin and
 trackers instead of being refused as unattributable.
 
 Claude Code's Stop hook is a background watcher (async + asyncRewake): it wakes
-a session that has already gone idle. Codex has no equivalent, so its Stop hook
-performs one read-only check as a turn ends — that narrows the end-of-turn race,
-it is not push delivery. All of them fail open: a missing mailbox, an
+a session that has already gone idle. Codex and omp have no equivalent, so their
+Stop hook performs one read-only check as a turn ends — that narrows the
+end-of-turn race, it is not push delivery. omp loads hooks as an extension
+module rather than from config, so plumb writes one file it owns there
+(<agent dir>/extensions/plumb.ts); it links the session on the first prompt
+instead of at SessionStart, and carries no identity stamp. All of them fail open: a missing mailbox, an
 unavailable daemon, an ambiguous session or a daemon that predates the identity
 channel all leave the turn and the call exactly as the client sent them, and
 none ever carries a message body.
 
-Both clients also get the advisory context-hint handlers (UserPromptSubmit and
+Every client also gets the advisory context-hint handlers (UserPromptSubmit and
 SubagentStart, plus a hint on SessionStart): a few selectors and locations,
 never source, when a prompt names code, after a resume or compaction, and when
 a subagent starts. --no-context leaves them out; it does not remove ones already
@@ -113,7 +116,7 @@ func init() {
 		"leave out the advisory context-hint handlers (already-installed ones stay; `plumb hooks uninstall --only context` removes them)")
 	hooksInstallCmd.Flags().BoolVar(&hooksInstallContext, "context", false, "the context-hint handlers are now installed by default")
 	_ = hooksInstallCmd.Flags().MarkDeprecated("context", "the context-hint handlers are installed by default; use --no-context to leave them out")
-	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd)
+	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd, hooksRunOmpCmd)
 }
 
 // resolveHooksTargets turns an optional client argument into the set to act on.
@@ -169,7 +172,7 @@ func runHooksInstall(args []string) error {
 			report.clientError(t, err)
 			continue
 		}
-		if _, err := installHooksAt(path, entries, t.ours); err != nil {
+		if _, err := t.installAt(path, entries, plumbBin); err != nil {
 			report.clientError(t, err)
 			continue
 		}
@@ -216,7 +219,7 @@ func runHooksUninstall(args []string) error {
 			continue
 		}
 		before = only.states(before)
-		removed, err := removeHooksAt(path, only.ownership(t.ours))
+		removed, err := t.removeAt(path, only, plumbBin)
 		if err != nil {
 			report.clientError(t, err)
 			continue
@@ -254,7 +257,7 @@ func hookPlan(t hooksTarget, plumbBin string, withContext bool) (path string, en
 	if t.contextEntries != nil {
 		ctx := t.contextEntries(plumbBin)
 		if !withContext {
-			states, err := hookStatesAt(path, ctx, t.ours)
+			states, err := t.statesAt(path, ctx, plumbBin)
 			if err != nil {
 				return "", nil, nil, err
 			}
@@ -264,7 +267,7 @@ func hookPlan(t hooksTarget, plumbBin string, withContext bool) (path string, en
 			entries = append(entries, ctx...)
 		}
 	}
-	before, err = hookStatesAt(path, entries, t.ours)
+	before, err = t.statesAt(path, entries, plumbBin)
 	if err != nil {
 		return "", nil, nil, err
 	}
