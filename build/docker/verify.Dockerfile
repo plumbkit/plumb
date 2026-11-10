@@ -11,7 +11,7 @@
 # .github/workflows/ci.yml, and the language servers with the integration job.
 # trixie, not bookworm: its git (2.47) has `merge-tree -X`, which the git tool's
 # tests exercise; bookworm's 2.39 does not.
-FROM golang:1.27.2-trixie
+FROM golang:1.27.3-trixie
 
 # Node only to install the npm-published language servers.
 COPY --from=node:26.12.0-bookworm /usr/local/bin/node /usr/local/bin/node

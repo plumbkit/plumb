@@ -20,7 +20,7 @@ var setupCmd = &cobra.Command{
 sweep every one.
 
 Registration is config-only: it never installs skill files. Skill-capable
-clients (claude-code, codex, junie, kimi-code, zcode) get their skills from
+clients (claude-code, codex, junie, kimi-code, omp, zcode) get their skills from
 ` + "`plumb skills sync`" + ` — setup prints a hint when it notices them missing or
 stale, and bare ` + "`plumb skills`" + ` shows the full status table.
 
@@ -32,9 +32,10 @@ all are left untouched — plumb cannot tell an absent config from an
 uninstalled client, so use the client's named subcommand to create one. The
 exceptions are Junie, detected via its home dir (~/.junie), Kimi Code,
 detected via its data dir ($KIMI_CODE_HOME, or ~/.kimi-code), ZCode, detected
-via its home dir (~/.zcode), and DeepSeek Harness, detected via its home dir
-($DSH_HOME, or ~/.dsh): their MCP configs only exist once an entry is
-configured, so --all creates them fresh.
+via its home dir (~/.zcode), DeepSeek Harness, detected via its home dir
+($DSH_HOME, or ~/.dsh), and omp, detected via its agent dir (~/.omp/agent,
+moved by its profile and env overrides): their MCP configs only exist once an
+entry is configured, so --all creates them fresh.
 
 --repair and --install-missing are deprecated hidden aliases of --all with
 the same effect. Bare ` + "`plumb setup`" + ` (no flags) opens an interactive

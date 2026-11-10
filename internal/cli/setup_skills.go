@@ -95,6 +95,23 @@ func junieSkillsDir() (string, error) {
 	return homeRelConfigPath(".junie", "skills")
 }
 
+// ompSkillsDir returns omp's user skills directory, <agent dir>/skills, under
+// the same profile and env precedence as OmpConfigPath (see ompAgentDir).
+//
+// Verified against a live install (omp 18.18.6), not assumed: its native
+// provider scans ~/.omp/agent/skills/*/SKILL.md, requires the frontmatter
+// description every shipped plumb skill carries, and ranks above every
+// imported source — so a synced copy outranks a same-named one in
+// ~/.agents/skills. `omp skill list --json` lists the synced skills from that
+// directory.
+func ompSkillsDir() (string, error) {
+	dir, err := ompAgentDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "skills"), nil
+}
+
 // skillResult is one skill's outcome: the action installSkill reported
 // ("installed"/"updated"/"unchanged"), or the error that stopped it.
 type skillResult struct {

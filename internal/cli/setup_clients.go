@@ -115,6 +115,7 @@ var extraSetupTargets = []setupTarget{
 	// DeepSeek Harness writes a YAML patch row into its home-level user patch
 	// layer rather than a server map — see setup_dsh.go for the node-level merge.
 	{use: "dsh", name: "DeepSeek Harness", pathFn: DSHConfigPath, installedFn: dshInstalled, intoFn: setupDSHInto, extractFn: dshCommandExtractor, outFn: setupDSHOut, note: dshSetupNote},
+	ompTarget,
 }
 
 // The four original setup targets, named so that both the bespoke commands in

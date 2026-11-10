@@ -278,7 +278,9 @@ func TestHooksTargets_AreRegistryDriven(t *testing.T) {
 		if !ok || found.name != target.name {
 			t.Errorf("findHooksTarget(%q) did not resolve to %s", target.use, target.name)
 		}
-		if target.setup.use == "" || target.pathFn == nil || target.ours == nil {
+		// A source-file client (omp) decides ownership by the file's marker, not
+		// per handler; hooks_omp_test.go pins its round trip instead.
+		if target.setup.use == "" || target.pathFn == nil || (target.ours == nil && target.source == nil) {
 			t.Errorf("%s is missing a registry field", target.name)
 		}
 		entries := target.entries("/opt/plumb")
@@ -289,7 +291,7 @@ func TestHooksTargets_AreRegistryDriven(t *testing.T) {
 			if e.event == "" || e.label == "" {
 				t.Errorf("%s has an unlabelled entry: %+v", target.name, e)
 			}
-			if !target.ours(e.event, e.handler) {
+			if target.source == nil && !target.ours(e.event, e.handler) {
 				t.Errorf("%s does not recognise its own handler for %s — install would duplicate on every run", target.name, e.event)
 			}
 		}
