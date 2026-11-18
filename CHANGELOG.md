@@ -2,6 +2,11 @@
 
 ## 0.28.0 (unreleased)
 
+### Security
+
+- **Built with Go 1.27.4**, which fixes GO-2026-6859 in the standard
+  library's `net/http`; govulncheck found it reachable from plumb.
+
 ### Added
 
 - **Qwen Code is a supported client: skills and hooks.** `plumb setup qwen`
