@@ -142,6 +142,17 @@ type claudeHookInput struct {
 const claudeHookStdinCap = 32 << 20
 
 func runClaudeHook(_ *cobra.Command, _ []string) error {
+	return runClaudeShapedHook("claude-code")
+}
+
+// runClaudeShapedHook is the runtime for every client whose hook contract is
+// Claude Code's — Claude Code itself and Qwen Code (hooks_qwen.go), whose
+// payload and output channels are byte-compatible. host attributes the context
+// hints in the uptake ledger. The Stop exit-2 wake is produced identically for
+// both and delivered differently: asyncRewake turns it into a task notification
+// on Claude Code, while Qwen Code's synchronous Stop reads it as the blocked
+// stop's feedback.
+func runClaudeShapedHook(host string) error {
 	var input claudeHookInput
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, claudeHookStdinCap)).Decode(&input); err != nil {
 		return nil // Hook failures must never strand a turn.
@@ -153,19 +164,19 @@ func runClaudeHook(_ *cobra.Command, _ []string) error {
 		return nil
 	case "SessionStart":
 		runClaudeSessionStart(input, notifyConversationCleared, os.Stdout)
-		fmt.Fprint(os.Stdout, claudeContextHintOutput(input, askContextHint))
+		fmt.Fprint(os.Stdout, claudeShapedContextHintOutput(input, host, askContextHint))
 		return nil
 	case "UserPromptSubmit", "SubagentStart":
-		fmt.Fprint(os.Stdout, claudeContextHintOutput(input, askContextHint))
+		fmt.Fprint(os.Stdout, claudeShapedContextHintOutput(input, host, askContextHint))
 		return nil
 	case "Stop":
 		wake := claudeStopHook(input, hookWakeProbe)
 		if wake == nil {
 			return nil
 		}
-		// Exit 2 with one line on stderr is the payload asyncRewake turns into
-		// a task notification. No other exit code carries a wake, and returning
-		// an error would exit 1 — hence the explicit exit.
+		// Exit 2 with one line on stderr is the wake payload. No other exit code
+		// carries a wake, and returning an error would exit 1 — hence the
+		// explicit exit.
 		fmt.Fprintln(os.Stderr, wakeSentence(*wake))
 		os.Exit(claudeWakeExitCode)
 	}

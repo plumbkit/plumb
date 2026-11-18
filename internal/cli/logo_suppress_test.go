@@ -50,7 +50,7 @@ func TestSuppressLogo_NoJSONFlag(t *testing.T) {
 // SessionStart, plain stdout is injected into the agent's context, where an
 // ASCII banner is noise the model has to read past. Both must stay silent.
 func TestSuppressLogo_HookRunVerbs(t *testing.T) {
-	for _, cmd := range []*cobra.Command{hooksRunClaudeCmd, hooksRunCodexCmd} {
+	for _, cmd := range []*cobra.Command{hooksRunClaudeCmd, hooksRunCodexCmd, hooksRunQwenCmd} {
 		if !suppressLogo(cmd) {
 			t.Errorf("`plumb hooks %s` prints the banner — it reaches the client's stdout", cmd.Use)
 		}

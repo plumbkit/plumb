@@ -20,7 +20,7 @@ var setupCmd = &cobra.Command{
 sweep every one.
 
 Registration is config-only: it never installs skill files. Skill-capable
-clients (claude-code, codex, junie, kimi-code, omp, zcode) get their skills from
+clients (claude-code, codex, junie, kimi-code, omp, qwen, zcode) get their skills from
 ` + "`plumb skills sync`" + ` — setup prints a hint when it notices them missing or
 stale, and bare ` + "`plumb skills`" + ` shows the full status table.
 

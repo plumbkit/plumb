@@ -63,6 +63,10 @@ type setupTarget struct {
 // setupTarget and the extra-profile doctor check (checkClaudeDesktopExtraProfiles).
 var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, "mcpServers", "command")
 
+// qwenTarget is named because qwenHooksTarget embeds it: Qwen Code keeps its
+// hooks in the same settings.json as its MCP registration.
+var qwenTarget = setupTarget{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: qwenSkillsDir}
+
 // extraSetupTargets are the command-line MCP-client agents that consume external
 // MCP servers and therefore make sense as `plumb setup` targets. The first six
 // share Claude Desktop's plain `mcpServers` JSON shape; the rest use a distinct
@@ -70,7 +74,7 @@ var claudeDesktopCommandExtractor = mapCommandExtractor(readOrInitClaudeConfig, 
 var extraSetupTargets = []setupTarget{
 	{use: "cursor", name: "Cursor", pathFn: CursorConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
 	{use: "augment", name: "Augment Code", pathFn: AugmentConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
-	{use: "qwen", name: "Qwen Code", pathFn: QwenConfigPath, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON},
+	qwenTarget,
 	{use: "junie", name: "Junie", pathFn: JunieConfigPath, installedFn: junieInstalled, intoFn: setupClaudeDesktopInto, extractFn: claudeDesktopCommandExtractor, outFn: removeMcpServersJSON, skillsDirFn: junieSkillsDir},
 	{
 		use: "kimi-code", name: "Kimi Code", pathFn: KimiCodeConfigPath, installedFn: kimiCodeInstalled,
