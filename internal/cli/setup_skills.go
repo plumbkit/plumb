@@ -95,6 +95,19 @@ func junieSkillsDir() (string, error) {
 	return homeRelConfigPath(".junie", "skills")
 }
 
+// qwenSkillsDir returns the user-scoped Qwen Code skills directory
+// (~/.qwen/skills).
+//
+// Verified against Qwen Code 0.28.0's shipped documentation, not assumed: it
+// discovers personal skills at ~/.qwen/skills/ (and ~/.agents/skills/, which
+// ~/.qwen/skills outranks on a name collision), reads the <name>/SKILL.md
+// directory-bundle shape, and requires the frontmatter name + description
+// every shipped plumb skill already carries (TestEmbeddedSkills_HaveValidFrontmatter
+// pins that). Symlinked skill directories are followed.
+func qwenSkillsDir() (string, error) {
+	return homeRelConfigPath(".qwen", "skills")
+}
+
 // ompSkillsDir returns omp's user skills directory, <agent dir>/skills, under
 // the same profile and env precedence as OmpConfigPath (see ompAgentDir).
 //

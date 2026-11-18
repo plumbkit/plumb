@@ -40,6 +40,7 @@ const (
 const (
 	claudeHookVerb = "hooks run-claude"
 	codexHookVerb  = "hooks run-codex"
+	qwenHookVerb   = "hooks run-qwen"
 )
 
 // ownershipTest decides whether one handler on one event is plumb's. The event
@@ -124,7 +125,7 @@ func (t hooksTarget) removeAt(path string, scope uninstallScope, plumbBin string
 // a function rather than a package var so it cannot depend on the
 // initialisation order of the setupTarget vars it embeds.
 func hooksTargets() []hooksTarget {
-	return []hooksTarget{claudeCodeHooksTarget, codexHooksTarget, ompHooksTarget}
+	return []hooksTarget{claudeCodeHooksTarget, codexHooksTarget, qwenHooksTarget, ompHooksTarget}
 }
 
 var claudeCodeHooksTarget = hooksTarget{

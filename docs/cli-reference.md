@@ -350,7 +350,7 @@ changing anything. Without a terminal, bare `plumb setup` prints help.
 | `plumb setup gemini --lean` | Same, plus an `includeTools` allowlist pinning plumb's lean tool set |
 | `plumb setup cursor` | `~/.cursor/mcp.json` (shared by the editor and the `cursor-agent` CLI) |
 | `plumb setup augment` | `~/.augment/settings.json` (the `auggie` CLI) |
-| `plumb setup qwen` | `~/.qwen/settings.json` |
+| `plumb setup qwen` | `~/.qwen/settings.json` + `~/.qwen/skills/` (skills via `plumb skills sync`) |
 | `plumb setup junie` | `~/.junie/mcp/mcp.json` (`mcpServers` key) + `~/.junie/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code` | `$KIMI_CODE_HOME/mcp.json` (or `~/.kimi-code/mcp.json`; `mcpServers` key — the legacy Kimi Desktop reads the same file; Kimi Work does NOT, register it with `kimi-work`) + `$KIMI_CODE_HOME/skills/` (skills via `plumb skills sync`) |
 | `plumb setup kimi-code --lean` | Same, plus an `enabledTools` allowlist pinning plumb's lean tool set |
@@ -429,6 +429,7 @@ cannot reach.
 |---|---|---|
 | `claude-code` | `~/.claude/settings.json` (hooks live here, not in `~/.claude.json`, which is where the MCP registration goes) | `SessionStart` (timeout 5s), `Stop` (`async` + `asyncRewake`, timeout 3630s by default — the wake ceiling plus slack) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `codex` | `$CODEX_HOME/hooks.json`, or `~/.codex/hooks.json` | `SessionStart` and `Stop`, both `command` handlers with a 5s timeout |
+| `qwen` | `~/.qwen/settings.json` (the same file as the MCP registration; plumb edits only its own handlers) | `SessionStart` (timeout 5s), `Stop` (synchronous watcher, timeout 3630000 by default — the wake ceiling plus slack, written in Qwen's millisecond notation) and `PreToolUse` (matcher `mcp__plumb__.*`, timeout 5s) |
 | `omp` | `<agent dir>/extensions/plumb.ts` (`~/.omp/agent/extensions/plumb.ts` by default; the agent directory resolves as for `plumb setup omp`) | One generated extension module carrying `SessionStart` and `Stop`; each handler pipes one JSON document to `plumb hooks run-omp` with a 5s timeout |
 
 Every client gets the `SessionStart`/`Stop` pair. **`SessionStart`** states the
@@ -453,7 +454,10 @@ connection) the new conversation simply gets an identity of its own. Codex's
 also reports `startup`, `resume`, `compact` and `fork`, none of which announce),
 with the same budget and an unchanged JSON stdout. Codex calls carry no
 identity stamp, so its next `session_start` relinks the connection by itself;
-the marker records that the old conversation ended. Claude Code gets a third hook:
+the marker records that the old conversation ended. Qwen Code's `SessionStart`
+sends the same notification for `source: "clear"`, and its calls carry the
+identity stamp, so the handover behaves as Claude Code's. Claude Code and Qwen
+Code get a third hook:
 
 - **`PreToolUse` stamps identity.** Claude Code runs every subagent over the
   parent's one `plumb serve`, and its transport carries no per-agent identity,
@@ -485,7 +489,10 @@ the marker records that the old conversation ended. Claude Code gets a third hoo
   reason=…`), which Claude Code shows only in its debug output. A plugin-scoped registration (`mcp__plugin_<p>_plumb__*`) is
   not matched. Codex is not covered: its `updatedInput` requires
   `permissionDecision: "allow"`, a permission side-effect plumb will not take
-  silently. **After upgrading, re-run `plumb hooks install claude-code`** — an
+  silently. Qwen Code is covered: a deferred `tool_call` invocation is
+  re-dispatched under the underlying tool's name and arguments before hooks
+  fire, and its `updatedInput` carries no permission side-effect (verified
+  against Qwen Code 0.28.0). **After upgrading, re-run `plumb hooks install claude-code`** — an
   older install has only the first two hooks, and the table shows the third as
   `missing` until it does, with a note beneath saying what that costs: nothing
   stamps a per-agent identity, so agents sharing one connection share one
@@ -552,6 +559,18 @@ What `Stop` can do differs by client, and the difference is not cosmetic:
   later turn ends; lock directories are not swept, and are reclaimed by the
   session that owns the key — nothing a sweep could measure is an upper bound on
   a live watcher, and deleting one would give that session two.
+- **Qwen Code watches synchronously.** Qwen has no `asyncRewake` and delivers
+  no async hook output, so the same watcher runs as a synchronous Stop handler:
+  it holds the turn open while it polls, and exit 2 blocks the stop with the
+  wake sentence as the model's feedback. A session that has already gone idle
+  cannot be woken — the watch covers the turn's end, not the idle after it;
+  user input interrupts the wait. The timeout is written in Qwen's notation (a
+  command-hook timeout of 1000 or more is read as milliseconds, below 1000 as
+  seconds), and consecutive wakes are bounded by Qwen's own
+  `stopHookBlockingCap` (default 8) — raise it above plumb's wake-chain cap
+  (10) for long back-and-forths. Open the `/hooks` menu or restart Qwen Code to
+  load the handlers; an install refreshes earlier hand-installed `run-claude`
+  entries in place rather than doubling them.
 - **Codex checks.** Codex has no background-wake mechanism, so its handler makes
   one metadata probe of the running daemon as the turn ends. It issues one Stop
   notice per unchanged eligible mailbox state; a new arrival can notify again.
@@ -667,7 +686,7 @@ plumb skills sync [client] [--check] [--force]
 Bare `plumb skills` is **read-only**: a status table over the clients with a
 verified skills directory (Claude Code `~/.claude/skills/`, Codex
 `$CODEX_HOME/skills/` or `~/.codex/skills/`, Junie `~/.junie/skills/`, Kimi Code `$KIMI_CODE_HOME/skills/`
-or `~/.kimi-code/skills/`, omp `~/.omp/agent/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
+or `~/.kimi-code/skills/`, omp `~/.omp/agent/skills/`, Qwen Code `~/.qwen/skills/`, ZCode `~/.zcode/skills/`), showing each embedded skill as `installed`,
 `missing`, or `stale` (content differs from the copy compiled into this
 binary). A skill-capable client whose config does not register plumb is shown
 as `unregistered`, with the reason `sync` skips it and the `plumb setup` fix
@@ -847,7 +866,7 @@ memory and the per-path write locks stay shared: a namespace changes who can see
 whom, not what the daemon knows about the code. Session names stay unique across
 every namespace.
 
-The Claude Code, Codex and omp hooks (`plumb hooks run-claude`, `run-codex`, `run-omp`) inherit
+The Claude Code, Codex, Qwen Code and omp hooks (`plumb hooks run-claude`, `run-codex`, `run-qwen`, `run-omp`) inherit
 the session's `PLUMB_NAMESPACE` and send it with every daemon request they make:
 the Stop-hook mailbox probe, context hints and the `/clear` handover are answered
 only from that namespace's sessions. A hook without a token speaks for the

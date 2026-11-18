@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.28.0 (unreleased)
+
+### Security
+
+- **Built with Go 1.27.4**, which fixes GO-2026-6859 in the standard
+  library's `net/http`; govulncheck found it reachable from plumb.
+
+### Added
+
+- **Qwen Code is a supported client: skills and hooks.** `plumb setup qwen`
+  already registered plumb in `~/.qwen/settings.json`; Qwen Code now joins the
+  skill-capable clients — it reads `SKILL.md` bundles from `~/.qwen/skills/`
+  (verified against Qwen Code 0.28.0), so `plumb skills sync qwen` keeps the
+  eight skills there. `plumb hooks install qwen` writes the session linkage,
+  the per-agent identity stamp and the context hints into the same
+  settings.json, plus a Stop mailbox watcher that runs synchronously: Qwen has
+  no `asyncRewake` and delivers no async hook output, so the watcher holds the
+  turn open while it polls and exit 2 blocks the stop with the wake sentence.
+  Its timeout is written in Qwen's notation (a command-hook timeout of 1000 or
+  more is read as milliseconds). The identity stamp reaches deferred
+  `tool_call` invocations too, which Qwen re-dispatches under the underlying
+  tool's name and arguments before hooks fire. An install refreshes earlier
+  hand-installed `run-claude` entries in place — Qwen's hook payload is
+  byte-compatible with Claude Code's — rather than doubling them.
+
 ## 0.27.0 (2026-11-11)
 
 ### Security

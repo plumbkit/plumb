@@ -35,17 +35,25 @@ func promptSelectors(prompt string) []string {
 }
 
 // claudeContextHintOutput is what Claude Code's hook prints for a context-hint
-// event: the hint as plain text where Claude Code adds stdout to the context
-// (SessionStart, UserPromptSubmit), as additionalContext where it reads JSON
-// (SubagentStart), and "" for every failure. Outside a plumb workspace it asks
-// nothing: the hooks are user-scoped and fire for every session on the machine.
+// event.
 func claudeContextHintOutput(input claudeHookInput, ask func(contextHintRequest) string) string {
+	return claudeShapedContextHintOutput(input, "claude-code", ask)
+}
+
+// claudeShapedContextHintOutput is the hint render for every client whose hook
+// contract is Claude Code's (Claude Code itself, Qwen Code): the hint as plain
+// text where the client adds stdout to the context (SessionStart,
+// UserPromptSubmit), as additionalContext where it reads JSON (SubagentStart),
+// and "" for every failure. host attributes the hint in the uptake ledger.
+// Outside a plumb workspace it asks nothing: the hooks are user-scoped and fire
+// for every session on the machine.
+func claudeShapedContextHintOutput(input claudeHookInput, host string, ask func(contextHintRequest) string) string {
 	root, inside := plumbWorkspaceRoot(input.CWD)
 	if !inside || ask == nil {
 		return ""
 	}
 	req := contextHintRequest{
-		Host: "claude-code", Event: input.Event, Source: input.Source,
+		Host: host, Event: input.Event, Source: input.Source,
 		SessionID: input.SessionID, AgentID: input.AgentID, Workspace: root,
 		NamespaceToken: hookNamespaceToken(),
 	}
@@ -225,6 +233,24 @@ func claudeContextHookEntries(plumbBin string) []hookEntry {
 // Codex asks the user to trust each new handler (/hooks) before it runs.
 func codexContextHookEntries(plumbBin string) []hookEntry {
 	command := plumbHookCommand(plumbBin, codexHookVerb)
+	return []hookEntry{
+		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+		{event: "SubagentStart", label: "subagent context hint", handler: map[string]any{
+			"type":    "command",
+			"command": command,
+			"timeout": float64(5),
+		}},
+	}
+}
+
+// qwenContextHookEntries are Qwen Code's context-hint handlers, on the same
+// terms as Claude Code's.
+func qwenContextHookEntries(plumbBin string) []hookEntry {
+	command := plumbHookCommand(plumbBin, qwenHookVerb)
 	return []hookEntry{
 		{event: "UserPromptSubmit", label: "context hint", handler: map[string]any{
 			"type":    "command",

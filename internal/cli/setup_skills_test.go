@@ -23,7 +23,7 @@ import (
 // session_start guidance block, never as files written into a directory plumb
 // guessed at.
 func TestSkillCapableClients_ArePinned(t *testing.T) {
-	want := []string{"claude-code", "codex", "junie", "kimi-code", "omp", "zcode"}
+	want := []string{"claude-code", "codex", "junie", "kimi-code", "omp", "qwen", "zcode"}
 
 	capable := skillCapableClients()
 	got := make([]string, 0, len(capable))

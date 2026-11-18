@@ -36,8 +36,8 @@ var hooksCmd = &cobra.Command{
 	Use:   "hooks",
 	Short: "Show which plumb lifecycle hooks are installed per client",
 	Long: `Show, for every client plumb ships lifecycle hooks for (claude-code, codex,
-omp), whether each hook is installed, missing, or stale relative to what this
-binary would write. Read-only.
+qwen, omp), whether each hook is installed, missing, or stale relative to what
+this binary would write. Read-only.
 
 ` + "`plumb hooks install [client]`" + ` installs or refreshes them;
 ` + "`plumb hooks uninstall [client]`" + ` removes them again. A client whose
@@ -53,13 +53,15 @@ var hooksInstallCmd = &cobra.Command{
 	Short: "Install or refresh plumb's lifecycle hooks",
 	Long: `Install plumb's opt-in lifecycle hooks in every registered client, or in the
 named one. SessionStart states the conversation ID that session_start records
-as session_id, and Stop reports unread peer mail. Claude Code gets a third,
-PreToolUse, which stamps a per-agent identity onto every plumb call so
+as session_id, and Stop reports unread peer mail. Claude Code and Qwen Code get
+a third, PreToolUse, which stamps a per-agent identity onto every plumb call so
 subagents multiplexed over one connection keep their own workspace pin and
 trackers instead of being refused as unattributable.
 
 Claude Code's Stop hook is a background watcher (async + asyncRewake): it wakes
-a session that has already gone idle. Codex and omp have no equivalent, so their
+a session that has already gone idle. Qwen Code runs the same watcher
+synchronously — it holds the turn open while it waits, and cannot wake a session
+that has already gone idle. Codex and omp have no watcher at all, so their
 Stop hook performs one read-only check as a turn ends — that narrows the
 end-of-turn race, it is not push delivery. omp loads hooks as an extension
 module rather than from config, so plumb writes one file it owns there
@@ -116,7 +118,7 @@ func init() {
 		"leave out the advisory context-hint handlers (already-installed ones stay; `plumb hooks uninstall --only context` removes them)")
 	hooksInstallCmd.Flags().BoolVar(&hooksInstallContext, "context", false, "the context-hint handlers are now installed by default")
 	_ = hooksInstallCmd.Flags().MarkDeprecated("context", "the context-hint handlers are installed by default; use --no-context to leave them out")
-	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd, hooksRunOmpCmd)
+	hooksCmd.AddCommand(hooksInstallCmd, hooksUninstallCmd, hooksRunCodexCmd, hooksRunClaudeCmd, hooksRunQwenCmd, hooksRunOmpCmd)
 }
 
 // resolveHooksTargets turns an optional client argument into the set to act on.
